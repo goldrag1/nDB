@@ -9,7 +9,15 @@
 
 ## 1. Vision
 
-Most real-world entities are intrinsically multi-dimensional. A single business event — fulfilling a customer order, recording a chemical reaction, completing a multi-party approval — simultaneously involves time, physical space, financial cost, human identity, and state. Reality is an n-dimensional web.
+Most real-world entities are intrinsically multi-dimensional.
+
+- A **chemical reaction** involves reactants, products, catalysts, temperature, pressure, and solvent — one atomic event with six or more participants.
+- A **gene-expression event** involves a gene, its transcription factors, co-factors, the chromatin state of its locus, the time-point, the cell type, and the resulting protein.
+- A **medical diagnosis** involves a patient, presenting symptoms, candidate pathogens, possible treatments, contraindications, and confidence levels — all interlocked.
+- An **agricultural harvest** involves a crop batch, geospatial coordinates, harvester, processing facility, date, and downstream compliance jurisdiction (EUDR, organic certification).
+- A **business approval** involves participants, document, time, jurisdiction, workflow, and audit trail.
+
+Reality is an n-dimensional web. Different domains differ in *what* the dimensions are, not in *how many* there are or how they interlock.
 
 Relational databases force this n-dimensional reality into 2D tables. The "2D-ness" of SQL is not primarily about endpoint count — it's about rigidity. A SQL row has many columns (many dimensions), but the columns are fixed per table. Adding a new dimension requires altering the table; expressing a fact that doesn't fit the table's schema is impossible without normalization across multiple tables joined together.
 
@@ -41,6 +49,15 @@ A single hyperedge core serves three distinct application clusters. They share s
 - No entrenched hyperedge-native leader in this space
 - Likely to drive early adoption
 
+Concrete reasoning domains where n-ary facts are the norm:
+
+- **Scientific literature graphs** — "drug X inhibits enzyme Y in pathway Z at concentration C, validated in study S" is one atomic claim
+- **Medical diagnostic reasoning** — patient + symptom set + pathogen + treatment + contraindication interlock in single facts; LLM-assisted diagnostic systems benefit directly
+- **Genomic data integration** — gene + variant + phenotype + population + study cohort
+- **Biochemical pathway modeling** — reaction networks where each step has multiple substrates, products, and conditions
+- **Legal reasoning** — case + parties + statutes + jurisdiction + precedent in one decision graph
+- **Knowledge engineering for autonomous agents** — situation + actors + resources + constraints + outcomes
+
 ### 3.2 Multi-party business workflows (ERP and enterprise)
 
 - 3-way match in accounting: `(PO, GRN, Invoice)` as one atomic fact
@@ -52,8 +69,10 @@ A single hyperedge core serves three distinct application clusters. They share s
 ### 3.3 Provenance, lineage, and perspectival data
 
 - W3C PROV-O lineage facts: `(output, derived_from, inputs..., by_transformation, at_time, with_parameters)` — 6+ arity, native fit
-- Multi-jurisdiction accounting (Vietnamese VAS + IFRS + parent GAAP simultaneously)
-- Versioned/branched knowledge (TerminusDB's killer feature, generalized)
+- **Agricultural supply-chain traceability** (EUDR, organic certification) — `(crop_batch, farm_geocoords, harvester, processing_facility, date, certification_status)` traced from field to shelf in a single hyperedge per stage
+- **Scientific reproducibility** — `(result_dataset, derived_from_inputs, by_algorithm, with_parameters, on_compute, at_time, by_researcher)`
+- **Multi-jurisdiction accounting** (Vietnamese VAS + IFRS + parent GAAP simultaneously) — same financial event recorded with different perspectives
+- **Versioned / branched knowledge** (TerminusDB's killer feature, generalized) — "as of git commit X, this is what we believed"
 - Provenance as a free byproduct: every hyperedge carries who-asserted, when, from-what-source
 
 ---
@@ -149,9 +168,55 @@ A property attaches a literal value to an entity or hyperedge. A hyperedge conne
 
 ERP business events lean hyperedge-heavy. Simple descriptive attributes lean property-heavy. Both coexist in any real domain.
 
-### 5.3 Example: ERP approval event
+### 5.3 Examples across domains
 
-In a property graph, this requires a reified `Approval` node plus 5 binary edges. In nDB, it is one hyperedge:
+Three examples in three domains — each is one hyperedge in nDB; each would require a reified intermediate node + multiple binary edges in a property graph.
+
+**Chemistry — a reaction:**
+
+```
+HyperEdge {
+    type: "chemical_reaction"
+    roles: {
+        reactant_1:   Sodium,
+        reactant_2:   Chlorine,
+        product:      SodiumChloride,
+        catalyst:     Water,
+        temperature:  T_25C,
+        environment:  Exothermic,
+    }
+    properties: {
+        yield_pct: 98.5,
+        observed_in_study: StudyRef_2024_117,
+    }
+}
+```
+
+A reaction is fundamentally n-ary — it doesn't exist without all participants. Reifying loses this atomicity.
+
+**Biology — a gene-expression event:**
+
+```
+HyperEdge {
+    type: "gene_expression"
+    roles: {
+        gene:                  TP53,
+        transcription_factor:  NF_kB,
+        co_factor:             p300,
+        chromatin_state:       open,
+        cell_type:             hepatocyte,
+        time_point:            T_30min_post_stress,
+        product:               TP53_mRNA,
+    }
+    properties: {
+        expression_level: 4.2,
+    }
+}
+```
+
+Seven role-players in one atomic biological fact. Querying "all transcription factors that produced TP53 mRNA in hepatocytes under stress" walks one hyperedge type, not a six-table join.
+
+**Enterprise — an approval event:**
 
 ```
 HyperEdge {
@@ -169,7 +234,7 @@ HyperEdge {
 }
 ```
 
-The fact is atomic. Querying "all 5 things Alice approved on Tuesday" walks one edge, not five. Auditing "did this approval involve fast-track workflow" is a single property check, not a multi-hop join.
+The fact is atomic across all three domains. Querying "all 5 things involved in this event" walks one edge, not five. Auditing or filtering on any role/property is a single check, not a multi-hop join.
 
 ### 5.4 Why hyperedge-native (not property graph + reification)
 
@@ -635,6 +700,21 @@ match
   approval(document: ?doc, approver: ?bob)
 where ?alice != ?bob
 return ?doc, ?alice, ?bob
+
+# Medical diagnostic reasoning — cross-reference multi-dimensional pathways
+match
+  diagnosis(patient: ?p, symptom: "fever", pathogen: ?disease)
+  diagnosis(patient: ?p, symptom: "rash", pathogen: ?disease)
+  treatment(disease: ?disease, medication: ?med, contraindication: ?allergen)
+  patient_record(id: ?p, known_allergy: ?allergen)
+return ?p, ?med, ?allergen
+# Returns patients whose recommended treatment conflicts with a known allergy
+
+# Biochemistry — find reactions producing a target compound under a condition
+match
+  chemical_reaction(product: ?product, catalyst: ?cat, temperature: ?temp)
+where ?product = SodiumChloride and ?temp < T_50C
+return ?cat, ?temp
 
 # Aggregation
 match
