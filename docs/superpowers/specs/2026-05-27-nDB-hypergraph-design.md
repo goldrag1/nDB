@@ -97,10 +97,10 @@ Five layers. Each layer has a single responsibility. Layers communicate through 
 | - Layered: schemaless to strict                |
 | - Schema is itself stored as hyperedges        |
 +------------------------------------------------+
-| Index layer (derived from primary storage)     |
-| - Adjacency lists per entity (traversal-fast)  |
-| - Columnar per role (slicer/aggregation-fast)  |
-| - Materialized views (slicer-preset-fast)      |
+| Index layer (framework + pluggable indexes)    |
+| - Stable Index trait; in-tree built-ins +      |
+|   out-of-tree plugins                          |
+| - Schema / slicer / apps can drive indexing    |
 | - Rebuildable from primary at any time         |
 +------------------------------------------------+
 | Primary storage core                           |
@@ -114,7 +114,7 @@ Five layers. Each layer has a single responsibility. Layers communicate through 
 **Layer boundaries are strict.**
 
 - **Primary storage** is the canonical record. It does not know about indexes, schema, slicers, or rendering. It only knows how to append assertions, retrieve them by ID, and compact according to retention policies.
-- **Index layer** is derived from primary storage. Indexes are rebuildable; a crashed index is repaired by re-scanning primary. Multiple indexes coexist over the same data, each optimized for a different access pattern.
+- **Index layer** is a framework with pluggable index implementations. The engine ships a small set of built-in indexes; additional indexes (columnar, vector, full-text, materialized views, domain-specific) plug in via a stable `Index` trait. Indexes are derived from primary storage and rebuildable; a crashed index is repaired by re-scanning primary. Multiple indexes coexist over the same data, each optimized for a different access pattern. Schema declarations, slicer materialized views, and application plugins can all drive index creation.
 - **Schema layer** sits above indexes because schema validation runs against indexed data. Schema itself is stored AS hyperedges in primary storage (self-describing) but is logically a separate concern.
 - **Slicer layer** consumes indexes (via a query planner that chooses which index serves a given projection). It does not know about primary storage directly.
 - **Renderer** is out of engine scope.
@@ -802,26 +802,75 @@ Single-node for the first 2 years of work. Distribution is a separate architectu
 
 ### 13.2 Index strategy
 
-Indexes are **derived structures**, rebuildable from primary storage. Multiple coexist over the same data, each optimized for a different access pattern. The mix of indexes shipped determines query performance characteristics.
+**Decided: index framework with pluggable implementations.** The engine exposes a stable `Index` trait. All indexes — including built-ins — implement this trait. Some ship in core; others load as in-tree plugins or out-of-tree extensions.
 
-Index types under consideration:
+Indexes are derived structures, rebuildable from primary storage. Multiple coexist over the same data. The mix of registered indexes per namespace determines query performance characteristics.
 
-- **Adjacency list per entity** — for each entity, the list of hyperedges it participates in (with role). Makes "all hyperedges Alice participates in" fast. The classic graph-traversal index.
-- **Columnar per role** — for each `(hyperedge_type, role)` pair, the column of values stored separately. Makes slicer aggregation ("sum amount across approvals") fast.
-- **Hyperedge-type clustering** — all hyperedges of a given type clustered together. Makes "list all approvals" fast.
-- **Per-property attribute index** — B-tree on entity property values. Makes "find customer where email = X" fast. Powers external lookup keys (Section 8).
-- **Full-text index** — open. Likely Tantivy if needed; opt-in per namespace.
-- **Vector index** — open. Needed for AI workloads (HNSW or similar). Opt-in per namespace.
-- **Slicer-pattern materialized views** — pre-computed slicer projections for hot patterns. Updated incrementally as the primary log grows.
+**Index trait shape (sketch — final shape in a dedicated index spec):**
 
-The likely answer is a hybrid: adjacency list + columnar + attribute indexes are core (always present); full-text + vector are opt-in per app/namespace; materialized views are configurable per hot slicer pattern.
+```
+trait Index {
+    fn name(&self) -> &str;
+    fn on_insert(&mut self, record: &Record, tx_id: u64);
+    fn on_supersede(&mut self, record: &Record, tx_id: u64);
+    fn query(&self, predicate: &Predicate, snapshot: SnapshotId) -> Cursor;
+    fn cost_estimate(&self, predicate: &Predicate) -> Cost;
+    fn compact(&mut self, retention: &RetentionPolicy);
+    fn rebuild_from(&mut self, primary_log: &PrimaryLog);
+}
+```
 
-Decision criteria: which indexes ship in v1, which are pluggable, incremental update cost, storage overhead per index, query planner cost model.
+**Four layers can drive index creation:**
 
-Constraints from prior decisions:
+| Layer | How indexes are created | Example |
+|---|---|---|
+| Engine core | Hardcoded mandatory built-ins | Entity-by-ID always exists |
+| Schema | Declarative: schema marks property as indexed | `Customer.email` → B-tree |
+| Slicer | Materialized view derived from hot query patterns | Recurring slicer projection becomes pre-computed |
+| App / extension | Plugin trait registration | Chemistry app registers structural-similarity index |
+
+**Indexes by version** (see Section 16 Roadmap for full version scope):
+
+| Index | Purpose | v1 | v2 | v3 |
+|---|---|---|---|---|
+| Entity-by-ID | Primary key lookup | mandatory built-in | — | — |
+| Hyperedge-by-ID | Primary key lookup | mandatory built-in | — | — |
+| Lookup-key reverse | External ID resolution (Section 8) | mandatory built-in | — | — |
+| Adjacency list per entity | Graph traversal | mandatory built-in | — | — |
+| Hyperedge-type clustering | Type filtering | mandatory built-in | — | — |
+| Schema-declarative B-tree on property | Property filtering | built-in, schema-driven | — | — |
+| Columnar per role | Slicer aggregation | — | in-tree plugin | — |
+| Slicer materialized view | Hot slicer patterns | — | in-tree plugin (slicer-driven) | — |
+| Full-text (Tantivy wrapper) | String search | — | opt-in per namespace | — |
+| Vector (HNSW or IVF) | Embedding similarity | — | opt-in per namespace (decision in v2 spec) | — |
+| Custom community plugins | Domain-specific | — | — | open plugin ecosystem |
+
+**Why this architecture wins over a fixed index set:**
+
+- V1 ships fewer indexes well rather than 10 indexes shallowly
+- Extensibility is a feature, not a hack — published trait attracts contributors
+- Slicer layer can request its own materialized views directly via the framework
+- Future-proof: vector index research changes fast; we swap implementations without breaking the core
+- Schema-driven indexing keeps configuration declarative (schema says "index this property" → engine creates B-tree)
+
+**Trade-offs accepted:**
+
+- Designing the plugin trait is itself architectural work (~2-4 weeks before any index is implemented)
+- Plugin index quality varies; need validation / sandboxing strategy
+- Query planner must accommodate future plugins from day 1 (designed to consume cost estimates from any registered index)
+
+**Constraints from prior decisions:**
+
 - All indexes must be rebuildable from primary storage (Section 11)
 - All indexes must respect MVCC snapshot visibility (Section 10)
-- Compaction in primary triggers incremental index update
+- Compaction in primary triggers incremental index update via `on_supersede`
+
+**Open sub-questions** (deferred to focused index spec):
+
+- Exact plugin trait signature (parameters, lifecycle hooks, async vs sync)
+- Index sandboxing / failure isolation across plugins
+- Query planner cost model details (how cost estimates compose)
+- Whether each plugin manages its own physical storage or shares engine-provided buckets
 
 ### 13.3 Concurrency model
 
@@ -890,37 +939,115 @@ Explicit statements of what nDB is **not** trying to be.
 
 ---
 
-## 16. Success Criteria
+## 16. Roadmap
 
-How we know the architecture works.
+Scope organized by version. Calendar dates intentionally absent — versions ship when their scope is complete and quality is acceptable. Each version is a meaningful release with success criteria attached.
 
-### 16.1 Year 1 (foundation)
+### 16.1 v1.0 — Initial Production Release
 
-- Single-node append-only storage core with hyperedge insert / read / traversal
-- Opaque UUID v7 + external lookup keys functional
-- Schemaless mode validated end-to-end
-- MVCC with snapshot isolation working (no SSI yet)
-- Basic compaction loop functional (LatestOnly retention working)
-- Custom query DSL (read-only initially)
-- Basic slicer API with table and 2D scatter renderers (renderer in a separate crate, not engine)
-- 1M hyperedges, sub-second traversal queries on commodity hardware
+Goal: usable single-node production engine for one workload (AI reasoning OR ERP — decided closer to launch based on pilot interest).
 
-### 16.2 Year 2 (production readiness)
-
-- MVCC with both SI and SSI namespaces, crash recovery
-- Schema Layer 2 (type assertions) functional
-- Full retention policy model implemented (Audited / Versioned / LatestOnly)
+**Storage:**
+- Custom binary primary storage with full record layout (Section 11.2)
+- Append-only LSM with per-type retention policies (Audited / Versioned / LatestOnly)
 - Hot/cold tiering operational
-- Slicer materialized views for hot patterns
-- Comparative benchmarks vs Neo4j and TypeDB published
-- At least one real-world pilot application (AI reasoning OR ERP module)
+- Crash recovery validated
 
-### 16.3 Year 3+ (differentiation)
+**Transactions:**
+- MVCC with both Snapshot Isolation and Serializable Snapshot Isolation per namespace
+- Time-travel queries (`as of T`)
 
-- Schema Layers 3-4 (constraints + ontology) functional
-- Distribution model decided and implemented (read replicas minimum)
-- Provenance / lineage as first-class feature
-- LLM integration patterns documented
+**Identifiers:**
+- UUID v7 internal + pluggable external lookup keys
+
+**Indexes (built-in mandatory):**
+- Entity-by-ID, Hyperedge-by-ID, Lookup-key reverse
+- Adjacency list per entity
+- Hyperedge-type clustering
+- Schema-declarative property indexes (B-tree)
+- Index framework + plugin trait stable
+
+**Query language:**
+- Custom DSL with pattern matching (Section 12)
+- Structured AST wire format
+- Read + write transactions
+- Optional Rust embedded DSL
+
+**Schema:**
+- Layer 1 (schemaless, always)
+- Layer 2 (type assertions, opt-in per namespace)
+- Strict-write and soft-read enforcement modes
+
+**Slicer:**
+- First-class projection API (Section 7)
+- Built-in renderers in a separate crate: table, 2D scatter
+- Renderer-out-of-engine pattern established
+
+**Success criteria:**
+- 1M hyperedges, sub-second traversal queries on commodity hardware
+- One real-world pilot application running in production
+- Comparative benchmark vs Neo4j published
+- Documentation site live
+
+### 16.2 v2.0 — Analytics + AI Workloads
+
+Goal: viable for AI / GraphRAG workloads and slicer-heavy analytics.
+
+**Indexes added (in-tree plugins):**
+- Columnar per-role
+- Slicer materialized views (declarative, incremental update)
+- Full-text index (Tantivy wrapper, opt-in per namespace)
+- Vector index (HNSW or IVF — decision in dedicated v2 spec)
+
+**Schema:**
+- Layer 3 (constraints + validation per type)
+
+**Slicer:**
+- Additional renderers: pivot, sankey, 3D scatter
+- Slicer presets per entity / hyperedge type
+
+**Operational:**
+- LLM integration patterns documented (GraphRAG, agent context)
+- Comparative benchmarks vs TypeDB + TerminusDB published
+
+**Success criteria:**
+- 100M hyperedges, sub-second slicer aggregation
+- Two real-world pilot applications across different target domains
+- Vector index integration validated with at least one AI workload
+- Schema Layer 3 validated with an ERP pilot
+
+### 16.3 v3.0 — Distribution + Ecosystem
+
+Goal: differentiated from competitors, ready for broader adoption.
+
+**Schema:**
+- Layer 4 (ontology + inference)
+
+**Distribution:**
+- Read replicas (eventually consistent reads)
+- Federation: linking multiple nDB instances via cross-reference resolution
+
+**Ecosystem:**
+- Public plugin API documented and stable
+- Community-contributed index plugins (spatial, temporal-specific, domain-specific)
+- Community slicer renderers
+- Provenance / lineage as queryable first-class feature
+
+**Success criteria:**
+- At least one community-contributed plugin in production
+- Federation working across 2+ instances in a real deployment
+- Plugin API documentation site
+
+### 16.4 v4.0+ — Distributed (future, out of current architectural scope)
+
+Goal: web-scale write workloads.
+
+Anticipated scope:
+- Sharding by entity / edge with cross-shard traversal
+- Raft-replicated state machine for distributed ACID
+- Multi-region deployment
+
+This is its own architectural epoch and will require a fresh design doc when approached.
 
 ---
 
