@@ -85,7 +85,13 @@ pub fn effective_tx(record: &Record) -> TxId {
         Record::Entity(e) => e.tx_id_assert,
         Record::HyperEdge(h) => h.tx_id_assert,
         Record::Tombstone(t) => t.tx_id_supersede,
-        Record::TypeName(_) | Record::RoleName(_) | Record::PropertyKey(_) => TxId::new(0),
+        // Dictionary records + v2.0 metadata records are timeless from a
+        // visibility standpoint; resolver treats them as effective-tx 0.
+        Record::TypeName(_)
+        | Record::RoleName(_)
+        | Record::PropertyKey(_)
+        | Record::TxTimestamp(_)
+        | Record::RetentionPolicy(_) => TxId::new(0),
     }
 }
 
@@ -96,8 +102,12 @@ pub fn visible_at(record: &Record, snapshot: TxId) -> bool {
     match record {
         Record::Tombstone(t) => snapshot.get() >= t.tx_id_supersede.get(),
         Record::Entity(_) | Record::HyperEdge(_) => snapshot.get() >= tx,
-        // Dictionary records are timeless.
-        Record::TypeName(_) | Record::RoleName(_) | Record::PropertyKey(_) => true,
+        // Dictionary + v2.0 metadata records are timeless.
+        Record::TypeName(_)
+        | Record::RoleName(_)
+        | Record::PropertyKey(_)
+        | Record::TxTimestamp(_)
+        | Record::RetentionPolicy(_) => true,
     }
 }
 
@@ -188,7 +198,9 @@ pub fn assert_v1_supersede_invariant(record: &Record) -> bool {
         Record::Tombstone(_)
         | Record::TypeName(_)
         | Record::RoleName(_)
-        | Record::PropertyKey(_) => true,
+        | Record::PropertyKey(_)
+        | Record::TxTimestamp(_)
+        | Record::RetentionPolicy(_) => true,
     }
 }
 

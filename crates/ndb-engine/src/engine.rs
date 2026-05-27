@@ -353,6 +353,9 @@ impl Engine {
         self.type_cluster.clear();
         self.vector.clear();
         self.property_btree.clear();
+        // Metadata maps (v2.0+) — rebuilt from the durable records.
+        self.commit_timestamps.clear();
+        self.retention.clear();
         // SSTables (sstables[0] is newest layer; iterate in declared order).
         for sst in &mut self.sstables {
             for item in sst.iter() {
@@ -361,8 +364,20 @@ impl Engine {
                     Record::Entity(e) => e.tx_id_assert,
                     Record::HyperEdge(h) => h.tx_id_assert,
                     Record::Tombstone(t) => t.tx_id_supersede,
+                    Record::TxTimestamp(t) => t.tx_id,
                     _ => TxId::new(0),
                 };
+                match &rec {
+                    Record::TxTimestamp(t) => {
+                        self.commit_timestamps.insert(t.tx_id, t.timestamp_us);
+                    }
+                    Record::RetentionPolicy(rp) => {
+                        if let Some(p) = decode_retention_policy(rp.policy_kind, rp.keep_last_n) {
+                            self.retention.insert(rp.type_id, p);
+                        }
+                    }
+                    _ => {}
+                }
                 self.lookup_key.apply(&rec, tx);
                 self.adjacency.apply(&rec, tx);
                 self.type_cluster.apply(&rec, tx);
@@ -376,8 +391,20 @@ impl Engine {
                 Record::Entity(e) => e.tx_id_assert,
                 Record::HyperEdge(h) => h.tx_id_assert,
                 Record::Tombstone(t) => t.tx_id_supersede,
+                Record::TxTimestamp(t) => t.tx_id,
                 _ => TxId::new(0),
             };
+            match rec {
+                Record::TxTimestamp(t) => {
+                    self.commit_timestamps.insert(t.tx_id, t.timestamp_us);
+                }
+                Record::RetentionPolicy(rp) => {
+                    if let Some(p) = decode_retention_policy(rp.policy_kind, rp.keep_last_n) {
+                        self.retention.insert(rp.type_id, p);
+                    }
+                }
+                _ => {}
+            }
             self.lookup_key.apply(rec, tx);
             self.adjacency.apply(rec, tx);
             self.type_cluster.apply(rec, tx);
@@ -628,8 +655,28 @@ impl Engine {
     /// honour this when deciding how many superseded versions to keep.
     /// Records committed BEFORE this call are also subject to the new
     /// policy at the next compaction.
+    ///
+    /// The policy is also persisted via a `RetentionPolicyRecord` so it
+    /// survives engine restarts (v2.0+). Falls back to in-memory-only if
+    /// the WAL write fails (callers can retry).
     pub fn set_retention_policy(&mut self, type_id: TypeId, policy: RetentionPolicy) {
         self.retention.insert(type_id, policy);
+        let (policy_kind, keep_last_n) = match policy {
+            RetentionPolicy::LatestOnly => (0u8, 0u32),
+            RetentionPolicy::Versioned { keep_last_n } => (1u8, keep_last_n),
+            RetentionPolicy::Audited => (2u8, 0u32),
+        };
+        let rec = Record::RetentionPolicy(crate::record::RetentionPolicyRecord {
+            type_id,
+            policy_kind,
+            keep_last_n,
+        });
+        // Best-effort durability: commit via an internal one-record txn.
+        // Failure leaves the in-memory state correct but unpersisted —
+        // matches the v1.3 contract.
+        let mut txn = self.begin_write();
+        txn.put_raw(rec);
+        let _ = txn.commit();
     }
 
     /// Look up the retention policy for a type. Returns `LatestOnly`
@@ -1032,7 +1079,18 @@ impl WriteTxn<'_> {
             .wal
             .as_mut()
             .expect("WAL active during commit (engine open invariant)");
-        let records: Vec<Record> = self.pending;
+        // Record the wall-clock commit timestamp as a durable record so
+        // `as of "<rfc3339>"` queries survive engine restart (v2.0+).
+        // Computed once here so the same value goes to WAL + memtable
+        // + in-memory map.
+        let now_us = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_micros()).unwrap_or(i64::MAX));
+        let mut records: Vec<Record> = self.pending;
+        records.push(Record::TxTimestamp(crate::record::TxTimestampRecord {
+            tx_id: self.tx_id,
+            timestamp_us: now_us,
+        }));
         wal.append_batch(&records)?;
         wal.sync()?;
         // Memtable insert + index update happen AFTER WAL durability so a
@@ -1041,6 +1099,19 @@ impl WriteTxn<'_> {
         // log and will be replayed on the next open (which will repopulate
         // the in-memory state).
         for r in records {
+            // Side-effects of metadata records: keep in-memory maps in
+            // sync with what was just durably written.
+            match &r {
+                Record::TxTimestamp(t) => {
+                    self.engine.commit_timestamps.insert(t.tx_id, t.timestamp_us);
+                }
+                Record::RetentionPolicy(rp) => {
+                    if let Some(p) = decode_retention_policy(rp.policy_kind, rp.keep_last_n) {
+                        self.engine.retention.insert(rp.type_id, p);
+                    }
+                }
+                _ => {}
+            }
             self.engine.lookup_key.apply(&r, self.tx_id);
             self.engine.adjacency.apply(&r, self.tx_id);
             self.engine.type_cluster.apply(&r, self.tx_id);
@@ -1048,14 +1119,6 @@ impl WriteTxn<'_> {
             self.engine.property_btree.apply(&r, self.tx_id);
             self.engine.memtable.insert(r)?;
         }
-        // Record the wall-clock commit timestamp so `as of "<rfc3339>"`
-        // queries can find this tx_id later in the session. v1 keeps
-        // these in memory only — see Engine::commit_timestamps for the
-        // persistence caveat.
-        let now_us = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| i64::try_from(d.as_micros()).unwrap_or(i64::MAX));
-        self.engine.commit_timestamps.insert(self.tx_id, now_us);
         Ok(self.tx_id)
     }
 
@@ -1124,6 +1187,18 @@ fn emit_versioned(
     Ok(())
 }
 
+/// Map a `RetentionPolicyRecord` (policy_kind, keep_last_n) into the
+/// typed `RetentionPolicy`. Returns `None` for unknown policy_kind so
+/// future kinds added in v2.1+ don't break v2.0 readers.
+fn decode_retention_policy(policy_kind: u8, keep_last_n: u32) -> Option<RetentionPolicy> {
+    match policy_kind {
+        0 => Some(RetentionPolicy::LatestOnly),
+        1 => Some(RetentionPolicy::Versioned { keep_last_n }),
+        2 => Some(RetentionPolicy::Audited),
+        _ => None,
+    }
+}
+
 fn wal_path(dir: &Path, seq: u64) -> PathBuf {
     dir.join(format!("{seq:06}{WAL_FILENAME_SUFFIX}"))
 }
@@ -1150,7 +1225,11 @@ fn replay_wal_into(path: &Path, memtable: &mut Memtable) -> Result<(u64, u64), E
             Record::Entity(e) => e.tx_id_assert.get(),
             Record::HyperEdge(h) => h.tx_id_assert.get(),
             Record::Tombstone(t) => t.tx_id_supersede.get(),
-            Record::TypeName(_) | Record::RoleName(_) | Record::PropertyKey(_) => 0,
+            Record::TxTimestamp(t) => t.tx_id.get(),
+            Record::TypeName(_)
+            | Record::RoleName(_)
+            | Record::PropertyKey(_)
+            | Record::RetentionPolicy(_) => 0,
         };
         if tx > max_tx {
             max_tx = tx;
@@ -1451,8 +1530,11 @@ mod tests {
         let stats = engine.compact().unwrap();
         assert_eq!(stats.sstables_in, 3);
         assert!(stats.new_sstable_seq.is_some());
-        assert_eq!(stats.records_in, 15);
-        assert_eq!(stats.records_out, 15);
+        // 15 entity commits + 15 durable TxTimestamp records (v2.0+) = 30.
+        // All survive compaction (entities aren't superseded; timestamps
+        // are append-only audit records with unique tx_ids).
+        assert_eq!(stats.records_in, 30);
+        assert_eq!(stats.records_out, 30);
         assert_eq!(engine.sstable_count(), 1);
         engine.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
@@ -1478,9 +1560,10 @@ mod tests {
         engine.flush().unwrap();
         assert_eq!(engine.sstable_count(), 2);
         let stats = engine.compact().unwrap();
-        // 5 records in, exactly 1 record out (the latest version).
-        assert_eq!(stats.records_in, 5);
-        assert_eq!(stats.records_out, 1);
+        // 5 entity commits + 5 TxTimestamps = 10 in. 1 surviving entity
+        // + 5 TxTimestamps = 6 out.
+        assert_eq!(stats.records_in, 10);
+        assert_eq!(stats.records_out, 6);
         // Latest version still readable.
         let snap = TxId::new(engine.manifest().last_tx_id);
         match engine.snapshot_read(&eid.into_uuid(), snap).unwrap() {
@@ -1515,10 +1598,12 @@ mod tests {
         engine.flush().unwrap();
         assert_eq!(engine.sstable_count(), 2);
         let stats = engine.compact().unwrap();
-        // 1 entity + 1 tombstone + 1 entity = 3 records in;
-        // 1 surviving entity out.
-        assert_eq!(stats.records_in, 3);
-        assert_eq!(stats.records_out, 1);
+        // 2 commits → 1 entity + (1 tombstone + 1 entity) = 3 user records
+        // + 2 durable TxTimestamps (v2.0+, one per commit) = 5 in.
+        // 1 surviving entity + 2 TxTimestamps = 3 out (tombstone + doomed
+        // dropped; timestamps are append-only audit, distinct tx_ids).
+        assert_eq!(stats.records_in, 5);
+        assert_eq!(stats.records_out, 3);
         // Tombstoned entity gone after compaction.
         let snap = TxId::new(engine.manifest().last_tx_id);
         assert!(matches!(
@@ -1949,6 +2034,40 @@ mod tests {
     }
 
     #[test]
+    fn commit_timestamps_and_retention_persist_across_restart() {
+        let dir = temp_dir("persist-meta");
+        // Phase 1: set retention + commit some entities, capture the
+        // tx + its wall-clock timestamp.
+        let (saved_tx, saved_ms);
+        {
+            let mut engine = Engine::create(&dir).unwrap();
+            engine.set_retention_policy(
+                TypeId::new(42),
+                RetentionPolicy::Versioned { keep_last_n: 7 },
+            );
+            let mut txn = engine.begin_write();
+            txn.put_entity(make_entity(EntityId::now_v7(), "first"));
+            saved_tx = txn.commit().unwrap();
+            saved_ms = engine.commit_timestamp_us(saved_tx).expect("ts recorded");
+            engine.flush().unwrap();
+            engine.close().unwrap();
+        }
+        // Phase 2: reopen — retention + timestamps must reload from disk.
+        let engine = Engine::open(&dir).unwrap();
+        assert_eq!(
+            engine.retention_policy(TypeId::new(42)),
+            RetentionPolicy::Versioned { keep_last_n: 7 },
+            "retention policy survives restart"
+        );
+        let restored = engine.commit_timestamp_us(saved_tx);
+        assert_eq!(restored, Some(saved_ms), "commit timestamp survives restart");
+        // tx_at_or_before still works at the same time.
+        assert_eq!(engine.tx_at_or_before(saved_ms + 1), Some(saved_tx));
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn serializable_txn_with_no_conflicting_writes_commits() {
         let dir = temp_dir("ssi-happy");
         let mut engine = Engine::create(&dir).unwrap();
@@ -2130,11 +2249,38 @@ mod tests {
         }
         let stats = engine.compact().unwrap();
         assert_eq!(stats.sstables_in, 3);
-        // Audited keeps all 3 versions of this entity.
-        assert_eq!(stats.records_out, 3);
+        // v2.0: each commit also writes a durable TxTimestamp record;
+        // set_retention_policy writes a RetentionPolicy + TxTimestamp.
+        // After Audited compaction of the entity type:
+        //   3 entity versions (Audited)
+        // + 4 TxTimestamp groups (1 per commit incl. set_retention) — each LatestOnly
+        // + 1 RetentionPolicy group — LatestOnly
+        // = 8 records out. Entity count alone is the meaningful assert.
+        let entities_out = count_records_of_kind(&dir, crate::record::RecordKind::Entity);
+        assert_eq!(entities_out, 3, "Audited must preserve every entity version");
 
         engine.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Helper used by retention tests — count how many records of a given
+    /// kind exist in the engine's SSTables. Opens fresh readers to avoid
+    /// disturbing engine state.
+    fn count_records_of_kind(dir: &std::path::Path, kind: crate::record::RecordKind) -> usize {
+        let mut n = 0;
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let p = entry.unwrap().path();
+            if p.extension().is_some_and(|e| e == "ndb") {
+                let mut r = SSTableReader::open(&p).unwrap();
+                for item in r.iter() {
+                    let (rec, _) = item.unwrap();
+                    if rec.kind() == kind {
+                        n += 1;
+                    }
+                }
+            }
+        }
+        n
     }
 
     #[test]
@@ -2160,8 +2306,9 @@ mod tests {
         }
         let stats = engine.compact().unwrap();
         assert_eq!(stats.sstables_in, 5);
-        // Versioned { keep_last_n: 2 } → 2 versions retained.
-        assert_eq!(stats.records_out, 2);
+        // Entity-only count: Versioned { keep_last_n: 2 } keeps 2.
+        let entities_out = count_records_of_kind(&dir, crate::record::RecordKind::Entity);
+        assert_eq!(entities_out, 2, "Versioned keep_last_n=2");
 
         engine.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
@@ -2186,8 +2333,9 @@ mod tests {
         }
         let stats = engine.compact().unwrap();
         assert_eq!(stats.sstables_in, 3);
-        // No policy set → LatestOnly → 1 record retained.
-        assert_eq!(stats.records_out, 1);
+        // Entity-only count: no policy → LatestOnly → 1 surviving entity.
+        let entities_out = count_records_of_kind(&dir, crate::record::RecordKind::Entity);
+        assert_eq!(entities_out, 1, "LatestOnly default");
         engine.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }

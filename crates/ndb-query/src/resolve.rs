@@ -95,7 +95,9 @@ impl Dictionaries {
                 Record::HyperEdge(h) => {
                     out.observe(h.type_id.get(), TypeKindObserved::Hyperedge);
                 }
-                Record::Tombstone(_) => {}
+                Record::Tombstone(_)
+                | Record::TxTimestamp(_)
+                | Record::RetentionPolicy(_) => {}
             }
         }
         out

@@ -708,6 +708,12 @@ impl Server {
         out.write_all(b"Content-Type: application/jsonl; charset=utf-8\r\n")?;
         out.write_all(b"Connection: close\r\n\r\n")?;
         for r in records {
+            // Filter internal v2.0 metadata records (TxTimestamp,
+            // RetentionPolicy). Clients access these through dedicated
+            // engine APIs, not /iter.
+            if matches!(r, Record::TxTimestamp(_) | Record::RetentionPolicy(_)) {
+                continue;
+            }
             let jr: JsonRecord = (&r).into();
             let line = serde_json::to_string(&jr).map_err(|e| {
                 ServerError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
@@ -1047,14 +1053,16 @@ impl Server {
             let mut engine = self.engine.lock().expect("engine mutex poisoned");
             let records = engine.snapshot_iter(TxId::new(cur_tx))?;
             for r in records {
+                // Skip internal v2.0 metadata records. Subscribers get
+                // user-facing data only.
+                if matches!(r, Record::TxTimestamp(_) | Record::RetentionPolicy(_)) {
+                    continue;
+                }
                 let assert_tx = match &r {
                     Record::Entity(e) => e.tx_id_assert.get(),
                     Record::HyperEdge(h) => h.tx_id_assert.get(),
-                    // Dictionary records: filter by their "implicit" tx
-                    // via the writer's tx_id_supersede field? In v1 these
-                    // don't carry a tx_assert — emit them on every
-                    // subscribe so new dictionary entries from this
-                    // period reach subscribers.
+                    // Dictionary records: emit on every subscribe so
+                    // new schema entries reach subscribers.
                     _ => req.since_tx_id + 1,
                 };
                 if assert_tx <= req.since_tx_id {

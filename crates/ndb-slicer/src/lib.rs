@@ -164,6 +164,8 @@ fn extract(record: &Record, source: &ColumnSource) -> Option<Value> {
                 Record::TypeName(_) => "type_name",
                 Record::RoleName(_) => "role_name",
                 Record::PropertyKey(_) => "property_key",
+                Record::TxTimestamp(_) => "tx_timestamp",
+                Record::RetentionPolicy(_) => "retention_policy",
             }
             .into(),
         )),
@@ -176,6 +178,9 @@ fn extract(record: &Record, source: &ColumnSource) -> Option<Value> {
             Record::TypeName(d) => Value::I64(i64::from(d.id.get())),
             Record::RoleName(d) => Value::I64(i64::from(d.id.get())),
             Record::PropertyKey(d) => Value::I64(i64::from(d.id.get())),
+            // v2.0 metadata: use the relevant id as the primary key.
+            Record::TxTimestamp(t) => Value::I64(i64::try_from(t.tx_id.get()).unwrap_or(i64::MAX)),
+            Record::RetentionPolicy(r) => Value::I64(i64::from(r.type_id.get())),
         }),
         ColumnSource::TxIdAssert => Some(match record {
             Record::Entity(e) => {

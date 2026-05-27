@@ -272,6 +272,22 @@ pub enum JsonRecord {
         /// Property key string.
         name: String,
     },
+    /// Wall-clock commit timestamp for a transaction (v2.0+ internal metadata).
+    TxTimestamp {
+        /// Transaction id.
+        tx_id: u64,
+        /// Microseconds since Unix epoch at commit time.
+        timestamp_us: i64,
+    },
+    /// Per-type retention policy (v2.0+ internal metadata).
+    RetentionPolicy {
+        /// Target type id.
+        type_id: u32,
+        /// Policy discriminator: 0 = LatestOnly, 1 = Versioned, 2 = Audited.
+        policy_kind: u8,
+        /// `keep_last_n` for Versioned; ignored otherwise.
+        keep_last_n: u32,
+    },
 }
 
 /// Wire form of `tx_id_supersede`: either a numeric `tx_id` OR the
@@ -385,6 +401,15 @@ impl From<&Record> for JsonRecord {
                 id: d.id.get(),
                 name: d.name.clone(),
             },
+            Record::TxTimestamp(t) => JsonRecord::TxTimestamp {
+                tx_id: t.tx_id.get(),
+                timestamp_us: t.timestamp_us,
+            },
+            Record::RetentionPolicy(r) => JsonRecord::RetentionPolicy {
+                type_id: r.type_id.get(),
+                policy_kind: r.policy_kind,
+                keep_last_n: r.keep_last_n,
+            },
         }
     }
 }
@@ -454,6 +479,22 @@ impl TryFrom<JsonRecord> for Record {
             JsonRecord::PropertyKey { id, name } => Record::PropertyKey(PropertyKeyRecord {
                 id: PropertyId::new(id),
                 name,
+            }),
+            JsonRecord::TxTimestamp {
+                tx_id,
+                timestamp_us,
+            } => Record::TxTimestamp(crate::record::TxTimestampRecord {
+                tx_id: TxId::new(tx_id),
+                timestamp_us,
+            }),
+            JsonRecord::RetentionPolicy {
+                type_id,
+                policy_kind,
+                keep_last_n,
+            } => Record::RetentionPolicy(crate::record::RetentionPolicyRecord {
+                type_id: TypeId::new(type_id),
+                policy_kind,
+                keep_last_n,
             }),
         })
     }

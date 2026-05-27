@@ -223,7 +223,9 @@ impl ValidationEngine {
             | Record::Tombstone(_)
             | Record::TypeName(_)
             | Record::RoleName(_)
-            | Record::PropertyKey(_) => Ok(()),
+            | Record::PropertyKey(_)
+            | Record::TxTimestamp(_)
+            | Record::RetentionPolicy(_) => Ok(()),
         }
     }
 

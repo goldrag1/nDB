@@ -159,6 +159,14 @@ impl SSTableKey {
                 kind: RecordKind::PropertyKey.as_byte(),
                 primary: d.id.get().to_be_bytes().to_vec(),
             },
+            Record::TxTimestamp(t) => Self {
+                kind: RecordKind::TxTimestamp.as_byte(),
+                primary: t.tx_id.get().to_be_bytes().to_vec(),
+            },
+            Record::RetentionPolicy(r) => Self {
+                kind: RecordKind::RetentionPolicy.as_byte(),
+                primary: r.type_id.get().to_be_bytes().to_vec(),
+            },
         }
     }
 }

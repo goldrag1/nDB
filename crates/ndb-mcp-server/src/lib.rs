@@ -460,11 +460,21 @@ impl McpServer {
             .map_or(1000_usize, |n| n.try_into().unwrap_or(1000));
         let mut engine = self.engine.lock().expect("engine mutex poisoned");
         let snap = TxId::new(engine.manifest().last_tx_id);
-        let mut records = engine.snapshot_iter(snap)?;
-        if records.len() > limit {
-            records.truncate(limit);
+        let records = engine.snapshot_iter(snap)?;
+        // Filter internal v2.0 metadata records, then truncate.
+        let mut filtered: Vec<&ndb_engine::Record> = records
+            .iter()
+            .filter(|r| {
+                !matches!(
+                    r,
+                    ndb_engine::Record::TxTimestamp(_) | ndb_engine::Record::RetentionPolicy(_)
+                )
+            })
+            .collect();
+        if filtered.len() > limit {
+            filtered.truncate(limit);
         }
-        let payload: Vec<JsonRecord> = records.iter().map(JsonRecord::from).collect();
+        let payload: Vec<JsonRecord> = filtered.iter().map(|r| JsonRecord::from(*r)).collect();
         Ok(serde_json::json!({"records": payload}))
     }
 

@@ -60,6 +60,12 @@ pub enum RecordKind {
     RoleName = 0x05,
     /// `PropertyKeyRecord` — `0x06`. Dictionary entry: `u32 ↔ property-key string`.
     PropertyKey = 0x06,
+    /// `TxTimestampRecord` — `0x07`. Wall-clock commit timestamp for a tx
+    /// (v2.0+). Written once per `WriteTxn::commit`.
+    TxTimestamp = 0x07,
+    /// `RetentionPolicyRecord` — `0x08`. Per-type retention policy
+    /// (v2.0+). Written by `Engine::set_retention_policy`.
+    RetentionPolicy = 0x08,
 }
 
 impl RecordKind {
@@ -72,6 +78,8 @@ impl RecordKind {
             0x04 => Self::TypeName,
             0x05 => Self::RoleName,
             0x06 => Self::PropertyKey,
+            0x07 => Self::TxTimestamp,
+            0x08 => Self::RetentionPolicy,
             other => return Err(DecodeError::UnknownRecordKind { kind: other }),
         })
     }
@@ -161,6 +169,31 @@ pub struct PropertyKeyRecord {
     pub name: String,
 }
 
+/// Wall-clock commit timestamp for a transaction. Written once per
+/// `WriteTxn::commit` so `Engine::tx_at_or_before(timestamp_us)` survives
+/// engine restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TxTimestampRecord {
+    /// Transaction id this timestamp belongs to.
+    pub tx_id: TxId,
+    /// Microseconds since Unix epoch at commit time.
+    pub timestamp_us: i64,
+}
+
+/// Per-type retention policy. Written when `Engine::set_retention_policy`
+/// is called; survives engine restart. The compactor preserves the
+/// most-recent record per `type_id` and may drop older ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetentionPolicyRecord {
+    /// Target type.
+    pub type_id: TypeId,
+    /// Policy discriminator:
+    /// 0 = `LatestOnly`, 1 = `Versioned { keep_last_n }`, 2 = `Audited`.
+    pub policy_kind: u8,
+    /// `keep_last_n` for the `Versioned` policy; ignored otherwise.
+    pub keep_last_n: u32,
+}
+
 // ---------------------------------------------------------------------------
 // Any-record enum — convenience wrapper used by the WAL replayer and the
 // scan-recovery loop.
@@ -182,6 +215,10 @@ pub enum Record {
     RoleName(RoleNameRecord),
     /// `0x06` — `PropertyKeyRecord`.
     PropertyKey(PropertyKeyRecord),
+    /// `0x07` — `TxTimestampRecord`.
+    TxTimestamp(TxTimestampRecord),
+    /// `0x08` — `RetentionPolicyRecord`.
+    RetentionPolicy(RetentionPolicyRecord),
 }
 
 impl Record {
@@ -195,6 +232,8 @@ impl Record {
             Self::TypeName(_) => RecordKind::TypeName,
             Self::RoleName(_) => RecordKind::RoleName,
             Self::PropertyKey(_) => RecordKind::PropertyKey,
+            Self::TxTimestamp(_) => RecordKind::TxTimestamp,
+            Self::RetentionPolicy(_) => RecordKind::RetentionPolicy,
         }
     }
 
@@ -207,6 +246,8 @@ impl Record {
             Self::TypeName(r) => r.encode(out),
             Self::RoleName(r) => r.encode(out),
             Self::PropertyKey(r) => r.encode(out),
+            Self::TxTimestamp(r) => r.encode(out),
+            Self::RetentionPolicy(r) => r.encode(out),
         }
     }
 
@@ -238,6 +279,14 @@ impl Record {
             RecordKind::PropertyKey => {
                 let (r, n) = PropertyKeyRecord::decode(input)?;
                 (Self::PropertyKey(r), n)
+            }
+            RecordKind::TxTimestamp => {
+                let (r, n) = TxTimestampRecord::decode(input)?;
+                (Self::TxTimestamp(r), n)
+            }
+            RecordKind::RetentionPolicy => {
+                let (r, n) = RetentionPolicyRecord::decode(input)?;
+                (Self::RetentionPolicy(r), n)
             }
         })
     }
@@ -685,6 +734,75 @@ impl PropertyKeyRecord {
 }
 
 // ---------------------------------------------------------------------------
+// TxTimestampRecord (0x07) — wall-clock commit timestamp
+// ---------------------------------------------------------------------------
+
+impl TxTimestampRecord {
+    /// Encode onto `out`.
+    pub fn encode(&self, out: &mut Vec<u8>) -> Result<usize, EncodeError> {
+        let start = begin_record(out, RecordKind::TxTimestamp);
+        write_u64(out, self.tx_id.get());
+        // i64 microseconds — preserve bits via to_le_bytes.
+        out.extend_from_slice(&self.timestamp_us.to_le_bytes());
+        finalize_record(out, start)
+    }
+
+    /// Decode the record at the start of `input`.
+    pub fn decode(input: &[u8]) -> Result<(Self, usize), DecodeError> {
+        let env = read_envelope(input, RecordKind::TxTimestamp)?;
+        let mut c = Cursor::new(env.payload);
+        let tx_id = TxId::new(c.read_u64()?);
+        let ts_bytes = c.read_array::<8>()?;
+        let timestamp_us = i64::from_le_bytes(ts_bytes);
+        if c.remaining() != 0 {
+            return Err(DecodeError::TrailingBytes(c.remaining()));
+        }
+        Ok((
+            Self {
+                tx_id,
+                timestamp_us,
+            },
+            env.total_size,
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RetentionPolicyRecord (0x08) — per-type retention configuration
+// ---------------------------------------------------------------------------
+
+impl RetentionPolicyRecord {
+    /// Encode onto `out`.
+    pub fn encode(&self, out: &mut Vec<u8>) -> Result<usize, EncodeError> {
+        let start = begin_record(out, RecordKind::RetentionPolicy);
+        write_u32(out, self.type_id.get());
+        write_u8(out, self.policy_kind);
+        write_u32(out, self.keep_last_n);
+        finalize_record(out, start)
+    }
+
+    /// Decode the record at the start of `input`.
+    pub fn decode(input: &[u8]) -> Result<(Self, usize), DecodeError> {
+        let env = read_envelope(input, RecordKind::RetentionPolicy)?;
+        let mut c = Cursor::new(env.payload);
+        let type_id = TypeId::new(c.read_u32()?);
+        let policy_kind = c.read_u8()?;
+        let keep_last_n = c.read_u32()?;
+        if c.remaining() != 0 {
+            return Err(DecodeError::TrailingBytes(c.remaining()));
+        }
+        Ok((
+            Self {
+                type_id,
+                policy_kind,
+                keep_last_n,
+            },
+            env.total_size,
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1098,6 +1216,8 @@ mod tests {
                 RecordKind::TypeName => TypeNameRecord::decode(slice).map(|_| ()),
                 RecordKind::RoleName => RoleNameRecord::decode(slice).map(|_| ()),
                 RecordKind::PropertyKey => PropertyKeyRecord::decode(slice).map(|_| ()),
+                RecordKind::TxTimestamp => TxTimestampRecord::decode(slice).map(|_| ()),
+                RecordKind::RetentionPolicy => RetentionPolicyRecord::decode(slice).map(|_| ()),
             };
             match result {
                 Ok(()) => ok_count += 1,
