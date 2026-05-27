@@ -560,6 +560,7 @@ impl Server {
             ("POST", "/property_range") => self.handle_property_range(body, out, outcome),
             ("POST", "/traverse") => self.handle_traverse(body, out, outcome),
             ("POST", "/query") => self.handle_query(body, out, outcome),
+            ("POST", "/query_stream") => self.handle_query_stream(body, out, outcome),
             _ => {
                 outcome.status = 404;
                 let detail = format!("no route for {} {}", req.method, req.path);
@@ -934,6 +935,60 @@ impl Server {
         write_json(out, 200, &resp)
     }
 
+    /// `POST /query_stream` — same semantics as `/query` but the response
+    /// is streamed as JSONL (one row per line) instead of materialised
+    /// in a single JSON body. Useful for large result sets where the
+    /// client wants to consume rows incrementally.
+    ///
+    /// The first line emitted is the header
+    /// `{"columns": [...], "truncated": <bool>}`; every subsequent line
+    /// is one row, an array of `JsonValue`s in column order. End of
+    /// stream is the closed connection (no trailing line).
+    ///
+    /// v1 caveat: the engine executor still materialises all binding
+    /// rows in memory before this route streams them. End-to-end lazy
+    /// execution lands in v2 once the executor is rewritten as an
+    /// iterator pipeline.
+    fn handle_query_stream(
+        &self,
+        body: &[u8],
+        out: &mut dyn Write,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
+        let req: QueryRequest = match serde_json::from_slice(body) {
+            Ok(r) => r,
+            Err(e) => return bad_json(out, outcome, "query body", &e.to_string()),
+        };
+        let mut engine = self.engine.lock().expect("engine mutex poisoned");
+        let resp = match execute_query(&mut engine, req) {
+            Ok(r) => r,
+            Err(e) => return query_error_to_http(out, outcome, &e),
+        };
+        write_status_line(out, 200)?;
+        out.write_all(b"Content-Type: application/jsonl; charset=utf-8\r\n")?;
+        out.write_all(b"Connection: close\r\n\r\n")?;
+        // First line: header.
+        let header = serde_json::json!({
+            "columns": resp.columns,
+            "truncated": resp.truncated,
+        });
+        let header_line = serde_json::to_string(&header).map_err(|e| {
+            ServerError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        })?;
+        out.write_all(header_line.as_bytes())?;
+        out.write_all(b"\n")?;
+        // Subsequent lines: one row each.
+        for row in &resp.rows {
+            let line = serde_json::to_string(row).map_err(|e| {
+                ServerError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            })?;
+            out.write_all(line.as_bytes())?;
+            out.write_all(b"\n")?;
+        }
+        outcome.status = 200;
+        Ok(())
+    }
+
     /// Borrow the shared engine for direct manipulation (tests).
     #[must_use]
     pub fn engine(&self) -> Arc<Mutex<Engine>> {
@@ -1279,7 +1334,7 @@ fn required_capability(method: &str, path: &str) -> Option<Capability> {
         (
             "POST",
             "/lookup" | "/vector_search" | "/property_lookup" | "/property_range" | "/traverse"
-                | "/query",
+                | "/query" | "/query_stream",
         ) => Some(Capability::Read),
         _ => None,
     }

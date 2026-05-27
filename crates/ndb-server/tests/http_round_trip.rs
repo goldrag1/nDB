@@ -599,6 +599,72 @@ fn query_route_executes_entity_pattern_via_tcp() {
 }
 
 #[test]
+fn query_stream_emits_header_plus_one_line_per_row() {
+    const TYPE_CUSTOMER: u32 = 100;
+    const PROP_NAME: u32 = 30;
+    const PROP_REGION: u32 = 31;
+
+    let dir = temp_dir("qstream");
+    let server = Arc::new(Server::open(&dir).unwrap());
+    {
+        let e = server.engine();
+        let mut e = e.lock().unwrap();
+        for n in 0..4 {
+            let eid = EntityId::now_v7();
+            let mut txn = e.begin_write();
+            txn.put_entity(ndb_engine::EntityRecord {
+                entity_id: eid,
+                type_id: TypeId::new(TYPE_CUSTOMER),
+                tx_id_assert: ndb_engine::TxId::new(0),
+                tx_id_supersede: ndb_engine::TxId::ACTIVE,
+                properties: vec![
+                    (PropertyId::new(PROP_NAME), Value::String(format!("c{n}"))),
+                    (PropertyId::new(PROP_REGION), Value::String("Vietnam".into())),
+                ],
+            });
+            txn.commit().unwrap();
+        }
+    }
+    let addr = spawn_server(Arc::clone(&server), 1);
+
+    let body = format!(
+        r#"{{
+            "patterns": [{{
+                "kind": "entity",
+                "type_id": {TYPE_CUSTOMER},
+                "self_var": "c",
+                "property_filters": [
+                    {{"property_id": {PROP_REGION}, "op": "eq",
+                      "term": {{"kind":"literal","value":{{"tag":"string","value":"Vietnam"}}}} }},
+                    {{"property_id": {PROP_NAME}, "op": "eq",
+                      "term": {{"kind":"var","name":"n"}} }}
+                ]
+            }}],
+            "returns": ["c", "n"]
+        }}"#,
+    );
+    let resp = post(addr, "/query_stream", &body);
+    assert_eq!(resp.status, 200);
+    let text = std::str::from_utf8(&resp.body).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    // Line 0: header. Lines 1..=4: four rows.
+    assert!(lines.len() >= 5, "expected ≥5 lines, got {}", lines.len());
+    let header: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(header["columns"], serde_json::json!(["c", "n"]));
+    assert_eq!(header["truncated"], serde_json::json!(false));
+    // Every subsequent line is a JSON array of two JsonValue objects.
+    for row_line in &lines[1..] {
+        let row: serde_json::Value = serde_json::from_str(row_line).unwrap();
+        let arr = row.as_array().expect("row is an array");
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["tag"], "uuid");
+        assert_eq!(arr[1]["tag"], "string");
+    }
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn malformed_uuid_in_read_returns_400() {
     let dir = temp_dir("bad_uuid");
     let server = Arc::new(Server::open(&dir).unwrap());
