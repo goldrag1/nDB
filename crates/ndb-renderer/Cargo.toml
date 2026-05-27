@@ -20,8 +20,9 @@ ndb-slicer = { path = "../ndb-slicer" }
 [dev-dependencies]
 # Only the v22_explorer example needs ndb-server; keeping it as a
 # dev-dep avoids forcing every consumer of ndb-renderer to link the
-# HTTP server.
+# HTTP server. uuid is for tempdir naming in the example's tests.
 ndb-server = { path = "../ndb-server" }
+uuid       = { workspace = true }
 
 [lints]
 workspace = true

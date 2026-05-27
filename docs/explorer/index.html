@@ -58,6 +58,13 @@
   .hint { font-size: 11px; color: #777; line-height: 1.5; }
   details summary { cursor: pointer; font-size: 13px; color: #cfcfd6; padding: 6px 0; }
   details[open] summary { color: #fff; }
+  .plddt-bar {
+    display: flex; height: 10px; border-radius: 3px; overflow: hidden;
+    margin: 4px 0 6px; border: 1px solid #2b2b36;
+  }
+  .plddt-bar > div { transition: flex 0.2s; min-width: 2px; }
+  a { color: #4a90e2; }
+  a:hover { color: #5aa0f2; }
 </style>
 </head>
 <body>
@@ -71,6 +78,9 @@
 
     <h2>Types</h2>
     <div id="type-legend"></div>
+
+    <h2>AlphaFold confidence</h2>
+    <div id="confidence-legend"></div>
 
     <h2>Add entity</h2>
     <div class="form">
@@ -147,7 +157,31 @@ const TYPES = {
   cites:     { id: 102, color: "#cccccc", kind: "hyperedge" },
   authored:  { id: 103, color: "#cccccc", kind: "hyperedge" },
 };
-const PROP_NAME = 30;
+const PROP_NAME              = 30;
+// AlphaFold confidence overlay (v2.2 §A).
+const PROP_PLDDT_MEAN        = 36;
+const PROP_PLDDT_BUCKET      = 37;
+const PROP_COMPLEX_CONFIDENCE = 38;
+const PROP_UNIPROT           = 39;
+const PROP_SEQ_LEN           = 40;
+const PROP_ORGANISM          = 41;
+const PROP_GENE              = 42;
+
+// AlphaFold-DB official per-residue confidence palette.
+// https://alphafold.ebi.ac.uk/faq#faq-5
+const PLDDT_PALETTE = {
+  very_high: "#0053D6",   // dark blue
+  confident: "#65CBF3",   // light blue
+  low:       "#FFDB13",   // yellow
+  very_low:  "#FF7D45",   // orange
+};
+function bucketForPlddt(mean) {
+  if (mean == null || Number.isNaN(mean)) return null;
+  if (mean > 90) return "very_high";
+  if (mean > 70) return "confident";
+  if (mean > 50) return "low";
+  return "very_low";
+}
 
 // Lookup helpers ───────────────────────────────────────────────
 const typeNameById = Object.fromEntries(
@@ -167,6 +201,7 @@ let Graph = null;                // 3d-force-graph instance
 // ─── DOM refs ──────────────────────────────────────────────────
 const $stats = document.getElementById("stats");
 const $legend = document.getElementById("type-legend");
+const $confidence = document.getElementById("confidence-legend");
 const $selected = document.getElementById("selected-card");
 const $deleteBtn = document.getElementById("delete-btn");
 const $pulseBtn = document.getElementById("pulse-btn");
@@ -266,12 +301,19 @@ function buildGraphFromRecords(records) {
   for (const rec of records) {
     if (rec.kind === "entity") {
       entitiesById.set(rec.entity_id, rec);
+      const plddtMean = extractPlddtMean(rec);
+      const plddtBucket =
+        extractPlddtBucket(rec) ?? bucketForPlddt(plddtMean);
       nodes.push({
         id: rec.entity_id,
         nodeKind: "entity",
         type_id: rec.type_id,
         label: extractName(rec),
         record: rec,
+        // Cached for the node-style callbacks; absent for non-protein
+        // entities + for proteins with no AF-DB record (ATM, BRCA2).
+        plddtMean: typeof plddtMean === "number" ? plddtMean : null,
+        plddtBucket: plddtBucket || null,
       });
     }
   }
@@ -285,12 +327,15 @@ function buildGraphFromRecords(records) {
       // set (orphan reference — shouldn't happen).
       const memberIds = rec.roles.map(r => r.entity_id);
       if (!memberIds.every(eid => entitiesById.has(eid))) continue;
+      const conf = extractComplexConf(rec);
       nodes.push({
         id: rec.hyperedge_id,
         nodeKind: "hyperedge",
         type_id: rec.type_id,
         label: extractName(rec) || `${typeNameById[rec.type_id] || "edge"}(${memberIds.length})`,
         record: rec,
+        complexConf: typeof conf === "number" ? conf : null,
+        complexBucket: typeof conf === "number" ? bucketForPlddt(conf) : null,
       });
       for (const m of memberIds) {
         links.push({
@@ -316,6 +361,18 @@ function extractName(rec) {
   return null;
 }
 
+// Generic property reader — returns the typed value or undefined.
+function extractProp(rec, propId) {
+  for (const p of (rec.properties || [])) {
+    if (p.prop_id === propId) return p.value?.value;
+  }
+  return undefined;
+}
+function extractPlddtMean(rec)    { return extractProp(rec, PROP_PLDDT_MEAN); }
+function extractPlddtBucket(rec)  { return extractProp(rec, PROP_PLDDT_BUCKET); }
+function extractComplexConf(rec)  { return extractProp(rec, PROP_COMPLEX_CONFIDENCE); }
+function extractUniprot(rec)      { return extractProp(rec, PROP_UNIPROT); }
+
 function shortId(uuid) {
   return uuid ? uuid.slice(0, 8) : "?";
 }
@@ -340,6 +397,57 @@ function updateStats() {
     const c = TYPES[name]?.color || "#888";
     return `<div class="type-row"><div class="type-dot" style="background:${c}"></div><span style="flex:1">${name}</span><span>${n}</span></div>`;
   }).join("");
+  updateConfidenceLegend();
+}
+
+// AlphaFold-DB pLDDT distribution across the protein entities currently
+// in view. Renders as a stacked horizontal bar in the bucket palette,
+// plus per-bucket counts. Buckets with zero counts collapse; "no data"
+// (proteins without a pLDDT property — e.g. ATM, BRCA2) is included as
+// a neutral grey bucket so the count balances against `Entities`.
+function updateConfidenceLegend() {
+  if (!$confidence) return;
+  const buckets = { very_high: 0, confident: 0, low: 0, very_low: 0, no_data: 0 };
+  let total = 0;
+  for (const n of graphData.nodes) {
+    if (n.nodeKind !== "entity") continue;
+    if (n.type_id !== TYPES.protein.id) continue;
+    total += 1;
+    if (n.plddtBucket && buckets[n.plddtBucket] != null) {
+      buckets[n.plddtBucket] += 1;
+    } else {
+      buckets.no_data += 1;
+    }
+  }
+  if (total === 0) {
+    $confidence.innerHTML = '<div class="hint">No protein entities loaded.</div>';
+    return;
+  }
+  const order = ["very_high", "confident", "low", "very_low", "no_data"];
+  const labelFor = {
+    very_high: "Very high (>90)",
+    confident: "Confident (>70)",
+    low:       "Low (>50)",
+    very_low:  "Very low (≤50)",
+    no_data:   "No AF-DB record",
+  };
+  const colorFor = { ...PLDDT_PALETTE, no_data: "#444a55" };
+  const segs = order
+    .filter(k => buckets[k] > 0)
+    .map(k => `<div title="${labelFor[k]}: ${buckets[k]}" style="background:${colorFor[k]};flex:${buckets[k]}"></div>`)
+    .join("");
+  const rows = order
+    .filter(k => buckets[k] > 0)
+    .map(k => `<div class="type-row"><div class="type-dot" style="background:${colorFor[k]}"></div><span style="flex:1">${labelFor[k]}</span><span>${buckets[k]}</span></div>`)
+    .join("");
+  $confidence.innerHTML = `
+    <div class="plddt-bar">${segs}</div>
+    ${rows}
+    <div class="hint" style="margin-top:4px">
+      Mean pLDDT from AlphaFold-DB. Node size scales with confidence;
+      node colour shows the bucket. <a href="https://alphafold.ebi.ac.uk/faq#faq-5" target="_blank" rel="noreferrer">Palette →</a>
+    </div>
+  `;
 }
 
 function refreshHedMemberList() {
@@ -444,18 +552,49 @@ function renderSelected() {
   if (selected.nodeKind === "entity") {
     lines.push(`<span class="label">entity</span> ${shortId(r.entity_id)}`);
     lines.push(`<span class="label">type</span> ${typeNameById[r.type_id] || r.type_id}`);
+    // Highlight the AF-DB confidence for proteins — the headline fact.
+    if (selected.plddtMean != null) {
+      const c = PLDDT_PALETTE[selected.plddtBucket] || "#888";
+      lines.push(
+        `<span class="label">pLDDT</span> <span style="color:${c}">${selected.plddtMean.toFixed(1)} (${selected.plddtBucket})</span>`
+      );
+    } else if (r.type_id === TYPES.protein.id) {
+      lines.push(`<span class="label">pLDDT</span> <span style="color:#888">no AF-DB record</span>`);
+    }
   } else {
     lines.push(`<span class="label">hyperedge</span> ${shortId(r.hyperedge_id)}`);
     lines.push(`<span class="label">type</span> ${typeNameById[r.type_id] || r.type_id}`);
     lines.push(`<span class="label">arity</span> ${r.roles.length}`);
+    if (selected.complexConf != null) {
+      const c = PLDDT_PALETTE[selected.complexBucket] || "#888";
+      lines.push(
+        `<span class="label">complex&nbsp;conf</span> <span style="color:${c}">${selected.complexConf.toFixed(1)} (${selected.complexBucket})</span>`
+      );
+    }
     for (const role of r.roles) {
       const ent = entitiesById.get(role.entity_id);
       lines.push(`<span class="label">role ${role.role_id}</span> ${ent ? extractName(ent) : shortId(role.entity_id)}`);
     }
   }
+  // Pretty labels for known property IDs; fall back to `p<id>` otherwise.
+  const PROP_LABEL = {
+    [PROP_NAME]: "name",
+    31: "function",
+    32: "year",
+    33: "title",
+    34: "pathway",
+    [PROP_PLDDT_MEAN]: "pLDDT_mean",
+    [PROP_PLDDT_BUCKET]: "pLDDT_bucket",
+    [PROP_COMPLEX_CONFIDENCE]: "complex_conf",
+    [PROP_UNIPROT]: "uniprot",
+    [PROP_SEQ_LEN]: "seq_len",
+    [PROP_ORGANISM]: "organism",
+    [PROP_GENE]: "gene",
+  };
   for (const p of r.properties || []) {
     const v = p.value && (p.value.value ?? p.value);
-    lines.push(`<span class="label">p${p.prop_id}</span> ${typeof v === "object" ? JSON.stringify(v) : String(v)}`);
+    const label = PROP_LABEL[p.prop_id] || `p${p.prop_id}`;
+    lines.push(`<span class="label">${label}</span> ${typeof v === "object" ? JSON.stringify(v) : String(v)}`);
   }
   $selected.innerHTML = lines.join("<br>");
   $deleteBtn.disabled = false;
@@ -599,11 +738,48 @@ $pulseBtn.addEventListener("click", pulseSignal);
 $clearHighlightsBtn.addEventListener("click", clearHighlights);
 
 // ─── Boot the 3D graph ─────────────────────────────────────────
+// Confidence-aware node styling — for a protein, the colour comes from
+// the AlphaFold-DB pLDDT bucket (blue-yellow-orange ramp) instead of the
+// type colour, AND the rendered size scales with the mean pLDDT so high-
+// confidence structures draw bigger. Non-protein entities + proteins
+// without an AF-DB record fall back to the existing type-colour scheme.
+function nodeColorFor(n) {
+  if (n.nodeKind === "entity" && n.plddtBucket) {
+    return PLDDT_PALETTE[n.plddtBucket] || colorForTypeId(n.type_id);
+  }
+  if (n.nodeKind === "hyperedge" && n.complexBucket) {
+    // Hyperedge centroids tinted by their synthesised complex confidence.
+    return PLDDT_PALETTE[n.complexBucket] || "#cccccc";
+  }
+  return colorForTypeId(n.type_id);
+}
+function nodeValFor(n) {
+  // 3d-force-graph multiplies nodeRelSize by sqrt(nodeVal). pLDDT 0-100
+  // → val 0.6-3.0 so high-confidence proteins draw ~2× the radius of
+  // missing-data proteins without dominating the scene.
+  if (n.nodeKind === "entity" && typeof n.plddtMean === "number") {
+    return 0.6 + (n.plddtMean / 100) * 2.4;
+  }
+  return 1.0;
+}
+function nodeLabelFor(n) {
+  const t = typeNameById[n.type_id] || n.type_id;
+  const id = n.label || shortId(n.id);
+  if (n.nodeKind === "entity" && typeof n.plddtMean === "number") {
+    return `${id} (${t}) · pLDDT ${n.plddtMean.toFixed(1)} (${n.plddtBucket})`;
+  }
+  if (n.nodeKind === "hyperedge" && typeof n.complexConf === "number") {
+    return `${id} (${t}) · complex confidence ${n.complexConf.toFixed(1)} (${n.complexBucket})`;
+  }
+  return `${id} (${t})`;
+}
+
 Graph = ForceGraph3D()(document.getElementById("graph-host"))
   .backgroundColor("#0d0d12")
   .nodeRelSize(5)
-  .nodeColor(n => colorForTypeId(n.type_id))
-  .nodeLabel(n => `${n.label || shortId(n.id)} (${typeNameById[n.type_id] || n.type_id})`)
+  .nodeVal(nodeValFor)
+  .nodeColor(nodeColorFor)
+  .nodeLabel(nodeLabelFor)
   .linkColor(() => "rgba(255,255,255,0.18)")
   .linkOpacity(0.5)
   .linkWidth(0.5)

@@ -61,6 +61,17 @@ const PROP_FUNCTION: u32 = 31;
 const PROP_YEAR: u32 = 32;
 const PROP_TITLE: u32 = 33;
 const PROP_PATHWAY_NAME: u32 = 34;
+// AlphaFold-derived properties (v2.2 §A — confidence overlay).
+const PROP_PLDDT_MEAN: u32 = 36;
+const PROP_PLDDT_BUCKET: u32 = 37;
+const PROP_COMPLEX_CONFIDENCE: u32 = 38;
+// Auxiliary metadata shipped from the AF-DB record (v2.2 §B — used when
+// the user fetches a new protein live, but seeded too for the 15
+// curated entries so the schema is symmetric).
+const PROP_UNIPROT: u32 = 39;
+const PROP_SEQ_LEN: u32 = 40;
+const PROP_ORGANISM: u32 = 41;
+const PROP_GENE: u32 = 42;
 
 const DB_PATH: &str = "/tmp/v22-explorer-ndb";
 const API_PORT: u16 = 8742;
@@ -135,39 +146,73 @@ fn main() {
     }
 }
 
+/// Bucket per AlphaFold-DB published thresholds.
+/// <https://alphafold.ebi.ac.uk/faq#faq-5>
+fn plddt_bucket(mean: f64) -> &'static str {
+    if mean > 90.0 {
+        "very_high"
+    } else if mean > 70.0 {
+        "confident"
+    } else if mean > 50.0 {
+        "low"
+    } else {
+        "very_low"
+    }
+}
+
+/// Curated AlphaFold-DB metadata for the 15 seed proteins.
+/// Values fetched + verified from `alphafold.ebi.ac.uk/api/prediction/<acc>`
+/// in May 2026 (`model_v6`). [`None`] for the two extra-large proteins (ATM
+/// 3056 aa, BRCA2 3418 aa) whose predictions AF-DB has retired — the viz
+/// renders them with neutral colouring so the user can see "no AF data".
+struct AfRecord {
+    name: &'static str,
+    func: &'static str,
+    year: i64,
+    uniprot: &'static str,
+    gene: &'static str,
+    organism: &'static str,
+    seq_len: i64,
+    plddt_mean: Option<f64>,
+}
+const AF_SEED: &[AfRecord] = &[
+    AfRecord { name: "P53",   func: "tumor suppressor",   year: 1979, uniprot: "P04637", gene: "TP53",     organism: "Homo sapiens", seq_len: 393,  plddt_mean: Some(75.06) },
+    AfRecord { name: "MDM2",  func: "ubiquitin ligase",   year: 1991, uniprot: "Q00987", gene: "MDM2",     organism: "Homo sapiens", seq_len: 491,  plddt_mean: Some(62.59) },
+    AfRecord { name: "ATM",   func: "kinase, DNA damage", year: 1995, uniprot: "Q13315", gene: "ATM",      organism: "Homo sapiens", seq_len: 3056, plddt_mean: None         },
+    AfRecord { name: "CHK2",  func: "checkpoint kinase",  year: 1998, uniprot: "O96017", gene: "CHEK2",    organism: "Homo sapiens", seq_len: 543,  plddt_mean: Some(76.19) },
+    AfRecord { name: "BRCA1", func: "DNA repair",         year: 1994, uniprot: "P38398", gene: "BRCA1",    organism: "Homo sapiens", seq_len: 1863, plddt_mean: Some(41.59) },
+    AfRecord { name: "BRCA2", func: "DNA repair",         year: 1995, uniprot: "P51587", gene: "BRCA2",    organism: "Homo sapiens", seq_len: 3418, plddt_mean: None         },
+    AfRecord { name: "AKT1",  func: "kinase, survival",   year: 1987, uniprot: "P31749", gene: "AKT1",     organism: "Homo sapiens", seq_len: 480,  plddt_mean: Some(83.06) },
+    AfRecord { name: "MTOR",  func: "kinase, growth",     year: 1994, uniprot: "P42345", gene: "MTOR",     organism: "Homo sapiens", seq_len: 2549, plddt_mean: Some(78.00) },
+    AfRecord { name: "ULK1",  func: "kinase, autophagy",  year: 1998, uniprot: "O75385", gene: "ULK1",     organism: "Homo sapiens", seq_len: 1050, plddt_mean: Some(59.41) },
+    AfRecord { name: "BECN1", func: "autophagy regulator",year: 1998, uniprot: "Q14457", gene: "BECN1",    organism: "Homo sapiens", seq_len: 450,  plddt_mean: Some(76.56) },
+    AfRecord { name: "LC3",   func: "autophagy",          year: 2000, uniprot: "Q9GZQ8", gene: "MAP1LC3B", organism: "Homo sapiens", seq_len: 125,  plddt_mean: Some(91.44) },
+    AfRecord { name: "ATG7",  func: "E1-like enzyme",     year: 1999, uniprot: "O95352", gene: "ATG7",     organism: "Homo sapiens", seq_len: 703,  plddt_mean: Some(87.62) },
+    AfRecord { name: "PI3K",  func: "kinase, signaling",  year: 1988, uniprot: "P42336", gene: "PIK3CA",   organism: "Homo sapiens", seq_len: 1068, plddt_mean: Some(92.38) },
+    AfRecord { name: "PTEN",  func: "phosphatase",        year: 1997, uniprot: "P60484", gene: "PTEN",     organism: "Homo sapiens", seq_len: 403,  plddt_mean: Some(83.00) },
+    AfRecord { name: "KRAS",  func: "GTPase, signaling",  year: 1983, uniprot: "P01116", gene: "KRAS",     organism: "Homo sapiens", seq_len: 189,  plddt_mean: Some(91.50) },
+];
+
 fn seed(engine: &mut Engine) {
-    // Proteins (15) — name + function + year_discovered.
-    let proteins: Vec<(&str, &str, i64)> = vec![
-        ("P53", "tumor suppressor", 1979),
-        ("MDM2", "ubiquitin ligase", 1991),
-        ("ATM", "kinase, DNA damage", 1995),
-        ("CHK2", "checkpoint kinase", 1998),
-        ("BRCA1", "DNA repair", 1994),
-        ("BRCA2", "DNA repair", 1995),
-        ("AKT1", "kinase, survival", 1987),
-        ("MTOR", "kinase, growth", 1994),
-        ("ULK1", "kinase, autophagy", 1998),
-        ("BECN1", "autophagy regulator", 1998),
-        ("LC3", "autophagy", 2000),
-        ("ATG7", "E1-like enzyme", 1999),
-        ("PI3K", "kinase, signaling", 1988),
-        ("PTEN", "phosphatase", 1997),
-        ("KRAS", "GTPase, signaling", 1983),
-    ];
-    let mut p_ids: Vec<(EntityId, &str)> = Vec::new();
-    for (name, func, year) in &proteins {
+    // Proteins (15) — name + function + year_discovered + AF-DB confidence.
+    let mut p_ids: Vec<(EntityId, &str, Option<f64>)> = Vec::new();
+    for rec in AF_SEED {
         let eid = EntityId::now_v7();
-        commit_entity(
-            engine,
-            eid,
-            T_PROTEIN,
-            vec![
-                (PROP_NAME, Value::String((*name).into())),
-                (PROP_FUNCTION, Value::String((*func).into())),
-                (PROP_YEAR, Value::I64(*year)),
-            ],
-        );
-        p_ids.push((eid, name));
+        let mut props: Vec<(u32, Value)> = vec![
+            (PROP_NAME, Value::String(rec.name.into())),
+            (PROP_FUNCTION, Value::String(rec.func.into())),
+            (PROP_YEAR, Value::I64(rec.year)),
+            (PROP_UNIPROT, Value::String(rec.uniprot.into())),
+            (PROP_GENE, Value::String(rec.gene.into())),
+            (PROP_ORGANISM, Value::String(rec.organism.into())),
+            (PROP_SEQ_LEN, Value::I64(rec.seq_len)),
+        ];
+        if let Some(mean) = rec.plddt_mean {
+            props.push((PROP_PLDDT_MEAN, Value::F64(mean)));
+            props.push((PROP_PLDDT_BUCKET, Value::String(plddt_bucket(mean).into())));
+        }
+        commit_entity(engine, eid, T_PROTEIN, props);
+        p_ids.push((eid, rec.name, rec.plddt_mean));
     }
 
     // Genes (5) — one per "famous" protein.
@@ -245,10 +290,16 @@ fn seed(engine: &mut Engine) {
 
     // ─── Hyperedges ───────────────────────────────────────────────
     let p_by_name = |n: &str| -> EntityId {
-        p_ids.iter().find(|(_, name)| *name == n).map_or_else(
+        p_ids.iter().find(|(_, name, _)| *name == n).map_or_else(
             || panic!("missing protein {n}"),
-            |(eid, _)| *eid,
+            |(eid, _, _)| *eid,
         )
+    };
+    let p_plddt = |n: &str| -> Option<f64> {
+        p_ids
+            .iter()
+            .find(|(_, name, _)| *name == n)
+            .and_then(|(_, _, m)| *m)
     };
     let a_by_name = |n: &str| -> EntityId {
         a_ids.iter().find(|(_, name)| *name == n).map_or_else(
@@ -277,12 +328,29 @@ fn seed(engine: &mut Engine) {
             .map(|n| (RoleId::new(ROLE_MEMBER), p_by_name(n)))
             .collect();
         roles.push((RoleId::new(ROLE_PATHWAY), path_eid));
-        commit_hyperedge(
-            engine,
-            T_COMPLEX,
-            roles,
-            vec![(PROP_NAME, Value::String((*cname).into()))],
-        );
+        // Synthesise a complex-level confidence from member pLDDT means.
+        // We don't have AlphaFold-Multimer's ipTM, so use a "mean × 0.8
+        // + min × 0.2" proxy — the weakest member drags the score down,
+        // which mirrors how confidence actually propagates through a
+        // multi-subunit complex prediction. Skip the property entirely
+        // when any member lacks an AF-DB record (no fabrication).
+        let mut props: Vec<(u32, Value)> = vec![(PROP_NAME, Value::String((*cname).into()))];
+        let member_plddts: Option<Vec<f64>> =
+            members.iter().map(|n| p_plddt(n)).collect();
+        if let Some(plddts) = member_plddts
+            && !plddts.is_empty()
+        {
+            // Members is always small (≤ ~6 in this dataset), well within
+            // f64 mantissa precision — but clippy can't see that, so opt
+            // in to the cast.
+            #[allow(clippy::cast_precision_loss)]
+            let n = plddts.len() as f64;
+            let mean = plddts.iter().sum::<f64>() / n;
+            let min = plddts.iter().copied().fold(f64::INFINITY, f64::min);
+            let combined = mean.mul_add(0.8, min * 0.2);
+            props.push((PROP_COMPLEX_CONFIDENCE, Value::F64(combined)));
+        }
+        commit_hyperedge(engine, T_COMPLEX, roles, props);
     }
 
     // 5 gene→protein "encodes" hyperedges.
@@ -466,3 +534,142 @@ fn write_response<W: Write>(w: &mut W, code: u16, ctype: &str, body: &[u8]) -> s
     w.flush()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndb_engine::id::PropertyId;
+
+    #[test]
+    fn plddt_bucket_matches_alphafold_db_thresholds() {
+        // AlphaFold-DB FAQ §5 published cutoffs (May 2026):
+        //   pLDDT > 90  → very_high
+        //   pLDDT > 70  → confident
+        //   pLDDT > 50  → low
+        //   pLDDT ≤ 50  → very_low
+        assert_eq!(plddt_bucket(95.0), "very_high");
+        assert_eq!(plddt_bucket(90.01), "very_high");
+        assert_eq!(plddt_bucket(90.0), "confident"); // boundary: not >90
+        assert_eq!(plddt_bucket(80.0), "confident");
+        assert_eq!(plddt_bucket(70.01), "confident");
+        assert_eq!(plddt_bucket(70.0), "low");       // boundary: not >70
+        assert_eq!(plddt_bucket(60.0), "low");
+        assert_eq!(plddt_bucket(50.01), "low");
+        assert_eq!(plddt_bucket(50.0), "very_low");  // boundary: not >50
+        assert_eq!(plddt_bucket(20.0), "very_low");
+        assert_eq!(plddt_bucket(0.0), "very_low");
+    }
+
+    #[test]
+    fn af_seed_has_15_proteins_with_consistent_metadata() {
+        assert_eq!(AF_SEED.len(), 15);
+        for rec in AF_SEED {
+            assert!(!rec.name.is_empty());
+            assert!(!rec.uniprot.is_empty());
+            assert!(rec.seq_len > 0);
+            if let Some(mean) = rec.plddt_mean {
+                assert!((0.0..=100.0).contains(&mean), "pLDDT out of range for {}: {mean}", rec.name);
+                // Cross-check: every published mean falls into a known bucket.
+                let b = plddt_bucket(mean);
+                assert!(
+                    matches!(b, "very_high" | "confident" | "low" | "very_low"),
+                    "bucket for {} = {b}",
+                    rec.name,
+                );
+            }
+        }
+        // ATM + BRCA2 are the two known-None entries (AF-DB retired their
+        // predictions for proteins >2700 aa as of v6).
+        let none_count = AF_SEED.iter().filter(|r| r.plddt_mean.is_none()).count();
+        assert_eq!(none_count, 2, "expected exactly 2 proteins with no AF-DB record");
+        let none_names: Vec<&str> = AF_SEED
+            .iter()
+            .filter(|r| r.plddt_mean.is_none())
+            .map(|r| r.name)
+            .collect();
+        assert!(none_names.contains(&"ATM"));
+        assert!(none_names.contains(&"BRCA2"));
+    }
+
+    /// End-to-end engine seed check: every protein carries the AF
+    /// properties; every complex hyperedge that can be scored has
+    /// `PROP_COMPLEX_CONFIDENCE` attached.
+    #[test]
+    fn seeded_engine_has_plddt_properties() {
+        use ndb_engine::record::Record;
+
+        // Fresh temp DB scoped to this test only — never collides with
+        // the example's `/tmp/v22-explorer-ndb` or with parallel tests.
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "v22-explorer-seed-test-{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        let mut engine = Engine::create(&dir).expect("create");
+        seed(&mut engine);
+        engine.flush().expect("flush");
+
+        // `TxId::ACTIVE` means "latest visible" — the right snapshot for
+        // a freshly-seeded engine with nothing in flight.
+        let records: Vec<Record> = engine
+            .snapshot_iter_streaming(TxId::ACTIVE)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("iter");
+
+        // Count protein entities + how many carry the AF properties.
+        let mut protein_count = 0_usize;
+        let mut with_plddt_mean = 0_usize;
+        let mut with_plddt_bucket = 0_usize;
+        let mut with_uniprot = 0_usize;
+        for r in &records {
+            if let Record::Entity(e) = r {
+                if e.type_id == TypeId::new(T_PROTEIN) {
+                    protein_count += 1;
+                    for (pid, _) in &e.properties {
+                        if *pid == PropertyId::new(PROP_PLDDT_MEAN) {
+                            with_plddt_mean += 1;
+                        }
+                        if *pid == PropertyId::new(PROP_PLDDT_BUCKET) {
+                            with_plddt_bucket += 1;
+                        }
+                        if *pid == PropertyId::new(PROP_UNIPROT) {
+                            with_uniprot += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(protein_count, 15);
+        assert_eq!(with_plddt_mean, 13); // ATM + BRCA2 have None
+        assert_eq!(with_plddt_bucket, 13);
+        assert_eq!(with_uniprot, 15); // UniProt accession known for all 15
+
+        // Complex hyperedges: 6 in the seed; 5 should carry confidence
+        // (the "BRCA repair" complex includes ATM → None → skip).
+        let mut complex_count = 0_usize;
+        let mut with_complex_conf = 0_usize;
+        for r in &records {
+            if let Record::HyperEdge(h) = r {
+                if h.type_id == TypeId::new(T_COMPLEX) {
+                    complex_count += 1;
+                    if h.properties
+                        .iter()
+                        .any(|(pid, _)| *pid == PropertyId::new(PROP_COMPLEX_CONFIDENCE))
+                    {
+                        with_complex_conf += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(complex_count, 6);
+        // Two complexes touch ATM (p53 surveillance, BRCA repair) and
+        // BRCA repair additionally touches BRCA2 — both proteins lack
+        // an AF-DB record, so the proxy can't be computed for them.
+        // The remaining 4 complexes get PROP_COMPLEX_CONFIDENCE.
+        assert_eq!(with_complex_conf, 4);
+
+        // Best-effort cleanup. Failures here are non-fatal — the tempdir
+        // is in $TMPDIR and will get reaped eventually.
+        drop(engine);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
