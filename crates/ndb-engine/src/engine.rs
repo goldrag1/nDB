@@ -825,7 +825,31 @@ impl Engine {
     ///    `active_wal_seq` and `last_tx_id` alone.
     /// 6. Open the new SSTable reader and replace `self.sstables`.
     /// 7. Delete the old SSTable files (best-effort).
+    ///
+    /// Equivalent to `compact_with_floor(TxId::ACTIVE)` — drops every
+    /// superseded version. For snapshot-aware compaction that protects
+    /// in-flight readers, use [`Self::compact_with_floor`] with the
+    /// oldest active snapshot tx_id.
     pub fn compact(&mut self) -> Result<CompactionStats, EngineError> {
+        self.compact_with_floor(TxId::ACTIVE)
+    }
+
+    /// Snapshot-aware compaction: drop a superseded version V only if
+    /// it was superseded BEFORE `oldest_active_snapshot`. Versions
+    /// superseded at-or-after that tx are still required by some active
+    /// reader; the compactor keeps them.
+    ///
+    /// `oldest_active_snapshot = TxId::ACTIVE` is the v1.3 baseline —
+    /// no active reader is registered, drop everything superseded.
+    ///
+    /// For `RetentionPolicy::Audited` the snapshot floor is irrelevant
+    /// (every version is kept anyway). For `Versioned { keep_last_n }`
+    /// the floor takes precedence: a version that's "old enough" by N
+    /// but still needed by a snapshot will be retained.
+    pub fn compact_with_floor(
+        &mut self,
+        oldest_active_snapshot: TxId,
+    ) -> Result<CompactionStats, EngineError> {
         if self.sstables.len() < 2 {
             // Single (or zero) SSTable: no merge to perform. We could
             // still drop tombstones, but for v1 the cost is not worth
@@ -886,7 +910,18 @@ impl Engine {
                 .unwrap_or_default();
             match policy {
                 RetentionPolicy::LatestOnly => {
-                    emit_latest_only(&mut writer, &versions, &killed, &mut records_out)?;
+                    if oldest_active_snapshot == TxId::ACTIVE {
+                        // Fast path: no snapshot floor — current v1.3 behaviour.
+                        emit_latest_only(&mut writer, &versions, &killed, &mut records_out)?;
+                    } else {
+                        emit_latest_only_with_floor(
+                            &mut writer,
+                            &versions,
+                            &killed,
+                            oldest_active_snapshot,
+                            &mut records_out,
+                        )?;
+                    }
                 }
                 RetentionPolicy::Audited => {
                     // Preserve every record (including tombstones) — full audit trail.
@@ -1174,6 +1209,67 @@ fn emit_latest_only(
             Ok(())
         }
     }
+}
+
+/// Snapshot-aware LatestOnly: emit every version that some live reader
+/// (snapshot ≥ `oldest_active_snapshot`) might still observe. Drops
+/// only versions fully shadowed at + after the floor.
+///
+/// A version V with assert tx `a_i` is observable at snapshot T iff
+/// `a_i ≤ T` and no later version `V'` has `a_{i+1} ≤ T`. So V is needed
+/// iff there exists T in `[oldest_active_snapshot, ACTIVE]` such that
+/// V is observable at T → iff the next version's assert > floor (or V
+/// is the last version, trivially live at ACTIVE).
+fn emit_latest_only_with_floor(
+    writer: &mut SSTableWriter,
+    versions: &[Record],
+    killed: &HashMap<uuid::Uuid, TxId>,
+    oldest_active_snapshot: TxId,
+    records_out: &mut u64,
+) -> Result<(), EngineError> {
+    // Sort ascending by assert tx (versions arriving from SSTable scan
+    // are in unspecified order across files; explicit sort is cheap and
+    // makes the live-interval logic unambiguous).
+    let mut sorted: Vec<&Record> = versions.iter().collect();
+    sorted.sort_by_key(|r| match r {
+        Record::Entity(e) => e.tx_id_assert.get(),
+        Record::HyperEdge(h) => h.tx_id_assert.get(),
+        Record::Tombstone(t) => t.tx_id_supersede.get(),
+        _ => 0,
+    });
+    let floor = oldest_active_snapshot.get();
+    for i in 0..sorted.len() {
+        let next_tx = sorted.get(i + 1).map(|r| match r {
+            Record::Entity(e) => e.tx_id_assert.get(),
+            Record::HyperEdge(h) => h.tx_id_assert.get(),
+            Record::Tombstone(t) => t.tx_id_supersede.get(),
+            _ => u64::MAX,
+        });
+        let keep = match next_tx {
+            None => true,                    // last version — live at ACTIVE
+            Some(n) => n > floor,            // a reader at floor still sees this
+        };
+        if !keep {
+            continue;
+        }
+        // Cross-bucket tombstone check (only for non-tombstone records).
+        let (uuid, tx) = match sorted[i] {
+            Record::Entity(e) => (Some(e.entity_id.into_uuid()), e.tx_id_assert),
+            Record::HyperEdge(h) => (Some(h.hyperedge_id.into_uuid()), h.tx_id_assert),
+            _ => (None, TxId::new(0)),
+        };
+        if let Some(u) = uuid
+            && let Some(killed_at) = killed.get(&u)
+            && killed_at.get() >= tx.get()
+            && killed_at.get() <= floor
+        {
+            // Tombstone fully retired before any live snapshot.
+            continue;
+        }
+        writer.append(sorted[i])?;
+        *records_out += 1;
+    }
+    Ok(())
 }
 
 /// Emit the N most-recent versions for a `Versioned { keep_last_n }`
@@ -2159,6 +2255,55 @@ mod tests {
             Resolved::Deleted { deleted_at } => assert_eq!(deleted_at, snap_deleted),
             other => panic!("expected Deleted, got {other:?}"),
         }
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn compact_with_floor_preserves_versions_active_readers_might_need() {
+        let dir = temp_dir("compact-floor");
+        let mut engine = Engine::create(&dir).unwrap();
+        let eid = EntityId::now_v7();
+        // Commit v1, v2, v3, v4. Each is one tx_id.
+        let mut tx_ids = Vec::new();
+        for v in 1..=4 {
+            let mut txn = engine.begin_write();
+            txn.put_entity(make_entity(eid, &format!("v{v}")));
+            tx_ids.push(txn.commit().unwrap());
+            engine.flush().unwrap();
+        }
+        // Pick the floor = tx_ids[1] (= v2's commit). Versions v1 is
+        // shadowed at-or-before floor (next assert = tx_ids[1] which is
+        // == floor → next > floor is false → v1 dropped). v2 onward
+        // retained because next assert > floor.
+        let floor = tx_ids[1];
+        let stats = engine.compact_with_floor(floor).unwrap();
+        assert!(stats.new_sstable_seq.is_some());
+
+        // Confirm v1 is gone, v2/v3/v4 retained.
+        let entities = count_records_of_kind(&dir, crate::record::RecordKind::Entity);
+        assert_eq!(entities, 3, "v1 dropped, v2/v3/v4 retained");
+
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn compact_with_floor_active_matches_default_compact_behaviour() {
+        // floor = TxId::ACTIVE should behave identically to compact()
+        // (drop everything but the latest version).
+        let dir = temp_dir("compact-floor-active");
+        let mut engine = Engine::create(&dir).unwrap();
+        let eid = EntityId::now_v7();
+        for v in 1..=3 {
+            let mut txn = engine.begin_write();
+            txn.put_entity(make_entity(eid, &format!("v{v}")));
+            txn.commit().unwrap();
+            engine.flush().unwrap();
+        }
+        engine.compact_with_floor(TxId::ACTIVE).unwrap();
+        let entities = count_records_of_kind(&dir, crate::record::RecordKind::Entity);
+        assert_eq!(entities, 1, "floor=ACTIVE = aggressive drop = v1.3 baseline");
         engine.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }

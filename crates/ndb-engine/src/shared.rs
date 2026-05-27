@@ -25,6 +25,7 @@
 //! Crash semantics, durability, and on-disk format are unchanged —
 //! `SharedEngine` is purely a concurrency wrapper.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -42,6 +43,12 @@ use crate::value::Value;
 #[derive(Debug)]
 pub struct SharedEngine {
     inner: Mutex<Engine>,
+    /// Active read snapshots: `tx_id → refcount`. A reader that pins
+    /// snapshot T while iterating registers via `register_snapshot(T)`
+    /// and releases via `release_snapshot(T)`. The compactor uses
+    /// `oldest_active_snapshot()` as a floor — versions superseded
+    /// before that tx are safe to drop.
+    snapshots: Mutex<BTreeMap<TxId, usize>>,
 }
 
 impl SharedEngine {
@@ -49,6 +56,7 @@ impl SharedEngine {
     pub fn create<P: AsRef<Path>>(path: P) -> Result<Self, EngineError> {
         Ok(Self {
             inner: Mutex::new(Engine::create(path)?),
+            snapshots: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -56,6 +64,7 @@ impl SharedEngine {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, EngineError> {
         Ok(Self {
             inner: Mutex::new(Engine::open(path)?),
+            snapshots: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -64,6 +73,7 @@ impl SharedEngine {
     pub fn from_engine(engine: Engine) -> Self {
         Self {
             inner: Mutex::new(engine),
+            snapshots: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -314,9 +324,64 @@ impl SharedEngine {
         self.inner.lock().expect("engine mutex poisoned").flush()
     }
 
-    /// `Engine::compact`.
+    /// `Engine::compact`. Snapshot-aware: uses the oldest active
+    /// snapshot (registered via `register_snapshot`) as the floor so
+    /// in-flight readers don't lose versions out from under them. With
+    /// no registered snapshots, behaves identically to v1.3 — drops
+    /// everything superseded.
     pub fn compact(&self) -> Result<CompactionStats, EngineError> {
-        self.inner.lock().expect("engine mutex poisoned").compact()
+        let floor = self.oldest_active_snapshot();
+        self.inner
+            .lock()
+            .expect("engine mutex poisoned")
+            .compact_with_floor(floor)
+    }
+
+    // -----------------------------------------------------------------
+    // Active-snapshot registry (snapshot-aware compaction support)
+    // -----------------------------------------------------------------
+
+    /// Register an active read snapshot. Subsequent compactions will
+    /// treat this tx_id as a floor and refuse to drop versions newer
+    /// than it. Pair with [`release_snapshot`] when done.
+    ///
+    /// Re-registering the same tx_id increments a refcount; release
+    /// must be called the same number of times for the snapshot to
+    /// drop out of the floor calculation.
+    pub fn register_snapshot(&self, tx_id: TxId) {
+        let mut s = self.snapshots.lock().expect("snapshot map poisoned");
+        *s.entry(tx_id).or_insert(0) += 1;
+    }
+
+    /// Release a previously-registered snapshot. Decrements refcount;
+    /// removes the entry when refcount reaches zero.
+    pub fn release_snapshot(&self, tx_id: TxId) {
+        let mut s = self.snapshots.lock().expect("snapshot map poisoned");
+        if let Some(n) = s.get_mut(&tx_id) {
+            *n -= 1;
+            if *n == 0 {
+                s.remove(&tx_id);
+            }
+        }
+    }
+
+    /// Oldest active snapshot. Used by [`compact`] as the version-
+    /// retention floor. Returns `TxId::ACTIVE` when no readers are
+    /// registered (= aggressive v1.3 behaviour).
+    #[must_use]
+    pub fn oldest_active_snapshot(&self) -> TxId {
+        let s = self.snapshots.lock().expect("snapshot map poisoned");
+        s.keys().next().copied().unwrap_or(TxId::ACTIVE)
+    }
+
+    /// Number of distinct snapshot tx_ids currently registered. Test +
+    /// monitoring helper.
+    #[must_use]
+    pub fn active_snapshot_count(&self) -> usize {
+        self.snapshots
+            .lock()
+            .expect("snapshot map poisoned")
+            .len()
     }
 }
 
@@ -395,6 +460,77 @@ mod tests {
         let last = eng.manifest_snapshot().last_tx_id;
         assert_eq!(last, max_seen, "manifest tracks highest committed tx_id");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn snapshot_aware_compaction_protects_registered_reader() {
+        let dir = temp_dir("snap-protect");
+        let eng = SharedEngine::create(&dir).unwrap();
+        // 3 versions of the same entity across 3 SSTables.
+        let eid = EntityId::now_v7();
+        let mut versions = Vec::new();
+        for v in 1..=3 {
+            let tx = eng
+                .with_write_txn(|mut txn| {
+                    txn.put_entity(EntityRecord {
+                        entity_id: eid,
+                        type_id: TypeId::new(1),
+                        tx_id_assert: TxId::new(0),
+                        tx_id_supersede: TxId::ACTIVE,
+                        properties: vec![(PropertyId::new(1), Value::I64(v))],
+                    });
+                    txn.commit()
+                })
+                .unwrap();
+            versions.push(tx);
+            eng.flush().unwrap();
+        }
+        // Pin a reader at the SECOND commit's tx_id.
+        eng.register_snapshot(versions[1]);
+        assert_eq!(eng.active_snapshot_count(), 1);
+        assert_eq!(eng.oldest_active_snapshot(), versions[1]);
+        // Compact — must keep v2 and v3 (v1 dropped: its supersession
+        // tx == versions[1] which is the floor, fully shadowed).
+        eng.compact().unwrap();
+        let entities = count_entities(&dir);
+        assert_eq!(entities, 2, "active reader at v2 preserves v2 and v3");
+        // Release; next compaction is fully aggressive.
+        eng.release_snapshot(versions[1]);
+        assert_eq!(eng.active_snapshot_count(), 0);
+        // Add a 4th version to recreate compactable history.
+        eng.with_write_txn(|mut txn| {
+            txn.put_entity(EntityRecord {
+                entity_id: eid,
+                type_id: TypeId::new(1),
+                tx_id_assert: TxId::new(0),
+                tx_id_supersede: TxId::ACTIVE,
+                properties: vec![(PropertyId::new(1), Value::I64(99))],
+            });
+            txn.commit()
+        })
+        .unwrap();
+        eng.flush().unwrap();
+        eng.compact().unwrap();
+        let entities = count_entities(&dir);
+        assert_eq!(entities, 1, "no active reader → drop everything but latest");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn count_entities(dir: &std::path::Path) -> usize {
+        let mut n = 0;
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let p = entry.unwrap().path();
+            if p.extension().is_some_and(|e| e == "ndb") {
+                let r = crate::sstable::SSTableReader::open(&p).unwrap();
+                for item in r.iter() {
+                    let (rec, _) = item.unwrap();
+                    if matches!(rec, Record::Entity(_)) {
+                        n += 1;
+                    }
+                }
+            }
+        }
+        n
     }
 
     #[test]
