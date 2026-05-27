@@ -1033,15 +1033,12 @@ impl Server {
     /// handler blocks on `wait_timeout_while` and returns the moment a
     /// later tx_id is observed. Sub-millisecond latency under low load.
     ///
-    /// v2.1 caveat: the bounded test server (`serve_n`) and the
-    /// production loop (`serve`) both process connections sequentially.
-    /// While `/subscribe` is blocked in the condvar wait, the server
-    /// can't accept the `/commit` connection that would fire the
-    /// notify. Real sub-millisecond latency requires the server to
-    /// spawn-per-connection, which is a v2.1 deliverable. The condvar
-    /// machinery is correct; only the connection acceptor is the
-    /// bottleneck. See `subscribe_wakes_on_concurrent_commit_within_a_millisecond_class_latency`
-    /// in the test suite (marked `#[ignore]` pending v2.1).
+    /// v2.1 closed the connection-acceptor bottleneck: `BoundServer::serve`
+    /// and `serve_n` spawn a thread per connection (via
+    /// [`std::thread::scope`]), so a `/subscribe` blocked in the condvar
+    /// wait no longer queues the `/commit` that would fire the notify.
+    /// See `subscribe_wakes_on_concurrent_commit_within_a_millisecond_class_latency`
+    /// in the test suite.
     fn handle_subscribe(
         &self,
         body: &[u8],
@@ -1264,30 +1261,58 @@ impl BoundServer<'_> {
         self.listener.local_addr()
     }
 
-    /// Accept and serve forever.
+    /// Accept and serve forever. Spawns a fresh thread per connection
+    /// — multiple `/subscribe` long-polls + concurrent `/commit`s no
+    /// longer queue behind each other, unlocking the condvar-based
+    /// notify-on-commit path added in #23.
+    ///
+    /// Threads borrow back into this `BoundServer` via [`std::thread::scope`],
+    /// so the function never returns while connections are in flight.
+    /// In practice that's fine — `serve()` runs forever on a healthy
+    /// server.
     pub fn serve(&self) -> Result<(), ServerError> {
-        for stream in self.listener.incoming() {
-            match stream {
-                Ok(s) => {
-                    if let Err(e) = self.server.handle_connection(s) {
-                        eprintln!("connection error: {e}");
+        std::thread::scope(|scope| {
+            for stream in self.listener.incoming() {
+                match stream {
+                    Ok(s) => {
+                        let server = self.server;
+                        scope.spawn(move || {
+                            if let Err(e) = server.handle_connection(s) {
+                                eprintln!("connection error: {e}");
+                            }
+                        });
                     }
+                    Err(e) => eprintln!("accept error: {e}"),
                 }
-                Err(e) => eprintln!("accept error: {e}"),
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Accept and serve N connections, then return. Used by tests.
+    /// Spawns a thread per accepted connection and joins them all
+    /// before returning so the bounded test loop still blocks until
+    /// every request has been processed.
     pub fn serve_n(&self, n: usize) -> Result<(), ServerError> {
-        for _ in 0..n {
-            let (stream, _addr) = self.listener.accept()?;
-            if let Err(e) = self.server.handle_connection(stream) {
-                eprintln!("connection error: {e}");
+        std::thread::scope(|scope| -> Result<(), ServerError> {
+            let mut handles = Vec::with_capacity(n);
+            for _ in 0..n {
+                let (stream, _addr) = self.listener.accept()?;
+                let server = self.server;
+                handles.push(scope.spawn(move || {
+                    if let Err(e) = server.handle_connection(stream) {
+                        eprintln!("connection error: {e}");
+                    }
+                }));
             }
-        }
-        Ok(())
+            for h in handles {
+                // Per-connection errors are already logged; we don't
+                // surface them here because the test surface treats
+                // serve_n as "drove N requests to completion".
+                let _ = h.join();
+            }
+            Ok(())
+        })
     }
 }
 
@@ -1341,30 +1366,47 @@ impl BoundTlsServer<'_> {
         dispatch_result
     }
 
-    /// Accept and serve forever.
+    /// Accept and serve forever. Spawns a fresh thread per connection
+    /// via [`std::thread::scope`]; same shape as the plain-TCP
+    /// `BoundServer::serve` — see that for rationale.
     pub fn serve(&self) -> Result<(), ServerError> {
-        for stream in self.listener.incoming() {
-            match stream {
-                Ok(s) => {
-                    if let Err(e) = self.handle_one(s) {
-                        eprintln!("tls connection error: {e}");
+        std::thread::scope(|scope| {
+            for stream in self.listener.incoming() {
+                match stream {
+                    Ok(s) => {
+                        let me = self;
+                        scope.spawn(move || {
+                            if let Err(e) = me.handle_one(s) {
+                                eprintln!("tls connection error: {e}");
+                            }
+                        });
                     }
+                    Err(e) => eprintln!("tls accept error: {e}"),
                 }
-                Err(e) => eprintln!("tls accept error: {e}"),
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
-    /// Accept and serve N connections, then return.
+    /// Accept and serve N connections, then return. Spawns + joins;
+    /// see `BoundServer::serve_n`.
     pub fn serve_n(&self, n: usize) -> Result<(), ServerError> {
-        for _ in 0..n {
-            let (stream, _addr) = self.listener.accept()?;
-            if let Err(e) = self.handle_one(stream) {
-                eprintln!("tls connection error: {e}");
+        std::thread::scope(|scope| -> Result<(), ServerError> {
+            let mut handles = Vec::with_capacity(n);
+            for _ in 0..n {
+                let (stream, _addr) = self.listener.accept()?;
+                let me = self;
+                handles.push(scope.spawn(move || {
+                    if let Err(e) = me.handle_one(stream) {
+                        eprintln!("tls connection error: {e}");
+                    }
+                }));
             }
-        }
-        Ok(())
+            for h in handles {
+                let _ = h.join();
+            }
+            Ok(())
+        })
     }
 }
 

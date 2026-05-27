@@ -659,16 +659,20 @@ fn subscribe_returns_records_committed_after_since_tx() {
 }
 
 #[test]
-#[ignore = "requires multi-threaded server (serve_n spawns per-connection); v2.1 deliverable"]
 fn subscribe_wakes_on_concurrent_commit_within_a_millisecond_class_latency() {
     // Pin a subscriber to a known tx_id, then commit concurrently from
-    // a sibling thread. The subscriber must wake quickly — well within
-    // the previous 50ms-poll bound. We assert ≤ 50ms here (real
-    // achieved latency is single-digit ms; the test bound is generous
-    // to avoid flakes on shared CI).
+    // a sibling thread. With v2.1's per-connection thread spawn the
+    // subscriber's condvar wait no longer blocks the next accept,
+    // so the wake latency from notify is sub-ms on localhost.
+    //
+    // The subscriber thread's elapsed time = ~50ms intentional sleep
+    // on the main thread (waiting for the subscriber to reach the
+    // condvar) + wake-latency. We assert wake-latency < 50ms (the
+    // old polling-bound floor); on a healthy local box it's <1ms.
     use std::time::{Duration, Instant};
 
     const TYPE_ITEM: u32 = 100;
+    const PRE_COMMIT_SLEEP_MS: u64 = 50;
     let dir = temp_dir("subscribe-condvar");
     let server = Arc::new(Server::open(&dir).unwrap());
     let since_tx_id;
@@ -696,9 +700,10 @@ fn subscribe_wakes_on_concurrent_commit_within_a_millisecond_class_latency() {
         let resp = post(addr, "/subscribe", &body);
         (started.elapsed(), resp)
     });
-    // Give the subscriber a beat to reach the condvar wait.
-    std::thread::sleep(Duration::from_millis(50));
-    // Commit a new record via /commit (so the server's notify fires).
+    // Give the subscriber a beat to reach the condvar wait. v2.1's
+    // per-connection thread spawn means /commit no longer queues
+    // behind it.
+    std::thread::sleep(Duration::from_millis(PRE_COMMIT_SLEEP_MS));
     let commit_body = format!(
         r#"{{"records":[{{"kind":"entity","entity_id":"{}","type_id":{TYPE_ITEM},"tx_id_assert":0,"tx_id_supersede":"active","properties":[]}}]}}"#,
         EntityId::now_v7().into_uuid(),
@@ -708,15 +713,12 @@ fn subscribe_wakes_on_concurrent_commit_within_a_millisecond_class_latency() {
 
     let (elapsed, sub_resp) = sub_handle.join().unwrap();
     assert_eq!(sub_resp.status, 200);
-    // Wake latency from notify must be substantially less than the old
-    // 50ms-poll worst case. Subscribers ran for at least 50ms of
-    // pre-commit sleep on this thread's side; the actual wait-then-wake
-    // budget is the remainder of subscribe minus that sleep. We assert
-    // the WAIT ELAPSED stays under 250ms total (50ms pre-commit sleep
-    // + comfortable budget for notify + read + parse).
+    // Subscriber's elapsed = pre-commit sleep + wake latency + tiny
+    // overhead. We want to assert wake latency itself is < 50ms.
+    let wake_latency = elapsed.saturating_sub(Duration::from_millis(PRE_COMMIT_SLEEP_MS));
     assert!(
-        elapsed < Duration::from_millis(500),
-        "condvar subscribe took too long: {elapsed:?}"
+        wake_latency < Duration::from_millis(50),
+        "wake latency {wake_latency:?} should be < 50ms; total elapsed = {elapsed:?}"
     );
     let text = std::str::from_utf8(&sub_resp.body).unwrap();
     let lines: Vec<&str> = text.lines().collect();
