@@ -48,6 +48,42 @@ plain language with live wire-format JSON. Full provenance and
 reproducibility steps at
 [`docs/alphafold_nDB/REPRODUCIBILITY.md`](docs/alphafold_nDB/REPRODUCIBILITY.md).
 
+## Status (v2.3)
+
+v2.3 turns alphafold_nDB into a real structural-biology tool with
+honest provenance, not a metadata-only demo:
+
+- **Engine arity bumped u8 → u32** (`record.rs` FORMAT_VERSION 1 → 2).
+  Hyperedge arity is no longer capped at 255 — `protein_atoms` for
+  KRAS is one arity-1518 record. Without this, the "N-dimensional"
+  pitch was structurally bounded at 255.
+- **Atom-level entities for every protein** — every CIF atom is a
+  first-class indexed nDB entity (`type 7`) with x/y/z/B-factor/
+  element/residue properties. Per-atom queries hit the property
+  B-tree directly. For KRAS, 1517 atom entities + 1 arity-1518
+  `protein_atoms` hyperedge.
+- **No CIF blob duplication.** Earlier iterations stored both the
+  CIF text AND atom entities — 3× the atom data. Path B fix: the
+  CIF is never persisted; on subsequent loads a minimal PDB is
+  rebuilt in memory from atom entities and handed to NGL. Single
+  source of truth = atom entities in nDB.
+- **N-ary "contains" replaces N reified binary edges.** Old design
+  was 1517 atom_of edges; new design is 1 `protein_atoms` edge with
+  1518 role-fillers. Same fix for `protein_residues` (5 N-ary edges
+  instead of 78 binary). This is the model nDB was built for; the
+  binary-edge anti-pattern was the bug.
+- **Persistent DB across runs.** `/tmp/v22-explorer-ndb` no longer
+  wiped on boot. First run seeds the curated 20 proteins; subsequent
+  runs reuse the existing store, atoms and all.
+- **Three-pane layout** (top bar + left "Protein in nDB" + 3D centre
+  + right "Drill down") with live atom-click → residue card.
+- **Side-by-side PDBx-vs-nDB comparison** with honest per-protein
+  vs engine/schema KPI split — measured numbers only, fabricated
+  benchmarks explicitly marked "not measured".
+
+See [`docs/alphafold_nDB/`](docs/alphafold_nDB/) for the science-
+facing landing page and reproducibility cheatsheet.
+
 ## Status (v2.2)
 
 Every line item in the v1 spec §17.1 PLUS every deliverable from the v2.0
