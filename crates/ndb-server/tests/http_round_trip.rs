@@ -279,3 +279,58 @@ fn malformed_uuid_in_read_returns_400() {
     assert_eq!(resp.status, 400);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn audit_log_records_each_request() {
+    let dir = temp_dir("audit");
+    let server = Arc::new(Server::open(&dir).unwrap().with_audit_log().unwrap());
+    let addr = spawn_server(Arc::clone(&server), 2);
+    let r1 = get(addr, "/health");
+    assert_eq!(r1.status, 200);
+    let r2 = get(addr, "/nonexistent");
+    assert_eq!(r2.status, 404);
+
+    let audit_path = server.audit_log_path().expect("audit enabled");
+    let bytes = std::fs::read(&audit_path).expect("audit file");
+    let s = std::str::from_utf8(&bytes).unwrap();
+    let lines: Vec<&str> = s.lines().collect();
+    assert_eq!(lines.len(), 2, "expected 2 audit lines, got: {s:?}");
+    let row1: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(row1["path"], "/health");
+    assert_eq!(row1["status"], 200);
+    assert_eq!(row1["method"], "GET");
+    let row2: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(row2["path"], "/nonexistent");
+    assert_eq!(row2["status"], 404);
+    assert!(row2["failure"].is_string());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn audit_log_records_principal_when_token_set() {
+    let dir = temp_dir("audit_tok");
+    let server = Arc::new(
+        Server::open(&dir)
+            .unwrap()
+            .with_auth_token("the-secret-token")
+            .with_audit_log()
+            .unwrap(),
+    );
+    let addr = spawn_server(Arc::clone(&server), 1);
+
+    let req = b"GET /iter HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer the-secret-token\r\nConnection: close\r\n\r\n";
+    let resp = raw_request(addr, req);
+    assert_eq!(resp.status, 200);
+
+    let path = server.audit_log_path().unwrap();
+    let s = std::fs::read_to_string(&path).unwrap();
+    let row: serde_json::Value = serde_json::from_str(s.lines().next().unwrap()).unwrap();
+    let principal = row["principal"].as_str().unwrap();
+    assert!(
+        principal.starts_with("token:"),
+        "principal should be hashed token id, got {principal}",
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}

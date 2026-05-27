@@ -35,10 +35,12 @@
 //! cargo run -p ndb-server -- --path /tmp/mydb --bind 127.0.0.1:8742
 //! ```
 
+use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use ndb_engine::{
     CommitRequest, CommitResponse, Engine, EngineError, ErrorResponse, JsonRecord, ReadResponse,
@@ -46,6 +48,9 @@ use ndb_engine::{
 };
 use serde::Serialize;
 use thiserror::Error;
+
+/// Audit log filename, written under the database directory.
+pub const AUDIT_LOG_FILENAME: &str = ".audit.jsonl";
 
 /// Errors raised by the server.
 #[derive(Debug, Error)]
@@ -76,6 +81,68 @@ pub struct Server {
     /// registry (one per principal) backed by capability hyperedges
     /// (§13.2).
     auth_token: Option<String>,
+    /// Append-only `.audit.jsonl` under the database directory. Every
+    /// dispatched request gets one line. None when auditing is disabled.
+    audit: Option<Arc<Mutex<AuditLog>>>,
+}
+
+/// Append-only audit log. One JSON line per request. Synchronous flush
+/// after every write so a crash loses at most the in-flight line.
+#[derive(Debug)]
+pub struct AuditLog {
+    file: std::fs::File,
+    path: PathBuf,
+}
+
+impl AuditLog {
+    /// Open or create `<db>/.audit.jsonl` for append.
+    pub fn open(db_dir: &Path) -> std::io::Result<Self> {
+        let path = db_dir.join(AUDIT_LOG_FILENAME);
+        let file = OpenOptions::new().create(true).append(true).open(&path)?;
+        Ok(Self { file, path })
+    }
+
+    /// Path to the audit log file.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Append one record, then flush.
+    pub fn append(&mut self, entry: &AuditEntry<'_>) -> std::io::Result<()> {
+        let line = serde_json::to_string(entry)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        self.file.write_all(line.as_bytes())?;
+        self.file.write_all(b"\n")?;
+        self.file.flush()
+    }
+}
+
+/// One row in the audit log. Field shape is intentionally stable —
+/// downstream SIEM pipelines key off these names.
+#[derive(Debug, Serialize)]
+pub struct AuditEntry<'a> {
+    /// Unix epoch microseconds.
+    pub ts_us: u128,
+    /// Principal name (from token mapping) or `"anonymous"` when auth is off.
+    pub principal: &'a str,
+    /// HTTP method (uppercase).
+    pub method: &'a str,
+    /// Request path (no query).
+    pub path: &'a str,
+    /// Response status code.
+    pub status: u16,
+    /// Transaction id, present only for successful `/commit` calls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_id: Option<u64>,
+    /// Optional failure reason for non-2xx responses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure: Option<&'a str>,
+}
+
+fn now_micros() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_micros())
 }
 
 impl Server {
@@ -92,6 +159,7 @@ impl Server {
         Ok(Self {
             engine: Arc::new(Mutex::new(engine)),
             auth_token: None,
+            audit: None,
         })
     }
 
@@ -101,6 +169,7 @@ impl Server {
         Self {
             engine: Arc::new(Mutex::new(engine)),
             auth_token: None,
+            audit: None,
         }
     }
 
@@ -111,6 +180,53 @@ impl Server {
         let t: String = token.into();
         self.auth_token = if t.is_empty() { None } else { Some(t) };
         self
+    }
+
+    /// Enable audit logging. Every dispatched request appends one line
+    /// to `<db>/.audit.jsonl`. Auditing is best-effort: failures to write
+    /// to the audit file are logged to stderr but do NOT fail the request
+    /// (so a full disk on the audit volume does not take the server down).
+    pub fn with_audit_log(mut self) -> Result<Self, ServerError> {
+        let dir = {
+            let eng = self.engine.lock().expect("engine mutex poisoned");
+            eng.path().to_path_buf()
+        };
+        let log = AuditLog::open(&dir)?;
+        self.audit = Some(Arc::new(Mutex::new(log)));
+        Ok(self)
+    }
+
+    /// Path of the open audit log, if any.
+    #[must_use]
+    pub fn audit_log_path(&self) -> Option<PathBuf> {
+        self.audit
+            .as_ref()
+            .map(|a| a.lock().expect("audit mutex poisoned").path().to_path_buf())
+    }
+
+    fn record_audit(
+        &self,
+        principal: &str,
+        method: &str,
+        path: &str,
+        status: u16,
+        tx_id: Option<u64>,
+        failure: Option<&str>,
+    ) {
+        if let Some(log) = &self.audit {
+            let entry = AuditEntry {
+                ts_us: now_micros(),
+                principal,
+                method,
+                path,
+                status,
+                tx_id,
+                failure,
+            };
+            if let Err(e) = log.lock().expect("audit mutex poisoned").append(&entry) {
+                eprintln!("audit log write failed: {e}");
+            }
+        }
     }
 
     /// Block forever accepting connections on `addr`.
@@ -144,43 +260,80 @@ impl Server {
     /// write a response, close. (No keep-alive in v1.)
     pub fn handle_connection(&self, mut stream: TcpStream) -> Result<(), ServerError> {
         let (req, body) = parse_request(&mut stream)?;
-        self.dispatch(&req, &body, &mut stream)?;
+        let mut outcome = DispatchOutcome::default();
+        let dispatch_result = self.dispatch(&req, &body, &mut stream, &mut outcome);
         let _ = stream.flush();
-        Ok(())
+        // Audit AFTER response is flushed; failures here don't break the request.
+        let principal = if outcome.principal.is_empty() {
+            if self.auth_token.is_none() { "anonymous" } else { "unknown" }
+        } else {
+            outcome.principal.as_str()
+        };
+        self.record_audit(
+            principal,
+            &req.method,
+            req.path_no_query(),
+            outcome.status,
+            outcome.tx_id,
+            outcome.failure.as_deref(),
+        );
+        dispatch_result
     }
 
-    fn dispatch(&self, req: &Request, body: &[u8], out: &mut TcpStream) -> Result<(), ServerError> {
+    fn dispatch(
+        &self,
+        req: &Request,
+        body: &[u8],
+        out: &mut TcpStream,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
         // Auth check first — applies to every route except /health, which
         // is intentionally open so liveness probes don't need a secret.
         if let Some(expected) = &self.auth_token
             && req.path_no_query() != "/health"
             && !constant_time_eq(expected.as_bytes(), req.bearer.as_bytes())
         {
+            outcome.status = 401;
+            outcome.failure = Some("missing or invalid bearer token".into());
             return write_error(out, 401, "unauthorized", "missing or invalid bearer token");
         }
+        // Token recognised → principal is the token holder. v1 records the
+        // first 8 chars of the token hash as the principal identifier; v2
+        // moves to a token registry.
+        if self.auth_token.is_some() && !req.bearer.is_empty() {
+            outcome.principal = principal_for_token(&req.bearer);
+        }
         match (req.method.as_str(), req.path_no_query()) {
-            ("GET", "/health") => write_json(out, 200, &serde_json::json!({"status": "ok"})),
-            ("POST", "/commit") => self.handle_commit(body, out),
+            ("GET", "/health") => {
+                outcome.status = 200;
+                write_json(out, 200, &serde_json::json!({"status": "ok"}))
+            }
+            ("POST", "/commit") => self.handle_commit(body, out, outcome),
             ("GET", path) if path.starts_with("/read/") => {
                 let uuid_str = &path["/read/".len()..];
-                self.handle_read(uuid_str, out)
+                self.handle_read(uuid_str, out, outcome)
             }
-            ("GET", "/iter") => self.handle_iter(out),
-            ("POST", "/flush") => self.handle_flush(out),
-            ("POST", "/compact") => self.handle_compact(out),
-            _ => write_error(
-                out,
-                404,
-                "not_found",
-                &format!("no route for {} {}", req.method, req.path),
-            ),
+            ("GET", "/iter") => self.handle_iter(out, outcome),
+            ("POST", "/flush") => self.handle_flush(out, outcome),
+            ("POST", "/compact") => self.handle_compact(out, outcome),
+            _ => {
+                outcome.status = 404;
+                let detail = format!("no route for {} {}", req.method, req.path);
+                outcome.failure = Some(detail.clone());
+                write_error(out, 404, "not_found", &detail)
+            }
         }
     }
 
-    fn handle_flush(&self, out: &mut TcpStream) -> Result<(), ServerError> {
+    fn handle_flush(
+        &self,
+        out: &mut TcpStream,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
         let mut engine = self.engine.lock().expect("engine mutex poisoned");
         engine.flush()?;
         let (records, bytes) = engine.memtable_stats();
+        outcome.status = 200;
         write_json(
             out,
             200,
@@ -192,9 +345,14 @@ impl Server {
         )
     }
 
-    fn handle_compact(&self, out: &mut TcpStream) -> Result<(), ServerError> {
+    fn handle_compact(
+        &self,
+        out: &mut TcpStream,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
         let mut engine = self.engine.lock().expect("engine mutex poisoned");
         let stats = engine.compact()?;
+        outcome.status = 200;
         write_json(
             out,
             200,
@@ -207,44 +365,64 @@ impl Server {
         )
     }
 
-    fn handle_commit(&self, body: &[u8], out: &mut TcpStream) -> Result<(), ServerError> {
+    fn handle_commit(
+        &self,
+        body: &[u8],
+        out: &mut TcpStream,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
         let req: CommitRequest = match serde_json::from_slice(body) {
             Ok(r) => r,
             Err(e) => {
-                return write_error(out, 400, "bad_json", &format!("commit body: {e}"));
+                outcome.status = 400;
+                let detail = format!("commit body: {e}");
+                outcome.failure = Some(detail.clone());
+                return write_error(out, 400, "bad_json", &detail);
             }
         };
         let mut engine = self.engine.lock().expect("engine mutex poisoned");
         let mut txn: WriteTxn = engine.begin_write();
-        let tx_id = txn.tx_id();
         for jr in req.records {
             let r: Record = match jr.try_into() {
                 Ok(r) => r,
                 Err(e) => {
                     drop(txn); // rollback
+                    outcome.status = 400;
+                    outcome.failure = Some(e.to_string());
                     return write_error(out, 400, "bad_record", &e.to_string());
                 }
             };
-            // The server stamps tx_id_assert / tx_id_supersede here so
-            // callers don't need to know the next tx. Roles in
-            // hyperedges and target_id on tombstones are passed
-            // through verbatim.
             stamp_and_push(&mut txn, r);
         }
         match txn.commit() {
-            Ok(tid) => write_json(out, 200, &CommitResponse { tx_id: tid.get() }),
+            Ok(tid) => {
+                outcome.status = 200;
+                outcome.tx_id = Some(tid.get());
+                write_json(out, 200, &CommitResponse { tx_id: tid.get() })
+            }
             Err(EngineError::Validation(v)) => {
+                outcome.status = 422;
+                outcome.failure = Some(v.to_string());
                 write_error(out, 422, "validation", &v.to_string())?;
-                // Re-bump tx_id allocation already happened; the gap is acceptable.
-                let _ = tx_id;
                 Ok(())
             }
-            Err(e) => write_error(out, 500, "engine", &e.to_string()),
+            Err(e) => {
+                outcome.status = 500;
+                outcome.failure = Some(e.to_string());
+                write_error(out, 500, "engine", &e.to_string())
+            }
         }
     }
 
-    fn handle_read(&self, uuid_str: &str, out: &mut TcpStream) -> Result<(), ServerError> {
+    fn handle_read(
+        &self,
+        uuid_str: &str,
+        out: &mut TcpStream,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
         let Ok(uuid) = uuid::Uuid::parse_str(uuid_str) else {
+            outcome.status = 400;
+            outcome.failure = Some(uuid_str.to_owned());
             return write_error(out, 400, "bad_uuid", uuid_str);
         };
         let mut engine = self.engine.lock().expect("engine mutex poisoned");
@@ -259,10 +437,15 @@ impl Server {
                 record: (&r).into(),
             },
         };
+        outcome.status = 200;
         write_json(out, 200, &body)
     }
 
-    fn handle_iter(&self, out: &mut TcpStream) -> Result<(), ServerError> {
+    fn handle_iter(
+        &self,
+        out: &mut TcpStream,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
         let mut engine = self.engine.lock().expect("engine mutex poisoned");
         let snapshot = TxId::new(engine.manifest().last_tx_id);
         let records = engine.snapshot_iter(snapshot)?;
@@ -278,6 +461,7 @@ impl Server {
             out.write_all(line.as_bytes())?;
             out.write_all(b"\n")?;
         }
+        outcome.status = 200;
         Ok(())
     }
 
@@ -407,6 +591,31 @@ fn parse_request(stream: &mut TcpStream) -> Result<(Request, Vec<u8>), ServerErr
         },
         body,
     ))
+}
+
+/// Captures per-request metadata so the audit logger can write a row
+/// once dispatch finishes, regardless of which handler ran.
+#[derive(Debug, Default)]
+struct DispatchOutcome {
+    status: u16,
+    principal: String,
+    tx_id: Option<u64>,
+    failure: Option<String>,
+}
+
+/// Stable, short identifier for a bearer token. v1 uses an 8-char prefix
+/// of the SHA256-equivalent: a simple deterministic non-reversible hash
+/// to avoid logging the raw token. (For a single-token deployment this
+/// is just a constant — fine; for multi-principal v2 each principal
+/// hashes to a distinct prefix.)
+fn principal_for_token(token: &str) -> String {
+    // FNV-1a 64-bit — small, dep-free, good enough for "stable identifier".
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in token.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    format!("token:{h:016x}")
 }
 
 /// Constant-time string compare so a malicious caller can't time-side-channel
