@@ -356,6 +356,114 @@ We do the same thing, one arity-level up: schemaless hyperedges + metadata hyper
 
 TypeDB requires schemas declared upfront, with a separate TypeQL Define language as a distinct primitive. This excludes the AI/extraction use case where types emerge from data. We refuse this exclusion. The schemaless core is non-negotiable; schema-as-metadata is opt-in.
 
+### 6.7 Metadata and data: same primitive
+
+**At the storage level: one hyperedge.** A `type_def` and an `approval` have byte-for-byte the same record layout (Section 11.2), same MVCC fields, same indexing. Storage and engine are unaware of any metadata/data distinction.
+
+**At the semantic level: a useful role distinction.**
+
+- **Data hyperedges** — facts about domain entities (`approval(...)`, `chemical_reaction(...)`, `sales_order(...)`)
+- **Metadata hyperedges** — facts about other hyperedges or entities (`type_def(...)`, `constraint(...)`, `index_declaration(...)`, `inference_rule(...)`)
+
+The engine looks for metadata-shaped types when running Layer 2/3/4 logic. Otherwise it treats every hyperedge identically.
+
+**Consequences (what uniform primitives unlock):**
+
+- Query metadata with the same DSL as data — no separate INFORMATION_SCHEMA
+- MVCC applies to schema changes — time-travel for "what schema did we have last year?"
+- Retention policies apply to metadata — keep schema evolution audit forever, or prune
+- Metadata can describe metadata recursively — a constraint can constrain another constraint
+- Apps introduce their own metadata kinds without engine changes
+
+### 6.8 What this solves — problems traditional schema cannot
+
+Each scenario below names a real pain point in traditional SQL / DDL schema and shows how nDB's same-primitive design solves it natively. These are not "nicer to do in nDB" — most are genuinely impossible or require heroic workarounds in traditional schema.
+
+**1. Time-traveling schema (regulatory compliance)**
+
+*Traditional:* Schema migrations destructively replace the old schema. The new schema overwrites the old; the old schema only lives in migration files, not the database itself. To query "what was the Account schema in 2023?" you would restore a backup. Querying historical data under historical schema is impossible without that restore.
+
+*nDB:* Metadata is MVCC-versioned alongside data.
+
+```
+as of 2023-12-31
+match type_def(name: "Account", properties: ?p)
+return ?p
+```
+
+Same query DSL. No backup required. Critical for Vietnamese accounting's transition from TT200/2014 to TT99/2025 — auditors in 2030 will need to interpret 2024 data under TT200 schema.
+
+**2. AI-emergent schemas (LLM workloads)**
+
+*Traditional:* Impossible. Schema must be declared BEFORE data exists. An LLM extracting structured facts from documents cannot extend a SQL schema mid-ingest without DBA intervention.
+
+*nDB:* The LLM agent writes `type_def` hyperedges as it discovers concepts. Schema EMERGES from data. No migration step, no DBA in the loop, no `ALTER TABLE`.
+
+```
+# After ingesting 5 papers
+write type_def(name: "clinical_trial", confidence: 0.6)
+
+# After ingesting 500 more, the agent firms up the type
+write constraint(target_type: "clinical_trial",
+                 rule_expr: "phase >= 1 AND phase <= 4",
+                 severity: "soft")
+```
+
+**3. Multi-tenant schema variations**
+
+*Traditional:* Two bad choices — separate database per tenant (heavy, expensive, hard to update) OR shared schema with optional NULL columns (every tenant pays storage cost for every other tenant's customization; access control becomes painful).
+
+*nDB:* Each tenant declares its own type definitions in its own namespace. Storage shared; metadata per-namespace. Tenant A's `Customer` has `tax_id_secondary`; Tenant B's doesn't. Same engine, zero cross-tenant pollution.
+
+**4. Domain-specific metadata extensions**
+
+*Traditional:* Adding a new KIND of metadata (e.g., chemical reaction pathway definition) requires custom tables (more SQL schema), JSON columns (no validation), or a PostgreSQL EXTENSION (engine-level integration, hard to ship).
+
+*nDB:* The chemistry app writes metadata hyperedges with types the engine doesn't recognize specially — `reaction_pathway_def`, `compound_classification_rule`, `safety_data_sheet_template`. The app's own code interprets them. No engine modification, no fork, no extension API.
+
+**5. Schema audit (regulatory + governance)**
+
+*Traditional:* DDL changes typically bypass the audit machinery applied to DML. Schema changes are logged to migration files (not the audit table) or require custom audit triggers per DDL command. "Who changed the Customer schema last week and why" is awkward and inconsistent.
+
+*nDB:* Metadata writes carry the same provenance hyperedges as data writes. Schema changes flow through the same MVCC + retention + audit machinery as financial transactions. Standard query returns the full audit trail of every schema change.
+
+**6. Self-describing data exports**
+
+*Traditional:* An export is data without schema. Recipient gets a SQL dump or CSV plus a separate DDL file or OpenAPI spec. Validation requires loading both into matching tools. Schema drift between sender and recipient is a real risk.
+
+*nDB:* Export includes data hyperedges AND metadata hyperedges in the same stream. Recipient queries the metadata to learn the structure, then queries the data — same DSL, no impedance mismatch, no separate validator.
+
+**7. Schema as queryable knowledge**
+
+*Traditional:* SQL's `INFORMATION_SCHEMA` exists but uses a separate query API and lives in a separate namespace. Joining schema metadata with business data is awkward. You can't easily run analytics over your own schema.
+
+*nDB:* Schemas are first-class queryable data.
+
+```
+# Find every type that has a "currency" property
+match type_def(name: ?t, properties: ?p)
+where contains(?p, "currency")
+return ?t
+```
+
+Same DSL as any data query. Useful for building generic UIs, generic search across heterogeneous domains, generic export tools.
+
+**8. Federated schema reconciliation**
+
+*Traditional:* Merging two databases with different schemas requires bespoke code to compare DDL, identify conflicts, write migration scripts to align them. Each merge is a custom project.
+
+*nDB:* Schema reconciliation is a query problem. Query both metadata sets, find `type_def` conflicts, propose merges — all within the engine, using the same DSL, no separate schema-merging tool.
+
+**9. Schema versioning without migrations**
+
+*Traditional:* Versioning a schema means writing migration scripts (forward AND backward), testing them, running them, dealing with failed migrations on production. The schema can only be in one version at a time per database.
+
+*nDB:* Multiple versions of a type can coexist as separate `type_def` hyperedges with different validity windows. Data tagged with which version applies. No global migration moment; new data uses new version, old data still validates against its own.
+
+---
+
+The common thread: traditional schema is a SEPARATE primitive with its own machinery (DDL, system catalog, migrations, INFORMATION_SCHEMA, audit triggers). nDB collapses that machinery into the data model itself — and every property of the data model (MVCC, retention, querying, audit) applies to schema for free.
+
 ---
 
 ## 7. Slicer Architecture
