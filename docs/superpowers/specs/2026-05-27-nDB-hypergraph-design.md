@@ -539,6 +539,83 @@ For slicers to be interactive (sub-second), storage must support:
 
 This must be designed in from day 1, not retrofitted.
 
+### 7.6 Compute responsibility: engine retrieves, slicer computes
+
+**The engine does retrieval. The slicer does computation.** This is a load-bearing architectural principle.
+
+| Operation | Lives in |
+|---|---|
+| Pattern matching, filtering, projection, time-travel, write, limit | Engine query language (Section 12) |
+| Aggregation (`sum`, `count`, `avg`, `max`, `min`) | Slicer crate |
+| Grouping (`group_by`) | Slicer crate |
+| Having clauses (post-aggregation filter) | Slicer crate |
+| Sorting (`order_by`) | Slicer crate |
+| Math expressions (`a + b * c`) | Slicer crate |
+| Currency conversion, formatting, business calculations | Slicer crate or app |
+| Window functions | Slicer crate |
+| Visual encoding (mapping dimensions to visual variables) | Slicer crate |
+
+**Aggregation pushdown via index plugins.** Naive read: engine streams ALL rows to slicer for aggregation = bad for large datasets. The architectural answer: some index plugins (notably columnar — Section 13.2) expose aggregation as a plugin-specific API. The slicer detects when an aggregation can be served by an index and uses it; falls back to streaming when no index is available.
+
+```
+slicer asks: "SUM(amount) BY customer"
+         |
+         v
++-------------------------------+
+| columnar index on amount      |    if registered:
+| (handles aggregation natively)|    -> serve aggregation directly
++-------------------------------+
+         else fallback:
+         engine streams raw rows -> slicer aggregates in memory
+```
+
+**Slicer API sketch (Rust):**
+
+```rust
+let result = slicer
+    .from_query(query)
+    .group_by("cust")
+    .aggregate(Sum::new("amt"), "total")
+    .filter(|r| r.total > 10000)
+    .sort_by_desc("total")
+    .limit(100)
+    .collect();
+```
+
+The slicer crate provides aggregation, grouping, math, sorting, and the projection API. Engine remains untouched.
+
+**Slicer projection example (visual encoding):**
+
+```
+slicer "sales by customer over time"
+  from_query:
+    match
+      sales_order(customer: ?cust, amount: ?amt, posting_date: ?dt)
+  group_by: ?cust, ?dt
+  aggregate: sum(?amt) as total_per_day
+  project:
+    ?cust         -> x_axis      (categorical)
+    ?dt           -> y_axis      (continuous, daily)
+    total_per_day -> color       (continuous)
+```
+
+The slicer combines query + aggregation + visual mapping into one declarative artifact. The engine only sees the underlying `match` query.
+
+### 7.7 Deployment topologies: where you put the slicer
+
+The slicer-as-companion-crate design means apps choose deployment topology to fit their performance needs. All trade-offs have solutions within the architecture; the choice is operational, not architectural.
+
+| Topology | Engine ↔ Slicer boundary | Latency | Best for |
+|---|---|---|---|
+| **All embedded** (app + slicer + engine in one process) | Function calls | Nanoseconds | Fast applications, embedded analytics, CLI tools, desktop apps |
+| **Slicer embedded, engine local server** (slicer in app, engine on same machine) | Unix socket / loopback HTTP | Tens of microseconds | Most production server apps; engine isolation without big perf hit |
+| **Slicer embedded, engine remote** | Cross-network HTTP/JSONL | Single-digit ms + bandwidth | Distributed apps with central engine; works for AI/BI workloads |
+| **All separate** (app talks to slicer service talks to engine) | Two network hops | 10s of ms | Multi-tenant SaaS where slicer service is shared; rare for latency-sensitive apps |
+
+A single nDB deployment can use multiple topologies for different concerns. An app might embed the slicer for its hot-path queries while running a separate slicer service for batch jobs that talk to the same engine.
+
+**This is the answer to the performance question:** trade-offs that look like cons in one topology disappear in another. Apps pick the topology that matches their latency / scalability / operational needs.
+
 ---
 
 ## 8. Identifier Strategy
@@ -849,7 +926,15 @@ For compile-time type-safe queries from Rust code, compiling to the same wire fo
 - **Pure embedded Rust DSL** — locks out non-Rust clients
 - **GraphQL** — read-mostly, doesn't compose joins
 
-### 12.6 Surface syntax examples
+### 12.6 What the engine query language does (and does NOT)
+
+**The engine query language is retrieval-only.** It supports pattern matching, filtering, projection, limits, time-travel, and writes. It does NOT include aggregation (`sum`, `count`, `avg`), grouping (`group by`), having clauses, sorting (`order by`), math expressions, or window functions.
+
+Those operations live in the **slicer crate** (Section 7), not in the engine. The engine retrieves matching rows; the slicer computes on them. Some index plugins (notably columnar — Section 13.2) may expose aggregation as a plugin-specific API that the slicer uses opportunistically; this keeps aggregation fast when an aggregation-capable index exists.
+
+This split is intentional. It keeps the engine minimal, makes the wire protocol simple, and lets apps use any compute library of their choice via the slicer crate.
+
+Engine query language examples:
 
 ```
 # Basic pattern match
@@ -863,7 +948,7 @@ match
   customer(id: ?cust, name: ?name, region: "Vietnam")
 where ?amt > 1000
 return ?name, ?amt, ?dt
-order by ?dt desc
+limit 1000
 
 # Multi-participant pattern (no arrow syntax — pattern joins)
 match
@@ -887,28 +972,14 @@ match
 where ?product = SodiumChloride and ?temp < T_50C
 return ?cat, ?temp
 
-# Aggregation
-match
-  sales_order(customer: ?cust, amount: ?amt)
-group by ?cust
-return ?cust, sum(?amt) as total
-having total > 10000
-
 # Time travel (free from MVCC + append-only)
 as of 2025-12-31
 match
   customer(id: ?cust, balance: ?bal)
 return ?cust, ?bal
-
-# Slicer projection (queries fold into slicer definitions)
-slicer "sales by customer over time"
-match
-  sales_order(customer: ?cust, amount: ?amt, posting_date: ?dt)
-project
-  ?cust on x_axis (categorical)
-  ?dt   on y_axis (continuous)
-  ?amt  on color (continuous)
 ```
+
+For aggregation, sorting, grouping, slicer projection, and visual encoding, see Section 7.
 
 ### 12.7 Wire format example
 
@@ -949,8 +1020,7 @@ Deferred to a focused query-language spec:
 
 - Full grammar specification (BNF / EBNF)
 - Operator precedence
-- Aggregation semantics (NULL handling, ordering)
-- Subquery / CTE syntax
+- Subquery / CTE syntax (read pipelines, not aggregation)
 - Recursive queries (path of unbounded length) — Datalog allows this; do we?
 - Error message design
 - Index hints / planner directives
@@ -1036,6 +1106,8 @@ trait Index {
 - All indexes must respect MVCC snapshot visibility (Section 10)
 - Compaction in primary triggers incremental index update via `on_supersede`
 
+**Plugin-specific query APIs (aggregation pushdown).** Beyond the base `Index` trait, plugins may expose specialized query interfaces. Notably, the columnar index plugin may expose aggregation (`sum`, `count`, `avg`, `min`, `max`, `group_by`) as plugin-specific methods. The slicer crate detects when a query's aggregation can be served by a registered plugin and routes it there; otherwise falls back to streaming raw rows from the engine and aggregating in the slicer's memory. This preserves the "engine retrieves, slicer computes" principle (Section 7.6) while keeping aggregation-heavy workloads fast.
+
 **Open sub-questions** (deferred to focused index spec):
 
 - Exact plugin trait signature (parameters, lifecycle hooks, async vs sync)
@@ -1074,6 +1146,7 @@ Explicit statements of what nDB is **not** trying to be.
 - **Not a document store.** Documents (JSON blobs) are anti-pattern in nDB; the engine wants entities and hyperedges, not opaque payloads.
 - **Not a search engine.** Full-text search may exist as a feature but is not the primary access pattern.
 - **Not a streaming engine.** Real-time event processing is out of scope; nDB ingests events but doesn't process streams as a primary workload.
+- **Not an ad-hoc OLAP engine without index preparation.** The engine-retrieves / slicer-computes split (Section 7.6) means aggregation-heavy workloads need either a columnar index plugin (Section 13.2) or a materialized view. Workloads that do unpredictable ad-hoc analytical queries over raw data and expect sub-second response without any index preparation should use DuckDB, Snowflake, BigQuery, or ClickHouse instead. nDB is honest about this — when an aggregation-capable index exists, performance is competitive; without one, it falls back to streaming + slicer-side aggregation, which is slower than purpose-built OLAP engines.
 
 ---
 
