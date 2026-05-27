@@ -375,6 +375,52 @@ fn push_json_value(out: &mut String, v: &Value) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// v2.1 §2.9 — HTML table renderer
+// ---------------------------------------------------------------------------
+
+/// Minimal `<table>` output — `<thead>` + `<tbody>` with HTML-escaped
+/// cells. No CSS, no classes, no JS — keeps the output small and
+/// paste-into-email / paste-into-Confluence friendly.
+#[must_use]
+pub fn render_html(t: &Table) -> String {
+    let mut out = String::new();
+    out.push_str("<table>\n");
+    out.push_str("<thead><tr>");
+    for h in &t.headers {
+        out.push_str("<th>");
+        push_html_escaped(&mut out, h);
+        out.push_str("</th>");
+    }
+    out.push_str("</tr></thead>\n");
+    out.push_str("<tbody>\n");
+    for row in &t.rows {
+        out.push_str("<tr>");
+        for cell in row {
+            out.push_str("<td>");
+            push_html_escaped(&mut out, &format_cell(cell));
+            out.push_str("</td>");
+        }
+        out.push_str("</tr>\n");
+    }
+    out.push_str("</tbody>\n");
+    out.push_str("</table>\n");
+    out
+}
+
+fn push_html_escaped(out: &mut String, s: &str) {
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            c => out.push(c),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -590,6 +636,54 @@ mod tests {
         assert!(s.contains("\"y\":null"));
         // And the line stays valid JSON shape.
         assert!(s.trim().starts_with('{') && s.trim().ends_with('}'));
+    }
+
+    // ---------------------------------------------------------------------
+    // v2.1 §2.9 — HTML renderer
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn html_basic_structure() {
+        let s = render_html(&sample_table());
+        assert!(s.starts_with("<table>"));
+        assert!(s.contains("<thead><tr>"));
+        assert!(s.contains("<tbody>"));
+        assert!(s.contains("<th>color</th>"));
+        assert!(s.contains("<th>n</th>"));
+        assert!(s.contains("<td>red</td>"));
+        assert!(s.contains("<td>blue</td>"));
+        assert!(s.trim_end().ends_with("</table>"));
+    }
+
+    #[test]
+    fn html_escapes_special_chars() {
+        let t = Table {
+            headers: vec!["<k>".into()],
+            rows: vec![vec![Value::String("a<b & c>\"d'e".into())]],
+        };
+        let s = render_html(&t);
+        // None of the raw special chars must survive in cell content.
+        assert!(s.contains("&lt;k&gt;"));
+        assert!(s.contains("a&lt;b &amp; c&gt;&quot;d&#39;e"));
+        // And no raw < or > should appear inside <td>… contents.
+        let body_start = s.find("<tbody>").unwrap();
+        let body = &s[body_start..];
+        assert!(!body.contains("a<b"));
+    }
+
+    #[test]
+    fn html_empty_table_structure() {
+        let t = Table {
+            headers: vec!["only".into()],
+            rows: vec![],
+        };
+        let s = render_html(&t);
+        assert!(s.contains("<th>only</th>"));
+        // No body rows.
+        let body_start = s.find("<tbody>").unwrap();
+        let body_end = s.find("</tbody>").unwrap();
+        let body = &s[body_start + "<tbody>".len()..body_end];
+        assert!(body.trim().is_empty(), "expected empty body, got: {body:?}");
     }
 
     #[test]
