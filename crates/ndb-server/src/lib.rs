@@ -535,6 +535,9 @@ impl Server {
             }
         }
 
+        // For routes that accept query parameters, extract them from the
+        // full request path (path_no_q strips them).
+        let full_path = req.path.as_str();
         match (req.method.as_str(), path_no_q) {
             ("GET", "/health") => {
                 outcome.status = 200;
@@ -542,10 +545,13 @@ impl Server {
             }
             ("POST", "/commit") => self.handle_commit(body, out, outcome),
             ("GET", path) if path.starts_with("/read/") => {
-                let uuid_str = &path["/read/".len()..];
-                self.handle_read(uuid_str, out, outcome)
+                let after_prefix = &full_path["/read/".len()..];
+                self.handle_read(after_prefix, out, outcome)
             }
-            ("GET", "/iter") => self.handle_iter(out, outcome),
+            ("GET", "/iter") => {
+                let query = full_path.split_once('?').map(|(_, q)| q);
+                self.handle_iter(query, out, outcome)
+            }
             ("POST", "/flush") => self.handle_flush(out, outcome),
             ("POST", "/compact") => self.handle_compact(out, outcome),
             ("POST", "/lookup") => self.handle_lookup(body, out, outcome),
@@ -654,17 +660,21 @@ impl Server {
 
     fn handle_read(
         &self,
-        uuid_str: &str,
+        uuid_and_query: &str,
         out: &mut dyn Write,
         outcome: &mut DispatchOutcome,
     ) -> Result<(), ServerError> {
+        let (uuid_str, query) = split_path_query(uuid_and_query);
         let Ok(uuid) = uuid::Uuid::parse_str(uuid_str) else {
             outcome.status = 400;
             outcome.failure = Some(uuid_str.to_owned());
             return write_error(out, 400, "bad_uuid", uuid_str);
         };
         let mut engine = self.engine.lock().expect("engine mutex poisoned");
-        let snapshot = TxId::new(engine.manifest().last_tx_id);
+        let snapshot = match resolve_snapshot_param(&engine, query) {
+            Ok(s) => s,
+            Err(detail) => return bad_request(out, outcome, "bad_snapshot_param", &detail),
+        };
         let resolved = engine.snapshot_read(&uuid, snapshot)?;
         let body = match resolved {
             Resolved::Missing => ReadResponse::Missing,
@@ -681,11 +691,15 @@ impl Server {
 
     fn handle_iter(
         &self,
+        query: Option<&str>,
         out: &mut dyn Write,
         outcome: &mut DispatchOutcome,
     ) -> Result<(), ServerError> {
         let mut engine = self.engine.lock().expect("engine mutex poisoned");
-        let snapshot = TxId::new(engine.manifest().last_tx_id);
+        let snapshot = match resolve_snapshot_param(&engine, query) {
+            Ok(s) => s,
+            Err(detail) => return bad_request(out, outcome, "bad_snapshot_param", &detail),
+        };
         let records = engine.snapshot_iter(snapshot)?;
         // Write status + headers manually so we can stream JSONL.
         write_status_line(out, 200)?;
@@ -927,6 +941,52 @@ impl Server {
     }
 }
 
+/// Split a path-with-query like `01923c.../?snapshot=42` into
+/// `("01923c...", Some("snapshot=42"))`. The path is everything up to the
+/// first `?`; the query is everything after (or `None` if absent).
+fn split_path_query(s: &str) -> (&str, Option<&str>) {
+    match s.split_once('?') {
+        Some((p, q)) => (p, Some(q)),
+        None => (s, None),
+    }
+}
+
+/// Resolve the snapshot tx_id for a request that accepts `?snapshot=N`
+/// (specific tx_id) OR `?timestamp_us=T` (latest tx at or before T) as
+/// query parameters. Missing query → latest committed tx.
+///
+/// Specifying both `snapshot` and `timestamp_us` is rejected to avoid
+/// ambiguity. Unknown keys are ignored.
+fn resolve_snapshot_param(
+    engine: &Engine,
+    query: Option<&str>,
+) -> Result<TxId, String> {
+    let mut tx_id: Option<u64> = None;
+    let mut timestamp_us: Option<i64> = None;
+    if let Some(q) = query {
+        for kv in q.split('&').filter(|s| !s.is_empty()) {
+            let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+            match k {
+                "snapshot" => {
+                    tx_id = Some(v.parse().map_err(|_| format!("bad snapshot={v}"))?);
+                }
+                "timestamp_us" => {
+                    timestamp_us = Some(v.parse().map_err(|_| format!("bad timestamp_us={v}"))?);
+                }
+                _ => {}
+            }
+        }
+    }
+    match (tx_id, timestamp_us) {
+        (Some(_), Some(_)) => Err("specify either snapshot or timestamp_us, not both".into()),
+        (Some(n), None) => Ok(TxId::new(n)),
+        (None, Some(ts)) => engine
+            .tx_at_or_before(ts)
+            .ok_or_else(|| format!("no tx_id at or before timestamp_us={ts}")),
+        (None, None) => Ok(TxId::new(engine.manifest().last_tx_id)),
+    }
+}
+
 /// Map a `QueryError` into the right HTTP status + error code. Codes are
 /// kept identical to the engine-side names so clients can switch on them
 /// without a translation table.
@@ -939,7 +999,7 @@ fn query_error_to_http(
         QueryError::Engine(_) => (500, "engine_error"),
         QueryError::RecursionConfigInvalid { .. } => (400, "recursion_config_invalid"),
         QueryError::RecursionDepthExceeded { .. } => (400, "recursion_depth_exceeded"),
-        QueryError::TimestampNotYetSupported => (501, "timestamp_not_yet_supported"),
+        QueryError::TimestampUnavailable { .. } => (410, "timestamp_unavailable"),
         QueryError::SnapshotUnavailable { .. } => (410, "snapshot_unavailable"),
         QueryError::TypeNotIndexed { .. } => (400, "type_not_indexed"),
         QueryError::UnboundVariableAtExec { .. } => (400, "unbound_variable_at_exec"),

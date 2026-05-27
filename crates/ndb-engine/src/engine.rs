@@ -140,6 +140,13 @@ pub struct Engine {
     validation: ValidationEngine,
     /// Database directory handle (owns the LOCK + current MANIFEST).
     db: Database,
+    /// In-memory map of `tx_id → commit_timestamp_us`. Populated at
+    /// commit time. v1 limitation: session-local — not persisted across
+    /// engine open/close. `as of "<timestamp>"` queries against tx_ids
+    /// committed in this process work; queries against pre-restart
+    /// tx_ids return `TimestampUnavailable`. v2 will persist via a new
+    /// `TxTimestampRecord` kind or the MANIFEST.
+    commit_timestamps: std::collections::BTreeMap<TxId, i64>,
 }
 
 impl Engine {
@@ -163,6 +170,7 @@ impl Engine {
             property_btree: PropertyBTreeIndex::new(),
             validation: ValidationEngine::new(),
             db,
+            commit_timestamps: std::collections::BTreeMap::new(),
         })
     }
 
@@ -226,6 +234,7 @@ impl Engine {
             property_btree: PropertyBTreeIndex::new(),
             validation: ValidationEngine::new(),
             db,
+            commit_timestamps: std::collections::BTreeMap::new(),
         };
         // Indexes are in-memory in v1 — rebuild them from the primary
         // store (SSTables in newest-first order) and the memtable
@@ -485,6 +494,35 @@ impl Engine {
     #[must_use]
     pub fn sstable_count(&self) -> usize {
         self.sstables.len()
+    }
+
+    /// Find the most recent tx_id whose commit timestamp is at or before
+    /// `timestamp_us` (microseconds since Unix epoch). Returns `None` if
+    /// no such tx exists in the in-memory commit-timestamp map.
+    ///
+    /// v1 limitation: the map is in-memory only and lost on engine
+    /// open/close. Only tx_ids committed during the current process
+    /// lifetime are findable. v2 will persist timestamps.
+    #[must_use]
+    pub fn tx_at_or_before(&self, timestamp_us: i64) -> Option<TxId> {
+        self.commit_timestamps
+            .iter()
+            .rev()
+            .find(|(_, ts)| **ts <= timestamp_us)
+            .map(|(tx, _)| *tx)
+    }
+
+    /// Record the wall-clock timestamp for a previously committed tx_id.
+    /// Used by tests + bench mode to seed the map deterministically; in
+    /// normal operation `WriteTxn::commit` populates it automatically.
+    pub fn record_commit_timestamp(&mut self, tx_id: TxId, timestamp_us: i64) {
+        self.commit_timestamps.insert(tx_id, timestamp_us);
+    }
+
+    /// Commit timestamp for a specific tx_id, if recorded in this session.
+    #[must_use]
+    pub fn commit_timestamp_us(&self, tx_id: TxId) -> Option<i64> {
+        self.commit_timestamps.get(&tx_id).copied()
     }
 
     /// Iterate every record visible at `snapshot`, in (kind, primary)
@@ -823,6 +861,14 @@ impl WriteTxn<'_> {
             self.engine.property_btree.apply(&r, self.tx_id);
             self.engine.memtable.insert(r)?;
         }
+        // Record the wall-clock commit timestamp so `as of "<rfc3339>"`
+        // queries can find this tx_id later in the session. v1 keeps
+        // these in memory only — see Engine::commit_timestamps for the
+        // persistence caveat.
+        let now_us = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_micros()).unwrap_or(i64::MAX));
+        self.engine.commit_timestamps.insert(self.tx_id, now_us);
         Ok(self.tx_id)
     }
 

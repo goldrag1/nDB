@@ -67,9 +67,15 @@ pub enum QueryError {
         frontier_size: usize,
     },
 
-    /// `as_of` with a timestamp — pending commit-timestamp tracking.
-    #[error("timestamp_not_yet_supported: use `as of <tx_id>` instead for v1")]
-    TimestampNotYetSupported,
+    /// `as_of` with a timestamp the engine has never seen committed in
+    /// this session. v1 only tracks commit timestamps in memory; queries
+    /// against timestamps before the current process started always hit
+    /// this path.
+    #[error("timestamp_unavailable: no tx_id committed at or before timestamp_us={timestamp_us}")]
+    TimestampUnavailable {
+        /// The requested timestamp.
+        timestamp_us: i64,
+    },
 
     /// `as_of` selected a tx that's been compacted out.
     #[error("snapshot_unavailable: tx_id={tx_id} no longer available")]
@@ -151,7 +157,9 @@ pub fn execute(engine: &mut Engine, req: QueryRequest) -> Result<QueryResponse, 
 fn resolve_snapshot(engine: &Engine, as_of: Option<AsOf>) -> Result<TxId, QueryError> {
     match as_of {
         Some(AsOf::TxId { tx_id }) => Ok(TxId::new(tx_id)),
-        Some(AsOf::TimestampUs { .. }) => Err(QueryError::TimestampNotYetSupported),
+        Some(AsOf::TimestampUs { timestamp_us }) => engine
+            .tx_at_or_before(timestamp_us)
+            .ok_or(QueryError::TimestampUnavailable { timestamp_us }),
         None => Ok(TxId::new(engine.manifest().last_tx_id)),
     }
 }
@@ -1360,11 +1368,11 @@ mod tests {
     }
 
     #[test]
-    fn as_of_timestamp_errors_for_now() {
-        let mut engine = temp_engine("ts");
+    fn as_of_timestamp_before_first_commit_errors() {
+        let mut engine = temp_engine("ts-empty");
         let req = QueryRequest {
             as_of: Some(AsOf::TimestampUs {
-                timestamp_us: 1_700_000_000_000_000,
+                timestamp_us: 1, // far before any commit
             }),
             patterns: vec![entity_pattern_one_prop_filter()],
             filter: None,
@@ -1372,7 +1380,35 @@ mod tests {
             limit: None,
         };
         let err = execute(&mut engine, req).unwrap_err();
-        assert!(matches!(err, QueryError::TimestampNotYetSupported));
+        assert!(matches!(err, QueryError::TimestampUnavailable { .. }));
+    }
+
+    #[test]
+    fn as_of_timestamp_finds_matching_tx_in_session() {
+        let mut engine = temp_engine("ts-session");
+        seed_customer(&mut engine, "Alice", "Vietnam");
+        // Record a known timestamp for the last committed tx so the
+        // lookup is deterministic.
+        let last_tx = TxId::new(engine.manifest().last_tx_id);
+        engine.record_commit_timestamp(last_tx, 1_000_000);
+        // Add another customer + record a later timestamp.
+        seed_customer(&mut engine, "Bob", "Vietnam");
+        let last_tx2 = TxId::new(engine.manifest().last_tx_id);
+        engine.record_commit_timestamp(last_tx2, 2_000_000);
+
+        // Query as_of timestamp_us = 1_500_000 → must see tx=last_tx
+        // (only Alice committed by then).
+        let req = QueryRequest {
+            as_of: Some(AsOf::TimestampUs {
+                timestamp_us: 1_500_000,
+            }),
+            patterns: vec![entity_pattern_one_prop_filter()],
+            filter: None,
+            returns: vec!["c".into()],
+            limit: None,
+        };
+        let resp = execute(&mut engine, req).unwrap();
+        assert_eq!(resp.rows.len(), 1, "only Alice should be visible at t=1.5s");
     }
 
     #[test]
