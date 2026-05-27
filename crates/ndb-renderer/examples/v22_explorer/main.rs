@@ -35,6 +35,8 @@ use ndb_engine::record::{EntityRecord, HyperEdgeRecord};
 use ndb_engine::value::Value;
 use ndb_server::Server;
 
+mod residues;
+
 // Reserved demo IDs — kept in lockstep with the TYPES table in
 // docs/explorer/index.html. Changing one without the other will
 // detach the SPA's type-name labels from the engine's actual data.
@@ -67,7 +69,7 @@ const PROP_PLDDT_BUCKET: u32 = 37;
 const PROP_COMPLEX_CONFIDENCE: u32 = 38;
 // Auxiliary metadata shipped from the AF-DB record (v2.2 §B — used when
 // the user fetches a new protein live, but seeded too for the 15
-// curated entries so the schema is symmetric).
+// curated entries so the model is symmetric).
 const PROP_UNIPROT: u32 = 39;
 const PROP_SEQ_LEN: u32 = 40;
 const PROP_ORGANISM: u32 = 41;
@@ -191,6 +193,16 @@ const AF_SEED: &[AfRecord] = &[
     AfRecord { name: "PI3K",  func: "kinase, signaling",  year: 1988, uniprot: "P42336", gene: "PIK3CA",   organism: "Homo sapiens", seq_len: 1068, plddt_mean: Some(92.38) },
     AfRecord { name: "PTEN",  func: "phosphatase",        year: 1997, uniprot: "P60484", gene: "PTEN",     organism: "Homo sapiens", seq_len: 403,  plddt_mean: Some(83.00) },
     AfRecord { name: "KRAS",  func: "GTPase, signaling",  year: 1983, uniprot: "P01116", gene: "KRAS",     organism: "Homo sapiens", seq_len: 189,  plddt_mean: Some(91.50) },
+    // ─── Structural-biology showcase parents for the v2.2 §C residue
+    // dataset. These are the five proteins whose residue-level data
+    // lives in residues.rs, picked from across the structural-biology
+    // canon (serine protease, zinc finger, disulfide bonds, helix
+    // sandwich, β-barrel). pLDDT values fetched May 2026.
+    AfRecord { name: "Trypsin",   func: "serine protease",            year: 1876, uniprot: "P00760", gene: "PRSS1",  organism: "Bos taurus",            seq_len: 246, plddt_mean: Some(93.12) },
+    AfRecord { name: "TFIIIA",    func: "zinc-finger transcription",  year: 1980, uniprot: "P03001", gene: "gtf3a",  organism: "Xenopus laevis",        seq_len: 366, plddt_mean: Some(71.00) },
+    AfRecord { name: "Insulin",   func: "hormone, glucose regulation",year: 1921, uniprot: "P01308", gene: "INS",    organism: "Homo sapiens",          seq_len: 110, plddt_mean: Some(52.91) },
+    AfRecord { name: "Myoglobin", func: "oxygen storage",             year: 1958, uniprot: "P02185", gene: "MB",     organism: "Physeter macrocephalus",seq_len: 154, plddt_mean: Some(97.50) },
+    AfRecord { name: "GFP",       func: "fluorescent reporter",       year: 1962, uniprot: "P42212", gene: "GFP",    organism: "Aequorea victoria",     seq_len: 238, plddt_mean: Some(96.62) },
 ];
 
 fn seed(engine: &mut Engine) {
@@ -401,6 +413,28 @@ fn seed(engine: &mut Engine) {
         }
         commit_hyperedge(engine, T_CITES, roles, vec![]);
     }
+
+    // ─── Residue-level dataset (v2.2 §C) ─────────────────────────
+    // For five well-characterised proteins we additionally commit one
+    // entity per residue + one hyperedge per structural motif. The
+    // motif hyperedges are intrinsically N-ary (catalytic triad of 3,
+    // zinc finger of 4, helix of 16, β-sheet pair of 20) — the case
+    // where a binary-edge model would have to reify each motif as a
+    // dummy node, and nDB just stores the relationship directly.
+    let stats = residues::seed_all(engine, &|name| {
+        p_ids
+            .iter()
+            .find(|(_, n, _)| *n == name)
+            .map(|(eid, _, _)| *eid)
+    });
+    eprintln!(
+        "seeded {} residue entities, {} motif hyperedges \
+         (triad={}, disulfide={}, zinc_finger={}, alpha_helix={}, beta_sheet_pair={})",
+        stats.residues,
+        stats.motifs,
+        stats.by_type[0], stats.by_type[1], stats.by_type[2],
+        stats.by_type[3], stats.by_type[4],
+    );
 }
 
 fn commit_entity(
@@ -560,15 +594,14 @@ mod tests {
     }
 
     #[test]
-    fn af_seed_has_15_proteins_with_consistent_metadata() {
-        assert_eq!(AF_SEED.len(), 15);
+    fn af_seed_has_20_proteins_with_consistent_metadata() {
+        assert_eq!(AF_SEED.len(), 20);
         for rec in AF_SEED {
             assert!(!rec.name.is_empty());
             assert!(!rec.uniprot.is_empty());
             assert!(rec.seq_len > 0);
             if let Some(mean) = rec.plddt_mean {
                 assert!((0.0..=100.0).contains(&mean), "pLDDT out of range for {}: {mean}", rec.name);
-                // Cross-check: every published mean falls into a known bucket.
                 let b = plddt_bucket(mean);
                 assert!(
                     matches!(b, "very_high" | "confident" | "low" | "very_low"),
@@ -588,6 +621,13 @@ mod tests {
             .collect();
         assert!(none_names.contains(&"ATM"));
         assert!(none_names.contains(&"BRCA2"));
+        // The five structural-biology showcase parents are present too.
+        for showcase in ["Trypsin", "TFIIIA", "Insulin", "Myoglobin", "GFP"] {
+            assert!(
+                AF_SEED.iter().any(|r| r.name == showcase),
+                "missing showcase protein {showcase}",
+            );
+        }
     }
 
     /// End-to-end engine seed check: every protein carries the AF
@@ -638,10 +678,10 @@ mod tests {
                 }
             }
         }
-        assert_eq!(protein_count, 15);
-        assert_eq!(with_plddt_mean, 13); // ATM + BRCA2 have None
-        assert_eq!(with_plddt_bucket, 13);
-        assert_eq!(with_uniprot, 15); // UniProt accession known for all 15
+        assert_eq!(protein_count, 20);
+        assert_eq!(with_plddt_mean, 18); // ATM + BRCA2 have None
+        assert_eq!(with_plddt_bucket, 18);
+        assert_eq!(with_uniprot, 20); // UniProt accession known for all 20
 
         // Complex hyperedges: 6 in the seed; 5 should carry confidence
         // (the "BRCA repair" complex includes ATM → None → skip).
@@ -666,6 +706,66 @@ mod tests {
         // an AF-DB record, so the proxy can't be computed for them.
         // The remaining 4 complexes get PROP_COMPLEX_CONFIDENCE.
         assert_eq!(with_complex_conf, 4);
+
+        // Residue dataset (§C) — verify the totals match the curated
+        // tables in residues.rs (which itself has unit tests for each
+        // individual protein's motif list).
+        let mut residue_count = 0_usize;
+        let mut triad_count = 0_usize;
+        let mut disulfide_count = 0_usize;
+        let mut zinc_finger_count = 0_usize;
+        let mut alpha_helix_count = 0_usize;
+        let mut beta_sheet_pair_count = 0_usize;
+        let mut residue_of_count = 0_usize;
+        for r in &records {
+            match r {
+                Record::Entity(e) if e.type_id == TypeId::new(residues::T_RESIDUE) => {
+                    residue_count += 1;
+                }
+                Record::HyperEdge(h) => {
+                    let t = h.type_id.get();
+                    if t == residues::T_CATALYTIC_TRIAD     { triad_count += 1; }
+                    if t == residues::T_DISULFIDE_BOND      { disulfide_count += 1; }
+                    if t == residues::T_ZINC_FINGER         { zinc_finger_count += 1; }
+                    if t == residues::T_ALPHA_HELIX         { alpha_helix_count += 1; }
+                    if t == residues::T_BETA_SHEET_PAIR     { beta_sheet_pair_count += 1; }
+                    if t == residues::T_RESIDUE_OF          { residue_of_count += 1; }
+                }
+                _ => {}
+            }
+        }
+        // Residue totals per protein:
+        //   Trypsin    9  (incl. catalytic Ser/His/Asp + S1 pocket + Cys220)
+        //   TFIIIA     4  (Cys-Cys-His-His)
+        //   Insulin    6  (six cysteines that form the 3 S-S bonds)
+        //   Myoglobin 16  (F-helix residues 80-95)
+        //   GFP       43  (β1 + β2 + β3 + β6 strands + chromophore tripeptide)
+        // = 78 residues total.
+        assert_eq!(residue_count, 78);
+        // residue_of edges == residue count (each residue has exactly
+        // one binding hyperedge back to its parent protein).
+        assert_eq!(residue_of_count, 78);
+        // 1 trypsin triad + 3 insulin disulfides + 1 TFIIIA finger +
+        // 1 myoglobin helix + 2 GFP sheet pairs = 8 motif hyperedges.
+        assert_eq!(triad_count, 1);
+        assert_eq!(disulfide_count, 3);
+        assert_eq!(zinc_finger_count, 1);
+        assert_eq!(alpha_helix_count, 1);
+        assert_eq!(beta_sheet_pair_count, 2);
+
+        // The catalytic triad MUST be arity 3 — that's the whole point.
+        for r in &records {
+            if let Record::HyperEdge(h) = r {
+                if h.type_id == TypeId::new(residues::T_CATALYTIC_TRIAD) {
+                    assert_eq!(h.roles.len(), 3,
+                        "catalytic_triad must be arity-3 (Ser-His-Asp)");
+                }
+                if h.type_id == TypeId::new(residues::T_ZINC_FINGER) {
+                    assert_eq!(h.roles.len(), 4,
+                        "C2H2 zinc finger must be arity-4 (Cys-Cys-His-His)");
+                }
+            }
+        }
 
         // Best-effort cleanup. Failures here are non-fatal — the tempdir
         // is in $TMPDIR and will get reaped eventually.

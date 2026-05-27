@@ -82,6 +82,20 @@
     <h2>AlphaFold confidence</h2>
     <div id="confidence-legend"></div>
 
+    <h2>Residue view</h2>
+    <div class="form">
+      <label><input type="checkbox" id="show-residues-toggle"> Show residues + structural motifs</label>
+      <div class="hint">
+        Off by default — keeps the cancer/autophagy/mTOR protein graph
+        legible. Turn on to see ~78 residue entities + 8 motif
+        hyperedges across trypsin, TFIIIA, insulin, myoglobin, and GFP.
+        Catalytic triads (arity-3), zinc fingers (arity-4), and helices
+        (arity-16) are intrinsically N-ary — that's the case where a
+        binary-edge database would need to reify every motif as a
+        dummy node.
+      </div>
+    </div>
+
     <h2>Fetch from AlphaFold-DB</h2>
     <div class="form">
       <label>UniProt accession</label>
@@ -166,11 +180,22 @@ const TYPES = {
   pathway:   { id: 3,   color: "#f5a623", kind: "entity" },
   paper:     { id: 4,   color: "#bd10e0", kind: "entity" },
   author:    { id: 5,   color: "#50e3c2", kind: "entity" },
+  residue:   { id: 6,   color: "#888aa8", kind: "entity" },
   complex:   { id: 100, color: "#cccccc", kind: "hyperedge" },
   encodes:   { id: 101, color: "#cccccc", kind: "hyperedge" },
   cites:     { id: 102, color: "#cccccc", kind: "hyperedge" },
   authored:  { id: 103, color: "#cccccc", kind: "hyperedge" },
+  catalytic_triad:  { id: 110, color: "#ff5e8a", kind: "hyperedge" },
+  disulfide_bond:   { id: 111, color: "#ffd84a", kind: "hyperedge" },
+  zinc_finger:      { id: 113, color: "#b388ff", kind: "hyperedge" },
+  alpha_helix:      { id: 114, color: "#ff9554", kind: "hyperedge" },
+  beta_sheet_pair:  { id: 115, color: "#54d2ff", kind: "hyperedge" },
+  residue_of:       { id: 116, color: "#3a3a48", kind: "hyperedge" },
 };
+// Type IDs that count as a "structural motif" — used by the residue-
+// filter toggle and the signal-flow code.
+const MOTIF_TYPE_IDS = new Set([110, 111, 113, 114, 115]);
+const RESIDUE_OF_TYPE_ID = 116;
 const PROP_NAME              = 30;
 // AlphaFold confidence overlay (v2.2 §A).
 const PROP_PLDDT_MEAN        = 36;
@@ -211,6 +236,7 @@ let selected = null;             // currently-selected node
 let highlightedLinks = new Set();// links lit up for signal-flow viz
 let pulseUntil = 0;              // timestamp until which the pulse burst is active
 let Graph = null;                // 3d-force-graph instance
+let showResidues = false;        // toggle controlling residue + motif visibility
 
 // ─── DOM refs ──────────────────────────────────────────────────
 const $stats = document.getElementById("stats");
@@ -311,8 +337,19 @@ function buildGraphFromRecords(records) {
   const links = [];
   entitiesById = new Map();
   edgesById = new Map();
+  // Helper: should this record be filtered out by the residue toggle?
+  const residueTypeId = TYPES.residue.id;
+  const skipForResidueFilter = (rec) => {
+    if (showResidues) return false;
+    if (rec.kind === "entity" && rec.type_id === residueTypeId) return true;
+    if (rec.kind === "hyper_edge" && (
+      MOTIF_TYPE_IDS.has(rec.type_id) || rec.type_id === RESIDUE_OF_TYPE_ID
+    )) return true;
+    return false;
+  };
   // Entities first.
   for (const rec of records) {
+    if (skipForResidueFilter(rec)) continue;
     if (rec.kind === "entity") {
       entitiesById.set(rec.entity_id, rec);
       const plddtMean = extractPlddtMean(rec);
@@ -335,6 +372,7 @@ function buildGraphFromRecords(records) {
   // For arity-2 edges that's effectively a single link; for arity 3+
   // it's the canonical bipartite reduction (hyperedge = node).
   for (const rec of records) {
+    if (skipForResidueFilter(rec)) continue;
     if (rec.kind === "hyper_edge") {
       edgesById.set(rec.hyperedge_id, rec);
       // Skip the edge if any role-filler is missing from our entity
@@ -604,6 +642,11 @@ function renderSelected() {
     [PROP_SEQ_LEN]: "seq_len",
     [PROP_ORGANISM]: "organism",
     [PROP_GENE]: "gene",
+    50: "position",
+    51: "amino_acid",
+    52: "residue_pLDDT",
+    53: "sec_struct",
+    54: "motif",
   };
   for (const p of r.properties || []) {
     const v = p.value && (p.value.value ?? p.value);
@@ -839,6 +882,12 @@ document.getElementById("af-fetch-btn").addEventListener("click", fetchAndCommit
 document.getElementById("af-fetch-acc").addEventListener("keydown", (e) => {
   if (e.key === "Enter") fetchAndCommitAlphaFold();
 });
+document.getElementById("show-residues-toggle").addEventListener("change", async (e) => {
+  showResidues = e.target.checked;
+  // The /iter call doesn't depend on the toggle — we filter client-side
+  // — but we still refresh so the graph rebuilds with/without residues.
+  await reload();
+});
 document.getElementById("add-ent-btn").addEventListener("click", addEntity);
 document.getElementById("add-hed-btn").addEventListener("click", addHyperedge);
 document.getElementById("delete-btn").addEventListener("click", deleteSelected);
@@ -866,6 +915,9 @@ function nodeValFor(n) {
   // 3d-force-graph multiplies nodeRelSize by sqrt(nodeVal). pLDDT 0-100
   // → val 0.6-3.0 so high-confidence proteins draw ~2× the radius of
   // missing-data proteins without dominating the scene.
+  if (n.nodeKind === "entity" && n.type_id === TYPES.residue.id) {
+    return 0.25; // residue dots are small by design — there are ~80 of them
+  }
   if (n.nodeKind === "entity" && typeof n.plddtMean === "number") {
     return 0.6 + (n.plddtMean / 100) * 2.4;
   }
