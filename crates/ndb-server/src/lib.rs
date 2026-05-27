@@ -47,7 +47,7 @@ use ndb_engine::{
     CommitRequest, CommitResponse, Engine, EngineError, ErrorResponse, JsonRecord, JsonValue,
     LookupRequest, LookupResponse, PropertyLookupRequest, PropertyLookupResponse,
     PropertyRangeRequest, PropertyRangeResponse, QueryError, QueryRequest, ReadResponse, Record,
-    Resolved, TraverseRequest, TraverseResponse, TxId, VectorHit, VectorMetric,
+    Resolved, SubscribeRequest, TraverseRequest, TraverseResponse, TxId, VectorHit, VectorMetric,
     VectorSearchRequest, VectorSearchResponse, WireError, WriteTxn, execute_query,
 };
 use ndb_engine::id::{EntityId, PropertyId, TypeId};
@@ -561,6 +561,7 @@ impl Server {
             ("POST", "/traverse") => self.handle_traverse(body, out, outcome),
             ("POST", "/query") => self.handle_query(body, out, outcome),
             ("POST", "/query_stream") => self.handle_query_stream(body, out, outcome),
+            ("POST", "/subscribe") => self.handle_subscribe(body, out, outcome),
             _ => {
                 outcome.status = 404;
                 let detail = format!("no route for {} {}", req.method, req.path);
@@ -989,6 +990,88 @@ impl Server {
         Ok(())
     }
 
+    /// `POST /subscribe` — long-poll for records committed after a
+    /// given tx_id. Returns JSONL: first line is
+    /// `{"current_tx_id": <N>}`, subsequent lines are each newly-visible
+    /// record (one JsonRecord per line). End of stream is closed
+    /// connection. If no commits arrive before `timeout_ms`, returns
+    /// only the header line with `current_tx_id == since_tx_id`.
+    ///
+    /// v1 implementation polls the engine's manifest every 50ms. Pure
+    /// poll-based — no condvar yet (a hook in `WriteTxn::commit` that
+    /// fires a `std::sync::Condvar::notify_all` lands in v2 for lower
+    /// latency). For event-rate consumers this is adequate; for sub-50ms
+    /// latency, use `Engine::commit_timestamps` + a tight tight loop.
+    fn handle_subscribe(
+        &self,
+        body: &[u8],
+        out: &mut dyn Write,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
+        let req: SubscribeRequest = match serde_json::from_slice(body) {
+            Ok(r) => r,
+            Err(e) => return bad_json(out, outcome, "subscribe body", &e.to_string()),
+        };
+        let server_max_ms: u32 = 60_000;
+        let timeout_ms = req.timeout_ms.unwrap_or(30_000).min(server_max_ms);
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_millis(u64::from(timeout_ms));
+
+        let cur_tx = loop {
+            let engine = self.engine.lock().expect("engine mutex poisoned");
+            let cur = engine.manifest().last_tx_id;
+            if cur > req.since_tx_id {
+                drop(engine);
+                break cur;
+            }
+            drop(engine);
+            if std::time::Instant::now() >= deadline {
+                break req.since_tx_id;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+
+        // Stream the response: header line, then records committed
+        // after since_tx_id.
+        write_status_line(out, 200)?;
+        out.write_all(b"Content-Type: application/jsonl; charset=utf-8\r\n")?;
+        out.write_all(b"Connection: close\r\n\r\n")?;
+        let header = serde_json::json!({ "current_tx_id": cur_tx });
+        let header_line = serde_json::to_string(&header).map_err(|e| {
+            ServerError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        })?;
+        out.write_all(header_line.as_bytes())?;
+        out.write_all(b"\n")?;
+
+        if cur_tx > req.since_tx_id {
+            let mut engine = self.engine.lock().expect("engine mutex poisoned");
+            let records = engine.snapshot_iter(TxId::new(cur_tx))?;
+            for r in records {
+                let assert_tx = match &r {
+                    Record::Entity(e) => e.tx_id_assert.get(),
+                    Record::HyperEdge(h) => h.tx_id_assert.get(),
+                    // Dictionary records: filter by their "implicit" tx
+                    // via the writer's tx_id_supersede field? In v1 these
+                    // don't carry a tx_assert — emit them on every
+                    // subscribe so new dictionary entries from this
+                    // period reach subscribers.
+                    _ => req.since_tx_id + 1,
+                };
+                if assert_tx <= req.since_tx_id {
+                    continue;
+                }
+                let jr: JsonRecord = (&r).into();
+                let line = serde_json::to_string(&jr).map_err(|e| {
+                    ServerError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+                })?;
+                out.write_all(line.as_bytes())?;
+                out.write_all(b"\n")?;
+            }
+        }
+        outcome.status = 200;
+        Ok(())
+    }
+
     /// Borrow the shared engine for direct manipulation (tests).
     #[must_use]
     pub fn engine(&self) -> Arc<Mutex<Engine>> {
@@ -1330,11 +1413,12 @@ fn required_capability(method: &str, path: &str) -> Option<Capability> {
         ("GET", "/iter") => Some(Capability::Iter),
         ("POST", "/flush") => Some(Capability::Flush),
         ("POST", "/compact") => Some(Capability::Compact),
-        // Indexed query + traversal + query-language routes — all gated by Read.
+        // Indexed query + traversal + query-language + subscribe routes
+        // — all gated by Read.
         (
             "POST",
             "/lookup" | "/vector_search" | "/property_lookup" | "/property_range" | "/traverse"
-                | "/query" | "/query_stream",
+                | "/query" | "/query_stream" | "/subscribe",
         ) => Some(Capability::Read),
         _ => None,
     }

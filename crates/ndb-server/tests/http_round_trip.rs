@@ -599,6 +599,89 @@ fn query_route_executes_entity_pattern_via_tcp() {
 }
 
 #[test]
+fn subscribe_returns_records_committed_after_since_tx() {
+    const TYPE_ITEM: u32 = 100;
+
+    let dir = temp_dir("subscribe");
+    let server = Arc::new(Server::open(&dir).unwrap());
+    let since_tx_id;
+    {
+        let e = server.engine();
+        let mut e = e.lock().unwrap();
+        // Commit one entity → bumps last_tx_id to 1.
+        let mut txn = e.begin_write();
+        txn.put_entity(ndb_engine::EntityRecord {
+            entity_id: EntityId::now_v7(),
+            type_id: TypeId::new(TYPE_ITEM),
+            tx_id_assert: ndb_engine::TxId::new(0),
+            tx_id_supersede: ndb_engine::TxId::ACTIVE,
+            properties: vec![],
+        });
+        txn.commit().unwrap();
+        since_tx_id = e.manifest().last_tx_id;
+        // Two more — those should appear in subscribe.
+        for _ in 0..2 {
+            let mut txn = e.begin_write();
+            txn.put_entity(ndb_engine::EntityRecord {
+                entity_id: EntityId::now_v7(),
+                type_id: TypeId::new(TYPE_ITEM),
+                tx_id_assert: ndb_engine::TxId::new(0),
+                tx_id_supersede: ndb_engine::TxId::ACTIVE,
+                properties: vec![],
+            });
+            txn.commit().unwrap();
+        }
+    }
+    let addr = spawn_server(Arc::clone(&server), 1);
+
+    let body = format!(r#"{{"since_tx_id": {since_tx_id}, "timeout_ms": 500}}"#);
+    let resp = post(addr, "/subscribe", &body);
+    assert_eq!(resp.status, 200);
+    let text = std::str::from_utf8(&resp.body).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(!lines.is_empty());
+    let header: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert!(header["current_tx_id"].as_u64().unwrap() > since_tx_id);
+    // The 2 newer entities both have tx_id_assert > since_tx_id → 2 record lines.
+    let record_lines = &lines[1..];
+    assert_eq!(
+        record_lines.len(),
+        2,
+        "expected 2 newer records, got {record_lines:?}"
+    );
+    for rl in record_lines {
+        let r: serde_json::Value = serde_json::from_str(rl).unwrap();
+        assert_eq!(r["kind"], "entity");
+        assert!(r["tx_id_assert"].as_u64().unwrap() > since_tx_id);
+    }
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn subscribe_times_out_with_only_header_when_no_new_commits() {
+    let dir = temp_dir("subscribe-timeout");
+    let server = Arc::new(Server::open(&dir).unwrap());
+    let addr = spawn_server(Arc::clone(&server), 1);
+    let body = r#"{"since_tx_id": 0, "timeout_ms": 200}"#;
+    let started = std::time::Instant::now();
+    let resp = post(addr, "/subscribe", body);
+    let elapsed = started.elapsed();
+    assert_eq!(resp.status, 200);
+    // Timeout polling should take at least timeout_ms.
+    assert!(
+        elapsed >= std::time::Duration::from_millis(200),
+        "elapsed = {elapsed:?}"
+    );
+    let text = std::str::from_utf8(&resp.body).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 1, "expected only header, got {lines:?}");
+    let header: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(header["current_tx_id"], 0);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn query_stream_emits_header_plus_one_line_per_row() {
     const TYPE_CUSTOMER: u32 = 100;
     const PROP_NAME: u32 = 30;

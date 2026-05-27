@@ -636,6 +636,18 @@ pub struct TraverseResponse {
     pub entity_ids: Vec<String>,
 }
 
+/// `POST /subscribe` request body — long-poll for records committed
+/// after `since_tx_id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubscribeRequest {
+    /// Return records with `tx_id_assert > since_tx_id`.
+    pub since_tx_id: u64,
+    /// Maximum time to wait for new commits, in milliseconds. Server
+    /// caps this server-side to prevent indefinite holds. Default 30000.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u32>,
+}
+
 #[cfg(test)]
 #[allow(clippy::needless_pass_by_value)] // test helpers
 mod tests {
