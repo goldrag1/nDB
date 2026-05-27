@@ -115,8 +115,8 @@ nDB ships as a small Rust engine plus a set of companion crates that compose int
 **Boundaries are strict.**
 
 - **The engine boundary is the wire protocol.** Apps in any language talk to the engine through it. The engine is shipped in Rust (for speed and memory safety) but the architecture is language-neutral.
-- **The engine exposes high-throughput primitives** (bulk batch reads, streaming cursors, change subscriptions, bulk write transactions) so that plugins — including future GPU plugins — can saturate hardware without per-record round trips. Concurrency: single-writer + batching + fully concurrent MVCC readers. See Section 13.3.
-- **Hardware-neutral plugins.** Engine compiles and runs without any GPU toolchain. GPU plugins (cuVS vector index, cuDF columnar aggregation, GPU slicers) ship as opt-in companion crates from v2 onward. See Section 16 roadmap.
+- **The engine exposes high-throughput primitives** (bulk batch reads, streaming cursors, change subscriptions, bulk write transactions) so that plugins — including future GPU plugins — can saturate hardware without per-record round trips. Concurrency: single-writer + batching + fully concurrent MVCC readers. See Section 14.3.
+- **Hardware-neutral plugins.** Engine compiles and runs without any GPU toolchain. GPU plugins (cuVS vector index, cuDF columnar aggregation, GPU slicers) ship as opt-in companion crates from v2 onward. See Section 17 roadmap.
 - **Primary storage** is the canonical record. It knows how to append assertions, retrieve them by ID, and compact per retention policies. It does not know about schema validation, indexes, slicers, or rendering as separate primitives — those are either built on top of it (schema, indexes) or downstream of it (slicers, renderers).
 - **Indexes are derived structures** consumed by the query planner. The engine ships a small mandatory set; additional indexes plug in via a stable `Index` trait (in-tree or out-of-tree). Schemas, slicers, and apps can all drive index creation.
 - **Schema is metadata hyperedges** stored alongside data. The engine's validation hooks read these and enforce per-type rules. Schema is not a separate primitive.
@@ -355,7 +355,7 @@ write
     severity: "strict"
   )
 
-# Index declaration (schema-driven indexing — see Section 13.2)
+# Index declaration (schema-driven indexing — see Section 14.2)
 write
   index_declaration(
     target_type: "Customer",
@@ -642,7 +642,7 @@ This must be designed in from day 1, not retrofitted.
 | Window functions | Slicer crate |
 | Visual encoding (mapping dimensions to visual variables) | Slicer crate |
 
-**Aggregation pushdown via index plugins.** Naive read: engine streams ALL rows to slicer for aggregation = bad for large datasets. The architectural answer: some index plugins (notably columnar — Section 13.2) expose aggregation as a plugin-specific API. The slicer detects when an aggregation can be served by an index and uses it; falls back to streaming when no index is available.
+**Aggregation pushdown via index plugins.** Naive read: engine streams ALL rows to slicer for aggregation = bad for large datasets. The architectural answer: some index plugins (notably columnar — Section 14.2) expose aggregation as a plugin-specific API. The slicer detects when an aggregation can be served by an index and uses it; falls back to streaming when no index is available.
 
 ```
 slicer asks: "SUM(amount) BY customer"
@@ -861,7 +861,7 @@ Different transactions in the same database can run at different isolation level
 
 ## 11. Primary Storage Format
 
-The canonical record format — how the append-only hyperedge log + entity record store live on disk. Index layout choices are a separate question (see Section 13.2); this is purely about ground-truth storage.
+The canonical record format — how the append-only hyperedge log + entity record store live on disk. Index layout choices are a separate question (see Section 14.2); this is purely about ground-truth storage.
 
 ### 11.1 File format: custom binary
 
@@ -1057,7 +1057,7 @@ For compile-time type-safe queries from Rust code, compiling to the same wire fo
 
 **The engine query language is retrieval-only.** It supports pattern matching, filtering, projection, limits, time-travel, and writes. It does NOT include aggregation (`sum`, `count`, `avg`), grouping (`group by`), having clauses, sorting (`order by`), math expressions, or window functions.
 
-Those operations live in the **slicer crate** (Section 7), not in the engine. The engine retrieves matching rows; the slicer computes on them. Some index plugins (notably columnar — Section 13.2) may expose aggregation as a plugin-specific API that the slicer uses opportunistically; this keeps aggregation fast when an aggregation-capable index exists.
+Those operations live in the **slicer crate** (Section 7), not in the engine. The engine retrieves matching rows; the slicer computes on them. Some index plugins (notably columnar — Section 14.2) may expose aggregation as a plugin-specific API that the slicer uses opportunistically; this keeps aggregation fast when an aggregation-capable index exists.
 
 This split is intentional. It keeps the engine minimal, makes the wire protocol simple, and lets apps use any compute library of their choice via the slicer crate.
 
@@ -1175,11 +1175,152 @@ Deferred to a focused query-language spec:
 
 ---
 
-## 13. Open Architectural Questions
+## 13. Security Model
+
+Security spans eight distinct concerns. nDB v1 gives defensible answers to all; depth ramps up in v2 and v3.
+
+### 13.1 Authentication
+
+**Server mode** (wire protocol over HTTP):
+
+- **Bearer tokens** via HTTP `Authorization` header — primary mechanism
+- **Optional mTLS** (mutual TLS) for high-security deployments
+- Engine validates token on every request and attaches the authenticated identity to the transaction context
+- Token issuance, lifetime, and rotation are operator concerns (or external IdP for OAuth2 layering — standard HTTP middleware patterns apply)
+
+**Embedded mode** (engine linked into the app process):
+
+- No authentication at the engine boundary — trust the host process
+- Authentication happens at the app's own external boundary
+- The host process passes an authenticated identity into each transaction; engine attaches it to writes for audit purposes
+
+### 13.2 Authorization: ReBAC via capability hyperedges
+
+**Decided.** Authorization is **Relationship-Based Access Control (ReBAC)**, expressed as capability hyperedges. This is the architecturally native fit — hyperedges are the data model, and authorization is just one more relation type.
+
+A capability hyperedge declares:
+
+```
+write capability(
+    subject:    alice,                   # who
+    action:     "read",                  # what action
+    target:     doc_X,                   # on what target
+    granted_at: 2026-05-26T15:00,        # provenance
+    expires_at: 2026-12-31               # optional expiry
+)
+```
+
+The engine consults capability hyperedges on every operation. For an attempted action `A` on target `T` by subject `S`, the engine checks: does there exist a `capability(subject: S, action: A, target: T)` hyperedge that is still valid (snapshot-visible, not expired, not tombstoned)?
+
+**v1 scope: direct capabilities only.** No inference. Apps that need transitive access compute and propagate the capabilities themselves into hyperedges. The engine just looks them up.
+
+**v3 scope: inference-based ReBAC.** When Layer 4 ontology arrives, capabilities can be derived from base relationships via inference rules:
+
+```
+write inference_rule(
+    name: "team_org_access",
+    when: "member(person: ?p, group: ?g) AND
+           admin(group: ?g, resource: ?org) AND
+           contains*(parent: ?org, child: ?doc)",
+    derive: "capability(subject: ?p, action: 'read', target: ?doc)"
+)
+```
+
+Same pattern as Google Zanzibar / SpiceDB, expressed natively in nDB without a separate authorization subsystem. Authorization rules become Datalog inference rules; matching uses the recursive query syntax (Section 12.3).
+
+**Cross-cutting properties (free from the architecture):**
+
+- Capabilities are MVCC-versioned — "did Alice have access on 2025-12-31?" is a time-travel query
+- Capabilities are auditable — every grant / revoke is a versioned hyperedge with provenance
+- Capabilities respect retention — expired capabilities can be compacted away via `forget_after`
+- Capabilities are queryable like any data — "list everything Alice can access" is a normal query
+
+### 13.3 Encryption in transit
+
+**TLS 1.3 mandatory** for any non-localhost connection in server mode. Embedded mode N/A (in-process).
+
+- Engine accepts HTTPS on its bound port
+- mTLS optional for high-security deployments (client certificates required)
+- Certificate provisioning is the operator's concern (Let's Encrypt, internal CA, cloud-provider managed)
+- Modern cipher suites only; no weak-suite support
+
+### 13.4 Encryption at rest
+
+**v1: filesystem-level encryption** (LUKS, dm-crypt, FileVault, cloud-provider volume encryption). The engine itself does NOT encrypt SSTables in v1.
+
+Rationale: for the vast majority of workloads, full-disk encryption is sufficient and operationally simple. Engine-level encryption adds complexity (key management, key rotation, IV handling, compaction with encrypted blocks) that v1 doesn't need.
+
+**v2: optional engine-level SSTable encryption.** Per-database AES-256-GCM keys, integrated with external KMS via a plugin pattern. Enables HIPAA / SOC2 compliance scenarios.
+
+**v3+: per-property encryption** for sensitive fields (national IDs, medical record numbers). Likely implemented as a slicer / app-layer pattern; the engine just stores the encrypted bytes.
+
+### 13.5 Audit logging
+
+**Free via the existing architecture.** Every write carries:
+
+- `tx_id_assert` (when it happened)
+- `created_by` (the authenticated subject)
+- `created_at` (engine timestamp)
+
+These are baseline properties on every record (in addition to user-defined properties).
+
+Audit queries are normal queries with time-travel:
+
+```
+as of now()
+match
+  Customer(name: "ACME", _last_modified_by: ?user, _last_modified_at: ?t)
+where ?t > (now() - 7d)
+return ?user, ?t
+```
+
+**Failed authentication and authorization attempts** emit `security_event` hyperedges with `attempted_subject`, `attempted_action`, `attempted_target`, `failure_reason`. These flow through the same retention and querying machinery as any other data.
+
+No separate audit subsystem. **Audit IS the data.**
+
+### 13.6 Key management
+
+**v1: external — operators integrate with their own KMS** (AWS KMS, GCP KMS, HashiCorp Vault) at the filesystem / OS layer. Engine doesn't ship a KMS.
+
+**v2: `KeyProvider` trait** — pluggable interface for engine-level SSTable encryption to fetch and rotate keys. Community ships KMS-specific implementations (`nDB-keys-aws-kms`, `nDB-keys-vault`, etc.).
+
+**v3+: HSM (hardware security module)** integration for high-compliance scenarios.
+
+### 13.7 Network security
+
+Operator concerns; the engine exposes configuration hooks:
+
+- Per-token rate limits (config-declared)
+- Optional IP allowlists (config-declared)
+- TCP keepalive tuning
+- Connection limits per client / token
+
+Reverse-proxy fronting (nginx, Envoy, Caddy) is the standard production deployment pattern; the engine doesn't need to be directly Internet-facing.
+
+### 13.8 Compliance hooks
+
+| Compliance | Support level |
+|---|---|
+| **GDPR** (right-to-be-forgotten) | v1 — via retention's `forget_after` policy (Section 9.3) |
+| **HIPAA** (encryption at rest + in transit + audit) | v1 partial (TLS + filesystem encryption + free audit); v2 full (engine-level encryption + KMS) |
+| **SOC2** (access controls + audit + encryption) | v1 partial; v2 audit-ready with engine-level encryption |
+| **Anonymization / pseudonymization** | App-layer concern; not engine |
+
+### 13.9 Security scope per version
+
+| Version | Security adds |
+|---|---|
+| **v1** | Bearer tokens + optional mTLS; TLS 1.3; direct-capability ReBAC; free audit via MVCC; filesystem encryption; GDPR forget-after; per-token rate limits |
+| **v2** | Engine-level SSTable encryption + `KeyProvider` plugin trait; HIPAA-ready; per-property encryption optional; SOC2 audit-ready |
+| **v3** | Layer 4 inference-based ReBAC (auth as ontology rules); advanced ABAC if demand emerges; HSM integration |
+
+---
+
+## 14. Open Architectural Questions
 
 These remain genuinely open. Each warrants its own focused spec.
 
-### 13.1 Distribution
+### 14.1 Distribution
 
 Candidates:
 - **Single-node first** — start here, no distribution complexity
@@ -1189,7 +1330,7 @@ Candidates:
 
 Single-node for the first 2 years of work. Distribution is a separate architectural epoch.
 
-### 13.2 Index strategy
+### 14.2 Index strategy
 
 **Decided: index framework with pluggable implementations.** The engine exposes a stable `Index` trait. All indexes — including built-ins — implement this trait. Some ship in core; others load as in-tree plugins or out-of-tree extensions.
 
@@ -1218,7 +1359,7 @@ trait Index {
 | Slicer | Materialized view derived from hot query patterns | Recurring slicer projection becomes pre-computed |
 | App / extension | Plugin trait registration | Chemistry app registers structural-similarity index |
 
-**Indexes by version** (see Section 16 Roadmap for full version scope):
+**Indexes by version** (see Section 17 Roadmap for full version scope):
 
 | Index | Purpose | v1 | v2 | v3 |
 |---|---|---|---|---|
@@ -1274,7 +1415,7 @@ The engine compiles and runs without any GPU toolchain. GPU plugins are opt-in d
 - Query planner cost model details (how cost estimates compose)
 - Whether each plugin manages its own physical storage or shares engine-provided buckets
 
-### 13.3 Concurrency model
+### 14.3 Concurrency model
 
 **Decided.** nDB uses **single-writer + batching** with **lock-free concurrent readers** for v1. Async runtime via **Tokio**.
 
@@ -1298,7 +1439,7 @@ The engine compiles and runs without any GPU toolchain. GPU plugins are opt-in d
 - Throughput is high anyway because of batching
 - Multi-writer requires distributed consensus or fine-grained locking — both belong in later versions
 
-**Multi-writer deferred to v3+** — revisit when distribution arrives (Section 16.3). Per-shard writers fit naturally with sharding.
+**Multi-writer deferred to v3+** — revisit when distribution arrives (Section 17.3). Per-shard writers fit naturally with sharding.
 
 **High-throughput plugin primitives (engine exposes from v1):**
 
@@ -1323,7 +1464,7 @@ These batch APIs are mandatory v1 engine primitives. Without them, high-throughp
 **Pinned memory hints (v2+, for GPU plugins):**
 The engine will expose an optional pinned (page-locked) memory pool API in v2. GPU plugins request pinned regions for fast CPU→GPU PCIe transfer. CPU plugins ignore the API. Hardware-neutral plugin design.
 
-### 13.4 Error handling
+### 14.4 Error handling
 
 Engine-level concerns to specify:
 - Schema-violation reporting (when validation is on)
@@ -1331,7 +1472,7 @@ Engine-level concerns to specify:
 - Storage corruption detection and recovery
 - Query-time error surfacing through slicer projections
 
-### 13.5 Testing strategy
+### 14.5 Testing strategy
 
 Open. Needs:
 - Property-based testing for graph invariants
@@ -1341,7 +1482,7 @@ Open. Needs:
 
 ---
 
-## 14. Non-Goals
+## 15. Non-Goals
 
 Explicit statements of what nDB is **not** trying to be.
 
@@ -1350,26 +1491,26 @@ Explicit statements of what nDB is **not** trying to be.
 - **Not a document store.** Documents (JSON blobs) are anti-pattern in nDB; the engine wants entities and hyperedges, not opaque payloads.
 - **Not a search engine.** Full-text search may exist as a feature but is not the primary access pattern.
 - **Not a streaming engine.** Real-time event processing is out of scope; nDB ingests events but doesn't process streams as a primary workload.
-- **Not an ad-hoc OLAP engine without index preparation.** The engine-retrieves / slicer-computes split (Section 7.6) means aggregation-heavy workloads need either a columnar index plugin (Section 13.2) or a materialized view. Workloads that do unpredictable ad-hoc analytical queries over raw data and expect sub-second response without any index preparation should use DuckDB, Snowflake, BigQuery, or ClickHouse instead. nDB is honest about this — when an aggregation-capable index exists, performance is competitive; without one, it falls back to streaming + slicer-side aggregation, which is slower than purpose-built OLAP engines.
+- **Not an ad-hoc OLAP engine without index preparation.** The engine-retrieves / slicer-computes split (Section 7.6) means aggregation-heavy workloads need either a columnar index plugin (Section 14.2) or a materialized view. Workloads that do unpredictable ad-hoc analytical queries over raw data and expect sub-second response without any index preparation should use DuckDB, Snowflake, BigQuery, or ClickHouse instead. nDB is honest about this — when an aggregation-capable index exists, performance is competitive; without one, it falls back to streaming + slicer-side aggregation, which is slower than purpose-built OLAP engines.
 
 ---
 
-## 15. Prior Art and References
+## 16. Prior Art and References
 
-### 15.1 Foundational
+### 16.1 Foundational
 
 - **Berge, Claude.** *Graphes et hypergraphes* (1970). Original hypergraph formalism.
 - **Wilkinson, Leland.** *The Grammar of Graphics* (1999). Theoretical basis for slicer architecture.
 - **Mackinlay, Jock.** "Automating the design of graphical presentations of relational information" (1986). Visual variable hierarchy.
 - **Cahill, Michael J., et al.** "Serializable Isolation for Snapshot Databases" (SIGMOD 2008). SSI algorithm.
 
-### 15.2 Existing hypergraph databases
+### 16.2 Existing hypergraph databases
 
 - **TypeDB** (formerly Grakn, ~2017) — most production-ready hyperedge-native database. Strong precedent. Schema-strict only.
 - **HyperGraphDB** (2007) — general-purpose embedded hypergraph DB in Java.
 - **GraphBrain** — NLP-focused hyperedges for semantic frames.
 
-### 15.3 Adjacent inspirations
+### 16.3 Adjacent inspirations
 
 - **Datomic** — opaque entity IDs, time as a dimension, MVCC, append-only log. Closest spiritual ancestor.
 - **Wikidata** — Q-numbers + multilingual labels = opaque + lookup pattern.
@@ -1380,18 +1521,18 @@ Explicit statements of what nDB is **not** trying to be.
 - **CockroachDB / FoundationDB** — Rust-adjacent transactional systems with SSI and distributed MVCC.
 - **RocksDB / LevelDB** — LSM tree implementations to study for the storage layer.
 
-### 15.4 ERP context
+### 16.4 ERP context
 
 - **Frappe / ERPNext** — DocType pattern as a hybrid of strict schema and flexible custom fields.
 - **TT99/2025** (Vietnamese accounting circular) — example of why VAS-specific reports cannot tolerate schemaless data.
 
 ---
 
-## 16. Roadmap
+## 17. Roadmap
 
 Scope organized by version. Calendar dates intentionally absent — versions ship when their scope is complete and quality is acceptable. Each version is a meaningful release with success criteria attached.
 
-### 16.1 v1.0 — Initial Production Release
+### 17.1 v1.0 — Initial Production Release
 
 Goal: usable single-node production engine for one workload (AI reasoning OR ERP — decided closer to launch based on pilot interest).
 
@@ -1455,7 +1596,7 @@ These primitives ship in v1 even though no GPU plugins exist yet. They are the f
 - Documentation site live
 - Batch APIs validated by a high-throughput ingest benchmark (10K+ writes/sec, 100K+ reads/sec)
 
-### 16.2 v2.0 — Analytics + AI Workloads + first GPU support
+### 17.2 v2.0 — Analytics + AI Workloads + first GPU support
 
 Goal: viable for AI / GraphRAG workloads and slicer-heavy analytics, with GPU acceleration available for vector and aggregation workloads.
 
@@ -1499,7 +1640,7 @@ Goal: viable for AI / GraphRAG workloads and slicer-heavy analytics, with GPU ac
 - Schema Layer 3 validated with an ERP pilot
 - GPU plugin path validated: at least one production user running `nDB-index-vector-cuda` with 10× speedup over CPU vector index for the same workload
 
-### 16.3 v3.0 — Distribution + Ecosystem + cross-platform GPU
+### 17.3 v3.0 — Distribution + Ecosystem + cross-platform GPU
 
 Goal: differentiated from competitors, ready for broader adoption. GPU coverage extends beyond NVIDIA.
 
@@ -1540,7 +1681,7 @@ Goal: differentiated from competitors, ready for broader adoption. GPU coverage 
 - Plugin API documentation site
 - GPU plugin parity validated across at least 2 GPU stacks (CUDA + ROCm OR CUDA + Metal)
 
-### 16.4 v4.0+ — Distributed + High-Dimensional Renderers (future)
+### 17.4 v4.0+ — Distributed + High-Dimensional Renderers (future)
 
 Goal: web-scale write workloads + saturating the visual variable hierarchy.
 
@@ -1561,7 +1702,7 @@ The distribution portion will require a fresh design doc when approached. The hi
 
 ---
 
-## 17. Risks and Open Concerns
+## 18. Risks and Open Concerns
 
 - **Query language fragmentation** — no existing standard fits cleanly. Inventing a new DSL is correct but raises adoption friction.
 - **Mindshare and ecosystem** — competing with Neo4j's mature tooling is a multi-year uphill battle.
@@ -1573,16 +1714,16 @@ The distribution portion will require a fresh design doc when approached. The hi
 
 ---
 
-## 18. Next Steps
+## 19. Next Steps
 
 1. **Review this design doc** — confirm the architectural decisions captured here match intent.
-2. **Decompose remaining items into focused specs** — storage implementation (Section 11.4 sub-questions), index strategy (Section 13.2), query language grammar (Section 12.9), distribution (Section 13.1).
+2. **Decompose remaining items into focused specs** — storage implementation (Section 11.4 sub-questions), index strategy (Section 14.2), query language grammar (Section 12.9), distribution (Section 14.1).
 3. **Study TypeDB deeply** — clone the repo, read the schema design and query language, understand why adoption is slow.
 4. **Study Datomic, PostgreSQL MVCC, and RocksDB** — Datomic for the append-only + MVCC reference architecture; PostgreSQL for MVCC + SSI patterns; RocksDB for LSM implementation patterns.
 5. **Prototype the storage core** — minimal Rust crate exercising hyperedge insert/read/traverse with the decided record layout (Section 11.2), append-only with MVCC from the start.
 6. **Prototype the query parser** — exercising the wire format AST (Section 12.2) and the text-syntax parser (Section 12.3).
 
-This doc covers the architectural foundation. Subsequent specs (one per Section 13 item, plus storage implementation and query grammar) will decompose into implementable milestones.
+This doc covers the architectural foundation. Subsequent specs (one per Section 14 item, plus storage implementation and query grammar) will decompose into implementable milestones.
 
 ---
 
