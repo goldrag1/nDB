@@ -82,6 +82,20 @@
     <h2>AlphaFold confidence</h2>
     <div id="confidence-legend"></div>
 
+    <h2>Fetch from AlphaFold-DB</h2>
+    <div class="form">
+      <label>UniProt accession</label>
+      <input id="af-fetch-acc" placeholder="e.g. P38398 (BRCA1), Q8N726 (CDKN2A)" autocomplete="off">
+      <button class="btn" id="af-fetch-btn">Fetch &amp; add protein</button>
+      <div class="hint">
+        Pulls <code>globalMetricValue</code>, gene, organism, and sequence
+        length from <a href="https://alphafold.ebi.ac.uk/" target="_blank" rel="noreferrer">alphafold.ebi.ac.uk</a>,
+        derives the pLDDT bucket using AF-DB thresholds, and commits a
+        protein entity to this nDB. Skips if the accession is already
+        loaded.
+      </div>
+    </div>
+
     <h2>Add entity</h2>
     <div class="form">
       <label>Type</label>
@@ -638,6 +652,97 @@ function hashPropKey(k) {
   return 1000 + Math.abs(h % 9999);
 }
 
+// ─── AlphaFold-DB live fetch (§B) ──────────────────────────────
+// EBI's prediction API serves CORS-friendly JSON, so the browser can
+// call it directly — no proxy needed. We GET the prediction, derive a
+// pLDDT bucket from `globalMetricValue`, then commit a protein entity
+// to the local nDB. Empty `{}` from EBI means the prediction has been
+// retired (typically for proteins > 2700 aa); we surface that as a
+// clear error and skip the commit.
+const AF_API_BASE = "https://alphafold.ebi.ac.uk/api/prediction";
+
+async function fetchAlphaFold(accession) {
+  const acc = accession.trim().toUpperCase();
+  if (!/^[A-Z0-9]{6,10}$/.test(acc)) {
+    throw new Error(`"${accession}" doesn't look like a UniProt accession`);
+  }
+  const r = await fetch(`${AF_API_BASE}/${encodeURIComponent(acc)}`);
+  if (r.status === 404) throw new Error(`AlphaFold-DB has no record for ${acc}`);
+  if (!r.ok) throw new Error(`AlphaFold-DB → ${r.status}`);
+  const body = await r.json();
+  if (Array.isArray(body)) {
+    if (body.length === 0) {
+      throw new Error(`AlphaFold-DB returned no predictions for ${acc} (likely >2700 aa, retired)`);
+    }
+    return { acc, rec: body[0] };
+  }
+  if (body && typeof body === "object" && Object.keys(body).length === 0) {
+    throw new Error(`AlphaFold-DB returned an empty record for ${acc} (likely retired)`);
+  }
+  throw new Error(`Unexpected AlphaFold-DB response shape for ${acc}`);
+}
+
+async function fetchAndCommitAlphaFold() {
+  const $acc = document.getElementById("af-fetch-acc");
+  const $btn = document.getElementById("af-fetch-btn");
+  const raw = $acc.value.trim();
+  if (!raw) {
+    showStatus("Enter a UniProt accession", true);
+    return;
+  }
+  $btn.disabled = true;
+  $btn.textContent = "Fetching…";
+  try {
+    const { acc, rec } = await fetchAlphaFold(raw);
+    // Dedupe by UniProt accession across the currently-loaded entities.
+    for (const e of entitiesById.values()) {
+      if (extractUniprot(e) === acc) {
+        throw new Error(`${acc} (${extractName(e) || "?"}) is already loaded`);
+      }
+    }
+    const gene = rec.gene || acc;
+    const plddt = (typeof rec.globalMetricValue === "number") ? rec.globalMetricValue : null;
+    const seqLen = (typeof rec.sequence === "string") ? rec.sequence.length
+                 : (typeof rec.sequenceLength === "number") ? rec.sequenceLength
+                 : 0;
+    const organism = rec.organismScientificName || "Unknown";
+    // PROP_NAME = user-facing label (gene symbol if known, else accession).
+    const properties = [
+      { prop_id: PROP_NAME,     value: { tag: "string", value: gene } },
+      { prop_id: PROP_UNIPROT,  value: { tag: "string", value: acc } },
+      { prop_id: PROP_GENE,     value: { tag: "string", value: gene } },
+      { prop_id: PROP_ORGANISM, value: { tag: "string", value: organism } },
+    ];
+    if (seqLen > 0) {
+      properties.push({ prop_id: PROP_SEQ_LEN, value: { tag: "i64", value: seqLen } });
+    }
+    if (plddt != null) {
+      properties.push({ prop_id: PROP_PLDDT_MEAN,   value: { tag: "f64", value: plddt } });
+      properties.push({ prop_id: PROP_PLDDT_BUCKET, value: { tag: "string", value: bucketForPlddt(plddt) } });
+    }
+    const eid = uuidV7();
+    await commit([{
+      kind: "entity",
+      entity_id: eid,
+      type_id: TYPES.protein.id,
+      tx_id_assert: 0,
+      tx_id_supersede: "active",
+      properties,
+    }]);
+    $acc.value = "";
+    const tag = plddt != null
+      ? `${gene} (pLDDT ${plddt.toFixed(1)} ${bucketForPlddt(plddt)})`
+      : `${gene} (no pLDDT — retired prediction)`;
+    showStatus(`Added ${tag}`);
+    await reload();
+  } catch (e) {
+    showStatus("AF fetch: " + e.message, true);
+  } finally {
+    $btn.disabled = false;
+    $btn.textContent = "Fetch & add protein";
+  }
+}
+
 async function addEntity() {
   try {
     const type = $entType.value;
@@ -730,6 +835,10 @@ async function reload() {
 }
 
 // ─── Wire UI ───────────────────────────────────────────────────
+document.getElementById("af-fetch-btn").addEventListener("click", fetchAndCommitAlphaFold);
+document.getElementById("af-fetch-acc").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") fetchAndCommitAlphaFold();
+});
 document.getElementById("add-ent-btn").addEventListener("click", addEntity);
 document.getElementById("add-hed-btn").addEventListener("click", addHyperedge);
 document.getElementById("delete-btn").addEventListener("click", deleteSelected);
