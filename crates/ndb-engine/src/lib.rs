@@ -28,6 +28,7 @@
 #![warn(missing_docs)]
 
 pub mod codec;
+pub mod db;
 pub mod error;
 pub mod id;
 pub mod record;
@@ -35,6 +36,11 @@ pub mod sstable;
 pub mod value;
 pub mod wal;
 
+pub use db::{
+    CURRENT_FILE, Database, DatabaseError, LOCK_FILE, MANIFEST_FORMAT_VERSION,
+    MANIFEST_FORMAT_VERSION_MAX_SUPPORTED, MANIFEST_MAGIC, MANIFEST_PREFIX, MAX_LSM_LEVEL,
+    Manifest, ManifestEntry, manifest_filename, parse_manifest_filename,
+};
 pub use error::{DecodeError, EncodeError};
 pub use id::{EntityId, HyperedgeId, PropertyId, RoleId, TX_ACTIVE, TYPE_UNTYPED, TxId, TypeId};
 pub use record::{
