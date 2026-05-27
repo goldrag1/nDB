@@ -1772,9 +1772,24 @@ function updateModelComparison(node) {
         </thead>
         <tbody>
           <tr>
-            <td style="padding:4px 6px;color:#cfcfd6">Storage (this protein)</td>
-            <td style="padding:4px 6px">${((atomRows * 120 + 8000) / 1024).toFixed(0)} KB <span style="color:#888">(.cif: atom_site rows + categories)</span></td>
-            <td style="padding:4px 6px">${((ndbTotalRecords * 200) / 1024).toFixed(0)} KB est. <span style="color:#888">(per-record envelope + B-tree)</span></td>
+            <td style="padding:4px 6px;color:#cfcfd6">Atomic structure</td>
+            <td style="padding:4px 6px">${((atomRows * 120 + 8000) / 1024).toFixed(0)} KB <span style="color:#888">(.cif text, unindexed)</span></td>
+            <td style="padding:4px 6px">${((ndbAtoms * 200) / 1024).toFixed(0)} KB est. <span style="color:#888">(${ndbAtoms} indexed atom entities + 1 contains edge)</span></td>
+          </tr>
+          <tr>
+            <td style="padding:4px 6px;color:#cfcfd6">Metadata (gene, UniProt, pLDDT, organism, …)</td>
+            <td style="padding:4px 6px"><span style="color:#888">not in .cif — UniProt SwissProt (~10 KB/entry)</span></td>
+            <td style="padding:4px 6px">~0.3 KB <span style="color:#888">(properties on the protein entity)</span></td>
+          </tr>
+          <tr>
+            <td style="padding:4px 6px;color:#cfcfd6">Cross-protein relations</td>
+            <td style="padding:4px 6px"><span style="color:#888">not in .cif — IntAct / Reactome (separate DBs)</span></td>
+            <td style="padding:4px 6px">~${(((ndbComplex + ndbEncodes) * 800) / 1024).toFixed(1)} KB <span style="color:#888">(${ndbComplex} complex + ${ndbEncodes} encodes hyperedges)</span></td>
+          </tr>
+          <tr>
+            <td style="padding:4px 6px;color:#cfcfd6">In one store?</td>
+            <td style="padding:4px 6px"><span style="color:#888">No — AF-DB ships only structure; metadata + relations are 3 different databases</span></td>
+            <td style="padding:4px 6px"><span style="color:#65CBF3">Yes — one engine, ~${((ndbAtoms * 200) / 1024 + 1).toFixed(0)} KB total for atoms + metadata + relations</span></td>
           </tr>
           <tr>
             <td style="padding:4px 6px;color:#cfcfd6">Schema units</td>
