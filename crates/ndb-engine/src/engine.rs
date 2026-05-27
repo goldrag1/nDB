@@ -44,7 +44,7 @@ use crate::index::{
     VectorIndex,
 };
 use crate::memtable::Memtable;
-use crate::mvcc::{Resolved, resolve_iter, visible_at};
+use crate::mvcc::{Resolved, resolve_iter};
 use crate::record::{EntityRecord, HyperEdgeRecord, Record, TombstoneRecord};
 use crate::sstable::{SSTableError, SSTableKey, SSTableReader, SSTableWriter};
 use crate::validation::{ValidationEngine, ValidationError};
@@ -689,32 +689,46 @@ impl Engine {
             .unwrap_or(RetentionPolicy::LatestOnly)
     }
 
+    /// Streaming variant of [`Self::snapshot_iter`] — lazily k-way-merges
+    /// the memtable + open SSTables in `(kind, primary)` order. Yields
+    /// one resolved record at a time without materialising the full
+    /// result set; peak memory is O(sources × avg record size) instead
+    /// of O(N).
+    ///
+    /// Use this for large-scan paths (`/iter`, `/query_stream`, the
+    /// query executor) where the caller doesn't need random access.
+    /// For backward compatibility, [`Self::snapshot_iter`] still
+    /// materialises a `Vec` internally by collecting from this iterator.
+    pub fn snapshot_iter_streaming(
+        &self,
+        snapshot: TxId,
+    ) -> SnapshotStream<'_> {
+        // Materialise memtable into an owned, sorted Vec. Memtable
+        // is small relative to SSTables and already in memory; this
+        // copy is the right cost-vs-complexity tradeoff for v2.0.
+        let mem: Vec<(SSTableKey, Record)> = self
+            .memtable
+            .iter()
+            .map(|(k, r)| (k.clone(), r.clone()))
+            .collect();
+        let mut sources: Vec<MergeSource<'_>> = Vec::with_capacity(self.sstables.len() + 1);
+        sources.push(MergeSource::Memtable(mem.into_iter()));
+        for sst in &self.sstables {
+            sources.push(MergeSource::SSTable(sst.iter()));
+        }
+        SnapshotStream::new(sources, snapshot)
+    }
+
     /// Iterate every record visible at `snapshot`, in (kind, primary)
     /// order, deduplicating across memtable + SSTables. Useful for scans.
     /// O(N) — v1 has no block index.
+    ///
+    /// Materialises the full result set in a `Vec`. For very large scans,
+    /// prefer [`Self::snapshot_iter_streaming`] which yields records one
+    /// at a time without buffering.
     pub fn snapshot_iter(&mut self, snapshot: TxId) -> Result<Vec<Record>, EngineError> {
-        // Collect all records across layers, group by SSTableKey, run
-        // resolver per group.
-        let mut by_key: BTreeMap<SSTableKey, Vec<Record>> = BTreeMap::new();
-        for (k, r) in self.memtable.iter() {
-            by_key.entry(k.clone()).or_default().push(r.clone());
-        }
-        for sst in &mut self.sstables {
-            for item in sst.iter() {
-                let (rec, _) = item?;
-                let k = SSTableKey::for_record(&rec);
-                by_key.entry(k).or_default().push(rec);
-            }
-        }
-        let mut out = Vec::new();
-        for (_k, versions) in by_key {
-            if let Some(r) = resolve_iter(versions.iter(), snapshot).into_live()
-                && visible_at(r, snapshot)
-            {
-                out.push(r.clone());
-            }
-        }
-        Ok(out)
+        self.snapshot_iter_streaming(snapshot)
+            .collect::<Result<Vec<_>, _>>()
     }
 
     /// Drain the memtable into a new SSTable, update MANIFEST, rotate
@@ -1185,6 +1199,122 @@ fn emit_versioned(
         *records_out += 1;
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Lazy snapshot iterator (v2.0+) — k-way merge memtable + SSTables
+// ---------------------------------------------------------------------------
+
+/// One source in the k-way merge. Either the memtable's pre-collected
+/// vec or an SSTable's mmap-backed iterator.
+enum MergeSource<'a> {
+    Memtable(std::vec::IntoIter<(SSTableKey, Record)>),
+    SSTable(crate::sstable::SSTableIter<'a>),
+}
+
+impl MergeSource<'_> {
+    fn next_item(&mut self) -> Result<Option<(SSTableKey, Record)>, EngineError> {
+        match self {
+            Self::Memtable(it) => Ok(it.next()),
+            Self::SSTable(it) => match it.next() {
+                None => Ok(None),
+                Some(Ok((rec, _))) => Ok(Some((SSTableKey::for_record(&rec), rec))),
+                Some(Err(e)) => Err(EngineError::SSTable(e)),
+            },
+        }
+    }
+}
+
+/// Streaming snapshot iterator. Holds owned merge state plus an
+/// immutable borrow of the SSTable readers, so the engine remains
+/// readable concurrently (relevant once v2.0's RwLock relaxation lands).
+pub struct SnapshotStream<'a> {
+    sources: Vec<MergeSource<'a>>,
+    /// Current head of each source. `None` when that source is exhausted.
+    heads: Vec<Option<(SSTableKey, Record)>>,
+    snapshot: TxId,
+    primed: bool,
+    /// Error captured during merge; subsequent next() calls return None.
+    errored: bool,
+}
+
+impl<'a> SnapshotStream<'a> {
+    fn new(sources: Vec<MergeSource<'a>>, snapshot: TxId) -> Self {
+        let heads = (0..sources.len()).map(|_| None).collect();
+        Self {
+            sources,
+            heads,
+            snapshot,
+            primed: false,
+            errored: false,
+        }
+    }
+
+    fn prime(&mut self) -> Result<(), EngineError> {
+        for (i, src) in self.sources.iter_mut().enumerate() {
+            self.heads[i] = src.next_item()?;
+        }
+        self.primed = true;
+        Ok(())
+    }
+
+    /// Pull the next visible record. Returns `Ok(None)` at end of stream.
+    fn pump(&mut self) -> Result<Option<Record>, EngineError> {
+        if !self.primed {
+            self.prime()?;
+        }
+        loop {
+            // Find the smallest head key across all sources.
+            let mut smallest: Option<SSTableKey> = None;
+            for h in &self.heads {
+                if let Some((k, _)) = h
+                    && smallest.as_ref().is_none_or(|s| k < s)
+                {
+                    smallest = Some(k.clone());
+                }
+            }
+            let Some(target) = smallest else {
+                return Ok(None); // all sources exhausted
+            };
+            // Collect all records with this key + advance those sources.
+            let mut versions: Vec<Record> = Vec::new();
+            for i in 0..self.sources.len() {
+                while let Some((k, _)) = &self.heads[i] {
+                    if *k != target {
+                        break;
+                    }
+                    let (_, rec) = self.heads[i].take().expect("head present");
+                    versions.push(rec);
+                    self.heads[i] = self.sources[i].next_item()?;
+                }
+            }
+            // Resolve visible winner for this key at the requested snapshot.
+            if let Some(r) = crate::mvcc::resolve_iter(versions.iter(), self.snapshot).into_live()
+                && crate::mvcc::visible_at(r, self.snapshot)
+            {
+                return Ok(Some(r.clone()));
+            }
+            // Else: key was tombstoned at this snapshot — keep pumping.
+        }
+    }
+}
+
+impl Iterator for SnapshotStream<'_> {
+    type Item = Result<Record, EngineError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.errored {
+            return None;
+        }
+        match self.pump() {
+            Ok(Some(r)) => Some(Ok(r)),
+            Ok(None) => None,
+            Err(e) => {
+                self.errored = true;
+                Some(Err(e))
+            }
+        }
+    }
 }
 
 /// Map a `RetentionPolicyRecord` (policy_kind, keep_last_n) into the
@@ -2034,6 +2164,64 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_iter_streaming_matches_materialised() {
+        let dir = temp_dir("stream-match");
+        let mut engine = Engine::create(&dir).unwrap();
+        // Mix: commits across two flushes so we have memtable + 2 SSTables.
+        for batch in 0..2 {
+            for i in 0..7 {
+                let mut txn = engine.begin_write();
+                txn.put_entity(make_entity(EntityId::now_v7(), &format!("b{batch}-{i}")));
+                txn.commit().unwrap();
+            }
+            engine.flush().unwrap();
+        }
+        for i in 0..3 {
+            // Memtable resident.
+            let mut txn = engine.begin_write();
+            txn.put_entity(make_entity(EntityId::now_v7(), &format!("live-{i}")));
+            txn.commit().unwrap();
+        }
+        let snap = TxId::new(engine.manifest().last_tx_id);
+
+        let materialised = engine.snapshot_iter(snap).unwrap();
+        let streamed: Vec<_> = engine
+            .snapshot_iter_streaming(snap)
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            materialised.len(),
+            streamed.len(),
+            "materialised vs streamed count must match"
+        );
+        // Both must be sorted by SSTableKey ascending, so element-wise
+        // equality is the right check.
+        assert_eq!(materialised, streamed);
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn snapshot_iter_streaming_early_termination_stops_pumping() {
+        let dir = temp_dir("stream-early");
+        let mut engine = Engine::create(&dir).unwrap();
+        for _ in 0..50 {
+            let mut txn = engine.begin_write();
+            txn.put_entity(make_entity(EntityId::now_v7(), "x"));
+            txn.commit().unwrap();
+        }
+        let snap = TxId::new(engine.manifest().last_tx_id);
+        let first_few: Vec<_> = engine
+            .snapshot_iter_streaming(snap)
+            .take(5)
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(first_few.len(), 5);
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn commit_timestamps_and_retention_persist_across_restart() {
         let dir = temp_dir("persist-meta");
         // Phase 1: set retention + commit some entities, capture the
@@ -2271,7 +2459,7 @@ mod tests {
         for entry in std::fs::read_dir(dir).unwrap() {
             let p = entry.unwrap().path();
             if p.extension().is_some_and(|e| e == "ndb") {
-                let mut r = SSTableReader::open(&p).unwrap();
+                let r = SSTableReader::open(&p).unwrap();
                 for item in r.iter() {
                     let (rec, _) = item.unwrap();
                     if rec.kind() == kind {

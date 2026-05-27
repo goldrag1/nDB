@@ -341,7 +341,7 @@ mod tests {
         assert_eq!(m.size_bytes(), 0);
 
         // SSTable round-trip — every record is readable.
-        let mut r = SSTableReader::open(&path).unwrap();
+        let r = SSTableReader::open(&path).unwrap();
         let read_back: Result<Vec<_>, _> = r.iter().map(|res| res.map(|(rec, _)| rec)).collect();
         let read_back = read_back.unwrap();
         assert_eq!(read_back.len() as u64, total_records);

@@ -590,7 +590,8 @@ impl SSTableReader {
     /// Streaming iterator over records. Validates the per-record CRC of every
     /// record yielded. On a CRC failure mid-stream, the iterator returns
     /// `Some(Err(_))`; subsequent calls return `None`.
-    pub fn iter(&mut self) -> SSTableIter<'_> {
+    #[allow(clippy::iter_without_into_iter)]
+    pub fn iter(&self) -> SSTableIter<'_> {
         SSTableIter {
             data: &self.mmap[..usize::try_from(self.footer.data_size).unwrap_or(usize::MAX)],
             pos: 0,
@@ -606,7 +607,7 @@ impl SSTableReader {
     ///
     /// Returns the first record whose [`SSTableKey`] matches `target`;
     /// returns `None` if the key isn't present.
-    pub fn find(&mut self, target: &SSTableKey) -> Result<Option<Record>, SSTableError> {
+    pub fn find(&self, target: &SSTableKey) -> Result<Option<Record>, SSTableError> {
         let start_offset = self
             .block_index
             .as_ref()
@@ -847,7 +848,7 @@ mod tests {
         let footer = w.finish().unwrap();
         assert_eq!(footer.record_count, records.len() as u64);
 
-        let mut r = SSTableReader::open(&path).unwrap();
+        let r = SSTableReader::open(&path).unwrap();
         assert_eq!(r.footer().record_count, records.len() as u64);
         let restored: Result<Vec<_>, _> = r.iter().map(|res| res.map(|(rec, _)| rec)).collect();
         let restored = restored.unwrap();
@@ -914,7 +915,7 @@ mod tests {
 
         // With sidecar — fast path.
         {
-            let mut r = SSTableReader::open(&path).unwrap();
+            let r = SSTableReader::open(&path).unwrap();
             assert!(r.has_block_index());
             for rec in &records {
                 let k = SSTableKey::for_record(rec);
@@ -927,7 +928,7 @@ mod tests {
         let sidecar = crate::block_index::sidecar_path_for(&path);
         std::fs::remove_file(&sidecar).unwrap();
         {
-            let mut r = SSTableReader::open(&path).unwrap();
+            let r = SSTableReader::open(&path).unwrap();
             assert!(!r.has_block_index(), "missing sidecar = no index loaded");
             for rec in &records {
                 let k = SSTableKey::for_record(rec);
@@ -964,7 +965,7 @@ mod tests {
         }
         w.finish().unwrap();
 
-        let mut r = SSTableReader::open(&path).unwrap();
+        let r = SSTableReader::open(&path).unwrap();
         // Lookup a dictionary entry by exact key.
         let key = SSTableKey::for_record(&dict(2, "Supplier"));
         let hit = r.find(&key).unwrap().expect("Supplier present");
@@ -1046,7 +1047,7 @@ mod tests {
         bytes[offset + 10] ^= 0xff;
         std::fs::write(&path, &bytes).unwrap();
 
-        let mut r = SSTableReader::open(&path).unwrap();
+        let r = SSTableReader::open(&path).unwrap();
         let mut ok = 0;
         let mut errored = false;
         for item in r.iter() {
