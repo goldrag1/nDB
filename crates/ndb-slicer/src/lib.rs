@@ -208,7 +208,12 @@ fn extract(record: &Record, source: &ColumnSource) -> Option<Value> {
 // ---------------------------------------------------------------------------
 
 /// Aggregate function applied to a column inside a `group_by` bucket.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Percentile` carries an `f64` fraction — `Aggregate::Percentile { p: 0.95 }`
+/// for p95 — so the variant can't derive `Eq`. The remaining variants are
+/// scalars; PartialEq is enough for the tests that compare aggregate
+/// shapes.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Aggregate {
     /// Count of non-null values.
     Count,
@@ -220,6 +225,28 @@ pub enum Aggregate {
     Min,
     /// Maximum (any total-orderable type).
     Max,
+    /// Percentile at fraction `p ∈ (0.0, 1.0]`. R-7 linear interpolation
+    /// between adjacent samples (NumPy / pandas default). Coerces every
+    /// `Value::I64 / F64 / Timestamp` to f64 for the calculation;
+    /// non-numeric values reduce the per-group count.
+    ///
+    /// Memory cost is O(group_size × 8 bytes) — the implementation
+    /// collects every value into a `Vec<f64>` and sorts. Streaming
+    /// estimators (t-digest, GK) are a v3 extension if real workloads
+    /// OOM on the naive variant.
+    Percentile {
+        /// Fraction in `(0.0, 1.0]`. Out-of-range values return `Null`.
+        p: f64,
+    },
+}
+
+impl Aggregate {
+    /// Convenience: 50th percentile.
+    pub const P50: Self = Self::Percentile { p: 0.50 };
+    /// Convenience: 95th percentile.
+    pub const P95: Self = Self::Percentile { p: 0.95 };
+    /// Convenience: 99th percentile.
+    pub const P99: Self = Self::Percentile { p: 0.99 };
 }
 
 /// An aggregate to compute over a column.
@@ -491,7 +518,51 @@ fn compute_aggregate(agg: Aggregate, col: usize, rows: &[Vec<Value>]) -> Value {
         }
         Aggregate::Min => extremum(rows, col, true),
         Aggregate::Max => extremum(rows, col, false),
+        Aggregate::Percentile { p } => percentile(rows, col, p),
     }
+}
+
+/// R-7 (linear) percentile over the numeric values in `col`. Matches
+/// NumPy / pandas default. Returns `Value::Null` for an empty group or
+/// out-of-range `p`.
+fn percentile(rows: &[Vec<Value>], col: usize, p: f64) -> Value {
+    if !(p > 0.0 && p <= 1.0) {
+        return Value::Null;
+    }
+    let mut xs: Vec<f64> = Vec::with_capacity(rows.len());
+    for r in rows {
+        match r[col] {
+            Value::I64(n) => {
+                #[allow(clippy::cast_precision_loss)]
+                xs.push(n as f64);
+            }
+            Value::F64(f) => xs.push(f),
+            Value::Timestamp(t) => {
+                #[allow(clippy::cast_precision_loss)]
+                xs.push(t as f64);
+            }
+            _ => {}
+        }
+    }
+    if xs.is_empty() {
+        return Value::Null;
+    }
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = xs.len();
+    if n == 1 {
+        return Value::F64(xs[0]);
+    }
+    // R-7: index h = p * (n - 1); lerp between floor(h) and ceil(h).
+    #[allow(clippy::cast_precision_loss)]
+    let h = p * (n as f64 - 1.0);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let lo = h.floor() as usize;
+    let hi = lo + 1;
+    if hi >= n {
+        return Value::F64(xs[n - 1]);
+    }
+    let frac = h - h.floor();
+    Value::F64(xs[lo] + (xs[hi] - xs[lo]) * frac)
 }
 
 fn extremum(rows: &[Vec<Value>], col: usize, want_min: bool) -> Value {
@@ -920,5 +991,82 @@ mod tests {
                 .any(|v| matches!(v, Value::String(s) if s == "ok"))
         );
         assert!(strs.iter().any(|v| matches!(v, Value::Null)));
+    }
+
+    // ---------------------------------------------------------------------
+    // §2.3 Percentile aggregates — R-7 linear interpolation
+    // ---------------------------------------------------------------------
+
+    fn percentile_value(rows: &[Vec<Value>], p: f64) -> Value {
+        compute_aggregate(Aggregate::Percentile { p }, 0, rows)
+    }
+
+    #[test]
+    fn percentile_r7_canonical_values_match_numpy() {
+        // numpy.percentile([1,2,3,4,5], 50) = 3.0; 95 = 4.8; 99 = 4.96
+        let rows: Vec<Vec<Value>> = (1..=5).map(|n| vec![Value::I64(n)]).collect();
+        assert!(matches!(
+            percentile_value(&rows, 0.50),
+            Value::F64(v) if (v - 3.0).abs() < 1e-9
+        ));
+        assert!(matches!(
+            percentile_value(&rows, 0.95),
+            Value::F64(v) if (v - 4.8).abs() < 1e-9
+        ));
+        assert!(matches!(
+            percentile_value(&rows, 0.99),
+            Value::F64(v) if (v - 4.96).abs() < 1e-9
+        ));
+    }
+
+    #[test]
+    fn percentile_empty_group_is_null() {
+        let rows: Vec<Vec<Value>> = vec![vec![Value::Null], vec![Value::Null]];
+        assert!(matches!(percentile_value(&rows, 0.5), Value::Null));
+    }
+
+    #[test]
+    fn percentile_mixed_numeric_types_coerce() {
+        let rows: Vec<Vec<Value>> = vec![
+            vec![Value::I64(10)],
+            vec![Value::F64(20.0)],
+            vec![Value::Timestamp(30)],
+        ];
+        assert!(matches!(
+            percentile_value(&rows, 0.50),
+            Value::F64(v) if (v - 20.0).abs() < 1e-9
+        ));
+    }
+
+    #[test]
+    fn percentile_out_of_range_returns_null() {
+        let rows: Vec<Vec<Value>> = vec![vec![Value::I64(1)], vec![Value::I64(2)]];
+        assert!(matches!(percentile_value(&rows, 0.0), Value::Null));
+        assert!(matches!(percentile_value(&rows, 1.5), Value::Null));
+        assert!(matches!(percentile_value(&rows, -0.1), Value::Null));
+    }
+
+    #[test]
+    fn percentile_single_value_returns_that_value() {
+        let rows: Vec<Vec<Value>> = vec![vec![Value::I64(42)]];
+        assert!(matches!(
+            percentile_value(&rows, 0.95),
+            Value::F64(v) if (v - 42.0).abs() < 1e-9
+        ));
+    }
+
+    #[test]
+    fn percentile_p50_p95_p99_constants_match_named_values() {
+        // P50/P95/P99 constants should produce identical results to the
+        // explicit Percentile { p: ... } variants.
+        let rows: Vec<Vec<Value>> = (1..=100).map(|n| vec![Value::I64(n)]).collect();
+        let p50 = compute_aggregate(Aggregate::P50, 0, &rows);
+        let p95 = compute_aggregate(Aggregate::P95, 0, &rows);
+        let p99 = compute_aggregate(Aggregate::P99, 0, &rows);
+        assert_eq!(p50, compute_aggregate(Aggregate::Percentile { p: 0.50 }, 0, &rows));
+        assert_eq!(p95, compute_aggregate(Aggregate::Percentile { p: 0.95 }, 0, &rows));
+        assert_eq!(p99, compute_aggregate(Aggregate::Percentile { p: 0.99 }, 0, &rows));
+        // Sanity: p50 ≈ 50.5 (R-7 on 1..=100)
+        assert!(matches!(p50, Value::F64(v) if (v - 50.5).abs() < 1e-9));
     }
 }
