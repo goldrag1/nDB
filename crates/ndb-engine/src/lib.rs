@@ -37,6 +37,7 @@ pub mod memtable;
 pub mod mvcc;
 pub mod record;
 pub mod sstable;
+pub mod validation;
 pub mod value;
 pub mod wal;
 
@@ -61,5 +62,6 @@ pub use sstable::{
     SSTABLE_FORMAT_VERSION_MAX_SUPPORTED, SSTABLE_MAGIC, SSTableError, SSTableFooter, SSTableIter,
     SSTableKey, SSTableReader, SSTableWriter, read_footer,
 };
+pub use validation::{ValidationEngine, ValidationError};
 pub use value::Value;
 pub use wal::{WAL_EXTENSION, WalReadError, WalReader, WalRecovery, WriteAheadLog};

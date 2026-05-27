@@ -44,6 +44,7 @@ use crate::memtable::Memtable;
 use crate::mvcc::{Resolved, resolve_iter, visible_at};
 use crate::record::{EntityRecord, HyperEdgeRecord, Record, TombstoneRecord};
 use crate::sstable::{SSTableError, SSTableKey, SSTableReader, SSTableWriter};
+use crate::validation::{ValidationEngine, ValidationError};
 use crate::value::Value;
 use crate::wal::{WalReadError, WalReader, WriteAheadLog, truncate_to};
 
@@ -97,6 +98,11 @@ pub enum EngineError {
         /// Transaction's actual id.
         txn_tx: u64,
     },
+
+    /// Validation engine rejected a record (missing required property,
+    /// wrong value tag, etc.).
+    #[error(transparent)]
+    Validation(#[from] ValidationError),
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +128,8 @@ pub struct Engine {
     adjacency: AdjacencyIndex,
     /// Hyperedge-type clustering — `type_id → [hyperedge ids]`.
     type_cluster: HyperEdgeTypeIndex,
+    /// Constraint enforcement (required properties, value-tag checks).
+    validation: ValidationEngine,
     /// Database directory handle (owns the LOCK + current MANIFEST).
     db: Database,
 }
@@ -143,6 +151,7 @@ impl Engine {
             lookup_key: LookupKeyIndex::new(),
             adjacency: AdjacencyIndex::new(),
             type_cluster: HyperEdgeTypeIndex::new(),
+            validation: ValidationEngine::new(),
             db,
         })
     }
@@ -203,6 +212,7 @@ impl Engine {
             lookup_key: LookupKeyIndex::new(),
             adjacency: AdjacencyIndex::new(),
             type_cluster: HyperEdgeTypeIndex::new(),
+            validation: ValidationEngine::new(),
             db,
         };
         // Indexes are in-memory in v1 — rebuild them from the primary
@@ -253,6 +263,25 @@ impl Engine {
             self.type_cluster.apply(rec, tx);
         }
         Ok(())
+    }
+
+    /// Declare a property as REQUIRED on entities of a given type.
+    /// Commits that contain an entity of `type_id` missing `property_id`
+    /// are rejected with [`ValidationError::MissingRequiredProperty`].
+    pub fn require_property(&mut self, type_id: TypeId, property_id: PropertyId) {
+        self.validation.require_property(type_id, property_id);
+    }
+
+    /// Declare that a property must use a specific `Value` tag byte.
+    /// Use the `TAG_*` constants from the `value` module.
+    pub fn expect_value_tag(&mut self, type_id: TypeId, property_id: PropertyId, tag: u8) {
+        self.validation.expect_value_tag(type_id, property_id, tag);
+    }
+
+    /// Borrow the validation engine immutably (for diagnostics).
+    #[must_use]
+    pub fn validation(&self) -> &ValidationEngine {
+        &self.validation
     }
 
     /// Register a property id as a lookup key. Subsequent commits will
@@ -692,6 +721,12 @@ impl WriteTxn<'_> {
         if self.pending.is_empty() {
             return Ok(self.tx_id);
         }
+        // Validate every record FIRST. Validation failure aborts the
+        // transaction cleanly — nothing reaches the WAL, no partial
+        // state.
+        for r in &self.pending {
+            self.engine.validation.check(r)?;
+        }
         let wal = self
             .engine
             .wal
@@ -949,6 +984,88 @@ mod tests {
             Resolved::Live(Record::Entity(e)) => assert_eq!(e.entity_id, eid),
             other => panic!("post-restart read: {other:?}"),
         }
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn validation_rejects_missing_required_property_at_commit() {
+        let dir = temp_dir("val_required");
+        let mut engine = Engine::create(&dir).unwrap();
+        engine.require_property(TypeId::new(1), PropertyId::new(7));
+        let mut txn = engine.begin_write();
+        // Entity of type 1 missing required property 7.
+        txn.put_entity(EntityRecord {
+            entity_id: EntityId::now_v7(),
+            type_id: TypeId::new(1),
+            tx_id_assert: TxId::new(0),
+            tx_id_supersede: TxId::ACTIVE,
+            properties: vec![(PropertyId::new(99), Value::I64(0))],
+        });
+        let err = txn.commit().unwrap_err();
+        assert!(matches!(
+            err,
+            EngineError::Validation(ValidationError::MissingRequiredProperty { .. })
+        ));
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn validation_rejects_wrong_value_tag() {
+        let dir = temp_dir("val_tag");
+        let mut engine = Engine::create(&dir).unwrap();
+        engine.expect_value_tag(TypeId::new(1), PropertyId::new(7), crate::value::TAG_STRING);
+        let mut txn = engine.begin_write();
+        txn.put_entity(EntityRecord {
+            entity_id: EntityId::now_v7(),
+            type_id: TypeId::new(1),
+            tx_id_assert: TxId::new(0),
+            tx_id_supersede: TxId::ACTIVE,
+            properties: vec![(PropertyId::new(7), Value::I64(42))],
+        });
+        let err = txn.commit().unwrap_err();
+        assert!(matches!(
+            err,
+            EngineError::Validation(ValidationError::WrongValueTag { .. })
+        ));
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn validation_aborts_atomically_no_records_written() {
+        let dir = temp_dir("val_atomic");
+        let mut engine = Engine::create(&dir).unwrap();
+        engine.require_property(TypeId::new(1), PropertyId::new(7));
+        // Push one good record AND one bad record in the same tx.
+        let good_eid = EntityId::now_v7();
+        let mut txn = engine.begin_write();
+        txn.put_entity(EntityRecord {
+            entity_id: good_eid,
+            type_id: TypeId::new(1),
+            tx_id_assert: TxId::new(0),
+            tx_id_supersede: TxId::ACTIVE,
+            properties: vec![(PropertyId::new(7), Value::String("ok".into()))],
+        });
+        txn.put_entity(EntityRecord {
+            entity_id: EntityId::now_v7(),
+            type_id: TypeId::new(1),
+            tx_id_assert: TxId::new(0),
+            tx_id_supersede: TxId::ACTIVE,
+            properties: vec![], // missing required 7
+        });
+        let err = txn.commit().unwrap_err();
+        assert!(matches!(err, EngineError::Validation(_)));
+        // Even the GOOD record must not be in the engine — atomic
+        // validation aborts the whole transaction before WAL append.
+        let snap_after = TxId::new(engine.manifest().last_tx_id);
+        assert!(matches!(
+            engine
+                .snapshot_read(&good_eid.into_uuid(), snap_after)
+                .unwrap(),
+            Resolved::Missing
+        ));
         engine.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
