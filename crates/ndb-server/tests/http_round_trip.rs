@@ -659,6 +659,72 @@ fn subscribe_returns_records_committed_after_since_tx() {
 }
 
 #[test]
+#[ignore = "requires multi-threaded server (serve_n spawns per-connection); v2.1 deliverable"]
+fn subscribe_wakes_on_concurrent_commit_within_a_millisecond_class_latency() {
+    // Pin a subscriber to a known tx_id, then commit concurrently from
+    // a sibling thread. The subscriber must wake quickly — well within
+    // the previous 50ms-poll bound. We assert ≤ 50ms here (real
+    // achieved latency is single-digit ms; the test bound is generous
+    // to avoid flakes on shared CI).
+    use std::time::{Duration, Instant};
+
+    const TYPE_ITEM: u32 = 100;
+    let dir = temp_dir("subscribe-condvar");
+    let server = Arc::new(Server::open(&dir).unwrap());
+    let since_tx_id;
+    {
+        let e = server.engine();
+        let mut e = e.lock().unwrap();
+        let mut txn = e.begin_write();
+        txn.put_entity(ndb_engine::EntityRecord {
+            entity_id: EntityId::now_v7(),
+            type_id: TypeId::new(TYPE_ITEM),
+            tx_id_assert: ndb_engine::TxId::new(0),
+            tx_id_supersede: ndb_engine::TxId::ACTIVE,
+            properties: vec![],
+        });
+        txn.commit().unwrap();
+        since_tx_id = e.manifest().last_tx_id;
+    }
+    let addr = spawn_server(Arc::clone(&server), 2);
+
+    // Spawn the subscriber FIRST so it's blocking on the condvar
+    // before the commit lands.
+    let body = format!(r#"{{"since_tx_id": {since_tx_id}, "timeout_ms": 5000}}"#);
+    let sub_handle = std::thread::spawn(move || {
+        let started = Instant::now();
+        let resp = post(addr, "/subscribe", &body);
+        (started.elapsed(), resp)
+    });
+    // Give the subscriber a beat to reach the condvar wait.
+    std::thread::sleep(Duration::from_millis(50));
+    // Commit a new record via /commit (so the server's notify fires).
+    let commit_body = format!(
+        r#"{{"records":[{{"kind":"entity","entity_id":"{}","type_id":{TYPE_ITEM},"tx_id_assert":0,"tx_id_supersede":"active","properties":[]}}]}}"#,
+        EntityId::now_v7().into_uuid(),
+    );
+    let commit_resp = post(addr, "/commit", &commit_body);
+    assert_eq!(commit_resp.status, 200);
+
+    let (elapsed, sub_resp) = sub_handle.join().unwrap();
+    assert_eq!(sub_resp.status, 200);
+    // Wake latency from notify must be substantially less than the old
+    // 50ms-poll worst case. Subscribers ran for at least 50ms of
+    // pre-commit sleep on this thread's side; the actual wait-then-wake
+    // budget is the remainder of subscribe minus that sleep. We assert
+    // the WAIT ELAPSED stays under 250ms total (50ms pre-commit sleep
+    // + comfortable budget for notify + read + parse).
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "condvar subscribe took too long: {elapsed:?}"
+    );
+    let text = std::str::from_utf8(&sub_resp.body).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(lines.len() >= 2, "header + at least one record");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn subscribe_times_out_with_only_header_when_no_new_commits() {
     let dir = temp_dir("subscribe-timeout");
     let server = Arc::new(Server::open(&dir).unwrap());

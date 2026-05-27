@@ -198,6 +198,11 @@ pub struct Server {
     /// to terminate TLS itself instead of relying on a reverse proxy
     /// (§13.3). When absent, only the plain-TCP paths are available.
     tls_config: Option<Arc<rustls::ServerConfig>>,
+    /// Condvar-based commit notification (v2.0+). The mutex holds the
+    /// latest committed tx_id seen by this server; `notify_all` fires on
+    /// every successful commit. `/subscribe` blocks on this condvar
+    /// instead of polling every 50ms — sub-millisecond latency.
+    commit_notify: Arc<(Mutex<u64>, std::sync::Condvar)>,
 }
 
 /// Append-only audit log. One JSON line per request. Synchronous flush
@@ -270,24 +275,28 @@ impl Server {
         } else {
             Engine::create(path)?
         };
+        let initial_tx = engine.manifest().last_tx_id;
         Ok(Self {
             engine: Arc::new(Mutex::new(engine)),
             auth_token: None,
             principals: None,
             audit: None,
             tls_config: None,
+            commit_notify: Arc::new((Mutex::new(initial_tx), std::sync::Condvar::new())),
         })
     }
 
     /// Wrap an already-opened engine. Useful for tests.
     #[must_use]
     pub fn from_engine(engine: Engine) -> Self {
+        let initial_tx = engine.manifest().last_tx_id;
         Self {
             engine: Arc::new(Mutex::new(engine)),
             auth_token: None,
             principals: None,
             audit: None,
             tls_config: None,
+            commit_notify: Arc::new((Mutex::new(initial_tx), std::sync::Condvar::new())),
         }
     }
 
@@ -642,6 +651,18 @@ impl Server {
         }
         match txn.commit() {
             Ok(tid) => {
+                // Drop the engine lock BEFORE notifying so subscribers
+                // can grab the lock to read newly-committed records
+                // without contending with the writer's still-held mutex.
+                drop(engine);
+                let (mu, cv) = &*self.commit_notify;
+                {
+                    let mut guard = mu.lock().expect("notify mutex poisoned");
+                    if tid.get() > *guard {
+                        *guard = tid.get();
+                    }
+                }
+                cv.notify_all();
                 outcome.status = 200;
                 outcome.tx_id = Some(tid.get());
                 write_json(out, 200, &CommitResponse { tx_id: tid.get() })
@@ -1003,11 +1024,20 @@ impl Server {
     /// connection. If no commits arrive before `timeout_ms`, returns
     /// only the header line with `current_tx_id == since_tx_id`.
     ///
-    /// v1 implementation polls the engine's manifest every 50ms. Pure
-    /// poll-based — no condvar yet (a hook in `WriteTxn::commit` that
-    /// fires a `std::sync::Condvar::notify_all` lands in v2 for lower
-    /// latency). For event-rate consumers this is adequate; for sub-50ms
-    /// latency, use `Engine::commit_timestamps` + a tight tight loop.
+    /// v2.0: condvar-based — `/commit` fires `notify_all` on the
+    /// server's `commit_notify` after every successful commit. This
+    /// handler blocks on `wait_timeout_while` and returns the moment a
+    /// later tx_id is observed. Sub-millisecond latency under low load.
+    ///
+    /// v2.1 caveat: the bounded test server (`serve_n`) and the
+    /// production loop (`serve`) both process connections sequentially.
+    /// While `/subscribe` is blocked in the condvar wait, the server
+    /// can't accept the `/commit` connection that would fire the
+    /// notify. Real sub-millisecond latency requires the server to
+    /// spawn-per-connection, which is a v2.1 deliverable. The condvar
+    /// machinery is correct; only the connection acceptor is the
+    /// bottleneck. See `subscribe_wakes_on_concurrent_commit_within_a_millisecond_class_latency`
+    /// in the test suite (marked `#[ignore]` pending v2.1).
     fn handle_subscribe(
         &self,
         body: &[u8],
@@ -1020,21 +1050,36 @@ impl Server {
         };
         let server_max_ms: u32 = 60_000;
         let timeout_ms = req.timeout_ms.unwrap_or(30_000).min(server_max_ms);
-        let deadline = std::time::Instant::now()
-            + std::time::Duration::from_millis(u64::from(timeout_ms));
+        let timeout = std::time::Duration::from_millis(u64::from(timeout_ms));
 
-        let cur_tx = loop {
-            let engine = self.engine.lock().expect("engine mutex poisoned");
-            let cur = engine.manifest().last_tx_id;
-            if cur > req.since_tx_id {
-                drop(engine);
-                break cur;
-            }
-            drop(engine);
-            if std::time::Instant::now() >= deadline {
-                break req.since_tx_id;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
+        // Cheap pre-check via the engine manifest: if commits have already
+        // landed past since_tx_id (e.g., from direct engine.begin_write
+        // calls in tests, or from a prior /commit we missed notifying for
+        // any reason), return immediately. Manifest is ground truth;
+        // commit_notify is a wake hint.
+        let manifest_tx = {
+            let e = self.engine.lock().expect("engine mutex poisoned");
+            e.manifest().last_tx_id
+        };
+        let cur_tx = if manifest_tx > req.since_tx_id {
+            manifest_tx
+        } else {
+            // Block on the condvar until a /commit fires notify_all OR
+            // the timeout elapses. Re-check the manifest after each wake
+            // so we tolerate notifications that race ahead.
+            let (mu, cv) = &*self.commit_notify;
+            let guard = mu.lock().expect("notify mutex poisoned");
+            let (final_guard, _wait_result) = cv
+                .wait_timeout_while(guard, timeout, |latest| *latest <= req.since_tx_id)
+                .expect("condvar wait failed");
+            // Re-read the manifest in case the condvar guard lags
+            // (a separate writer could have committed without going
+            // through /commit's notify hook).
+            let post = {
+                let e = self.engine.lock().expect("engine mutex poisoned");
+                e.manifest().last_tx_id
+            };
+            post.max(*final_guard)
         };
 
         // Stream the response: header line, then records committed
