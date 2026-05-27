@@ -7,10 +7,14 @@
   html, body { margin: 0; padding: 0; height: 100%; font-family: system-ui, -apple-system, sans-serif; color: #e8e8ec; background: #14141a; }
   #app { display: grid; grid-template-columns: 340px 1fr; height: 100vh; }
   #sidebar { background: #1c1c24; border-right: 1px solid #2b2b36; padding: 16px; overflow-y: auto; }
-  /* Right pane splits into two stacked viewers when a protein is "opened"
-     in the 3D viewer; the bottom half collapses by default. */
-  #right-pane { display: grid; grid-template-rows: 1fr 0; height: 100vh; transition: grid-template-rows 0.25s; }
-  #right-pane.three-d-open { grid-template-rows: 1fr 1fr; }
+  /* Right pane defaults to STRUCTURE-ONLY (3D fold fills the whole
+     pane). The hypergraph view is opt-in via the "Show data graph"
+     toggle, since most users just want to interact with the protein. */
+  #right-pane { display: grid; grid-template-rows: 0 1fr; height: 100vh; transition: grid-template-rows 0.25s; }
+  /* Both panes visible — "split" mode (graph on top, structure below). */
+  #right-pane.show-graph { grid-template-rows: 1fr 1fr; }
+  /* Graph-only mode — when no structure is loaded yet. */
+  #right-pane.graph-only { grid-template-rows: 1fr 0; }
   /* min-height:0 + min-width:0 is the standard fix for CSS-grid children
      whose intrinsic content (canvases here) blocks 1fr distribution. */
   #right-pane > * { min-height: 0; min-width: 0; }
@@ -122,7 +126,18 @@
 <div id="app">
   <aside id="sidebar">
     <h1>nDB Explorer</h1>
-    <div class="hint">Drag the graph to rotate. Scroll to zoom. Drag any node to reposition. Click a node to inspect.</div>
+    <div class="hint">Pick a protein below, rotate / zoom its AlphaFold structure on the right.</div>
+
+    <h2>View protein in 3D</h2>
+    <div class="form">
+      <select id="protein-picker"></select>
+      <label style="margin-top:8px"><input type="checkbox" id="show-graph-toggle"> Show data graph above structure</label>
+      <div class="hint">
+        Optional. Off = full-screen protein viewer. On = adds the
+        hypergraph view of how this protein connects to its gene,
+        pathway, and complex partners in nDB.
+      </div>
+    </div>
 
     <h2>Stats</h2>
     <div id="stats"></div>
@@ -757,12 +772,33 @@ function applyGraph() {
   Graph.graphData(graphData);
   updateStats();
   refreshHedMemberList();
+  refreshProteinPicker();
   // Recompute highlight set against the fresh link references (the
   // library replaces the link objects on graphData() call).
   if (selected) {
     highlightedLinks = computeHighlightedLinks(selected);
   }
   applyHighlights();
+}
+
+// Populate the sidebar dropdown with every protein currently in the
+// graph. Sorted by name; preserves the current selection across
+// refreshes when the user adds via the AF-fetch form.
+function refreshProteinPicker() {
+  const $sel = document.getElementById("protein-picker");
+  if (!$sel) return;
+  const proteins = Array.from(entitiesById.values())
+    .filter(e => e.type_id === TYPES.protein.id)
+    .map(e => ({ id: e.entity_id, name: extractName(e) || "?" }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const previous = $sel.value;
+  $sel.innerHTML = proteins.map(p =>
+    `<option value="${p.id}">${escapeHtml(p.name)}</option>`
+  ).join("");
+  // Restore previous selection if still present.
+  if (previous && proteins.some(p => p.id === previous)) {
+    $sel.value = previous;
+  }
 }
 
 // ─── Mutations ─────────────────────────────────────────────────
@@ -988,6 +1024,20 @@ document.getElementById("load-3d-btn").addEventListener("click", () => {
   if (selected) load3DStructureFor(selected);
 });
 document.getElementById("viewer-3d-close").addEventListener("click", closeNgl3dPane);
+
+// Protein dropdown → load that protein's structure in 3D.
+document.getElementById("protein-picker").addEventListener("change", (e) => {
+  const id = e.target.value;
+  const node = Graph.graphData().nodes.find(n => n.id === id);
+  if (node) {
+    setSelected(node);
+    load3DStructureFor(node);
+  }
+});
+// "Show data graph" toggle — flips between split and structure-only.
+document.getElementById("show-graph-toggle").addEventListener("change", (e) => {
+  setLayoutMode(e.target.checked ? LAYOUT_SPLIT : LAYOUT_STRUCTURE_ONLY);
+});
 document.getElementById("add-ent-btn").addEventListener("click", addEntity);
 document.getElementById("add-hed-btn").addEventListener("click", addHyperedge);
 document.getElementById("delete-btn").addEventListener("click", deleteSelected);
@@ -1024,21 +1074,40 @@ function nglStageInit() {
   return nglStage;
 }
 
+// Layout state: the right pane has three modes managed by CSS classes
+// on #right-pane. Default = STRUCTURE_ONLY. The user can opt into the
+// SPLIT view via the sidebar's "Show data graph" toggle.
+const LAYOUT_STRUCTURE_ONLY = "structure_only"; // default — no class
+const LAYOUT_SPLIT = "split";                   // class "show-graph"
+const LAYOUT_GRAPH_ONLY = "graph_only";         // class "graph-only"
+function setLayoutMode(mode) {
+  const rp = document.getElementById("right-pane");
+  rp.classList.remove("show-graph", "graph-only");
+  if (mode === LAYOUT_SPLIT)      rp.classList.add("show-graph");
+  if (mode === LAYOUT_GRAPH_ONLY) rp.classList.add("graph-only");
+  // Both panes can change size — give the canvases a chance to redraw.
+  setTimeout(() => {
+    if (nglStage) nglStage.handleResize();
+  }, 60);
+}
+
 function openNgl3dPane() {
-  document.getElementById("right-pane").classList.add("three-d-open");
   document.getElementById("viewer-3d").hidden = false;
   nglStageInit();
-  // NGL needs a layout pass after the host element gains size.
-  setTimeout(() => nglStage && nglStage.handleResize(), 60);
+  setLayoutMode(document.getElementById("show-graph-toggle")?.checked
+    ? LAYOUT_SPLIT
+    : LAYOUT_STRUCTURE_ONLY);
 }
 function closeNgl3dPane() {
-  document.getElementById("right-pane").classList.remove("three-d-open");
   document.getElementById("viewer-3d").hidden = true;
   if (nglStage) nglStage.removeAllComponents();
   nglComponent = null;
   nglHighlightRepr = null;
   currentProteinNode = null;
   updateNdbModelPane(null);
+  // No structure loaded → fall back to graph-only so the user has
+  // something to look at.
+  setLayoutMode(LAYOUT_GRAPH_ONLY);
 }
 
 function cifUrlForUniprot(acc, fragment = 1, version = 6) {
@@ -1426,6 +1495,7 @@ Graph = ForceGraph3D()(document.getElementById("graph-host"))
     n => n.nodeKind === "entity" && n.label === "KRAS"
   );
   if (defaultProtein) {
+    document.getElementById("protein-picker").value = defaultProtein.id;
     setSelected(defaultProtein);
     // Small delay so the force-graph layout settles before we start
     // the CIF fetch + NGL canvas paint (they share the GPU).
