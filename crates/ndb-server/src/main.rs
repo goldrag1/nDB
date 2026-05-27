@@ -1,13 +1,17 @@
 //! nDB server binary. Run with `--path <dir>` and optional `--bind <addr>`.
-#![allow(clippy::doc_markdown)]
+#![allow(clippy::doc_markdown, dead_code, missing_docs)] // bench-mode constants are pub for clients; docs live in the comment block above each group.
 
 use std::process::ExitCode;
 
 use ndb_engine::{PropertyId, TypeId};
 use ndb_server::Server;
 
+// =====================================================================
 // Bench-mode schema constants — exported so benchmark clients can compile
 // against the same shape. Pre-registered indexes on `--bench-mode`.
+// =====================================================================
+
+// ---- "simple" workload (user entities + friends hyperedges) ----
 /// Type id used for bench-mode user entities.
 pub const BENCH_TYPE_USER: u32 = 1;
 /// Property id for `name` (Utf8).
@@ -18,6 +22,29 @@ pub const BENCH_PROP_EMAIL: u32 = 11;
 pub const BENCH_PROP_AGE: u32 = 12;
 /// Property id for `vector` — registered for vector search in `--bench-mode`.
 pub const BENCH_PROP_VECTOR: u32 = 13;
+
+// ---- "biology" workload (drug / protein / disease / publication) ----
+pub const BIO_TYPE_DRUG: u32 = 100;
+pub const BIO_TYPE_PROTEIN: u32 = 101;
+pub const BIO_TYPE_DISEASE: u32 = 102;
+pub const BIO_TYPE_PUBLICATION: u32 = 103;
+// Properties (30..=41).
+pub const BIO_PROP_BIO_NAME: u32 = 30;
+pub const BIO_PROP_DRUG_CLASS: u32 = 31;
+pub const BIO_PROP_GENE_SYMBOL: u32 = 32; // lookup-indexed
+pub const BIO_PROP_ORGANISM: u32 = 33;
+pub const BIO_PROP_MESH_ID: u32 = 34;
+pub const BIO_PROP_PREVALENCE: u32 = 35; // btree-indexed per Disease
+pub const BIO_PROP_PUBMED_ID: u32 = 36;
+pub const BIO_PROP_JOURNAL: u32 = 37;
+pub const BIO_PROP_YEAR: u32 = 38; // btree-indexed per Publication
+pub const BIO_PROP_SMILES_EMB: u32 = 39; // vector-indexed
+pub const BIO_PROP_SEQUENCE_EMB: u32 = 40; // vector-indexed
+pub const BIO_PROP_ABSTRACT_EMB: u32 = 41; // vector-indexed
+// Hyperedge types (3-ary and 4-ary).
+pub const BIO_TYPE_TARGETS: u32 = 200; // drug + protein + effect
+pub const BIO_TYPE_IMPLICATED_IN: u32 = 201; // protein + disease + pathway
+pub const BIO_TYPE_CITED_BY: u32 = 202; // drug + disease + publication + evidence_level
 
 fn usage() {
     eprintln!(
@@ -109,15 +136,28 @@ fn main() -> ExitCode {
     if args.bench_mode {
         let engine = server.engine();
         let mut e = engine.lock().expect("engine mutex poisoned");
+        // Simple workload schema.
         e.register_lookup_key(PropertyId::new(BENCH_PROP_EMAIL));
         e.register_property_btree(
             TypeId::new(BENCH_TYPE_USER),
             PropertyId::new(BENCH_PROP_AGE),
         );
         e.register_vector_property(PropertyId::new(BENCH_PROP_VECTOR));
+        // Biology workload schema.
+        e.register_lookup_key(PropertyId::new(BIO_PROP_GENE_SYMBOL));
+        e.register_property_btree(
+            TypeId::new(BIO_TYPE_PUBLICATION),
+            PropertyId::new(BIO_PROP_YEAR),
+        );
+        e.register_property_btree(
+            TypeId::new(BIO_TYPE_DISEASE),
+            PropertyId::new(BIO_PROP_PREVALENCE),
+        );
+        e.register_vector_property(PropertyId::new(BIO_PROP_SMILES_EMB));
+        e.register_vector_property(PropertyId::new(BIO_PROP_SEQUENCE_EMB));
+        e.register_vector_property(PropertyId::new(BIO_PROP_ABSTRACT_EMB));
         eprintln!(
-            "ndb-server: --bench-mode active — registered lookup_key on {BENCH_PROP_EMAIL}, \
-             property_btree on ({BENCH_TYPE_USER}, {BENCH_PROP_AGE}), vector on {BENCH_PROP_VECTOR}",
+            "ndb-server: --bench-mode active — registered indexes for simple and biology workloads",
         );
     }
     if let Ok(token) = std::env::var("NDB_TOKEN")
