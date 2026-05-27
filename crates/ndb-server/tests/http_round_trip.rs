@@ -504,6 +504,99 @@ fn traverse_route_walks_2_hops() {
 }
 
 #[test]
+fn query_route_executes_entity_pattern_via_tcp() {
+    const TYPE_CUSTOMER: u32 = 100;
+    const PROP_NAME: u32 = 30;
+    const PROP_REGION: u32 = 31;
+
+    let dir = temp_dir("query");
+    let server = Arc::new(Server::open(&dir).unwrap());
+
+    // Seed three customers — two in Vietnam, one in Singapore.
+    {
+        let e = server.engine();
+        let mut e = e.lock().unwrap();
+        for (name, region) in [
+            ("Alice", "Vietnam"),
+            ("Bob", "Singapore"),
+            ("Carol", "Vietnam"),
+        ] {
+            let eid = EntityId::now_v7();
+            let mut txn = e.begin_write();
+            txn.put_entity(ndb_engine::EntityRecord {
+                entity_id: eid,
+                type_id: TypeId::new(TYPE_CUSTOMER),
+                tx_id_assert: ndb_engine::TxId::new(0),
+                tx_id_supersede: ndb_engine::TxId::ACTIVE,
+                properties: vec![
+                    (PropertyId::new(PROP_NAME), Value::String(name.into())),
+                    (PropertyId::new(PROP_REGION), Value::String(region.into())),
+                ],
+            });
+            txn.commit().unwrap();
+        }
+    }
+    let addr = spawn_server(Arc::clone(&server), 3);
+
+    // POST /query with an Entity pattern selecting Vietnam customers,
+    // binding ?n to the name property.
+    let body = format!(
+        r#"{{
+            "patterns": [{{
+                "kind": "entity",
+                "type_id": {TYPE_CUSTOMER},
+                "self_var": "c",
+                "property_filters": [
+                    {{"property_id": {PROP_REGION}, "op": "eq",
+                      "term": {{"kind":"literal","value":{{"tag":"string","value":"Vietnam"}}}} }},
+                    {{"property_id": {PROP_NAME}, "op": "eq",
+                      "term": {{"kind":"var","name":"n"}} }}
+                ]
+            }}],
+            "returns": ["c", "n"]
+        }}"#,
+    );
+    let resp = post(addr, "/query", &body);
+    assert_eq!(resp.status, 200, "body = {:?}", String::from_utf8_lossy(&resp.body));
+    let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    let columns = v["columns"].as_array().unwrap();
+    assert_eq!(columns, &[serde_json::json!("c"), serde_json::json!("n")]);
+    let rows = v["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "two Vietnam customers expected: {rows:?}");
+    // Names must be Alice or Carol; UUIDs must be valid.
+    let names: std::collections::HashSet<String> = rows
+        .iter()
+        .filter_map(|r| r[1]["value"].as_str().map(str::to_string))
+        .collect();
+    assert!(names.contains("Alice"), "got {names:?}");
+    assert!(names.contains("Carol"), "got {names:?}");
+    for r in rows {
+        assert_eq!(r[0]["tag"], "uuid");
+        assert_eq!(r[1]["tag"], "string");
+    }
+
+    // Bad body → 400.
+    let resp = post(addr, "/query", "not json");
+    assert_eq!(resp.status, 400);
+
+    // Recursion → 501 (not yet supported).
+    let body = format!(
+        r#"{{
+            "patterns": [{{
+                "kind": "hyperedge",
+                "type_id": {TYPE_CUSTOMER},
+                "recursion": {{"kind": "star", "max_depth": 10}}
+            }}],
+            "returns": []
+        }}"#,
+    );
+    let resp = post(addr, "/query", &body);
+    assert_eq!(resp.status, 501);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn malformed_uuid_in_read_returns_400() {
     let dir = temp_dir("bad_uuid");
     let server = Arc::new(Server::open(&dir).unwrap());

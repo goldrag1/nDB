@@ -46,9 +46,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ndb_engine::{
     CommitRequest, CommitResponse, Engine, EngineError, ErrorResponse, JsonRecord, JsonValue,
     LookupRequest, LookupResponse, PropertyLookupRequest, PropertyLookupResponse,
-    PropertyRangeRequest, PropertyRangeResponse, ReadResponse, Record, Resolved, TraverseRequest,
-    TraverseResponse, TxId, VectorHit, VectorMetric, VectorSearchRequest, VectorSearchResponse,
-    WireError, WriteTxn,
+    PropertyRangeRequest, PropertyRangeResponse, QueryError, QueryRequest, ReadResponse, Record,
+    Resolved, TraverseRequest, TraverseResponse, TxId, VectorHit, VectorMetric,
+    VectorSearchRequest, VectorSearchResponse, WireError, WriteTxn, execute_query,
 };
 use ndb_engine::id::{EntityId, PropertyId, TypeId};
 use ndb_engine::index::Distance;
@@ -553,6 +553,7 @@ impl Server {
             ("POST", "/property_lookup") => self.handle_property_lookup(body, out, outcome),
             ("POST", "/property_range") => self.handle_property_range(body, out, outcome),
             ("POST", "/traverse") => self.handle_traverse(body, out, outcome),
+            ("POST", "/query") => self.handle_query(body, out, outcome),
             _ => {
                 outcome.status = 404;
                 let detail = format!("no route for {} {}", req.method, req.path);
@@ -895,11 +896,57 @@ impl Server {
         write_json(out, 200, &resp)
     }
 
+    /// `POST /query` — execute a structured wire-AST query and return
+    /// the result rows. The body is a `QueryRequest` (id-based AST); the
+    /// resolver step (text → AST + name → id) is the caller's job. See
+    /// the query-language working spec §4 for the request shape and §5
+    /// for execution semantics.
+    fn handle_query(
+        &self,
+        body: &[u8],
+        out: &mut dyn Write,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
+        let req: QueryRequest = match serde_json::from_slice(body) {
+            Ok(r) => r,
+            Err(e) => return bad_json(out, outcome, "query body", &e.to_string()),
+        };
+        let mut engine = self.engine.lock().expect("engine mutex poisoned");
+        let resp = match execute_query(&mut engine, req) {
+            Ok(r) => r,
+            Err(e) => return query_error_to_http(out, outcome, &e),
+        };
+        outcome.status = 200;
+        write_json(out, 200, &resp)
+    }
+
     /// Borrow the shared engine for direct manipulation (tests).
     #[must_use]
     pub fn engine(&self) -> Arc<Mutex<Engine>> {
         Arc::clone(&self.engine)
     }
+}
+
+/// Map a `QueryError` into the right HTTP status + error code. Codes are
+/// kept identical to the engine-side names so clients can switch on them
+/// without a translation table.
+fn query_error_to_http(
+    out: &mut dyn Write,
+    outcome: &mut DispatchOutcome,
+    err: &QueryError,
+) -> Result<(), ServerError> {
+    let (status, code) = match err {
+        QueryError::Engine(_) => (500, "engine_error"),
+        QueryError::RecursionNotYetSupported => (501, "recursion_not_yet_supported"),
+        QueryError::TimestampNotYetSupported => (501, "timestamp_not_yet_supported"),
+        QueryError::SnapshotUnavailable { .. } => (410, "snapshot_unavailable"),
+        QueryError::TypeNotIndexed { .. } => (400, "type_not_indexed"),
+        QueryError::UnboundVariableAtExec { .. } => (400, "unbound_variable_at_exec"),
+    };
+    outcome.status = status;
+    let detail = err.to_string();
+    outcome.failure = Some(detail.clone());
+    write_error(out, status, code, &detail)
 }
 
 /// Build a rustls `ServerConfig` from PEM-encoded cert chain + PKCS#8 key.
@@ -1167,10 +1214,11 @@ fn required_capability(method: &str, path: &str) -> Option<Capability> {
         ("GET", "/iter") => Some(Capability::Iter),
         ("POST", "/flush") => Some(Capability::Flush),
         ("POST", "/compact") => Some(Capability::Compact),
-        // Indexed query + traversal routes — all gated by Read.
+        // Indexed query + traversal + query-language routes — all gated by Read.
         (
             "POST",
-            "/lookup" | "/vector_search" | "/property_lookup" | "/property_range" | "/traverse",
+            "/lookup" | "/vector_search" | "/property_lookup" | "/property_range" | "/traverse"
+                | "/query",
         ) => Some(Capability::Read),
         _ => None,
     }
