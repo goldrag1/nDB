@@ -1,0 +1,310 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<title>nDB v2.1 — hypergraph demo</title>
+<style>
+body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#f7f7f9;color:#222;}
+.wrap{max-width:1180px;margin:0 auto;padding:24px;}
+h1{font-size:28px;margin:0 0 8px;}
+h2{font-size:18px;margin:28px 0 6px;color:#444;border-bottom:1px solid #ddd;padding-bottom:4px;}
+p.lead{color:#555;line-height:1.55;}
+.card{background:#fff;border:1px solid #e5e5ea;border-radius:8px;padding:14px;margin:12px 0;box-shadow:0 1px 2px rgba(0,0,0,0.03);}
+.meta{font-size:13px;color:#777;}
+.meta code{background:#eee;padding:2px 4px;border-radius:3px;}
+table{border-collapse:collapse;margin:4px 0;}
+th,td{border:1px solid #ddd;padding:6px 10px;text-align:left;}
+th{background:#f3f3f6;font-weight:600;}
+.legend{font-size:13px;color:#555;margin:6px 0 0;}
+
+body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#fff;}
+.hg-edge{fill-opacity:0.10;stroke:#888;stroke-width:1;stroke-opacity:0.6;}
+.hg-edge:hover{fill-opacity:0.30;stroke-opacity:1;}
+.hg-spoke{stroke:#aaa;stroke-width:1;stroke-opacity:0.5;}
+.hg-node{stroke:#fff;stroke-width:1.5;cursor:pointer;}
+.hg-node:hover{stroke:#222;stroke-width:2;}
+.hg-label{font-size:11px;fill:#333;text-anchor:middle;pointer-events:none;}
+.hg-title{font-size:18px;font-weight:600;fill:#222;text-anchor:middle;}
+#hg-tooltip{position:fixed;pointer-events:none;background:#222;color:#fff;padding:6px 8px;border-radius:4px;font-size:12px;display:none;max-width:360px;z-index:9;white-space:pre-wrap;}
+
+
+body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#fff;}
+.pc-line{fill:none;stroke-width:1.2;stroke-opacity:0.6;}
+.pc-line:hover{stroke-opacity:1;stroke-width:2.4;}
+.pc-axis{stroke:#444;stroke-width:1;}
+.pc-axis-label{font-size:13px;font-weight:600;text-anchor:middle;fill:#222;}
+.pc-tick{font-size:11px;fill:#666;text-anchor:end;}
+.pc-title{font-size:18px;font-weight:600;fill:#222;text-anchor:middle;}
+#pc-tooltip{position:fixed;pointer-events:none;background:#222;color:#fff;padding:6px 8px;border-radius:4px;font-size:12px;display:none;max-width:320px;z-index:9;}
+
+</style></head><body>
+<div class="wrap">
+<h1>nDB v2.1 demo — protein complexes</h1>
+<p class="lead">A small biology dataset (15 proteins, 6 protein complexes) seeded into a real nDB database, then visualised through the three v2.1 N-dim renderers. Hover any node or polygon for metadata.</p>
+<p class="meta">Source database: <code>/tmp/v21-demo-ndb</code> &middot; rendered by <code>cargo run -p ndb-renderer --example v21_demo</code></p>
+<h2>1 · Hypergraph diagram (§2.12) — the showcase</h2>
+<p>Entities are labelled nodes; each protein complex is a polygon connecting its members. <strong>This is what a hyperedge looks like</strong> — a single fact connecting <em>N</em> entities, not a binary edge with reified properties. Hover any node or polygon for properties.</p>
+<p class="legend">Node colour = entity type · polygon colour = hyperedge identity · layout = deterministic Fruchterman-Reingold</p>
+<div class="card">
+<svg width="1100" height="700" viewBox="0 0 1100 700" xmlns="http://www.w3.org/2000/svg">
+<text class="hg-title" x="550" y="24">Protein complexes — hover any node or polygon</text>
+<polygon class="hg-edge" points="1060.00,160.61 956.98,40.00 1060.00,326.59 1060.00,40.00" fill="#666" data-hyperedge-id="019e69e6-6715-73a1-9336-fdaad3941d4d" data-tip="Hyperedge 019e69e6-6715-73a1-9336-fdaad3941d4d
+type_id: 100, arity: 4
+r10: 019e69e6-670d-71e0-8585-d2091c2e64d4
+r10: 019e69e6-670d-71e0-8585-d214dc358d4a
+r10: 019e69e6-670e-7a10-abfb-ef5d0048009d
+r10: 019e69e6-670e-7a10-abfb-ef69cea2ae81
+p35: p53 surveillance
+p33: dna_repair
+p34: H. sapiens" data-roles='[{&quot;role_id&quot;:10,&quot;entity_id&quot;:&quot;019e69e6-670d-71e0-8585-d2091c2e64d4&quot;},{&quot;role_id&quot;:10,&quot;entity_id&quot;:&quot;019e69e6-670d-71e0-8585-d214dc358d4a&quot;},{&quot;role_id&quot;:10,&quot;entity_id&quot;:&quot;019e69e6-670e-7a10-abfb-ef5d0048009d&quot;},{&quot;role_id&quot;:10,&quot;entity_id&quot;:&quot;019e69e6-670e-7a10-abfb-ef69cea2ae81&quot;}]' data-properties='{&quot;p35&quot;:&quot;p53 surveillance&quot;,&quot;p33&quot;:&quot;dna_repair&quot;,&quot;p34&quot;:&quot;H. sapiens&quot;}'/>
+<polygon class="hg-edge" points="1060.00,660.00 1060.00,543.04 1060.00,326.59" fill="#1f77b4" data-hyperedge-id="019e69e6-6715-73a1-9336-fdb011c8cbff" data-tip="Hyperedge 019e69e6-6715-73a1-9336-fdb011c8cbff
+type_id: 100, arity: 3
+r10: 019e69e6-670e-7a10-abfb-ef7c6fb6145d
+r10: 019e69e6-670f-7551-998e-9c6dfd556f50
+r10: 019e69e6-670e-7a10-abfb-ef5d0048009d
+p35: BRCA repair
+p33: dna_repair
+p34: H. sapiens" data-roles='[{&quot;role_id&quot;:10,&quot;entity_id&quot;:&quot;019e69e6-670e-7a10-abfb-ef7c6fb6145d&quot;},{&quot;role_id&quot;:10,&quot;entity_id&quot;:&quot;019e69e6-670f-7551-998e-9c6dfd556f50&quot;},{&quot;role_id&quot;:10,&quot;entity_id&quot;:&quot;019e69e6-670e-7a10-abfb-ef5d0048009d&quot;}]' data-properties='{&quot;p35&quot;:&quot;BRCA repair&quot;,&quot;p33&quot;:&quot;dna_repair&quot;,&quot;p34&quot;:&quot;H. sapiens&quot;}'/>
+<polygon class="hg-edge" points="40.00,660.00 319.27,660.00 112.41,660.00 212.46,660.00" fill="#2ca02c" data-hyperedge-id="019e69e6-6715-73a1-9336-fdcb30550c4d" data-tip="Hyperedge 019e69e6-6715-73a1-9336-fdcb30550c4d
+type_id: 100, arity: 4
+r10: 019e69e6-670f-7551-998e-9c7f037a080d
+r10: 019e69e6-670f-7551-998e-9c86da13fdcd
+r10: 019e69e6-6714-7b93-9b74-bc685fca30f6
+r10: 019e69e6-6714-7b93-9b74-bc71eb503a95
+p35: mTOR growth
+p33: signaling
+p34: H. sapiens" data-roles='[{&quot;role_id&quot;:10,&quot;entity_id&quot;:&quot;019e69e6-670f-7551-998e-9c7f037a080d&quot;},{&quot;role_id&quot;:10,&quot;entity_id&quot;:&quot;019e69e6-670f-7551-998e-9c86da13fdcd&quot;},{&quot;role_id&quot;:10,&quot;entity_id&quot;:&quot;019e69e6-6714-7b93-9b74-bc685fca30f6&quot;},{&quot;role_id&quot;:10,&quot;entity_id&quot;:&quot;019e69e6-6714-7b93-9b74-bc71eb503a95&quot;}]' data-properties='{&quot;p35&quot;:&quot;mTOR growth&quot;,&quot;p33&quot;:&quot;signaling&quot;,&quot;p34&quot;:&quot;H. sapiens&quot;}'/>
+<polygon class="hg-edge" points="126.01,40.00 40.00,40.00 227.16,40.00" fill="#d62728" data-hyperedge-id="019e69e6-6716-75e0-9aa7-23f0810761b4" data-tip="Hyperedge 019e69e6-6716-75e0-9aa7-23f0810761b4
+type_id: 100, arity: 3
+r10: 019e69e6-6710-76c0-be65-186cd44c3301
+r10: 019e69e6-6710-76c0-be65-1874bab68742
+r10: 019e69e6-6711-7a02-8450-4812d31b074b
+p35: autophagy init
+p33: autophagy
+p34: H. sapiens" data-roles='[{&quot;role_id&quot;:10,&quot;entity_id&quot;:&quot;019e69e6-6710-76c0-be65-186cd44c3301&quot;},{&quot;role_id&quot;:10,&quot;entity_id&quot;:&quot;019e69e6-6710-76c0-be65-1874bab68742&quot;},{&quot;role_id&quot;:10,&quot;entity_id&quot;:&quot;019e69e6-6711-7a02-8450-4812d31b074b&quot;}]' data-properties='{&quot;p35&quot;:&quot;autophagy init&quot;,&quot;p33&quot;:&quot;autophagy&quot;,&quot;p34&quot;:&quot;H. sapiens&quot;}'/>
+<polygon class="hg-edge" points="40.00,173.22 227.16,40.00 40.00,40.00" fill="#9467bd" data-hyperedge-id="019e69e6-6716-75e0-9aa7-24049d0ae284" data-tip="Hyperedge 019e69e6-6716-75e0-9aa7-24049d0ae284
+type_id: 100, arity: 3
+r10: 019e69e6-6711-7a02-8450-4807760388a8
+r10: 019e69e6-6711-7a02-8450-4812d31b074b
+r10: 019e69e6-6710-76c0-be65-1874bab68742
+p35: autophagy elongation
+p33: autophagy
+p34: H. sapiens" data-roles='[{&quot;role_id&quot;:10,&quot;entity_id&quot;:&quot;019e69e6-6711-7a02-8450-4807760388a8&quot;},{&quot;role_id&quot;:10,&quot;entity_id&quot;:&quot;019e69e6-6711-7a02-8450-4812d31b074b&quot;},{&quot;role_id&quot;:10,&quot;entity_id&quot;:&quot;019e69e6-6710-76c0-be65-1874bab68742&quot;}]' data-properties='{&quot;p35&quot;:&quot;autophagy elongation&quot;,&quot;p33&quot;:&quot;autophagy&quot;,&quot;p34&quot;:&quot;H. sapiens&quot;}'/>
+<polygon class="hg-edge" points="40.00,173.22 40.00,353.95" fill="#666" data-hyperedge-id="019e69e6-6716-75e0-9aa7-241206599f14" data-tip="Hyperedge 019e69e6-6716-75e0-9aa7-241206599f14
+type_id: 100, arity: 2
+r10: 019e69e6-6711-7a02-8450-4807760388a8
+r10: 019e69e6-6714-7b93-9b74-bc5b1cb5322a
+p35: late autophagy
+p33: autophagy
+p34: H. sapiens" data-roles='[{&quot;role_id&quot;:10,&quot;entity_id&quot;:&quot;019e69e6-6711-7a02-8450-4807760388a8&quot;},{&quot;role_id&quot;:10,&quot;entity_id&quot;:&quot;019e69e6-6714-7b93-9b74-bc5b1cb5322a&quot;}]' data-properties='{&quot;p35&quot;:&quot;late autophagy&quot;,&quot;p33&quot;:&quot;autophagy&quot;,&quot;p34&quot;:&quot;H. sapiens&quot;}'/>
+<circle class="hg-node" cx="1060.00" cy="160.61" r="8" fill="#4a90e2" data-entity-id="019e69e6-670d-71e0-8585-d2091c2e64d4" data-type-id="1" data-properties='{&quot;p30&quot;:&quot;P53&quot;,&quot;p31&quot;:&quot;tumor suppressor&quot;,&quot;p32&quot;:&quot;1979&quot;}' data-tip="Entity 019e69e6-670d-71e0-8585-d2091c2e64d4
+type_id: 1
+p30: P53
+p31: tumor suppressor
+p32: 1979"/>
+<text class="hg-label" x="1060.00" y="148.61">P53</text>
+<circle class="hg-node" cx="956.98" cy="40.00" r="8" fill="#4a90e2" data-entity-id="019e69e6-670d-71e0-8585-d214dc358d4a" data-type-id="1" data-properties='{&quot;p30&quot;:&quot;MDM2&quot;,&quot;p31&quot;:&quot;ubiquitin ligase&quot;,&quot;p32&quot;:&quot;1991&quot;}' data-tip="Entity 019e69e6-670d-71e0-8585-d214dc358d4a
+type_id: 1
+p30: MDM2
+p31: ubiquitin ligase
+p32: 1991"/>
+<text class="hg-label" x="956.98" y="28.00">MDM2</text>
+<circle class="hg-node" cx="1060.00" cy="326.59" r="8" fill="#4a90e2" data-entity-id="019e69e6-670e-7a10-abfb-ef5d0048009d" data-type-id="1" data-properties='{&quot;p30&quot;:&quot;ATM&quot;,&quot;p31&quot;:&quot;kinase, DNA damage response&quot;,&quot;p32&quot;:&quot;1995&quot;}' data-tip="Entity 019e69e6-670e-7a10-abfb-ef5d0048009d
+type_id: 1
+p30: ATM
+p31: kinase, DNA damage response
+p32: 1995"/>
+<text class="hg-label" x="1060.00" y="314.59">ATM</text>
+<circle class="hg-node" cx="1060.00" cy="40.00" r="8" fill="#4a90e2" data-entity-id="019e69e6-670e-7a10-abfb-ef69cea2ae81" data-type-id="1" data-properties='{&quot;p30&quot;:&quot;CHK2&quot;,&quot;p31&quot;:&quot;checkpoint kinase&quot;,&quot;p32&quot;:&quot;1998&quot;}' data-tip="Entity 019e69e6-670e-7a10-abfb-ef69cea2ae81
+type_id: 1
+p30: CHK2
+p31: checkpoint kinase
+p32: 1998"/>
+<text class="hg-label" x="1060.00" y="28.00">CHK2</text>
+<circle class="hg-node" cx="1060.00" cy="660.00" r="8" fill="#4a90e2" data-entity-id="019e69e6-670e-7a10-abfb-ef7c6fb6145d" data-type-id="1" data-properties='{&quot;p30&quot;:&quot;BRCA1&quot;,&quot;p31&quot;:&quot;DNA repair&quot;,&quot;p32&quot;:&quot;1994&quot;}' data-tip="Entity 019e69e6-670e-7a10-abfb-ef7c6fb6145d
+type_id: 1
+p30: BRCA1
+p31: DNA repair
+p32: 1994"/>
+<text class="hg-label" x="1060.00" y="648.00">BRCA1</text>
+<circle class="hg-node" cx="1060.00" cy="543.04" r="8" fill="#4a90e2" data-entity-id="019e69e6-670f-7551-998e-9c6dfd556f50" data-type-id="1" data-properties='{&quot;p30&quot;:&quot;BRCA2&quot;,&quot;p31&quot;:&quot;DNA repair&quot;,&quot;p32&quot;:&quot;1995&quot;}' data-tip="Entity 019e69e6-670f-7551-998e-9c6dfd556f50
+type_id: 1
+p30: BRCA2
+p31: DNA repair
+p32: 1995"/>
+<text class="hg-label" x="1060.00" y="531.04">BRCA2</text>
+<circle class="hg-node" cx="40.00" cy="660.00" r="8" fill="#4a90e2" data-entity-id="019e69e6-670f-7551-998e-9c7f037a080d" data-type-id="1" data-properties='{&quot;p30&quot;:&quot;AKT1&quot;,&quot;p31&quot;:&quot;kinase, survival&quot;,&quot;p32&quot;:&quot;1987&quot;}' data-tip="Entity 019e69e6-670f-7551-998e-9c7f037a080d
+type_id: 1
+p30: AKT1
+p31: kinase, survival
+p32: 1987"/>
+<text class="hg-label" x="40.00" y="648.00">AKT1</text>
+<circle class="hg-node" cx="319.27" cy="660.00" r="8" fill="#4a90e2" data-entity-id="019e69e6-670f-7551-998e-9c86da13fdcd" data-type-id="1" data-properties='{&quot;p30&quot;:&quot;MTOR&quot;,&quot;p31&quot;:&quot;kinase, growth&quot;,&quot;p32&quot;:&quot;1994&quot;}' data-tip="Entity 019e69e6-670f-7551-998e-9c86da13fdcd
+type_id: 1
+p30: MTOR
+p31: kinase, growth
+p32: 1994"/>
+<text class="hg-label" x="319.27" y="648.00">MTOR</text>
+<circle class="hg-node" cx="126.01" cy="40.00" r="8" fill="#4a90e2" data-entity-id="019e69e6-6710-76c0-be65-186cd44c3301" data-type-id="1" data-properties='{&quot;p30&quot;:&quot;ULK1&quot;,&quot;p31&quot;:&quot;kinase, autophagy init&quot;,&quot;p32&quot;:&quot;1998&quot;}' data-tip="Entity 019e69e6-6710-76c0-be65-186cd44c3301
+type_id: 1
+p30: ULK1
+p31: kinase, autophagy init
+p32: 1998"/>
+<text class="hg-label" x="126.01" y="28.00">ULK1</text>
+<circle class="hg-node" cx="40.00" cy="40.00" r="8" fill="#4a90e2" data-entity-id="019e69e6-6710-76c0-be65-1874bab68742" data-type-id="1" data-properties='{&quot;p30&quot;:&quot;BECN1&quot;,&quot;p31&quot;:&quot;autophagy regulator&quot;,&quot;p32&quot;:&quot;1998&quot;}' data-tip="Entity 019e69e6-6710-76c0-be65-1874bab68742
+type_id: 1
+p30: BECN1
+p31: autophagy regulator
+p32: 1998"/>
+<text class="hg-label" x="40.00" y="28.00">BECN1</text>
+<circle class="hg-node" cx="40.00" cy="173.22" r="8" fill="#4a90e2" data-entity-id="019e69e6-6711-7a02-8450-4807760388a8" data-type-id="1" data-properties='{&quot;p30&quot;:&quot;LC3&quot;,&quot;p31&quot;:&quot;autophagy elongation&quot;,&quot;p32&quot;:&quot;2000&quot;}' data-tip="Entity 019e69e6-6711-7a02-8450-4807760388a8
+type_id: 1
+p30: LC3
+p31: autophagy elongation
+p32: 2000"/>
+<text class="hg-label" x="40.00" y="161.22">LC3</text>
+<circle class="hg-node" cx="227.16" cy="40.00" r="8" fill="#4a90e2" data-entity-id="019e69e6-6711-7a02-8450-4812d31b074b" data-type-id="1" data-properties='{&quot;p30&quot;:&quot;ATG7&quot;,&quot;p31&quot;:&quot;E1-like enzyme&quot;,&quot;p32&quot;:&quot;1999&quot;}' data-tip="Entity 019e69e6-6711-7a02-8450-4812d31b074b
+type_id: 1
+p30: ATG7
+p31: E1-like enzyme
+p32: 1999"/>
+<text class="hg-label" x="227.16" y="28.00">ATG7</text>
+<circle class="hg-node" cx="40.00" cy="353.95" r="8" fill="#4a90e2" data-entity-id="019e69e6-6714-7b93-9b74-bc5b1cb5322a" data-type-id="1" data-properties='{&quot;p30&quot;:&quot;RAB7&quot;,&quot;p31&quot;:&quot;late autophagy GTPase&quot;,&quot;p32&quot;:&quot;1990&quot;}' data-tip="Entity 019e69e6-6714-7b93-9b74-bc5b1cb5322a
+type_id: 1
+p30: RAB7
+p31: late autophagy GTPase
+p32: 1990"/>
+<text class="hg-label" x="40.00" y="341.95">RAB7</text>
+<circle class="hg-node" cx="112.41" cy="660.00" r="8" fill="#4a90e2" data-entity-id="019e69e6-6714-7b93-9b74-bc685fca30f6" data-type-id="1" data-properties='{&quot;p30&quot;:&quot;PI3K&quot;,&quot;p31&quot;:&quot;kinase, signaling&quot;,&quot;p32&quot;:&quot;1988&quot;}' data-tip="Entity 019e69e6-6714-7b93-9b74-bc685fca30f6
+type_id: 1
+p30: PI3K
+p31: kinase, signaling
+p32: 1988"/>
+<text class="hg-label" x="112.41" y="648.00">PI3K</text>
+<circle class="hg-node" cx="212.46" cy="660.00" r="8" fill="#4a90e2" data-entity-id="019e69e6-6714-7b93-9b74-bc71eb503a95" data-type-id="1" data-properties='{&quot;p30&quot;:&quot;PTEN&quot;,&quot;p31&quot;:&quot;phosphatase, tumor suppressor&quot;,&quot;p32&quot;:&quot;1997&quot;}' data-tip="Entity 019e69e6-6714-7b93-9b74-bc71eb503a95
+type_id: 1
+p30: PTEN
+p31: phosphatase, tumor suppressor
+p32: 1997"/>
+<text class="hg-label" x="212.46" y="648.00">PTEN</text>
+</svg>
+<div id="hg-tooltip"></div>
+<script>
+(function(){var tip=document.getElementById('hg-tooltip');function bind(sel){document.querySelectorAll(sel).forEach(function(n){n.addEventListener('mousemove',function(e){tip.style.display='block';tip.style.left=(e.clientX+12)+'px';tip.style.top=(e.clientY+12)+'px';tip.textContent=n.getAttribute('data-tip')||'';});n.addEventListener('mouseleave',function(){tip.style.display='none';});});}bind('.hg-node');bind('.hg-edge');})();
+</script>
+</div>
+<h2>2 · Parallel coordinates (§2.11) — proteins across discovery year × function</h2>
+<p>One axis per dimension; each protein becomes a polyline crossing every axis. Useful for spotting clusters + outliers in N-dim numeric/categorical data. Colour = function class.</p>
+<div class="card">
+<svg width="1100" height="360" viewBox="0 0 1100 360" xmlns="http://www.w3.org/2000/svg">
+<text class="pc-title" x="550" y="30">Proteins — year discovered × function</text>
+<line class="pc-axis" x1="80" y1="60" x2="80" y2="300"/>
+<text class="pc-axis-label" x="80" y="340">year_discovered</text>
+<text class="pc-tick" x="74" y="60">2000.00</text>
+<text class="pc-tick" x="74" y="180">1989.50</text>
+<text class="pc-tick" x="74" y="300">1979.00</text>
+<line class="pc-axis" x1="570" y1="60" x2="570" y2="300"/>
+<text class="pc-axis-label" x="570" y="340">name</text>
+<text class="pc-tick" x="564" y="300">AKT1</text>
+<text class="pc-tick" x="564" y="282.8571428571429">ATG7</text>
+<text class="pc-tick" x="564" y="265.7142857142857">ATM</text>
+<text class="pc-tick" x="564" y="248.57142857142856">BECN1</text>
+<text class="pc-tick" x="564" y="231.42857142857144">BRCA1</text>
+<text class="pc-tick" x="564" y="214.28571428571428">BRCA2</text>
+<text class="pc-tick" x="564" y="197.14285714285714">CHK2</text>
+<text class="pc-tick" x="564" y="180">LC3</text>
+<text class="pc-tick" x="564" y="162.85714285714286">MDM2</text>
+<text class="pc-tick" x="564" y="145.71428571428572">MTOR</text>
+<text class="pc-tick" x="564" y="128.57142857142856">P53</text>
+<text class="pc-tick" x="564" y="111.42857142857143">PI3K</text>
+<text class="pc-tick" x="564" y="94.2857142857143">PTEN</text>
+<text class="pc-tick" x="564" y="77.14285714285714">RAB7</text>
+<text class="pc-tick" x="564" y="60">ULK1</text>
+<line class="pc-axis" x1="1060" y1="60" x2="1060" y2="300"/>
+<text class="pc-axis-label" x="1060" y="340">function</text>
+<text class="pc-tick" x="1054" y="300">DNA repair</text>
+<text class="pc-tick" x="1054" y="281.53846153846155">E1-like enzyme</text>
+<text class="pc-tick" x="1054" y="263.0769230769231">autophagy elongation</text>
+<text class="pc-tick" x="1054" y="244.61538461538458">autophagy regulator</text>
+<text class="pc-tick" x="1054" y="226.15384615384616">checkpoint kinase</text>
+<text class="pc-tick" x="1054" y="207.6923076923077">kinase, DNA damage response</text>
+<text class="pc-tick" x="1054" y="189.23076923076923">kinase, autophagy init</text>
+<text class="pc-tick" x="1054" y="170.76923076923077">kinase, growth</text>
+<text class="pc-tick" x="1054" y="152.3076923076923">kinase, signaling</text>
+<text class="pc-tick" x="1054" y="133.84615384615387">kinase, survival</text>
+<text class="pc-tick" x="1054" y="115.38461538461537">late autophagy GTPase</text>
+<text class="pc-tick" x="1054" y="96.92307692307693">phosphatase, tumor suppressor</text>
+<text class="pc-tick" x="1054" y="78.46153846153845">tumor suppressor</text>
+<text class="pc-tick" x="1054" y="60">ubiquitin ligase</text>
+<path class="pc-line" stroke="#2ca02c" d="M80.00 300.00 L570.00 128.57 L1060.00 78.46 " data-tip="name: P53 • function: tumor suppressor • year_discovered: 1979"/>
+<path class="pc-line" stroke="#d62728" d="M80.00 162.86 L570.00 162.86 L1060.00 60.00 " data-tip="name: MDM2 • function: ubiquitin ligase • year_discovered: 1991"/>
+<path class="pc-line" stroke="#8c564b" d="M80.00 117.14 L570.00 265.71 L1060.00 207.69 " data-tip="name: ATM • function: kinase, DNA damage response • year_discovered: 1995"/>
+<path class="pc-line" stroke="#9467bd" d="M80.00 82.86 L570.00 197.14 L1060.00 226.15 " data-tip="name: CHK2 • function: checkpoint kinase • year_discovered: 1998"/>
+<path class="pc-line" stroke="#1f77b4" d="M80.00 128.57 L570.00 231.43 L1060.00 300.00 " data-tip="name: BRCA1 • function: DNA repair • year_discovered: 1994"/>
+<path class="pc-line" stroke="#1f77b4" d="M80.00 117.14 L570.00 214.29 L1060.00 300.00 " data-tip="name: BRCA2 • function: DNA repair • year_discovered: 1995"/>
+<path class="pc-line" stroke="#17becf" d="M80.00 208.57 L570.00 300.00 L1060.00 133.85 " data-tip="name: AKT1 • function: kinase, survival • year_discovered: 1987"/>
+<path class="pc-line" stroke="#7f7f7f" d="M80.00 128.57 L570.00 145.71 L1060.00 170.77 " data-tip="name: MTOR • function: kinase, growth • year_discovered: 1994"/>
+<path class="pc-line" stroke="#e377c2" d="M80.00 82.86 L570.00 60.00 L1060.00 189.23 " data-tip="name: ULK1 • function: kinase, autophagy init • year_discovered: 1998"/>
+<path class="pc-line" stroke="#d62728" d="M80.00 82.86 L570.00 248.57 L1060.00 244.62 " data-tip="name: BECN1 • function: autophagy regulator • year_discovered: 1998"/>
+<path class="pc-line" stroke="#2ca02c" d="M80.00 60.00 L570.00 180.00 L1060.00 263.08 " data-tip="name: LC3 • function: autophagy elongation • year_discovered: 2000"/>
+<path class="pc-line" stroke="#ff7f0e" d="M80.00 71.43 L570.00 282.86 L1060.00 281.54 " data-tip="name: ATG7 • function: E1-like enzyme • year_discovered: 1999"/>
+<path class="pc-line" stroke="#1f77b4" d="M80.00 174.29 L570.00 77.14 L1060.00 115.38 " data-tip="name: RAB7 • function: late autophagy GTPase • year_discovered: 1990"/>
+<path class="pc-line" stroke="#bcbd22" d="M80.00 197.14 L570.00 111.43 L1060.00 152.31 " data-tip="name: PI3K • function: kinase, signaling • year_discovered: 1988"/>
+<path class="pc-line" stroke="#ff7f0e" d="M80.00 94.29 L570.00 94.29 L1060.00 96.92 " data-tip="name: PTEN • function: phosphatase, tumor suppressor • year_discovered: 1997"/>
+</svg>
+<div id="pc-tooltip"></div>
+<script>
+(function(){var tip=document.getElementById('pc-tooltip');document.querySelectorAll('.pc-line').forEach(function(p){p.addEventListener('mousemove',function(e){tip.style.display='block';tip.style.left=(e.clientX+12)+'px';tip.style.top=(e.clientY+12)+'px';tip.textContent=p.getAttribute('data-tip')||'';});p.addEventListener('mouseleave',function(){tip.style.display='none';});});})();
+</script>
+</div>
+<h2>3 · Pivot table (§2.10) — protein × (pathway / complex) membership</h2>
+<p>Compound column labels (pathway / complex) expand 4-5 dimensional data into a single tabular view. Empty cells = no membership.</p>
+<div class="card"><table>
+<thead><tr><th>protein</th><th>autophagy / autophagy elongation</th><th>autophagy / autophagy init</th><th>autophagy / late autophagy</th><th>dna_repair / BRCA repair</th><th>dna_repair / p53 surveillance</th><th>signaling / mTOR growth</th></tr></thead>
+<tbody>
+<tr><th>AKT1</th><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>1</td></tr>
+<tr><th>ATG7</th><td>1</td><td>1</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+<tr><th>ATM</th><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>1</td><td>1</td><td>&nbsp;</td></tr>
+<tr><th>BECN1</th><td>1</td><td>1</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+<tr><th>BRCA1</th><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>1</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+<tr><th>BRCA2</th><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>1</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+<tr><th>CHK2</th><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>1</td><td>&nbsp;</td></tr>
+<tr><th>LC3</th><td>1</td><td>&nbsp;</td><td>1</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+<tr><th>MDM2</th><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>1</td><td>&nbsp;</td></tr>
+<tr><th>MTOR</th><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>1</td></tr>
+<tr><th>P53</th><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>1</td><td>&nbsp;</td></tr>
+<tr><th>PI3K</th><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>1</td></tr>
+<tr><th>PTEN</th><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>1</td></tr>
+<tr><th>RAB7</th><td>&nbsp;</td><td>&nbsp;</td><td>1</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+<tr><th>ULK1</th><td>&nbsp;</td><td>1</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+</tbody>
+</table>
+</div>
+<h2>4 · Slicer aggregates (§2.3) — discovery-year P50 per function</h2>
+<p>Per-group median of the year-discovered property, computed by the slicer's R-7 percentile aggregate.</p>
+<div class="card"><table>
+<thead><tr><th>function</th><th>p50_year</th><th>n</th></tr></thead>
+<tbody>
+<tr><td>DNA repair</td><td>1994.5</td><td>2</td></tr>
+<tr><td>E1-like enzyme</td><td>1999</td><td>1</td></tr>
+<tr><td>autophagy elongation</td><td>2000</td><td>1</td></tr>
+<tr><td>autophagy regulator</td><td>1998</td><td>1</td></tr>
+<tr><td>checkpoint kinase</td><td>1998</td><td>1</td></tr>
+<tr><td>kinase, DNA damage response</td><td>1995</td><td>1</td></tr>
+<tr><td>kinase, autophagy init</td><td>1998</td><td>1</td></tr>
+<tr><td>kinase, growth</td><td>1994</td><td>1</td></tr>
+<tr><td>kinase, signaling</td><td>1988</td><td>1</td></tr>
+<tr><td>kinase, survival</td><td>1987</td><td>1</td></tr>
+<tr><td>late autophagy GTPase</td><td>1990</td><td>1</td></tr>
+<tr><td>phosphatase, tumor suppressor</td><td>1997</td><td>1</td></tr>
+<tr><td>tumor suppressor</td><td>1979</td><td>1</td></tr>
+<tr><td>ubiquitin ligase</td><td>1991</td><td>1</td></tr>
+</tbody>
+</table>
+</div>
+<p class="meta">Generated by nDB v2.1.0 · <a href="https://github.com/goldrag1/nDB">github.com/goldrag1/nDB</a></p>
+</div>
+<div id="hg-tooltip"></div>
+<div id="pc-tooltip"></div>
+<script>
+(function(){var tip=document.getElementById('hg-tooltip');function bind(sel){document.querySelectorAll(sel).forEach(function(n){n.addEventListener('mousemove',function(e){tip.style.display='block';tip.style.left=(e.clientX+12)+'px';tip.style.top=(e.clientY+12)+'px';tip.textContent=n.getAttribute('data-tip')||'';});n.addEventListener('mouseleave',function(){tip.style.display='none';});});}bind('.hg-node');bind('.hg-edge');})();
+(function(){var tip=document.getElementById('pc-tooltip');document.querySelectorAll('.pc-line').forEach(function(p){p.addEventListener('mousemove',function(e){tip.style.display='block';tip.style.left=(e.clientX+12)+'px';tip.style.top=(e.clientY+12)+'px';tip.textContent=p.getAttribute('data-tip')||'';});p.addEventListener('mouseleave',function(){tip.style.display='none';});});})();
+</script>
+</body></html>
