@@ -1,0 +1,21 @@
+[package]
+name         = "ndb-engine"
+description  = "nDB append-only LSM storage core for the n-dimensional hypergraph database engine"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+authors      = { workspace = true }
+repository   = { workspace = true }
+license      = { workspace = true }
+
+[lib]
+name = "ndb_engine"
+path = "src/lib.rs"
+
+[dependencies]
+crc32fast = { workspace = true }
+thiserror = { workspace = true }
+uuid      = { workspace = true }
+
+[lints]
+workspace = true

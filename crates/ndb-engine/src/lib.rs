@@ -1,0 +1,43 @@
+//! nDB engine — append-only LSM storage core for the nDB n-dimensional
+//! hypergraph database.
+//!
+//! See `docs/superpowers/specs/2026-05-27-nDB-hypergraph-design.md` for the
+//! authoritative architectural design. This crate implements §11 (Primary
+//! Storage Format): byte-level record layouts, the self-describing tagged
+//! `Value` union, identifier newtypes, and CRC-checked envelope handling.
+//!
+//! What lives here today:
+//!
+//! - `record` — 6 record kinds (entity, hyperedge, tombstone, three dictionary
+//!   kinds) with encode + decode + envelope checks
+//! - `value` — tagged-union property values, all 11 tags
+//! - `id` — `EntityId`, `HyperedgeId`, `TypeId`, `RoleId`, `PropertyId`,
+//!   `TxId`, plus the `TX_ACTIVE` and `TYPE_UNTYPED` sentinels
+//! - `codec` — low-level little-endian read/write helpers
+//! - `error` — `EncodeError` / `DecodeError` types
+//!
+//! What will live here next (not yet implemented):
+//!
+//! - Append-only log writer + reader (§9.1, `.ndblog`)
+//! - `SSTable` structure + `MANIFEST` / `CURRENT` / `LOCK` (§11.5)
+//! - Memtable + flush
+//! - MVCC visibility checks (§10)
+//! - Single-writer transaction commit (§14.3)
+//! - The six mandatory v1 indexes (§14.2)
+
+#![warn(missing_docs)]
+
+pub mod codec;
+pub mod error;
+pub mod id;
+pub mod record;
+pub mod value;
+
+pub use error::{DecodeError, EncodeError};
+pub use id::{EntityId, HyperedgeId, PropertyId, RoleId, TX_ACTIVE, TYPE_UNTYPED, TxId, TypeId};
+pub use record::{
+    ENVELOPE_OVERHEAD, EntityRecord, FORMAT_VERSION, FORMAT_VERSION_MAX_SUPPORTED, HyperEdgeRecord,
+    PropertyKeyRecord, RecordKind, RoleNameRecord, TombstoneRecord, TypeNameRecord,
+    peek_record_kind, peek_record_size,
+};
+pub use value::Value;
