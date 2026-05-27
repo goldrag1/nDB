@@ -40,6 +40,7 @@ pub mod sstable;
 pub mod validation;
 pub mod value;
 pub mod wal;
+pub mod wire;
 
 pub use db::{
     CURRENT_FILE, Database, DatabaseError, LOCK_FILE, MANIFEST_FORMAT_VERSION,
@@ -65,3 +66,7 @@ pub use sstable::{
 pub use validation::{ValidationEngine, ValidationError};
 pub use value::Value;
 pub use wal::{WAL_EXTENSION, WalReadError, WalReader, WalRecovery, WriteAheadLog};
+pub use wire::{
+    CommitRequest, CommitResponse, ErrorResponse, JsonProperty, JsonRecord, JsonRole, JsonValue,
+    ReadResponse, TxIdOrActive, WireError,
+};
