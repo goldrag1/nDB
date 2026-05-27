@@ -90,7 +90,9 @@ HyperEdge {
 
 One atomic fact. One write. One traversal. No reification.
 
-Chemistry, biology, business events, knowledge claims — all fit the same primitive. Section 5 of the design doc walks through the data model in detail.
+Chemistry, biology, business events, knowledge claims — all fit the same primitive. **Nested entity hierarchies** (body contains cells contains proteins contains amino acids; document contains sections contains paragraphs; filesystem contains directories contains files) are also expressed as standard hyperedges with a `contains` relation type. Cascade lifecycle (what happens to children when a parent is deleted) is declared per-hyperedge with a sensible default that matches biological intuition. Recursive / transitive queries traverse the hierarchy at any depth with a single query.
+
+Section 5 of the design doc walks through the data model in detail, including the containment pattern.
 
 ### 2. Schema as metadata, not a separate primitive
 

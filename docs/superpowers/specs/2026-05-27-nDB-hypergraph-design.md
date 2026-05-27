@@ -256,6 +256,42 @@ The fact is atomic across all three domains. Querying "all 5 things involved in 
 
 These are real costs. The architectural payoff — honest representation of n-dimensional reality — is judged worth them.
 
+### 5.6 Nested entities and containment
+
+Real-world data is full of containment hierarchies: body contains cells, cells contain proteins, proteins contain amino acids; documents contain sections, sections contain paragraphs; filesystems contain directories, directories contain files; organizations contain departments, departments contain teams.
+
+**nDB has no special "nested entity" primitive.** Containment is just a hyperedge type — usually called `contains`, `part_of`, or domain-specific names (`composed_of`, `houses`, `consists_of`). Standard hyperedges with the lifecycle semantics declared as a property.
+
+```
+# Entities (each independently meaningful with its own properties)
+body_42        (Entity, type: "body")
+cell_001       (Entity, type: "cell")
+protein_xyz    (Entity, type: "protein")
+amino_acid_42  (Entity, type: "amino_acid")
+
+# Containment hyperedges
+contains(parent: body_42,     child: cell_001)
+contains(parent: cell_001,    child: protein_xyz)
+contains(parent: protein_xyz, child: amino_acid_42, position: 12)
+```
+
+**Order-sensitive containment** (amino acid sequences, document sections, file lines): add a `position` or `order` property on the contains hyperedge. No new primitive needed.
+
+**Multi-parent containment** (a protein appears in multiple cells; a person belongs to multiple departments): just multiple containment hyperedges. Hyperedges are atomic facts; the same child can appear in many.
+
+**Transitive queries** (find every amino acid under body_42) are supported by the query language via the recursive-relation suffix syntax (Section 12.3). One query walks the entire containment tree.
+
+**Cascade lifecycle** (when parent is deleted, what happens to children?) is configurable per-hyperedge with sensible defaults — see Section 6.9.
+
+**Why not a special primitive for nesting:**
+
+- Containment is one relation among hundreds. Privileging it forces a specific semantic on data that may not want it.
+- Domain semantics vary: biological containment is structural; organizational containment is fuzzy (matrix orgs); filesystem containment is strict; document containment is ordered. One primitive can't capture all variants.
+- "Strict one-parent" is a constraint, not a structural fact — most domains have weaker containment.
+- Same lesson as schema and namespace: SQL-thinking concepts that don't carry their weight in nDB.
+
+Apps that need strict-containment-with-cascade declare it via `type_def` and the `lifecycle` property on each hyperedge. Apps that need loose containment use the same primitive without those constraints.
+
 ---
 
 ## 6. Schema Philosophy: Layered / Optional
@@ -468,6 +504,55 @@ Same DSL as any data query. Useful for building generic UIs, generic search acro
 ---
 
 The common thread: traditional schema is a SEPARATE primitive with its own machinery (DDL, system catalog, migrations, INFORMATION_SCHEMA, audit triggers). nDB collapses that machinery into the data model itself — and every property of the data model (MVCC, retention, querying, audit) applies to schema for free.
+
+### 6.9 Lifecycle and cascade semantics
+
+For containment-style hyperedges (`contains`, `part_of`, etc. — see Section 5.6), what happens to the child when the parent is deleted is a **lifecycle property** declared on the hyperedge itself (with an optional per-type default).
+
+**Three lifecycle modes:**
+
+| Mode | Behavior when parent is deleted |
+|---|---|
+| `cascade` (default) | Child entity is also deleted. Matches biological / structural intuition: when the body dies, its cells die. |
+| `orphan` | Containment hyperedge is tombstoned, but the child entity survives independently. Useful for loose containment (company dissolves, employees survive). |
+| `restrict` | Parent delete is rejected if any child still exists. Caller must delete children first. Strict-integrity use cases. |
+
+**Default is `cascade`** because it matches the natural intuition for containment in the real world. Apps explicitly override when child entities have independent meaning.
+
+**Precedence:** per-hyperedge property wins over per-type default; per-type default wins over engine default (`cascade`).
+
+```
+# Per-type default (declares the norm for this relation)
+write type_def(name: "contains",
+               default_lifecycle: "cascade")
+
+# Specific instances — inherit cascade by default
+write contains(parent: body_42, child: cell_001)
+write contains(parent: cell_001, child: protein_xyz)
+
+# Override per-hyperedge — company dissolves, employees survive
+write contains(parent: company_acme, child: employee_alice,
+               lifecycle: "orphan")
+
+# Strict mode — sales order cannot be deleted while line items exist
+write contains(parent: sales_order_001, child: line_item_1,
+               lifecycle: "restrict")
+```
+
+**Multi-parent edge case:** if a child has multiple containment hyperedges from different parents, the semantic is **strong cascade** — a child is deleted when ANY of its cascade-mode containment hyperedges fires on a parent delete.
+
+```
+# protein_xyz is in two cells (cascade is the default for both)
+contains(parent: cell_A, child: protein_xyz)
+contains(parent: cell_B, child: protein_xyz)
+
+# Delete cell_A → protein_xyz is deleted; cell_B's contains hyperedge
+# is also tombstoned because its child is gone.
+```
+
+If apps want "child survives as long as ANY parent still references it" (reference-counted GC), they declare `lifecycle: "orphan"` on the containment hyperedges and implement reference-counting at the app layer or via a custom plugin index that tracks remaining references. Engine-level cascade stays simple and predictable.
+
+**Containment hyperedges themselves** are always tombstoned when their parent is deleted (an orphan containment hyperedge is meaningless). The lifecycle property controls only the fate of the CHILD entity, not the hyperedge.
 
 ---
 
@@ -953,7 +1038,7 @@ JSON or MessagePack. The optimizer consumes the AST, not raw text. LLMs and prog
 
 ### 12.3 Surface syntax: SQL-like keywords + hyperedge pattern primitives
 
-Not LISP parens (alienates most devs), not Cypher ASCII art (binary-shaped). Familiar shell + hyperedge-native primitives.
+Not LISP parens (alienates most devs), not Cypher ASCII art (binary-shaped). Familiar shell + hyperedge-native primitives. **Recursive / transitive relation patterns** via suffix syntax (`relation*`, `relation+`, `relation?`, `relation{n,m}`) — needed because containment hierarchies (Section 5.6) and other transitive structures are extremely common.
 
 ### 12.4 Optional Rust embedded DSL
 
@@ -1019,6 +1104,26 @@ as of 2025-12-31
 match
   customer(id: ?cust, balance: ?bal)
 return ?cust, ?bal
+
+# Recursive / transitive query (Datalog-style closure)
+# Find every amino acid contained anywhere under body_42 (traverse contains
+# to any depth)
+match
+  contains*(parent: body_42, child: ?leaf)
+  amino_acid(id: ?leaf, name: ?name)
+return ?leaf, ?name
+
+# Relation suffixes for path patterns:
+#   contains*   zero-or-more steps (transitive closure including self)
+#   contains+   one-or-more steps (transitive closure excluding self)
+#   contains?   zero-or-one steps (optional)
+#   contains{n,m}  bounded range (n to m steps)
+
+# Find all proteins exactly 2 levels below body_42
+match
+  contains{2,2}(parent: body_42, child: ?protein)
+  protein(id: ?protein, ...)
+return ?protein
 ```
 
 For aggregation, sorting, grouping, slicer projection, and visual encoding, see Section 7.
@@ -1063,7 +1168,8 @@ Deferred to a focused query-language spec:
 - Full grammar specification (BNF / EBNF)
 - Operator precedence
 - Subquery / CTE syntax (read pipelines, not aggregation)
-- Recursive queries (path of unbounded length) — Datalog allows this; do we?
+- Recursive-query semantics under MVCC (snapshot for the closure: query-start or per-step?)
+- Recursive-query termination guarantees (cycle detection, depth caps)
 - Error message design
 - Index hints / planner directives
 
