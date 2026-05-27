@@ -478,6 +478,7 @@ fn write_response<W: Write>(w: &mut W, code: u16, ctype: &str, body: &[u8]) -> s
         "HTTP/1.1 {code} {reason}\r\n\
          Content-Type: {ctype}\r\n\
          Content-Length: {}\r\n\
+         Cache-Control: no-store, no-cache, must-revalidate\r\n\
          Connection: close\r\n\r\n",
         body.len(),
     )?;
