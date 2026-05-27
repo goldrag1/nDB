@@ -242,10 +242,10 @@
 const API_URL = "http://127.0.0.1:8742";
 const DB_PATH = "/tmp/v22-explorer-ndb";
 
-// Reserved IDs from crates/ndb-renderer/examples/v22_explorer.rs.
+// Reserved IDs from crates/ndb-renderer/examples/v22_explorer/main.rs.
 // Each is a (name → numeric id) mapping the example committed
 // dictionary records for, but the dictionary-resolve endpoint isn't
-// in v2.1 wire surface, so we mirror the constants here.
+// in the wire surface yet, so we mirror the constants here.
 const TYPES = {
   protein:   { id: 1,   color: "#4a90e2", kind: "entity" },
   gene:      { id: 2,   color: "#7ed321", kind: "entity" },
@@ -1189,7 +1189,7 @@ function onNgl3DResidueClick(resno) {
 // For the currently-loaded protein, walk graphData and render: the
 // protein entity itself, every residue + residue_of edge pointing at
 // it, every motif hyperedge whose member set includes one of its
-// residues, and every protein-level complex/cites/encodes edge it
+// residues, and every protein-level complex/encodes edge it
 // participates in. Each appears as a tagged human label plus the
 // actual wire-format JSON, so the user can see exactly what nDB stores.
 function updateNdbModelPane(node) {
@@ -1237,7 +1237,7 @@ function updateNdbModelPane(node) {
     }
     if (touches) motifEdges.push(edge);
   }
-  // Protein-level edges (complex, encodes, cites, authored).
+  // Protein-level edges (complex, encodes).
   for (const edge of edgesById.values()) {
     if (MOTIF_TYPE_IDS.has(edge.type_id)) continue;
     if (edge.type_id === RESIDUE_OF_TYPE_ID) continue;
@@ -1302,7 +1302,8 @@ function updateNdbModelPane(node) {
     }, null, 2))}</pre>` : ""}
     <h4>${proteinLevelEdges.length} protein-level hyperedges</h4>
     <div>
-      Connect this protein to other proteins / pathways / papers.
+      Connect this protein to other proteins, the gene that encodes it,
+      and the pathways it participates in.
       ${proteinLevelEdges.length ? proteinLevelEdges.map(e =>
         `<span class="pill">${typeNameById[e.type_id]} · arity ${e.roles.length}</span>`
       ).join(" ") : '<i>none</i>'}

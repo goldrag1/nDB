@@ -55,8 +55,8 @@ Open `http://127.0.0.1:9876/` in a browser.
    domains), orange = very low (BRCA1's disordered N-terminus drags
    the whole-chain score to 41).
 2. **Click any protein**. The sidebar shows its UniProt accession,
-   gene, organism, sequence length, pLDDT mean, and which complexes,
-   pathways, and papers it participates in.
+   gene, organism, sequence length, pLDDT mean, and which complexes
+   and pathways it participates in.
 3. **Hit "Load AlphaFold 3D structure"**. The right pane splits — the
    CIF loads from `alphafold.ebi.ac.uk` directly (no proxy, no
    account), coloured by per-residue pLDDT in the same palette.

@@ -10,8 +10,8 @@
 //! entities + structural-motif hyperedges), then stands up two HTTP
 //! servers on localhost:
 //!
-//! - `127.0.0.1:8742` — `ndb-server` (with CORS) speaking the v2.1
-//!   wire protocol. The SPA fetches `/iter` and posts to `/commit`.
+//! - `127.0.0.1:8742` — `ndb-server` (with CORS) speaking the nDB
+//!   JSON wire protocol. The SPA fetches `/iter` and posts to `/commit`.
 //! - `127.0.0.1:9876` — a tiny static file server that serves
 //!   `docs/explorer/index.html`.
 //!
@@ -41,11 +41,8 @@ mod residues;
 // Reserved demo IDs — kept in lockstep with the TYPES table in
 // docs/explorer/index.html. Changing one without the other will
 // detach the SPA's type-name labels from the engine's actual data.
-//
-// IDs 4 (paper), 5 (author), 102 (cites), 103 (authored) were used by
-// the v2.1 literature-graph showcase but are NOT seeded in v2.2 — the
-// project re-focused on structural biology. The IDs remain reserved
-// so any earlier database on disk still round-trips through `/iter`.
+// Type IDs are non-contiguous so they can grow without renumbering;
+// gaps (4, 5, 102, 103, 112) are intentional placeholders.
 const T_PROTEIN: u32 = 1;
 const T_GENE: u32 = 2;
 const T_PATHWAY: u32 = 3;
