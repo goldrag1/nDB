@@ -10,10 +10,31 @@
 //!   e.g. a property that should always be `i64` accidentally being set
 //!   as a string.
 //!
-//! Constraints are registered at runtime via [`ValidationEngine`] methods
-//! (in v1) and consulted on every [`WriteTxn::commit`] before WAL durability.
-//! v2 will populate constraints from metadata hyperedges (§6.4) so they
-//! survive engine restarts without re-registration.
+//! Constraints can be registered in two ways:
+//!
+//! 1. **At runtime** via [`ValidationEngine`] methods directly. Used by
+//!    tests and small embedded apps. Constraints registered this way are
+//!    in-memory only — they do NOT survive engine restarts.
+//! 2. **Metadata-driven** via reserved-id constraint entities written to
+//!    the database. The engine scans these at `open()` and calls the
+//!    matching `ValidationEngine` method automatically. Constraints
+//!    written this way are durable — they're part of the database.
+//!
+//! Metadata-constraint encoding (locked):
+//!
+//! A constraint is one entity with `type_id = TYPE_VALIDATION_CONSTRAINT`
+//! (= [`TYPE_VALIDATION_CONSTRAINT`]) and the following properties:
+//!
+//! | Property id | Type | Meaning |
+//! |---|---|---|
+//! | [`PROP_CONSTRAINT_KIND`] | `Value::I64` | 1 = required property, 2 = value tag |
+//! | [`PROP_TARGET_TYPE`] | `Value::I64` | `type_id` of the constraint's target |
+//! | [`PROP_TARGET_PROPERTY`] | `Value::I64` | `property_id` of the constraint's target |
+//! | [`PROP_EXPECTED_TAG`] | `Value::I64` | tag byte (only for kind=2 value_tag) |
+//!
+//! The 0xFFFF_FFFx reserved-ID space is chosen so client-side ids stay
+//! well clear. Engine refuses commits that touch these reserved IDs from
+//! anywhere other than the metadata path.
 //!
 //! Out-of-scope for v1:
 //!
@@ -29,6 +50,33 @@ use thiserror::Error;
 
 use crate::id::{PropertyId, TypeId};
 use crate::record::Record;
+use crate::value::Value;
+
+// ---------------------------------------------------------------------------
+// Reserved IDs for metadata-driven constraints
+// ---------------------------------------------------------------------------
+
+/// Reserved type id for constraint entities. Engine scans entities of
+/// this type at `open()` and registers them with the validation engine.
+pub const TYPE_VALIDATION_CONSTRAINT: TypeId = TypeId::new(0xFFFF_FFF0);
+
+/// Property id: constraint kind discriminator.
+/// Value: `I64(1)` = required property; `I64(2)` = value tag.
+pub const PROP_CONSTRAINT_KIND: PropertyId = PropertyId::new(0xFFFF_FFF1);
+
+/// Property id: `type_id` the constraint targets (stored as `Value::I64`).
+pub const PROP_TARGET_TYPE: PropertyId = PropertyId::new(0xFFFF_FFF2);
+
+/// Property id: `property_id` the constraint targets (stored as `Value::I64`).
+pub const PROP_TARGET_PROPERTY: PropertyId = PropertyId::new(0xFFFF_FFF3);
+
+/// Property id: expected `Value` tag byte (kind=2 only; stored as `Value::I64`).
+pub const PROP_EXPECTED_TAG: PropertyId = PropertyId::new(0xFFFF_FFF4);
+
+/// Constraint kind discriminator values.
+pub const CONSTRAINT_KIND_REQUIRED: i64 = 1;
+/// Constraint kind discriminator: value tag.
+pub const CONSTRAINT_KIND_VALUE_TAG: i64 = 2;
 
 /// Errors raised by the validation engine on commit.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -107,6 +155,60 @@ impl ValidationEngine {
     pub fn clear(&mut self) {
         self.required.clear();
         self.expected_tag.clear();
+    }
+
+    /// Walk `records` and register any constraint entities found
+    /// (`type_id == TYPE_VALIDATION_CONSTRAINT`). Records of other types
+    /// are ignored. Returns the number of constraints loaded.
+    ///
+    /// Called by `Engine::open` after `rebuild_indexes` so durable
+    /// constraints survive restarts. Callers that mutate constraint
+    /// entities at runtime should call `Engine::reload_constraints` to
+    /// pick the changes up (or directly mutate via `require_property` /
+    /// `expect_value_tag` for ephemeral changes).
+    pub fn load_from_metadata<'a>(&mut self, records: impl IntoIterator<Item = &'a Record>) -> usize {
+        let mut loaded = 0;
+        for r in records {
+            let Record::Entity(e) = r else { continue };
+            if e.type_id != TYPE_VALIDATION_CONSTRAINT {
+                continue;
+            }
+            let mut kind: Option<i64> = None;
+            let mut target_type: Option<i64> = None;
+            let mut target_prop: Option<i64> = None;
+            let mut expected_tag: Option<i64> = None;
+            for (pid, v) in &e.properties {
+                match (*pid, v) {
+                    (p, Value::I64(n)) if p == PROP_CONSTRAINT_KIND => kind = Some(*n),
+                    (p, Value::I64(n)) if p == PROP_TARGET_TYPE => target_type = Some(*n),
+                    (p, Value::I64(n)) if p == PROP_TARGET_PROPERTY => target_prop = Some(*n),
+                    (p, Value::I64(n)) if p == PROP_EXPECTED_TAG => expected_tag = Some(*n),
+                    _ => {}
+                }
+            }
+            let (Some(k), Some(t), Some(p)) = (kind, target_type, target_prop) else {
+                continue;
+            };
+            let target_type_id = u32::try_from(t).map(TypeId::new).ok();
+            let target_prop_id = u32::try_from(p).map(PropertyId::new).ok();
+            let (Some(tt), Some(tp)) = (target_type_id, target_prop_id) else {
+                continue;
+            };
+            match k {
+                CONSTRAINT_KIND_REQUIRED => {
+                    self.require_property(tt, tp);
+                    loaded += 1;
+                }
+                CONSTRAINT_KIND_VALUE_TAG => {
+                    if let Some(tag) = expected_tag.and_then(|n| u8::try_from(n).ok()) {
+                        self.expect_value_tag(tt, tp, tag);
+                        loaded += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        loaded
     }
 
     /// Check a record. Tombstones and dictionary records pass through;

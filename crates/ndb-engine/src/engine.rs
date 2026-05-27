@@ -273,7 +273,23 @@ impl Engine {
         // store (SSTables in newest-first order) and the memtable
         // (already populated from WAL replay).
         engine.rebuild_indexes()?;
+        // Metadata-driven validation constraints: scan every visible
+        // record at the latest tx and register any constraint entities
+        // with the validation engine. Durable across restarts because
+        // they live in the primary store.
+        engine.reload_constraints_from_metadata()?;
         Ok(engine)
+    }
+
+    /// Scan the latest snapshot for metadata constraint entities and
+    /// register them with the validation engine. Returns the number of
+    /// constraints loaded. Called automatically by `open()`; callers
+    /// that add constraint entities at runtime can invoke this manually
+    /// to pick up the changes.
+    pub fn reload_constraints_from_metadata(&mut self) -> Result<usize, EngineError> {
+        let snap = TxId::new(self.db.manifest().last_tx_id);
+        let records = self.snapshot_iter(snap)?;
+        Ok(self.validation.load_from_metadata(&records))
     }
 
     /// Rebuild every in-memory index from the primary store. Called on
@@ -1812,6 +1828,96 @@ mod tests {
             Resolved::Deleted { deleted_at } => assert_eq!(deleted_at, snap_deleted),
             other => panic!("expected Deleted, got {other:?}"),
         }
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn metadata_constraints_load_at_open() {
+        use crate::validation::{
+            CONSTRAINT_KIND_REQUIRED, CONSTRAINT_KIND_VALUE_TAG, PROP_CONSTRAINT_KIND,
+            PROP_EXPECTED_TAG, PROP_TARGET_PROPERTY, PROP_TARGET_TYPE, TYPE_VALIDATION_CONSTRAINT,
+        };
+        use crate::value::TAG_STRING;
+
+        let dir = temp_dir("meta-constraints");
+        // Phase 1: commit two constraint entities + close.
+        {
+            let mut engine = Engine::create(&dir).unwrap();
+            // Required: type 50, property 60.
+            let mut txn = engine.begin_write();
+            txn.put_entity(EntityRecord {
+                entity_id: EntityId::now_v7(),
+                type_id: TYPE_VALIDATION_CONSTRAINT,
+                tx_id_assert: TxId::new(0),
+                tx_id_supersede: TxId::ACTIVE,
+                properties: vec![
+                    (PROP_CONSTRAINT_KIND, Value::I64(CONSTRAINT_KIND_REQUIRED)),
+                    (PROP_TARGET_TYPE, Value::I64(50)),
+                    (PROP_TARGET_PROPERTY, Value::I64(60)),
+                ],
+            });
+            txn.commit().unwrap();
+            // Value tag: type 50, property 60 must be String (tag 0x05).
+            let mut txn = engine.begin_write();
+            txn.put_entity(EntityRecord {
+                entity_id: EntityId::now_v7(),
+                type_id: TYPE_VALIDATION_CONSTRAINT,
+                tx_id_assert: TxId::new(0),
+                tx_id_supersede: TxId::ACTIVE,
+                properties: vec![
+                    (PROP_CONSTRAINT_KIND, Value::I64(CONSTRAINT_KIND_VALUE_TAG)),
+                    (PROP_TARGET_TYPE, Value::I64(50)),
+                    (PROP_TARGET_PROPERTY, Value::I64(60)),
+                    (PROP_EXPECTED_TAG, Value::I64(i64::from(TAG_STRING))),
+                ],
+            });
+            txn.commit().unwrap();
+            engine.close().unwrap();
+        }
+
+        // Phase 2: reopen — constraints should be loaded automatically.
+        let mut engine = Engine::open(&dir).unwrap();
+        assert!(engine.validation().has_constraints());
+        // Try committing an entity that violates the required-property rule.
+        let mut txn = engine.begin_write();
+        txn.put_entity(EntityRecord {
+            entity_id: EntityId::now_v7(),
+            type_id: TypeId::new(50),
+            tx_id_assert: TxId::new(0),
+            tx_id_supersede: TxId::ACTIVE,
+            properties: vec![],
+        });
+        let err = txn.commit().unwrap_err();
+        assert!(matches!(
+            err,
+            EngineError::Validation(ValidationError::MissingRequiredProperty { .. })
+        ));
+        // Now commit with the property present BUT wrong tag — value-tag
+        // constraint should fire.
+        let mut txn = engine.begin_write();
+        txn.put_entity(EntityRecord {
+            entity_id: EntityId::now_v7(),
+            type_id: TypeId::new(50),
+            tx_id_assert: TxId::new(0),
+            tx_id_supersede: TxId::ACTIVE,
+            properties: vec![(PropertyId::new(60), Value::I64(99))],
+        });
+        let err = txn.commit().unwrap_err();
+        assert!(matches!(
+            err,
+            EngineError::Validation(ValidationError::WrongValueTag { .. })
+        ));
+        // Correct shape commits cleanly.
+        let mut txn = engine.begin_write();
+        txn.put_entity(EntityRecord {
+            entity_id: EntityId::now_v7(),
+            type_id: TypeId::new(50),
+            tx_id_assert: TxId::new(0),
+            tx_id_supersede: TxId::ACTIVE,
+            properties: vec![(PropertyId::new(60), Value::String("ok".into()))],
+        });
+        txn.commit().unwrap();
         engine.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }

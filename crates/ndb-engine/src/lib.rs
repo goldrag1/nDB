@@ -74,7 +74,11 @@ pub use sstable::{
     SSTABLE_FORMAT_VERSION_MAX_SUPPORTED, SSTABLE_MAGIC, SSTableError, SSTableFooter, SSTableIter,
     SSTableKey, SSTableReader, SSTableWriter, read_footer,
 };
-pub use validation::{ValidationEngine, ValidationError};
+pub use validation::{
+    CONSTRAINT_KIND_REQUIRED, CONSTRAINT_KIND_VALUE_TAG, PROP_CONSTRAINT_KIND, PROP_EXPECTED_TAG,
+    PROP_TARGET_PROPERTY, PROP_TARGET_TYPE, TYPE_VALIDATION_CONSTRAINT, ValidationEngine,
+    ValidationError,
+};
 pub use value::Value;
 pub use wal::{WAL_EXTENSION, WalReadError, WalReader, WalRecovery, WriteAheadLog};
 pub use wire::{
