@@ -421,6 +421,10 @@ fn property_lookup_and_range_routes() {
 
 #[test]
 fn traverse_route_walks_2_hops() {
+    const TYPE_PERSON: u32 = 1;
+    const TYPE_KNOWS: u32 = 100;
+    const TYPE_WORKS_AT: u32 = 101;
+
     let dir = temp_dir("traverse");
     let server = Arc::new(Server::open(&dir).unwrap());
 
@@ -430,9 +434,6 @@ fn traverse_route_walks_2_hops() {
     let alice = EntityId::now_v7();
     let bob = EntityId::now_v7();
     let acme = EntityId::now_v7();
-    const TYPE_PERSON: u32 = 1;
-    const TYPE_KNOWS: u32 = 100;
-    const TYPE_WORKS_AT: u32 = 101;
     {
         let e = server.engine();
         let mut e = e.lock().unwrap();
