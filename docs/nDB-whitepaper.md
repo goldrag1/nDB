@@ -34,21 +34,25 @@ Relational databases were designed in the 1970s for tabular data — payroll row
 
 But applications have outgrown that data model. The events modern applications care about are rarely 2D.
 
-Consider a single business approval event:
+Consider three examples from very different domains:
 
-```
-Alice approved Sales Order SO-001 on Tuesday 15:00
-using the fast-track workflow, with outcome "approved",
-comment "all conditions met"
-```
+**Biology** — A gene-expression event involves the gene, its transcription factors, co-factors, the chromatin state of its locus, the cell type, the time point, and the resulting protein produced. Seven role-players in one atomic biological fact. Take any one away and the fact loses meaning.
 
-This is ONE fact about FIVE participants (Alice, SO-001, Tuesday, fast-track, approved) plus metadata. To store this in SQL you need at minimum:
+**Construction engineering** — A structural load test involves the component being tested (a specific beam, column, or slab), its material specification, the load applied in kN, the measured deflection in mm, the ambient temperature, the engineer who performed the test, and the timestamp. Seven dimensions all required to make the result regulatory-quality.
+
+**Business operations** — An approval event involves the document being approved, the approver, the timestamp, the workflow used, and the outcome. Five participants in one atomic event.
+
+All three are inherently **n-ary**. Each loses meaning when fragmented into a 2D table.
+
+To store the business approval in SQL you need at minimum:
 - An `approvals` table with a synthetic primary key
 - Foreign keys to `users`, `documents`, `workflows`
 - A separate `audit_log` table that tracks who made the assertion
 - An ORM layer in your application that reconstructs the event from these fragments
 
 To answer "find all 5-way Alice approvals using fast-track in 2026 Q1" you write a 5-way JOIN. To audit "what was the schema of approvals in 2024?" you restore a backup. To extend the model with a new dimension (say, "geographic jurisdiction") you write a migration, take downtime, and update every consumer.
+
+The biology and construction examples have analogous pain: PubMed publishers normalize gene-expression facts across 6 tables and lose the atomicity; BIM (Building Information Modeling) systems fight their relational stores to express what is naturally one component with many attributes and relationships.
 
 These pains are not edge cases. They are the daily reality of building modern applications on relational databases.
 
@@ -72,25 +76,70 @@ A production-grade hypergraph database engine in Rust. Five foundational archite
 
 Every fact in nDB is a **hyperedge** — a connection between any number of named role-players, with optional properties. There is no reification, no synthetic intermediate node, no foreign-key choreography.
 
-The approval event above becomes:
+The same primitive expresses facts from radically different domains:
 
 ```
+# Chemistry — an n-ary reaction
+HyperEdge {
+    type: "chemical_reaction"
+    roles: {
+        reactant_1:   Sodium,
+        reactant_2:   Chlorine,
+        product:      SodiumChloride,
+        catalyst:     Water,
+        temperature:  T_25C,
+        environment:  Exothermic
+    }
+    properties: { yield_pct: 98.5, study_ref: "PubChem-117" }
+}
+
+# Construction engineering — a structural load test
+HyperEdge {
+    type: "load_test"
+    roles: {
+        component:        BEAM-A12,
+        material:         ReinforcedConcrete_C30,
+        load_applied_kN:  250,
+        deflection_mm:    1.2,
+        ambient_temp_C:   22,
+        tested_by:        engineer_pham,
+        date:             2026-05-26
+    }
+    properties: { pass: true, certified_per: "TCVN-5574-2018" }
+}
+
+# Biology — a gene-expression event
+HyperEdge {
+    type: "gene_expression"
+    roles: {
+        gene:                  TP53,
+        transcription_factor:  NF_kB,
+        co_factor:             p300,
+        chromatin_state:       open,
+        cell_type:             hepatocyte,
+        time_point:            T_30min_post_stress,
+        product:               TP53_mRNA
+    }
+    properties: { expression_level: 4.2 }
+}
+
+# Business — an approval event
 HyperEdge {
     type: "approval"
     roles: {
-        document:  SO-001,
-        approver:  Alice,
-        timestamp: 2026-05-26T15:00,
-        workflow:  fast-track,
-        outcome:   approved
+        document:   SO-001,
+        approver:   Alice,
+        timestamp:  2026-05-26T15:00,
+        workflow:   fast-track,
+        outcome:    approved
     }
     properties: { comment: "all conditions met" }
 }
 ```
 
-One atomic fact. One write. One traversal. No reification.
+One atomic fact per event. One write. One traversal. No reification. No domain forces nDB to flatten or fragment.
 
-Chemistry, biology, business events, knowledge claims — all fit the same primitive. **Nested entity hierarchies** (body contains cells contains proteins contains amino acids; document contains sections contains paragraphs; filesystem contains directories contains files) are also expressed as standard hyperedges with a `contains` relation type. Cascade lifecycle (what happens to children when a parent is deleted) is declared per-hyperedge with a sensible default that matches biological intuition. Recursive / transitive queries traverse the hierarchy at any depth with a single query.
+**Nested entity hierarchies** (body contains cells contains proteins contains amino acids; building contains floor contains room contains structural-component; document contains sections contains paragraphs; filesystem contains directories contains files) are expressed as standard hyperedges with a `contains` relation type. Cascade lifecycle (what happens to children when a parent is deleted) is declared per-hyperedge with a sensible default that matches biological intuition. Recursive / transitive queries traverse the hierarchy at any depth in one query.
 
 Section 5 of the design doc walks through the data model in detail, including the containment pattern.
 
@@ -184,30 +233,60 @@ Concrete capabilities:
 
 For domains like medical reasoning, scientific literature analysis, legal case analysis, and autonomous agent context management, nDB is built for the workload that AI is creating, not the workload SQL was designed for in 1974.
 
-### 2. Multi-party business workflows
+### 2. Multi-party operational systems (business + engineering + supply chain)
 
-Vietnamese accounting (TT200/2014 → TT99/2025 transition), international trade (5-party deals across buyer / seller / bank / customs / shipper), multi-stakeholder approvals, manufacturing BOMs — these are inherently multi-party events. SQL forces them into normalized fragments; nDB stores them as hyperedges.
+Multi-party events are pervasive beyond business systems. Construction projects involve architect, structural engineer, MEP engineer, contractor, and owner all signing off on each design change. International trade involves buyer, seller, bank, customs, shipper. Manufacturing BOMs interlock parts, sub-assemblies, process steps, and quality checks. ERP approvals involve multiple stakeholders. All of these are inherently multi-party events that SQL forces into normalized fragments.
 
-Concrete capabilities:
+**Construction engineering specifically:**
 
-- **Multi-party events as atomic facts.** A 3-way invoice match (PO + GRN + Invoice) is one hyperedge, not three rows + a match table.
-- **Per-tenant schema variations.** Each tenant defines its own `Customer` type by linking the type definition to the tenant entity. No tenant pollution, no separate databases per tenant.
-- **Regulatory time-travel.** When VAS rules change, old data is still queryable under old schema. Auditors in 2030 can reconstruct 2024 state without backups.
-- **Audit trail free.** Every change is MVCC-versioned with provenance. Compliance reporting becomes a query.
-- **Multi-jurisdiction views.** The same financial event recorded under Vietnamese VAS + IFRS + parent-company GAAP simultaneously, via multiple type_defs and constraints. No data duplication.
+- BIM (Building Information Modeling) data is naturally hypergraph-shaped — a structural component has many attributes (material, dimensions, load capacity, fire rating, supplier, certifications) AND many relationships (contained in, connected to, depends on, replaces). One hyperedge per attribute set + relationship set, queryable in any direction.
+- Multi-party design approvals — architect + structural engineer + MEP + contractor + owner approving a change order as one atomic 5-party event with provenance.
+- Structural test data — each load test (Section 1 example) carries 7+ dimensions; thousands of tests across a project are queryable as a uniform hyperedge stream.
+- Construction phase tracking — same building component goes through design → fabrication → delivery → installation → certification, with each transition as a hyperedge linking the component, the actors, the timestamp, and the conditions.
+- Regulatory change tracking — when local building codes change (e.g., TCVN updates), old projects are still queryable under the schema that applied at their certification date.
 
-For ERP, supply chain, compliance, and any business system where the events involve multiple parties and audit matters, nDB removes structural friction that SQL imposes.
+**Business operations and supply chain:**
 
-### 3. Provenance, lineage, scientific reproducibility
+- 3-way invoice match (PO + GRN + Invoice) — one hyperedge, not three tables + a match table
+- International trade — 5-party events native
+- Per-tenant SaaS — each tenant defines its own `Customer` type by linking to the tenant entity; no tenant pollution, no separate databases
+- Regulatory time-travel — Vietnamese VAS transition from TT200/2014 to TT99/2025; auditors in 2030 reconstruct 2024 state without backups
+- Multi-jurisdiction accounting — same financial event recorded under VAS + IFRS + parent-company GAAP simultaneously
 
-W3C PROV-O lineage facts are 6+-arity: `(output, derived_from, inputs..., by_transformation, at_time, with_parameters)`. nDB stores these natively without reification. Agricultural traceability (EUDR compliance), scientific result reproducibility, data lineage in ML pipelines, multi-jurisdiction accounting — all fit the same model.
+For any operational system where events involve multiple parties and the audit trail matters, nDB removes structural friction that SQL imposes.
 
-Concrete capabilities:
+### 3. Scientific, biomedical, and provenance/lineage workloads
 
-- **One hyperedge per lineage event.** A computational result links to inputs, transformation, parameters, compute, timestamp, researcher — atomically.
-- **Federated provenance.** Multiple nDB instances can reference each other's facts via stable identifiers + lookup keys (v3 federation).
-- **Versioned/branched knowledge.** TerminusDB's killer feature, generalized to hyperedges. "As of git-commit-X, this is what we believed."
-- **Cross-perspective queries.** Multi-jurisdiction views, multi-observer perspectives — different metadata hyperedges describing the same underlying facts.
+Scientific data is the natural home for n-ary hyperedges. Most experimental events involve many parameters; reproducibility requires preserving them all; multi-perspective interpretation (what is true under hypothesis A vs B) requires versioned schemas.
+
+**Biology and biomedicine:**
+
+- Gene-expression events — 7+ role-players as shown above; protein-protein interactions; metabolic pathway steps
+- Clinical trials — each trial event involves patient, drug, dose, timepoint, observed response, side effects, attending researcher, study, and regulatory submission. Reproducibility requires all of them.
+- Drug-target-pathway-disease graphs — multi-way relationships natural for GraphRAG over biomedical literature
+- Molecular dynamics simulations — multi-parameter records that fit the hyperedge primitive without flattening
+
+**Chemistry:**
+
+- Chemical reactions as atomic n-ary facts (Section 1 example)
+- Reaction conditions + outcomes + study references all in one hyperedge
+- Compound classification and similarity (with a vector index plugin in v2)
+
+**Scientific lineage and reproducibility:**
+
+- W3C PROV-O lineage facts are 6+-arity: `(output, derived_from, inputs..., by_transformation, at_time, with_parameters, by_researcher)`. nDB stores these natively without reification.
+- Computational result lineage in ML pipelines — full traceability of how a model was trained, on what data, with what parameters, by whom
+
+**Agricultural and supply-chain traceability:**
+
+- EUDR compliance (EU Deforestation Regulation) requires tracing crop batches from harvest geolocation through processing to retail. One hyperedge per stage, atomic + multi-party.
+- Organic certification chains, fair-trade audit trails, halal/kosher provenance
+
+**Multi-perspectival data:**
+
+- Same financial event recorded under multiple accounting standards
+- Same patient record viewed differently by attending doctor, insurance, and regulator (different metadata hyperedges describing same underlying facts)
+- Versioned/branched knowledge — TerminusDB's killer feature, generalized to hyperedges. "As of git-commit-X, this is what we believed."
 
 ---
 
