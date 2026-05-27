@@ -1,3 +1,173 @@
+## Session 2026-05-27 (fourth turn, extended) — query language end-to-end: spec → wire → parser → resolver → planner → executor → /query → clients
+
+Continued through the full pipeline. All eight steps of the v1 query-language
+build landed in one extended session. The query language is now end-to-end
+usable: server up → `POST /query` with a wire-AST body → result rows.
+Recursive patterns and `as of <timestamp>` still return explicit "not yet
+supported" errors; everything else works.
+
+**11 new commits**, **+92 tests** (262 → 354 Rust). Workspace clippy clean
+with `-D warnings`. Pushed to `origin/main`.
+
+### What landed this session
+
+| SHA       | Subject |
+|-----------|---------|
+| `ae0fe30` | spec(query-language): close §12.9 open sub-questions |
+| `010c652` | fix(test): hoist const decls (clippy 1.95 regression on main) |
+| `f972ba8` | feat(engine): wire_query — QueryRequest/Response AST + 17 tests |
+| `efc1285` | spec(query-language): lock hyperedge semantics (partial match, role-vs-property Option A) |
+| `6008d77` | feat(query): ndb-query crate — lexer + parser + 46 tests |
+| `3ebd77e` | feat(query): resolver — NameQuery → wire QueryRequest via dictionaries (15 tests) |
+| `8b848a6` | session-close (mid-session checkpoint) |
+| `d8ffc47` | feat(engine): query planner + executor — wire QueryRequest → QueryResponse (10 tests) |
+| `5fcf64d` | feat(server): POST /query — auth/audit/ReBAC same as existing routes (1 round-trip test) |
+| `92ed15b` | feat(clients): query() on Rust + Python + CLI (1 round-trip test) |
+| `<this>`  | session-close: full pipeline shipped |
+
+### End-to-end flow now usable
+
+```text
+text          ─►  ndb-query::parse_query   ─►  NameQuery
+NameQuery     ─►  ndb-query::resolve       ─►  QueryRequest (wire AST)
+QueryRequest  ─►  ndb-engine::execute_query ─►  QueryResponse
+              (over HTTP via POST /query with the same auth/audit/ReBAC as every other route)
+```
+
+CLI: `echo '{"patterns":[...]}' | ndb query` prints the result rows.
+Python: `client.query({"patterns": [...]})` returns the dict verbatim.
+Rust: `client.query(&req)` returns a typed `QueryResponse`.
+
+### What still returns "not yet supported"
+
+These are explicit error paths in the executor, gated for follow-on commits:
+
+1. **Recursive patterns** — `RecursionNotYetSupported`. The executor errors
+   on any `Pattern::Hyperedge { recursion: Some(_) }`. The BFS implementation
+   with visited-set + depth cap per spec §5.3 is straightforward but separate
+   work; ~200-400 LOC.
+2. **`as of "<rfc3339>"`** — `TimestampNotYetSupported`. The wire AST and
+   parser accept timestamps; the engine doesn't track commit timestamps yet
+   so the executor can't resolve them. Add per-tx commit timestamps to the
+   engine first, then this falls into place.
+3. **Cardinality-aware planning** — v0 uses source-order. The greedy
+   smallest-cardinality-first algorithm in spec §7 lands as a sort pass over
+   patterns + a tiny estimator over the existing indexes; ~100 LOC.
+
+These three are the v1 polish items for query language. After them, the
+language is feature-complete per §12 of the parent spec.
+
+### Locked design decisions added this session (executor)
+
+| Concern | Decision | Module |
+|---|---|---|
+| Bindings type | `HashMap<String, ndb_engine::Value>` — engine-native, not wire JsonValue. Converts at the response boundary. | `query.rs` |
+| Source-order patterns | v0; cardinality reordering is a sort pass. Correctness independent of order. | `query.rs::execute` |
+| Index seed priority | `property_lookup` B-tree first; adjacency-intersect-with-type-cluster for hyperedges with a bound entity; full `snapshot_iter` as last fallback. | `query.rs::candidate_*` |
+| Unification semantics | Repeated variable inside a pattern unifies via equality on `Value::PartialEq` (which uses `to_bits` for f64). | `query.rs::unify` |
+| Property binding form | `term=Var + op=Eq` → bind; `term=Literal + op=Eq` → filter; other-op + literal → ordered filter. | `query.rs::match_filter` |
+| Incomparable-type comparison | Returns FALSE for any op (spec §5.5). Never crashes. | `query.rs::cmp_values` |
+| Truncation flag | Set when `rows.len() > limit` BEFORE truncate; users can distinguish "exact result" from "capped". | `query.rs::execute` |
+| Error-code → HTTP map | Engine names verbatim as the `error` field. 400 for usage errors, 410 for snapshot-gone, 501 for not-yet-implemented. | `ndb-server::query_error_to_http` |
+
+### Architectural notes for next session
+
+The recursive executor needs three things:
+1. **Direction tracking** — a recursive pattern names two endpoint roles
+   (start, end). Walk goes start → end. Other named roles are per-step
+   constraints (per spec §5.7).
+2. **BFS frontier** — `HashSet<EntityId>` to dedup. Per-step, expand current
+   frontier via adjacency on hyperedges of the right type, applying any
+   non-endpoint role/property constraints at each step.
+3. **Depth cap** — read `max_depth` from `Recursion::Star/Plus { max_depth }`.
+   `Optional` is 0-or-1, `Bounded { min, max }` enforces both. Loud error on
+   cap reached without exhausting frontier (`recursion_depth_exceeded`); do
+   not silent-truncate.
+
+For `as_of` timestamps: the engine needs to record `(tx_id, commit_us)` at
+commit time and expose a `find_tx_at_or_before(ts) -> Option<TxId>` lookup.
+Then `resolve_snapshot` looks up the tx for the timestamp instead of
+erroring.
+
+For cardinality-aware planning: a small estimator function
+`estimate_cardinality(pattern, engine) -> usize` walks each pattern, hits
+the existing index `count()`/`degree()` methods, and emits a numeric score.
+Sort patterns ascending before executing. Source-order remains the fallback
+when estimates tie.
+
+### Workspace shape after this session
+
+```
+crates/
+├── ndb-engine             # +wire_query module, +query module
+│                          # 211 tests (incl. new 27 across wire_query + query)
+├── ndb-server             # +/query route handler, +query_error_to_http
+│                          # 21 tests (incl. new query route test)
+├── ndb-cli                # +query subcommand
+├── ndb-client-rust        # +Client::query()
+├── ndb-mcp-server         # unchanged
+├── ndb-slicer             # unchanged
+├── ndb-renderer           # unchanged
+├── ndb-arrow              # unchanged
+├── ndb-index-vector-hnsw  # unchanged
+└── ndb-query              # NEW — parser + resolver
+                           # 76 tests + 1 doctest
+```
+
+### §17.1 status — query language complete (with documented gaps)
+
+| Deliverable | Status |
+|---|---|
+| Query language §12 working spec | ✅ shipped |
+| Wire AST (`QueryRequest` / `QueryResponse`) | ✅ shipped |
+| Parser (text → name AST) | ✅ shipped |
+| Resolver (name AST → id AST) | ✅ shipped |
+| Planner (id AST → execution order) | ✅ shipped (source-order; cardinality-aware deferred) |
+| Executor (id AST → result rows) | ✅ shipped (recursion + timestamp deferred with explicit errors) |
+| `POST /query` HTTP route | ✅ shipped |
+| Rust client `.query()` | ✅ shipped |
+| Python client `.query()` | ✅ shipped |
+| `ndb query` CLI subcommand | ✅ shipped |
+
+Remaining §17.1 items still pending:
+- Per-type retention policies (Audited / Versioned / LatestOnly) — task #8
+- Serializable Snapshot Isolation — task #9
+- `as of T` timestamp form via wire — task #10 (tx_id form done as part of query language)
+- Streaming query cursors — task #11
+- Change subscription — task #12
+- Mmap'd SSTable reads — task #13
+- Metadata-hyperedge-driven validation — task #14
+
+### Evolution score this session
+
+- 11 new commits
+- 1 new crate (`ndb-query`)
+- 2 new engine modules (`wire_query`, `query`)
+- 1 new HTTP route (`POST /query`)
+- 3 new client methods (Rust, Python, CLI)
+- 1 design spec (`2026-05-27-query-language.md`) + 1 amendment
+- +92 tests (262 → 354 Rust)
+- 0 cross-project rules promoted (everything is project-specific)
+
+### Bugs caught + fixed inline this session
+
+(See the earlier session-close note for the first four. New ones below.)
+
+5. **`PropertyFilter.value: JsonValue`** couldn't express
+   `customer(name: ?n)` — variable binding to a property. Amended the wire
+   AST to `term: Term` (var or literal) before any wire consumer existed.
+6. **Pre-existing clippy 1.95 regression** on `traverse_route_walks_2_hops`
+   — `items_after_statements` lint. Fixed by hoisting consts to the top of
+   the function in a separate commit so the AST commit stays focused.
+7. **Awk RSTART/RLENGTH ordering bug in my own test-count script** — the
+   second `match()` overwrote RSTART before the first `substr()` ran,
+   reporting `passed=341 failed=1` when actually 342/0. Fixed by switching
+   to awk's array-capture form `match($0, /(...)/, arr)`.
+8. **`engine.manifest().last_tx_id` is a field, not a method** —
+   I initially wrote `last_tx_id()`. Spotted at compile time and fixed.
+
+---
+
 ## Session 2026-05-27 (fourth turn) — query language scaffolding: spec → wire AST → parser → resolver
 
 Started from v1.2.0 (262 Rust + 12 Python = 274 tests) toward the §17.1
