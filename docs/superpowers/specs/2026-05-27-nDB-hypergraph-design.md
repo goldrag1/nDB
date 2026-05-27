@@ -267,11 +267,11 @@ The word "schema" is retained as familiar shorthand, but it does NOT carry the t
 
 This is the Datomic pattern, generalized: a schema in Datomic is just a set of datoms describing attributes. In nDB, a schema is just a set of hyperedges describing types, constraints, indexes, and rules.
 
-Apps choose enforcement strictness per namespace.
+Apps choose enforcement strictness per type (declared in the `type_def` metadata hyperedge itself). nDB has no namespace primitive — configuration attaches at the granularity of types, transactions, or individual entities, not coarse namespace containers.
 
 ### 6.2 The four layers
 
-The "layers" describe **what kinds of metadata hyperedges** exist, ordered by how much the engine does with them. Apps opt into each layer per namespace.
+The "layers" describe **what kinds of metadata hyperedges** exist, ordered by how much the engine does with them. Apps opt into each layer per type.
 
 ```
 Layer 4: Ontology + reasoning      <- reasoning apps opt in
@@ -285,13 +285,15 @@ Layer 1: Raw hyperedges            <- storage core, no metadata required
 - **Layer 3** — Constraint hyperedges declare rules per type (cardinality, required roles, value domains). Validated at write-time or read-time per app config. Used by ERP.
 - **Layer 4** — Ontology hyperedges declare class hierarchies, equivalence, inference rules. Used by reasoning systems.
 
-### 6.3 Enforcement modes (per namespace)
+### 6.3 Enforcement modes (per type)
+
+Declared in the `type_def`'s `enforcement` property:
 
 - **Strict write** — invalid writes rejected (ERP default)
 - **Soft read** — invalid reads flagged but returned (AI extraction default)
 - **Inference on** — derived facts computed from Layer 4 rules (reasoning systems)
 
-Different namespaces in the same database can run at different strictness levels.
+Different types in the same database can run at different strictness levels. A single application can have its financial entities (`Account`, `JournalEntry`) on `strict_write` while AI-extracted entities (`ExtractedFact`) run on `soft_read` — all in one engine instance.
 
 ### 6.4 What metadata hyperedges look like (concrete)
 
@@ -413,7 +415,7 @@ write constraint(target_type: "clinical_trial",
 
 *Traditional:* Two bad choices — separate database per tenant (heavy, expensive, hard to update) OR shared schema with optional NULL columns (every tenant pays storage cost for every other tenant's customization; access control becomes painful).
 
-*nDB:* Each tenant declares its own type definitions in its own namespace. Storage shared; metadata per-namespace. Tenant A's `Customer` has `tax_id_secondary`; Tenant B's doesn't. Same engine, zero cross-tenant pollution.
+*nDB:* Each tenant is an entity. Other entities link to a tenant via `belongs_to`. Tenant-specific type definitions are disambiguated by the tenant link: `type_def(name: "Customer", belongs_to: tenant_acme, ...)` is a different hyperedge from `type_def(name: "Customer", belongs_to: tenant_xyz, ...)`. Queries scope by tenant via the same `belongs_to` filter. Apps needing bulk-tenant admin operations (e.g. "delete everything tenant X owns") register a custom plugin index that maintains the tenant→entities mapping efficiently. Same engine, zero cross-tenant pollution, no namespace primitive needed.
 
 **4. Domain-specific metadata extensions**
 
@@ -657,14 +659,14 @@ Typical configurations:
 
 MVCC is the natural fit with the append-only storage core (Section 9). Because append-only already keeps every version, MVCC requires no separate version-tracking machinery — only visibility logic at read time and snapshot-aware compaction.
 
-### 10.2 Isolation levels (per namespace)
+### 10.2 Isolation levels (per transaction)
 
-Two isolation levels supported. Apps configure per namespace at schema setup.
+Two isolation levels supported. Caller specifies isolation level when starting a transaction. Optional per-type default can be declared in the `type_def` for convenience.
 
 - **Snapshot Isolation (SI)** — default for AI / analytics / read-heavy workloads. Each transaction sees its consistent snapshot. Highest throughput. Rare write-skew anomalies possible (two transactions each see consistent snapshots but their combined writes produce an inconsistent state).
-- **Serializable Snapshot Isolation (SSI)** — default for ERP / financial namespaces. SI plus conflict detection that aborts transactions which would produce write-skew. Slightly higher overhead, no anomalies. Pattern proven in PostgreSQL 9.1+ and CockroachDB.
+- **Serializable Snapshot Isolation (SSI)** — default for ERP / financial workloads. SI plus conflict detection that aborts transactions which would produce write-skew. Slightly higher overhead, no anomalies. Pattern proven in PostgreSQL 9.1+ and CockroachDB.
 
-Different namespaces in the same database can run at different isolation levels.
+Different transactions in the same database can run at different isolation levels. An app processing both financial JEs (SSI) and AI-extracted facts (SI) can mix them freely.
 
 ### 10.3 What MVCC enables
 
@@ -678,15 +680,15 @@ Different namespaces in the same database can run at different isolation levels.
 - **Transaction IDs / snapshot IDs** — every assertion gets a transaction ID; every read transaction gets a snapshot reference.
 - **Visibility logic** — when reading, determine which version of each entity is visible to the current snapshot.
 - **Snapshot-aware compaction** — old versions cannot be removed while any active transaction needs them. Garbage collection waits for the oldest live snapshot to advance.
-- **Conflict detection (SSI namespaces)** — track read sets and write sets per transaction; abort transactions that would create cycles in the precedence graph.
+- **Conflict detection (SSI transactions)** — track read sets and write sets per transaction; abort transactions that would create cycles in the precedence graph.
 
 ### 10.5 Trade-offs accepted
 
-- Write skew possible under plain SI (mitigated by SSI for namespaces that need it)
+- Write skew possible under plain SI (mitigated by SSI for transactions that need it)
 - Long-running read transactions delay compaction (mitigated by snapshot timeouts + retention policies)
 - Increased transient storage during heavy write activity (versions accumulate before compaction catches up)
 - Snapshot ID overhead per assertion (~8 bytes, marginal)
-- SSI conflict detection adds CPU cost for high-contention namespaces
+- SSI conflict detection adds CPU cost for high-contention workloads
 
 ---
 
@@ -970,7 +972,7 @@ Single-node for the first 2 years of work. Distribution is a separate architectu
 
 **Decided: index framework with pluggable implementations.** The engine exposes a stable `Index` trait. All indexes — including built-ins — implement this trait. Some ship in core; others load as in-tree plugins or out-of-tree extensions.
 
-Indexes are derived structures, rebuildable from primary storage. Multiple coexist over the same data. The mix of registered indexes per namespace determines query performance characteristics.
+Indexes are derived structures, rebuildable from primary storage. Multiple coexist over the same data. Indexes are registered per type (most common) or globally; the mix of registered indexes determines query performance characteristics.
 
 **Index trait shape (sketch — final shape in a dedicated index spec):**
 
@@ -1007,8 +1009,8 @@ trait Index {
 | Schema-declarative B-tree on property | Property filtering | built-in, schema-driven | — | — |
 | Columnar per role | Slicer aggregation | — | in-tree plugin | — |
 | Slicer materialized view | Hot slicer patterns | — | in-tree plugin (slicer-driven) | — |
-| Full-text (Tantivy wrapper) | String search | — | opt-in per namespace | — |
-| Vector (HNSW or IVF) | Embedding similarity | — | opt-in per namespace (decision in v2 spec) | — |
+| Full-text (Tantivy wrapper) | String search | — | opt-in per type | — |
+| Vector (HNSW or IVF) | Embedding similarity | — | opt-in per type (decision in v2 spec) | — |
 | Custom community plugins | Domain-specific | — | — | open plugin ecosystem |
 
 **Why this architecture wins over a fixed index set:**
@@ -1120,7 +1122,7 @@ Goal: usable single-node production engine for one workload (AI reasoning OR ERP
 - Crash recovery validated
 
 **Transactions:**
-- MVCC with both Snapshot Isolation and Serializable Snapshot Isolation per namespace
+- MVCC with both Snapshot Isolation and Serializable Snapshot Isolation, selectable per transaction (with optional per-type default)
 - Time-travel queries (`as of T`)
 
 **Identifiers:**
@@ -1141,7 +1143,7 @@ Goal: usable single-node production engine for one workload (AI reasoning OR ERP
 
 **Schema:**
 - Layer 1 (schemaless, always)
-- Layer 2 (type assertions, opt-in per namespace)
+- Layer 2 (type assertions, opt-in per type)
 - Strict-write and soft-read enforcement modes
 
 **Slicer:**
@@ -1162,7 +1164,7 @@ Goal: viable for AI / GraphRAG workloads and slicer-heavy analytics.
 **Indexes added (in-tree plugins):**
 - Columnar per-role
 - Slicer materialized views (declarative, incremental update)
-- Full-text index (Tantivy wrapper, opt-in per namespace)
+- Full-text index (Tantivy wrapper, opt-in per type)
 - Vector index (HNSW or IVF — decision in dedicated v2 spec)
 
 **Schema:**
