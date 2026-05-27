@@ -604,6 +604,38 @@ pub struct PropertyRangeResponse {
     pub entity_ids: Vec<String>,
 }
 
+/// One hop in a [`TraverseRequest`]. Specifies which hyperedge type to
+/// walk across at this step.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraverseHop {
+    /// Only walk hyperedges of this type at this hop. `None` = any type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hyperedge_type_id: Option<u32>,
+}
+
+/// `POST /traverse` request body. Server-side breadth-first traversal
+/// starting at one entity, walking through the configured sequence of
+/// hyperedge types, returning every entity reachable at the end.
+///
+/// At each hop, for every entity in the current frontier, the server
+/// looks up every hyperedge incident on that entity (via the adjacency
+/// index), filters by the hop's hyperedge type, and adds the other
+/// role-bound entities to the next frontier. Cycles are deduplicated.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraverseRequest {
+    /// UUID of the entity to start the walk from.
+    pub start: String,
+    /// Ordered sequence of hops. Length determines walk depth.
+    pub hops: Vec<TraverseHop>,
+}
+
+/// `POST /traverse` response body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraverseResponse {
+    /// Entity uuids reachable after walking every hop.
+    pub entity_ids: Vec<String>,
+}
+
 #[cfg(test)]
 #[allow(clippy::needless_pass_by_value)] // test helpers
 mod tests {

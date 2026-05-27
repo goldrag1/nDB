@@ -224,6 +224,27 @@ class Client:
         parsed = _json.loads(resp.body)
         return list(parsed.get("entity_ids", []))
 
+    def traverse(
+        self,
+        start_uuid: str,
+        hops: list[dict],
+    ) -> list[str]:
+        """``POST /traverse`` — server-side multi-hop BFS over hyperedges.
+
+        Each element of ``hops`` is a dict like
+        ``{"hyperedge_type_id": <int>}`` (use ``None`` or omit the key to
+        accept any type at that hop). Returns the list of entity uuids
+        reachable after walking every hop. Single round-trip regardless
+        of fanout.
+        """
+        resp = self._request(
+            "POST",
+            "/traverse",
+            body={"start": start_uuid, "hops": hops},
+        )
+        parsed = _json.loads(resp.body)
+        return list(parsed.get("entity_ids", []))
+
     def property_range(
         self,
         type_id: int,

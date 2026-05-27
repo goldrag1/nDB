@@ -47,8 +47,8 @@ use std::time::Duration;
 use ndb_engine::{
     CommitRequest, CommitResponse, ErrorResponse, JsonRecord, JsonValue, LookupRequest,
     LookupResponse, PropertyLookupRequest, PropertyLookupResponse, PropertyRangeRequest,
-    PropertyRangeResponse, ReadResponse, VectorHit, VectorMetric, VectorSearchRequest,
-    VectorSearchResponse,
+    PropertyRangeResponse, ReadResponse, TraverseHop, TraverseRequest, TraverseResponse,
+    VectorHit, VectorMetric, VectorSearchRequest, VectorSearchResponse,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -275,6 +275,27 @@ impl Client {
         let body = serde_json::to_vec(&req).map_err(|e| ClientError::Parse(e.to_string()))?;
         let (status, resp) = self.post("/property_lookup", &body)?;
         let parsed: PropertyLookupResponse = parse_2xx(status, &resp)?;
+        Ok(parsed.entity_ids)
+    }
+
+    /// `POST /traverse` — server-side multi-hop BFS over hyperedges.
+    ///
+    /// Walks from `start_uuid` through the configured sequence of
+    /// `hyperedge_type_id` filters and returns every entity reachable at
+    /// the final hop. Single round-trip regardless of fanout — the
+    /// server runs the traversal in-process against the adjacency index.
+    pub fn traverse(
+        &self,
+        start_uuid: &str,
+        hops: Vec<TraverseHop>,
+    ) -> Result<Vec<String>, ClientError> {
+        let req = TraverseRequest {
+            start: start_uuid.to_owned(),
+            hops,
+        };
+        let body = serde_json::to_vec(&req).map_err(|e| ClientError::Parse(e.to_string()))?;
+        let (status, resp) = self.post("/traverse", &body)?;
+        let parsed: TraverseResponse = parse_2xx(status, &resp)?;
         Ok(parsed.entity_ids)
     }
 

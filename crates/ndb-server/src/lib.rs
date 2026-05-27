@@ -46,10 +46,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ndb_engine::{
     CommitRequest, CommitResponse, Engine, EngineError, ErrorResponse, JsonRecord, JsonValue,
     LookupRequest, LookupResponse, PropertyLookupRequest, PropertyLookupResponse,
-    PropertyRangeRequest, PropertyRangeResponse, ReadResponse, Record, Resolved, TxId, VectorHit,
-    VectorMetric, VectorSearchRequest, VectorSearchResponse, WireError, WriteTxn,
+    PropertyRangeRequest, PropertyRangeResponse, ReadResponse, Record, Resolved, TraverseRequest,
+    TraverseResponse, TxId, VectorHit, VectorMetric, VectorSearchRequest, VectorSearchResponse,
+    WireError, WriteTxn,
 };
-use ndb_engine::id::{PropertyId, TypeId};
+use ndb_engine::id::{EntityId, PropertyId, TypeId};
 use ndb_engine::index::Distance;
 use ndb_engine::value::Value;
 use serde::{Deserialize, Serialize};
@@ -551,6 +552,7 @@ impl Server {
             ("POST", "/vector_search") => self.handle_vector_search(body, out, outcome),
             ("POST", "/property_lookup") => self.handle_property_lookup(body, out, outcome),
             ("POST", "/property_range") => self.handle_property_range(body, out, outcome),
+            ("POST", "/traverse") => self.handle_traverse(body, out, outcome),
             _ => {
                 outcome.status = 404;
                 let detail = format!("no route for {} {}", req.method, req.path);
@@ -819,6 +821,75 @@ impl Server {
         );
         let resp = PropertyRangeResponse {
             entity_ids: hits.into_iter().map(|eid| eid.into_uuid().to_string()).collect(),
+        };
+        outcome.status = 200;
+        write_json(out, 200, &resp)
+    }
+
+    /// `POST /traverse` — server-side BFS across N hops of hyperedges,
+    /// returning every entity reachable at the final hop.
+    ///
+    /// Implementation: per-hop frontier expansion using the adjacency
+    /// index (entity → incident hyperedge IDs) and the primary store
+    /// (hyperedge ID → role bindings). Cycles are deduplicated via a
+    /// visited set.
+    fn handle_traverse(
+        &self,
+        body: &[u8],
+        out: &mut dyn Write,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
+        let req: TraverseRequest = match serde_json::from_slice(body) {
+            Ok(r) => r,
+            Err(e) => return bad_json(out, outcome, "traverse body", &e.to_string()),
+        };
+        let Ok(start_uuid) = uuid::Uuid::parse_str(&req.start) else {
+            return bad_request(out, outcome, "bad_uuid", &req.start);
+        };
+        let start = EntityId::from_uuid(start_uuid);
+        let mut engine = self.engine.lock().expect("engine mutex poisoned");
+        let snapshot = TxId::new(engine.manifest().last_tx_id);
+
+        let mut frontier: std::collections::HashSet<EntityId> =
+            std::collections::HashSet::from([start]);
+        for hop in &req.hops {
+            let mut next: std::collections::HashSet<EntityId> =
+                std::collections::HashSet::new();
+            for &current in &frontier {
+                // Pull every hyperedge incident on `current`. The
+                // adjacency index returns IDs; we read each to get role
+                // bindings.
+                for he_id in engine.hyperedges_for_entity(current) {
+                    let resolved = engine.snapshot_read(&he_id.into_uuid(), snapshot)?;
+                    let Resolved::Live(live) = resolved else {
+                        continue;
+                    };
+                    let Record::HyperEdge(he) = live else {
+                        continue;
+                    };
+                    if let Some(t) = hop.hyperedge_type_id
+                        && he.type_id.get() != t
+                    {
+                        continue;
+                    }
+                    for (_role, eid) in &he.roles {
+                        if *eid == current {
+                            continue;
+                        }
+                        next.insert(*eid);
+                    }
+                }
+            }
+            frontier = next;
+            if frontier.is_empty() {
+                break;
+            }
+        }
+        let resp = TraverseResponse {
+            entity_ids: frontier
+                .into_iter()
+                .map(|e| e.into_uuid().to_string())
+                .collect(),
         };
         outcome.status = 200;
         write_json(out, 200, &resp)
@@ -1096,10 +1167,11 @@ fn required_capability(method: &str, path: &str) -> Option<Capability> {
         ("GET", "/iter") => Some(Capability::Iter),
         ("POST", "/flush") => Some(Capability::Flush),
         ("POST", "/compact") => Some(Capability::Compact),
-        // Indexed query routes — all gated by Read.
-        ("POST", "/lookup" | "/vector_search" | "/property_lookup" | "/property_range") => {
-            Some(Capability::Read)
-        }
+        // Indexed query + traversal routes — all gated by Read.
+        (
+            "POST",
+            "/lookup" | "/vector_search" | "/property_lookup" | "/property_range" | "/traverse",
+        ) => Some(Capability::Read),
         _ => None,
     }
 }

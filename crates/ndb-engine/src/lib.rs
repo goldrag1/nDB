@@ -77,6 +77,7 @@ pub use wal::{WAL_EXTENSION, WalReadError, WalReader, WalRecovery, WriteAheadLog
 pub use wire::{
     CommitRequest, CommitResponse, ErrorResponse, JsonProperty, JsonRecord, JsonRole, JsonValue,
     LookupRequest, LookupResponse, PropertyLookupRequest, PropertyLookupResponse,
-    PropertyRangeRequest, PropertyRangeResponse, ReadResponse, TxIdOrActive, VectorHit,
-    VectorMetric, VectorSearchRequest, VectorSearchResponse, WireError,
+    PropertyRangeRequest, PropertyRangeResponse, ReadResponse, TraverseHop, TraverseRequest,
+    TraverseResponse, TxIdOrActive, VectorHit, VectorMetric, VectorSearchRequest,
+    VectorSearchResponse, WireError,
 };

@@ -420,6 +420,89 @@ fn property_lookup_and_range_routes() {
 }
 
 #[test]
+fn traverse_route_walks_2_hops() {
+    let dir = temp_dir("traverse");
+    let server = Arc::new(Server::open(&dir).unwrap());
+
+    // Build a tiny graph:
+    //   alice — (knows) — bob — (works_at) — acme
+    // and walk: start=alice, hop=knows, hop=works_at, expect={acme}.
+    let alice = EntityId::now_v7();
+    let bob = EntityId::now_v7();
+    let acme = EntityId::now_v7();
+    const TYPE_PERSON: u32 = 1;
+    const TYPE_KNOWS: u32 = 100;
+    const TYPE_WORKS_AT: u32 = 101;
+    {
+        let e = server.engine();
+        let mut e = e.lock().unwrap();
+        for eid in [alice, bob, acme] {
+            let mut txn = e.begin_write();
+            txn.put_entity(ndb_engine::EntityRecord {
+                entity_id: eid,
+                type_id: TypeId::new(TYPE_PERSON),
+                tx_id_assert: ndb_engine::TxId::new(0),
+                tx_id_supersede: ndb_engine::TxId::ACTIVE,
+                properties: vec![],
+            });
+            txn.commit().unwrap();
+        }
+        // alice — knows — bob
+        let mut txn = e.begin_write();
+        txn.put_hyperedge(ndb_engine::HyperEdgeRecord {
+            hyperedge_id: ndb_engine::HyperedgeId::now_v7(),
+            type_id: TypeId::new(TYPE_KNOWS),
+            tx_id_assert: ndb_engine::TxId::new(0),
+            tx_id_supersede: ndb_engine::TxId::ACTIVE,
+            roles: vec![
+                (ndb_engine::RoleId::new(1), alice),
+                (ndb_engine::RoleId::new(2), bob),
+            ],
+            properties: vec![],
+        });
+        txn.commit().unwrap();
+        // bob — works_at — acme
+        let mut txn = e.begin_write();
+        txn.put_hyperedge(ndb_engine::HyperEdgeRecord {
+            hyperedge_id: ndb_engine::HyperedgeId::now_v7(),
+            type_id: TypeId::new(TYPE_WORKS_AT),
+            tx_id_assert: ndb_engine::TxId::new(0),
+            tx_id_supersede: ndb_engine::TxId::ACTIVE,
+            roles: vec![
+                (ndb_engine::RoleId::new(3), bob),
+                (ndb_engine::RoleId::new(4), acme),
+            ],
+            properties: vec![],
+        });
+        txn.commit().unwrap();
+    }
+    let addr = spawn_server(Arc::clone(&server), 2);
+
+    let body = format!(
+        r#"{{"start":"{}","hops":[{{"hyperedge_type_id":{}}},{{"hyperedge_type_id":{}}}]}}"#,
+        alice.into_uuid(),
+        TYPE_KNOWS,
+        TYPE_WORKS_AT,
+    );
+    let resp = post(addr, "/traverse", &body);
+    assert_eq!(resp.status, 200);
+    let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    let ids = v["entity_ids"].as_array().unwrap();
+    assert_eq!(ids.len(), 1, "expected exactly acme; got {ids:?}");
+    assert_eq!(ids[0], acme.into_uuid().to_string());
+
+    // Bad-uuid start → 400.
+    let resp = post(
+        addr,
+        "/traverse",
+        r#"{"start":"not-a-uuid","hops":[]}"#,
+    );
+    assert_eq!(resp.status, 400);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn malformed_uuid_in_read_returns_400() {
     let dir = temp_dir("bad_uuid");
     let server = Arc::new(Server::open(&dir).unwrap());
