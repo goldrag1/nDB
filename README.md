@@ -25,12 +25,64 @@ for the byte-level details.
 | `ndb-index-vector-hnsw`     | HNSW ANN vector index (opt-in plugin) — drop-in replacement for the brute-force baseline once dataset size warrants it. |
 | `clients/python/ndb_client` | Pure-Python (`urllib`-only) HTTP client. `pip install ndb-client`.                  |
 
-## Status (v2.0)
+## For structural biologists — start here
+
+If you arrived because you care about proteins more than databases,
+the v2.2 explorer ships a working 3D demo plus a science-friendly
+landing page at **[`docs/alphafold_nDB/README.md`](docs/alphafold_nDB/README.md)**.
+30-second tour:
+
+```sh
+cargo run -p ndb-renderer --example v22_explorer
+# then open http://127.0.0.1:9876/
+```
+
+Mean pLDDT from AlphaFold-DB drives node colour + size. Click a
+protein → "Load AlphaFold 3D structure" → cartoon coloured by per-
+residue confidence appears in the right pane. Toggle "Show residues"
+to surface 78 residue entities + 8 structural-motif hyperedges
+(catalytic triad, zinc finger, disulfides, α-helix, β-sheet pair).
+Clicking a motif hyperedge → its members glow in 3D. Floating "What
+does nDB store for this protein?" pane explains the data shape in
+plain language with live wire-format JSON. Full provenance and
+reproducibility steps at
+[`docs/alphafold_nDB/REPRODUCIBILITY.md`](docs/alphafold_nDB/REPRODUCIBILITY.md).
+
+## Status (v2.2)
 
 Every line item in the v1 spec §17.1 PLUS every deliverable from the v2.0
-working spec (`docs/superpowers/specs/2026-05-27-v2-working-spec.md`) is
-shipped. **432 Rust tests + 12 Python tests, clippy clean with `-D warnings`**
-as of this writing.
++ v2.1 + v2.2 working specs is shipped. **487 Rust tests + 12 Python
+tests, clippy clean with `-D warnings`** as of this writing.
+
+What's new in v2.2 (Nobel-themed AlphaFold integration):
+
+- **AlphaFold pLDDT confidence overlay** — real `globalMetricValue`
+  fetched from `alphafold.ebi.ac.uk/api/prediction/<acc>` for 18
+  proteins (2 retired by AF-DB for >2700 aa proteins). Node colour +
+  size driven by the AF-DB palette + thresholds. Stacked confidence
+  distribution bar in the sidebar.
+- **Live AlphaFold-DB fetch** from the sidebar — paste any UniProt
+  accession; the protein lands in the database with real pLDDT
+  bucket, gene, organism, and sequence length.
+- **Residue-level hypergraph** for trypsin, TFIIIA, insulin,
+  myoglobin, GFP — 78 residue entities + 8 N-ary motif hyperedges
+  (catalytic_triad arity 3, zinc_finger arity 4, alpha_helix arity
+  16, beta_sheet_pair arity 20, disulfide_bond arity 2). The case
+  where binary edges have to invent a dummy node and nDB just
+  stores the relationship directly.
+- **NGL Viewer in the right pane** — AlphaFold cartoon coloured by
+  per-residue pLDDT in the canonical AF palette. Bidirectional
+  click sync: click a motif hyperedge → its members glow as
+  ball+stick in the 3D structure; click a residue in the canvas →
+  jump back to its nDB entity in the hypergraph.
+- **nDB model explainer pane** — floats over the 3D view; shows
+  the actual entity + hyperedge records nDB holds for the currently-
+  loaded protein with live wire-format JSON. Designed so a
+  structural biologist who's never seen a hyperedge database can
+  understand the data shape in 30 seconds.
+
+See `docs/alphafold_nDB/README.md` for the science-facing tour and
+`docs/alphafold_nDB/REPRODUCIBILITY.md` for the verification cheatsheet.
 
 What's shipped (v2.0 polish on top of v1):
 
