@@ -6,23 +6,35 @@
 
 ## 1. Identity
 
-**v2.1 is the "finish v2.0" release.** v2.0 closed every v1 limitation
-the working spec listed, but landed two follow-ons of its own
-(`Engine::reencrypt` deferred from §6 of the v2.0 spec, server auth
-dispatch still reading the in-memory cache instead of the engine).
-v2.1 closes both, and uses the remaining sprint room to broaden the
-analytics surface — `ndb-slicer` is the one user-facing API where
-"correct but minimal" still describes the v2.0 state.
+**v2.1 is the "finish v2.0 + demo the N-dim story" release.** Three
+goals:
+
+1. Close v2.0's two follow-ons: `Engine::reencrypt` (deferred from
+   §6 of the v2.0 spec) and server auth dispatch through
+   `Engine::has_capability` (capability revocation effective without
+   restart).
+2. Broaden the `ndb-slicer` analytics surface — percentiles, `HAVING`,
+   time-bucket binning, multi-column sort. `ndb-slicer` is the one
+   user-facing API where "correct but minimal" still describes the
+   v2.0 state.
+3. Build the **N-dimensional renderer story**. v2.0 ships tabular
+   output (text / TSV / CSV) which is fundamentally 2D and doesn't
+   showcase why a hyperedge-native database earns the name "nDB".
+   v2.1 adds three self-contained Rust → HTML+SVG renderers — pivot
+   table, parallel coordinates, hypergraph diagram — so a single
+   `.html` file demonstrates 4-20 dimensional data without a
+   frontend project.
 
 This is **NOT** a platform release. No new transports, no distributed
-mode, no §12 grammar additions. The on-disk format is unchanged;
-v2.0 databases open in v2.1 byte-for-byte and the reverse holds
-modulo the new analytics being unused.
+mode, no §12 grammar additions, no separate frontend codebase. The
+on-disk format is unchanged; v2.0 databases open in v2.1
+byte-for-byte and the reverse holds modulo the new analytics being
+unused.
 
 Critical-path constraint: v2.1 must ship **before** v3 work begins, so
 the v3 working spec can focus on platform-shape decisions (distributed
-mode, write-via-query, gRPC, JS/Go clients) without inheriting v2-era
-caveats.
+mode, write-via-query, gRPC, JS/Go clients, interactive React/D3
+explorer) without inheriting v2-era caveats.
 
 ## 2. Scope — locked deliverables
 
@@ -303,6 +315,146 @@ Tests:
 
 Effort: 0.5 day.
 
+### Sprint 4 — N-dimensional renderers (Rust, self-contained HTML+SVG) (2-2.5 weeks)
+
+Three renderers that emit **one self-contained `.html` file** —
+inline CSS, inline SVG, inline JS for tooltips, zero external assets.
+Open in any browser, email to a teammate, embed in a doc, no build
+step. This sprint is the "demo nDB's N-dimensionality" story; the
+hypergraph diagram in particular is the deliverable that visually
+distinguishes nDB from a tabular database.
+
+All three live in a new module `ndb-renderer::viz`. Two of them
+(pivot, parallel coords) consume the existing `Table` type produced
+by `ndb-slicer`. The hypergraph diagram consumes `&[Record]` directly
+because the data model — entities + roles + properties + hyperedges —
+doesn't flatten to a `Table` without losing the structure that
+matters.
+
+#### 2.10 Pivot table renderer
+
+Goal: tabular display of 4-5 dimensional data via nested row + column
+headers. Same shape as Excel / Google Sheets pivot tables.
+
+Design:
+
+  - `pub fn render_pivot(t: &Table, rows: &[usize], cols: &[usize], value: usize, agg: Aggregate) -> String`.
+  - `rows` + `cols` are column indexes from `t.headers` to use as row
+    keys + column keys respectively. `value` is the column to
+    aggregate. `agg` is one of `Aggregate::Sum / Avg / Min / Max / Count`.
+  - Output: HTML `<table>` with nested `<th>` headers — multi-row
+    header band for `cols`, multi-column row band for `rows`, body
+    cells carrying the aggregated value.
+  - Empty cells (no rows matching the row × col key combo) render as
+    `&nbsp;`.
+  - Cell formatting: shared `format_cell` with the flat HTML renderer.
+  - No JS — pure HTML.
+
+Tests:
+
+  - 2 row dims × 2 col dims × 1 value (Sum) renders a correct
+    cross-tab with totals per cell.
+  - Single-dim row + single-dim col matches a simple HTML table with
+    rearranged headers.
+  - Missing combinations emit empty cells, not 0 (Sum of empty group
+    is null, not 0).
+  - 3 row dims × 1 col dim renders nested row headers in the right
+    order.
+
+Effort: 2 days. Most cost is the nested-header HTML emit + the
+multi-key bucket assembly.
+
+#### 2.11 Parallel coordinates renderer
+
+Goal: visualise 5-20 dimensional numeric/ordinal data as polylines
+crossing N vertical axes. Standard high-D viz; works well for
+classification + outlier detection.
+
+Design:
+
+  - `pub fn render_parallel_coords(t: &Table, opts: ParallelCoordsOpts) -> String`.
+  - `ParallelCoordsOpts { width: u32, height: u32, axis_cols: Vec<usize>, color_by: Option<usize> }`.
+    Width/height default 1200 × 600.
+  - One vertical axis per `axis_cols` index. Numeric columns scale
+    linearly between (min, max) observed on that column. Categorical
+    columns use ordinal positions (alphabetical sort).
+  - Each row becomes a polyline crossing every axis at the row's
+    normalised value on that axis. Stroke colour is constant unless
+    `color_by` is set; with `color_by` set, the colour bucket is
+    derived from the column value (categorical → palette; numeric →
+    viridis-ish gradient computed inline).
+  - Output: standalone `<html>` document — inline CSS, inline SVG,
+    inline JS that highlights the polyline on hover and shows a
+    tooltip with the row's values.
+  - Null values: skip that row's segment on the affected axis (gap).
+
+Tests:
+
+  - 5-axis table renders 5 axis lines + N polylines (one per row).
+  - Numeric-only axis scales correctly (min row touches bottom of
+    axis, max row touches top).
+  - Categorical axis lays out evenly spaced ticks.
+  - `color_by` produces visually distinct stroke colours (assert
+    distinct hex codes in the output).
+  - Output file opens in headless Chromium without console errors —
+    smoke test via `assert!(html.contains("<svg"))` is enough; we don't
+    pull in a browser dep for unit tests.
+
+Effort: 3 days. Real cost: axis scaling, colour palette, tooltip JS.
+
+#### 2.12 Hypergraph diagram renderer
+
+Goal: show the hyperedge data model directly. Entities are labelled
+nodes; each hyperedge is a polygon (or starburst) connecting its
+N role-fillers. This is the renderer that visually proves nDB is
+not a tabular database.
+
+Design:
+
+  - `pub fn render_hypergraph(records: &[Record], opts: HypergraphOpts) -> String`.
+  - `HypergraphOpts { width: u32, height: u32, type_palette: Option<HashMap<TypeId, &'static str>>, hyperedge_style: HyperedgeStyle, max_nodes: Option<usize> }`.
+  - `HyperedgeStyle::Polygon` — draws each hyperedge as a closed
+    polygon through its role-filler entity centroids. Good for ≤6
+    roles per edge.
+  - `HyperedgeStyle::Starburst` — draws a central "hyperedge dot"
+    plus radial lines to each role-filler. Good for higher-arity
+    edges or visual clutter.
+  - Layout: force-directed (Fruchterman-Reingold) computed in Rust
+    over ~200 iterations. Inputs are the entities + an adjacency
+    derived from co-membership in hyperedges. Output is `(x, y)` per
+    entity in `[0, width] × [0, height]`. Deterministic given a seeded
+    RNG so the same input always produces the same diagram.
+  - Output: standalone `<html>` document — inline CSS, inline SVG,
+    inline JS for hover-to-show-properties on both entities and
+    hyperedge shapes.
+  - Each entity node carries `data-entity-id`, `data-type-id`, and
+    `data-properties` (JSON-encoded) attributes — the inline JS pulls
+    these into a tooltip on hover.
+  - Each hyperedge shape carries `data-hyperedge-id`, `data-roles`
+    (JSON-encoded `[{role_id, entity_id}]`), and `data-properties`.
+  - `max_nodes` cap: if `records` contains more entities than the cap,
+    sample the top-degree subset (most-connected entities first) and
+    drop the rest with a warning comment in the HTML. Default 200.
+    Without this cap, large databases produce hairball diagrams
+    nobody can read.
+
+Tests:
+
+  - Single hyperedge connecting 3 entities renders as a triangle.
+  - 4-role hyperedge with `Polygon` style renders as a quadrilateral.
+  - Same 4-role edge with `Starburst` style renders a central node +
+    4 radial spokes.
+  - Force layout is deterministic — same input + seed produces
+    byte-identical SVG.
+  - `max_nodes = 5` on a 50-entity input keeps the 5 highest-degree
+    nodes; output contains exactly 5 entity nodes.
+  - Tooltip metadata: `data-properties` JSON on each node parses back
+    to the original property set.
+
+Effort: 5-7 days. Force-directed layout + the polygon math + the
+hover JS are each non-trivial. Largest single deliverable in v2.1;
+also the highest demo value.
+
 ## 3. Out of scope — v3 territory
 
 Same boundary as v2.0 plus a few items that don't fit "v2.1 polish":
@@ -312,10 +464,17 @@ Same boundary as v2.0 plus a few items that don't fit "v2.1 polish":
 - IVF / ScaNN vector indexes (HNSW + brute-force suffice for v2-scale workloads)
 - gRPC alternative transport
 - JS/TS and Go client crates
+- **Interactive React/D3 explorer SPA** — full zoom/brush/filter/drill-down
+  built on JSON-lines + Arrow IPC + the v2.1 viz outputs. Real second
+  codebase, real build pipeline; deserves its own working spec.
 - Block-index sidecar encryption (offsets leak some info; defer pending threat-model justification)
 - Streaming percentile algorithms (t-digest, GK) — only relevant if real workloads OOM on the naive variant; revisit with data
 - SharedEngine fine-grained per-index locks — substantial refactor; v3 platform work
 - Pilot deployment integration (Frappe connector, etc.) — separate project once v2.1 ships
+- Additional N-dim viz beyond the three in §2.10–§2.12 (small-multiples /
+  facet grid, Sankey, radar/spider, heatmap matrix). Each is doable in
+  the same Rust → HTML+SVG shape; revisit if the v2.1 three don't
+  cover the demo space.
 
 ## 4. Sequencing rationale
 
@@ -324,22 +483,31 @@ Same boundary as v2.0 plus a few items that don't fit "v2.1 polish":
 | 1 | reencrypt, auth dispatch | 1-1.5 wk | 1-1.5 wk |
 | 2 | Percentiles, HAVING, time-buckets, multi-sort | 1.5-2 wk | 2.5-3.5 wk |
 | 3 | Markdown, JSON-lines, HTML | 0.5-1 wk | 3-4.5 wk |
+| 4 | Pivot, parallel coords, hypergraph diagram | 2-2.5 wk | 5-7 wk |
 
-**Critical path:** none — every sprint is independent. Sprints 2 and
-3 can interleave (slicer + renderer pair well; ship a feature + its
-renderer in the same commit when natural).
+**Critical path:** none between sprints, but inside Sprint 4 the
+hypergraph diagram (§2.12) is the largest single item; ship pivot
+(§2.10) and parallel coords (§2.11) first so the smaller demos exist
+even if §2.12 slips.
 
-**Earliest beta:** end of Sprint 1 if 2.x / 3.x slip — Sprint 1 closes
-the v2.0 spec gaps which are the only "real" v2.x bugs.
+Sprints 2, 3, and 4 can interleave — the slicer's percentiles +
+multi-key sort pair naturally with parallel coords (which needs sorted
+groupings); HTML renderer (§2.9) is a prerequisite shape for the pivot
+renderer (§2.10) so do §2.9 first.
 
-**Most conservative ship date:** ~5 weeks from work start, allowing for
-debug + benchmark + docs + release notes.
+**Earliest beta:** end of Sprint 1 if §2.x / §3.x / §4.x slip —
+Sprint 1 closes the v2.0 spec gaps which are the only "real" v2.x
+bugs. The slicer + renderer + viz work is genuinely additive.
+
+**Most conservative ship date:** ~7 weeks from work start, allowing
+for debug + benchmark + docs + release notes + producing the demo
+artifact (`docs/v2.1-demo.html` — see §7).
 
 ## 5. Success criteria (gates for v2.1 release)
 
-1. **Every v2.0 test still passes.** Plus 50+ new tests for v2.1
+1. **Every v2.0 test still passes.** Plus 80+ new tests for v2.1
    features (rough budget: 8 reencrypt, 6 auth dispatch, 12 slicer,
-   6 renderer, plus integration).
+   6 flat renderer, 15 viz renderer, plus integration).
 2. **Clippy clean** with `-D warnings`.
 3. **Engine opens any v2.0 database** byte-for-byte, no conversion.
 4. **`Engine::reencrypt` crash-tested** — a kill -9 mid-migration
@@ -348,9 +516,23 @@ debug + benchmark + docs + release notes.
 5. **Server auth dispatch reads engine on every request** —
    verified by a test that revokes a capability mid-session and asserts
    the next request 403s without a restart.
-6. **All four renderers handle the same `Table` correctly** — round-trip
-   test that builds one Table, runs every renderer, parses each output
-   back into a structured form, asserts equality of the structured form.
+6. **Every flat renderer handles the same `Table` correctly** —
+   round-trip test that builds one Table, runs every flat renderer
+   (text / TSV / CSV / Markdown / JSON-lines / HTML), parses each
+   output back into a structured form, asserts equality of the
+   structured form.
+7. **Every viz renderer produces a valid self-contained `.html`** —
+   smoke test asserts each output starts with `<!DOCTYPE html>`,
+   contains an inline `<svg>` (or for the pivot, an HTML `<table>`),
+   has no `<script src=` (no external assets), and parses past 500
+   bytes of body content for non-trivial inputs.
+8. **Hypergraph layout is deterministic** — same `&[Record]` + same
+   seed produces byte-identical SVG. Lets us snapshot-test the
+   demo artifact in CI.
+9. **`docs/v2.1-demo.html`** — committed artifact built from a
+   small seeded biology dataset, demonstrating all three viz
+   renderers in one file. Verifies the renderers work end-to-end
+   on real data and serves as the canonical demo output.
 
 ## 6. Open questions (locked before sprint 1 starts)
 
@@ -384,14 +566,51 @@ debug + benchmark + docs + release notes.
   Decision: `Vec<SortKey>`. Order of keys is explicit + visible; the
   builder pattern obscures key priority.
 
+- **Viz renderers in `ndb-renderer::viz` or a new `ndb-viz` crate?**
+  Decision: a new `viz` module inside `ndb-renderer`. Same crate
+  avoids dependency-graph fan-out; a sub-module is enough namespace.
+  Pivot is conceptually viz too (it's about displaying N-dim data
+  in one file) so it lives there even though its output is plain
+  HTML rather than SVG.
+
+- **Force-directed layout: hand-rolled or pull in a crate?** Decision:
+  hand-rolled Fruchterman-Reingold in ~80 lines. Pulling `petgraph` or
+  `force_graph` adds dep weight for one viz feature. Use an inline LCG
+  (or `oorandom` if already a workspace dep) for the seeded RNG so the
+  layout is deterministic.
+
+- **Parallel coordinates colour palette: viridis or categorical?**
+  Decision: both. Numeric `color_by` uses an 8-stop viridis-ish gradient
+  computed inline from a hardcoded table; categorical `color_by` uses
+  the d3.schemeCategory10 palette inlined. Caller picks via the
+  column's value type.
+
+- **Hypergraph diagram for 1k+ entity graphs.** Force-directed layout
+  is O(N²) per iteration — fine to ~500 entities, painful above.
+  Decision: `max_nodes` cap defaults to 200; callers wanting larger
+  diagrams supply their own pre-filtered `&[Record]`. Sampling strategy
+  is top-degree-first, deterministic.
+
+- **Pivot renderer empty cells: `0`, empty string, or `&nbsp;`?**
+  Decision: `&nbsp;` for visual consistency (the cell still takes
+  space); aggregate semantics distinguish "no rows" (null/empty) from
+  "rows summed to zero" (rendered as the formatted number).
+
 ## 7. v2.1 release readiness
 
-When all 9 deliverables ship + success criteria pass:
+When all 12 deliverables ship + success criteria pass:
 
 - Tag `v2.1.0`
+- Build `docs/v2.1-demo.html` — single self-contained file
+  demonstrating pivot + parallel coords + hypergraph diagram on a
+  small seeded biology dataset. Committed alongside the release so
+  reviewers can open it locally without running the server.
 - Write `2026-XX-XX-v3-working-spec.md` covering distributed mode +
-  write-via-query + gRPC + JS/Go clients
-- Update README to reflect v2.1 capabilities
+  write-via-query + gRPC + JS/Go clients + the **interactive React/D3
+  explorer SPA** (the natural successor to v2.1's static viz outputs,
+  consuming the same Arrow IPC + JSON-lines pipes).
+- Update README to reflect v2.1 capabilities; embed a screenshot of
+  the hypergraph diagram alongside the existing prose.
 - Frappe pilot deployment can begin (using v2.1 as the engine; v2.0
-  also viable but v2.1's analytics surface is the better starting
-  point for any product built on top)
+  also viable but v2.1's analytics + viz surface is the better
+  starting point for any product built on top).
