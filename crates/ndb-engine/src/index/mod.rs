@@ -46,6 +46,7 @@ use crate::record::Record;
 pub mod adjacency;
 pub mod lookup_key;
 pub mod type_cluster;
+pub mod vector;
 
 /// What an index does when a record is committed. Implementors mutate
 /// their internal state to reflect the new record (or the deletion, for
@@ -66,3 +67,4 @@ pub trait Index {
 pub use adjacency::AdjacencyIndex;
 pub use lookup_key::LookupKeyIndex;
 pub use type_cluster::HyperEdgeTypeIndex;
+pub use vector::{Distance, VectorIndex};

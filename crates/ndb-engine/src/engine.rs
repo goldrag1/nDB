@@ -39,7 +39,9 @@ use thiserror::Error;
 use crate::db::{Database, DatabaseError, Manifest, ManifestEntry};
 use crate::error::EncodeError;
 use crate::id::{EntityId, HyperedgeId, PropertyId, TX_ACTIVE, TxId, TypeId};
-use crate::index::{AdjacencyIndex, HyperEdgeTypeIndex, Index, LookupKeyIndex};
+use crate::index::{
+    AdjacencyIndex, Distance, HyperEdgeTypeIndex, Index, LookupKeyIndex, VectorIndex,
+};
 use crate::memtable::Memtable;
 use crate::mvcc::{Resolved, resolve_iter, visible_at};
 use crate::record::{EntityRecord, HyperEdgeRecord, Record, TombstoneRecord};
@@ -128,6 +130,8 @@ pub struct Engine {
     adjacency: AdjacencyIndex,
     /// Hyperedge-type clustering — `type_id → [hyperedge ids]`.
     type_cluster: HyperEdgeTypeIndex,
+    /// Brute-force vector index for k-NN search over embedding props.
+    vector: VectorIndex,
     /// Constraint enforcement (required properties, value-tag checks).
     validation: ValidationEngine,
     /// Database directory handle (owns the LOCK + current MANIFEST).
@@ -151,6 +155,7 @@ impl Engine {
             lookup_key: LookupKeyIndex::new(),
             adjacency: AdjacencyIndex::new(),
             type_cluster: HyperEdgeTypeIndex::new(),
+            vector: VectorIndex::new(),
             validation: ValidationEngine::new(),
             db,
         })
@@ -212,6 +217,7 @@ impl Engine {
             lookup_key: LookupKeyIndex::new(),
             adjacency: AdjacencyIndex::new(),
             type_cluster: HyperEdgeTypeIndex::new(),
+            vector: VectorIndex::new(),
             validation: ValidationEngine::new(),
             db,
         };
@@ -235,6 +241,7 @@ impl Engine {
         self.lookup_key.clear();
         self.adjacency.clear();
         self.type_cluster.clear();
+        self.vector.clear();
         // SSTables (sstables[0] is newest layer; iterate in declared order).
         for sst in &mut self.sstables {
             for item in sst.iter() {
@@ -248,6 +255,7 @@ impl Engine {
                 self.lookup_key.apply(&rec, tx);
                 self.adjacency.apply(&rec, tx);
                 self.type_cluster.apply(&rec, tx);
+                self.vector.apply(&rec, tx);
             }
         }
         // Memtable.
@@ -261,6 +269,7 @@ impl Engine {
             self.lookup_key.apply(rec, tx);
             self.adjacency.apply(rec, tx);
             self.type_cluster.apply(rec, tx);
+            self.vector.apply(rec, tx);
         }
         Ok(())
     }
@@ -312,6 +321,29 @@ impl Engine {
     #[must_use]
     pub fn hyperedges_by_type(&self, type_id: TypeId) -> Vec<HyperedgeId> {
         self.type_cluster.by_type_vec(type_id)
+    }
+
+    /// Declare an entity property as carrying vector embeddings. Subsequent
+    /// commits will index it for k-NN search. Already-committed entities
+    /// are NOT retroactively indexed — call `rebuild_indexes` after late
+    /// registration if you need backfill.
+    pub fn register_vector_property(&mut self, property_id: PropertyId) {
+        self.vector.register_property(property_id);
+    }
+
+    /// k-nearest-neighbor search over a vector-indexed property. Returns
+    /// up to `k` entries sorted ascending by distance. Empty if the
+    /// property isn't registered, no vectors are indexed, or the query
+    /// dimension doesn't match.
+    #[must_use]
+    pub fn vector_search(
+        &self,
+        property_id: PropertyId,
+        query: &[f32],
+        k: usize,
+        metric: Distance,
+    ) -> Vec<(EntityId, f32)> {
+        self.vector.search(property_id, query, k, metric)
     }
 
     /// Database directory path.
@@ -744,6 +776,7 @@ impl WriteTxn<'_> {
             self.engine.lookup_key.apply(&r, self.tx_id);
             self.engine.adjacency.apply(&r, self.tx_id);
             self.engine.type_cluster.apply(&r, self.tx_id);
+            self.engine.vector.apply(&r, self.tx_id);
             self.engine.memtable.insert(r)?;
         }
         Ok(self.tx_id)
@@ -1276,6 +1309,51 @@ mod tests {
         hids.sort();
         assert_eq!(alice_hits, hids);
         assert_eq!(bob_hits, hids);
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn vector_search_returns_nearest_after_restart() {
+        let dir = temp_dir("vec_search");
+        let embedding_prop = PropertyId::new(99);
+        let target = EntityId::now_v7();
+        {
+            let mut engine = Engine::create(&dir).unwrap();
+            engine.register_vector_property(embedding_prop);
+            let vectors = vec![
+                (target, vec![1.0_f32, 0.0, 0.0]),
+                (EntityId::now_v7(), vec![0.0, 1.0, 0.0]),
+                (EntityId::now_v7(), vec![0.0, 0.0, 1.0]),
+                (EntityId::now_v7(), vec![0.9, 0.1, 0.0]),
+            ];
+            for (id, vec) in vectors {
+                let mut txn = engine.begin_write();
+                txn.put_entity(EntityRecord {
+                    entity_id: id,
+                    type_id: TypeId::new(1),
+                    tx_id_assert: TxId::new(0),
+                    tx_id_supersede: TxId::ACTIVE,
+                    properties: vec![(embedding_prop, Value::Vector(vec))],
+                });
+                txn.commit().unwrap();
+            }
+            // Pre-restart: confirm search finds target as nearest.
+            let hits =
+                engine.vector_search(embedding_prop, &[1.0, 0.0, 0.0], 1, Distance::L2Squared);
+            assert_eq!(hits.len(), 1);
+            assert_eq!(hits[0].0, target);
+            engine.flush().unwrap();
+            engine.close().unwrap();
+        }
+        // Reopen: vector index rebuilt; need to re-register the property
+        // and call rebuild_indexes to backfill.
+        let mut engine = Engine::open(&dir).unwrap();
+        engine.register_vector_property(embedding_prop);
+        engine.rebuild_indexes().unwrap();
+        let hits = engine.vector_search(embedding_prop, &[1.0, 0.0, 0.0], 2, Distance::L2Squared);
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].0, target);
         engine.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
