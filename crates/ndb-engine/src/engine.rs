@@ -37,11 +37,13 @@ use thiserror::Error;
 
 use crate::db::{Database, DatabaseError, Manifest, ManifestEntry};
 use crate::error::EncodeError;
-use crate::id::{TX_ACTIVE, TxId};
+use crate::id::{EntityId, HyperedgeId, PropertyId, TX_ACTIVE, TxId, TypeId};
+use crate::index::{AdjacencyIndex, HyperEdgeTypeIndex, Index, LookupKeyIndex};
 use crate::memtable::Memtable;
 use crate::mvcc::{Resolved, resolve_iter, visible_at};
 use crate::record::{EntityRecord, HyperEdgeRecord, Record, TombstoneRecord};
 use crate::sstable::{SSTableError, SSTableKey, SSTableReader, SSTableWriter};
+use crate::value::Value;
 use crate::wal::{WalReadError, WalReader, WriteAheadLog, truncate_to};
 
 const WAL_FILENAME_SUFFIX: &str = ".ndblog";
@@ -98,6 +100,12 @@ pub struct Engine {
     /// Active WAL, kept open for append. `None` only during create()
     /// before the first WAL exists.
     wal: Option<WriteAheadLog>,
+    /// Lookup-key reverse index — `(property_id, value) → entity_id`.
+    lookup_key: LookupKeyIndex,
+    /// Adjacency index — `entity → [hyperedges referencing it]`.
+    adjacency: AdjacencyIndex,
+    /// Hyperedge-type clustering — `type_id → [hyperedge ids]`.
+    type_cluster: HyperEdgeTypeIndex,
     /// Database directory handle (owns the LOCK + current MANIFEST).
     db: Database,
 }
@@ -116,6 +124,9 @@ impl Engine {
             memtable: Memtable::new(),
             sstables: Vec::new(),
             wal: Some(wal),
+            lookup_key: LookupKeyIndex::new(),
+            adjacency: AdjacencyIndex::new(),
+            type_cluster: HyperEdgeTypeIndex::new(),
             db,
         })
     }
@@ -169,12 +180,93 @@ impl Engine {
             WriteAheadLog::open_append(&p)?
         };
 
-        Ok(Self {
+        let mut engine = Self {
             memtable,
             sstables,
             wal: Some(wal),
+            lookup_key: LookupKeyIndex::new(),
+            adjacency: AdjacencyIndex::new(),
+            type_cluster: HyperEdgeTypeIndex::new(),
             db,
-        })
+        };
+        // Indexes are in-memory in v1 — rebuild them from the primary
+        // store (SSTables in newest-first order) and the memtable
+        // (already populated from WAL replay).
+        engine.rebuild_indexes()?;
+        Ok(engine)
+    }
+
+    /// Rebuild every in-memory index from the primary store. Called on
+    /// `open()` after SSTables are loaded and the memtable is replayed.
+    /// Also useful after `register_lookup_key` if the caller wants the
+    /// new property backfilled over already-loaded records.
+    ///
+    /// Order: SSTables newest-first, then memtable. Records arriving with
+    /// older `tx_id_assert` are ignored by each index's out-of-order
+    /// guard, so the "newest wins" property holds regardless of replay
+    /// ordering.
+    pub fn rebuild_indexes(&mut self) -> Result<(), EngineError> {
+        self.lookup_key.clear();
+        self.adjacency.clear();
+        self.type_cluster.clear();
+        // SSTables (sstables[0] is newest layer; iterate in declared order).
+        for sst in &mut self.sstables {
+            for item in sst.iter() {
+                let (rec, _) = item?;
+                let tx = match &rec {
+                    Record::Entity(e) => e.tx_id_assert,
+                    Record::HyperEdge(h) => h.tx_id_assert,
+                    Record::Tombstone(t) => t.tx_id_supersede,
+                    _ => TxId::new(0),
+                };
+                self.lookup_key.apply(&rec, tx);
+                self.adjacency.apply(&rec, tx);
+                self.type_cluster.apply(&rec, tx);
+            }
+        }
+        // Memtable.
+        for (_k, rec) in self.memtable.iter() {
+            let tx = match rec {
+                Record::Entity(e) => e.tx_id_assert,
+                Record::HyperEdge(h) => h.tx_id_assert,
+                Record::Tombstone(t) => t.tx_id_supersede,
+                _ => TxId::new(0),
+            };
+            self.lookup_key.apply(rec, tx);
+            self.adjacency.apply(rec, tx);
+            self.type_cluster.apply(rec, tx);
+        }
+        Ok(())
+    }
+
+    /// Register a property id as a lookup key. Subsequent commits will
+    /// populate the lookup-key index for that property. Already-committed
+    /// records will NOT be retroactively indexed — call `rebuild_indexes`
+    /// after registration if you need backfill.
+    pub fn register_lookup_key(&mut self, property_id: PropertyId) {
+        self.lookup_key.register_property(property_id);
+    }
+
+    /// Find an entity by an external lookup-key value.
+    #[must_use]
+    pub fn lookup_by_external_key(
+        &self,
+        property_id: PropertyId,
+        value: &Value,
+    ) -> Option<EntityId> {
+        self.lookup_key.lookup(property_id, value)
+    }
+
+    /// All hyperedges that reference `entity` in any role.
+    #[must_use]
+    pub fn hyperedges_for_entity(&self, entity: EntityId) -> Vec<HyperedgeId> {
+        self.adjacency.neighbors_vec(entity)
+    }
+
+    /// All hyperedges of the given type.
+    #[must_use]
+    pub fn hyperedges_by_type(&self, type_id: TypeId) -> Vec<HyperedgeId> {
+        self.type_cluster.by_type_vec(type_id)
     }
 
     /// Database directory path.
@@ -443,7 +535,15 @@ impl WriteTxn<'_> {
         let records: Vec<Record> = self.pending;
         wal.append_batch(&records)?;
         wal.sync()?;
+        // Memtable insert + index update happen AFTER WAL durability so a
+        // crash before this point cleanly rolls back the transaction; a
+        // crash AFTER WAL durability means the records are durable in the
+        // log and will be replayed on the next open (which will repopulate
+        // the in-memory state).
         for r in records {
+            self.engine.lookup_key.apply(&r, self.tx_id);
+            self.engine.adjacency.apply(&r, self.tx_id);
+            self.engine.type_cluster.apply(&r, self.tx_id);
             self.engine.memtable.insert(r)?;
         }
         Ok(self.tx_id)
@@ -684,6 +784,157 @@ mod tests {
             Resolved::Live(Record::Entity(e)) => assert_eq!(e.entity_id, eid),
             other => panic!("post-restart read: {other:?}"),
         }
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn lookup_by_external_key_round_trip() {
+        let dir = temp_dir("lookup_key_e2e");
+        let mut engine = Engine::create(&dir).unwrap();
+        let email_prop = PropertyId::new(7);
+        engine.register_lookup_key(email_prop);
+        let eid = EntityId::now_v7();
+        let mut txn = engine.begin_write();
+        txn.put_entity(EntityRecord {
+            entity_id: eid,
+            type_id: TypeId::new(1),
+            tx_id_assert: TxId::new(0),
+            tx_id_supersede: TxId::ACTIVE,
+            properties: vec![(email_prop, Value::String("alice@example.com".into()))],
+        });
+        txn.commit().unwrap();
+        assert_eq!(
+            engine.lookup_by_external_key(email_prop, &Value::String("alice@example.com".into())),
+            Some(eid)
+        );
+        assert!(
+            engine
+                .lookup_by_external_key(email_prop, &Value::String("nobody@x.com".into()))
+                .is_none()
+        );
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn lookup_key_survives_flush_and_restart() {
+        let dir = temp_dir("lookup_key_persist");
+        let email_prop = PropertyId::new(7);
+        let eid = EntityId::now_v7();
+        {
+            let mut engine = Engine::create(&dir).unwrap();
+            engine.register_lookup_key(email_prop);
+            let mut txn = engine.begin_write();
+            txn.put_entity(EntityRecord {
+                entity_id: eid,
+                type_id: TypeId::new(1),
+                tx_id_assert: TxId::new(0),
+                tx_id_supersede: TxId::ACTIVE,
+                properties: vec![(email_prop, Value::String("alice@example.com".into()))],
+            });
+            txn.commit().unwrap();
+            engine.flush().unwrap();
+            engine.close().unwrap();
+        }
+        let mut engine = Engine::open(&dir).unwrap();
+        // Must re-register; lookup-key properties live in-memory only in v1.
+        engine.register_lookup_key(email_prop);
+        // Backfill the registration over already-loaded records.
+        engine.rebuild_indexes().unwrap();
+        assert_eq!(
+            engine.lookup_by_external_key(email_prop, &Value::String("alice@example.com".into())),
+            Some(eid)
+        );
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn adjacency_finds_hyperedges_per_entity() {
+        let dir = temp_dir("adjacency_e2e");
+        let mut engine = Engine::create(&dir).unwrap();
+        let alice = EntityId::now_v7();
+        let bob = EntityId::now_v7();
+        let mut hids = Vec::new();
+        for _ in 0..5 {
+            let h = HyperedgeId::now_v7();
+            hids.push(h);
+            let mut txn = engine.begin_write();
+            txn.put_hyperedge(HyperEdgeRecord {
+                hyperedge_id: h,
+                type_id: TypeId::new(1),
+                tx_id_assert: TxId::new(0),
+                tx_id_supersede: TxId::ACTIVE,
+                roles: vec![(RoleId::new(1), alice), (RoleId::new(2), bob)],
+                properties: vec![],
+            });
+            txn.commit().unwrap();
+        }
+        let mut alice_hits = engine.hyperedges_for_entity(alice);
+        let mut bob_hits = engine.hyperedges_for_entity(bob);
+        alice_hits.sort();
+        bob_hits.sort();
+        hids.sort();
+        assert_eq!(alice_hits, hids);
+        assert_eq!(bob_hits, hids);
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn type_cluster_groups_hyperedges() {
+        let dir = temp_dir("type_cluster_e2e");
+        let mut engine = Engine::create(&dir).unwrap();
+        for i in 0..6 {
+            let mut txn = engine.begin_write();
+            txn.put_hyperedge(HyperEdgeRecord {
+                hyperedge_id: HyperedgeId::now_v7(),
+                type_id: TypeId::new(if i < 4 { 10 } else { 20 }),
+                tx_id_assert: TxId::new(0),
+                tx_id_supersede: TxId::ACTIVE,
+                roles: vec![(RoleId::new(1), EntityId::now_v7())],
+                properties: vec![],
+            });
+            txn.commit().unwrap();
+        }
+        assert_eq!(engine.hyperedges_by_type(TypeId::new(10)).len(), 4);
+        assert_eq!(engine.hyperedges_by_type(TypeId::new(20)).len(), 2);
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn adjacency_survives_flush_restart() {
+        let dir = temp_dir("adjacency_restart");
+        let alice = EntityId::now_v7();
+        let mut expected_hids = Vec::new();
+        {
+            let mut engine = Engine::create(&dir).unwrap();
+            for i in 0..10 {
+                let h = HyperedgeId::now_v7();
+                expected_hids.push(h);
+                let mut txn = engine.begin_write();
+                txn.put_hyperedge(HyperEdgeRecord {
+                    hyperedge_id: h,
+                    type_id: TypeId::new(1),
+                    tx_id_assert: TxId::new(0),
+                    tx_id_supersede: TxId::ACTIVE,
+                    roles: vec![(RoleId::new(1), alice)],
+                    properties: vec![],
+                });
+                txn.commit().unwrap();
+                if i == 4 {
+                    engine.flush().unwrap();
+                }
+            }
+            engine.close().unwrap();
+        }
+        let engine = Engine::open(&dir).unwrap();
+        let mut got = engine.hyperedges_for_entity(alice);
+        got.sort();
+        expected_hids.sort();
+        assert_eq!(got, expected_hids);
         engine.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }

@@ -32,6 +32,7 @@ pub mod db;
 pub mod engine;
 pub mod error;
 pub mod id;
+pub mod index;
 pub mod memtable;
 pub mod mvcc;
 pub mod record;
@@ -47,6 +48,7 @@ pub use db::{
 pub use engine::{Engine, EngineError, WriteTxn};
 pub use error::{DecodeError, EncodeError};
 pub use id::{EntityId, HyperedgeId, PropertyId, RoleId, TX_ACTIVE, TYPE_UNTYPED, TxId, TypeId};
+pub use index::{AdjacencyIndex, HyperEdgeTypeIndex, Index, LookupKeyIndex};
 pub use memtable::Memtable;
 pub use mvcc::{Resolved, effective_tx, resolve, resolve_owned, visible_at};
 pub use record::{
