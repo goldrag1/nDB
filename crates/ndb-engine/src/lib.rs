@@ -27,6 +27,7 @@
 
 #![warn(missing_docs)]
 
+pub mod block_index;
 pub mod codec;
 pub mod db;
 pub mod encryption;
@@ -70,6 +71,11 @@ pub use record::{
     ENVELOPE_OVERHEAD, EntityRecord, FORMAT_VERSION, FORMAT_VERSION_MAX_SUPPORTED, HyperEdgeRecord,
     PropertyKeyRecord, Record, RecordKind, RoleNameRecord, TombstoneRecord, TypeNameRecord,
     peek_record_kind, peek_record_size,
+};
+pub use block_index::{
+    BLOCK_INDEX_EXTENSION, BLOCK_INDEX_FORMAT_VERSION, BLOCK_INDEX_FORMAT_VERSION_MAX_SUPPORTED,
+    BLOCK_INDEX_MAGIC, BlockIndex, BlockIndexEntry, BlockIndexError, BlockIndexWriter,
+    DEFAULT_BLOCK_SIZE, load_sidecar, sidecar_path_for,
 };
 pub use sstable::{
     SSTABLE_EXTENSION, SSTABLE_FOOTER_SIZE, SSTABLE_FORMAT_VERSION,

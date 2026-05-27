@@ -265,6 +265,11 @@ pub struct SSTableWriter {
     record_count: u64,
     bytes_written: u64,
     last_key: Option<SSTableKey>,
+    /// Builds the `<seq>.idx` sidecar (v2.0+). One entry per
+    /// `BlockIndexWriter` block boundary; the very first record is
+    /// always indexed so seek_offset(target) before the first key
+    /// returns 0.
+    block_index: crate::block_index::BlockIndexWriter,
 }
 
 impl SSTableWriter {
@@ -285,6 +290,7 @@ impl SSTableWriter {
             record_count: 0,
             bytes_written: 0,
             last_key: None,
+            block_index: crate::block_index::BlockIndexWriter::new(),
         })
     }
 
@@ -299,6 +305,11 @@ impl SSTableWriter {
                 index: self.record_count,
             });
         }
+        // Observe BEFORE writing so the entry's offset is the start of
+        // this record. The very first record always becomes the first
+        // index entry (offset 0); subsequent records become entries
+        // only when crossing a block boundary.
+        self.block_index.observe_record(&key, self.bytes_written);
         let mut buf = Vec::with_capacity(128);
         record
             .encode(&mut buf)
@@ -319,8 +330,14 @@ impl SSTableWriter {
         Ok(())
     }
 
-    /// Write the footer, fsync the temp file, rename onto `final_path`, then
-    /// fsync the parent directory.
+    /// Write the footer, fsync the temp file, rename onto `final_path`,
+    /// then write the block-index sidecar (also write-temp-then-rename),
+    /// and finally fsync the parent directory.
+    ///
+    /// Ordering note: the main `.ndb` lands first so a crash between the
+    /// two renames produces a v1.3-compatible state — the reader will
+    /// find a valid SSTable with no sidecar and gracefully fall back to
+    /// linear scan.
     pub fn finish(mut self) -> Result<SSTableFooter, SSTableError> {
         let footer = SSTableFooter {
             record_count: self.record_count,
@@ -337,7 +354,14 @@ impl SSTableWriter {
             .map_err(|e| io::Error::other(format!("BufWriter into_inner failed: {e}")))?;
         f.sync_data()?;
         std::fs::rename(&self.tmp_path, &self.final_path)?;
-        // fsync the parent directory so the rename itself is durable.
+        // Sidecar is best-effort but should normally succeed. If it fails
+        // (out of space, permission), the SSTable is still valid and the
+        // reader falls back to linear scan.
+        let sidecar = crate::block_index::sidecar_path_for(&self.final_path);
+        self.block_index.finish(&sidecar).map_err(|e| {
+            io::Error::other(format!("block-index sidecar write failed: {e}"))
+        })?;
+        // fsync the parent directory so both renames are durable.
         if let Some(parent) = self.final_path.parent() {
             fsync_dir(parent)?;
         }
@@ -449,10 +473,8 @@ fn decode_footer(bytes: &[u8; SSTABLE_FOOTER_SIZE]) -> Result<SSTableFooter, SST
 pub struct SSTableReader {
     path: PathBuf,
     /// Memory-mapped view of the file. Used for all reads — sequential
-    /// iteration and (future) random-access block lookups. The map covers
-    /// the entire file including the footer. v1 reads are sequential;
-    /// mmap pays off most for the eventual block-index path because it
-    /// lets the kernel page in only what we touch.
+    /// iteration and random-access block lookups. The map covers the
+    /// entire file including the footer.
     mmap: memmap2::Mmap,
     /// Keeps the underlying file descriptor alive for the lifetime of the
     /// mmap. We never write through the FD — SSTable files are
@@ -460,6 +482,10 @@ pub struct SSTableReader {
     _file: File,
     file_len: u64,
     footer: SSTableFooter,
+    /// Optional block-index sidecar. Present for SSTables written by
+    /// v2.0+ writers; absent for v1.3-era SSTables. When present,
+    /// `find()` binary-searches it to bound the linear-scan range.
+    block_index: Option<crate::block_index::BlockIndex>,
 }
 
 impl SSTableReader {
@@ -503,13 +529,36 @@ impl SSTableReader {
                 needed: footer.data_size + needed,
             });
         }
+        // Sidecar load is best-effort: missing → v1.3 SSTable, fall back
+        // to linear scan. Corrupt → log + fall back (we can't bring down
+        // the engine because of a bad index).
+        let sidecar_path = crate::block_index::sidecar_path_for(&path);
+        let block_index = match crate::block_index::load_sidecar(&sidecar_path) {
+            Ok(Some(idx)) => Some(idx),
+            Ok(None) => None,
+            Err(e) => {
+                eprintln!(
+                    "ndb-engine: block-index sidecar {} corrupt ({}); falling back to linear scan",
+                    sidecar_path.display(),
+                    e,
+                );
+                None
+            }
+        };
         Ok(Self {
             path,
             mmap,
             _file: file,
             file_len,
             footer,
+            block_index,
         })
+    }
+
+    /// Whether this reader has a block-index sidecar loaded.
+    #[must_use]
+    pub fn has_block_index(&self) -> bool {
+        self.block_index.is_some()
     }
 
     /// Path of the underlying file.
@@ -541,11 +590,29 @@ impl SSTableReader {
         }
     }
 
-    /// Linear-scan lookup. Returns the first record whose [`SSTableKey`]
-    /// matches `target`. v1 implementation is O(N); a block-index sidecar
-    /// will give O(log N) in a follow-on commit.
+    /// Lookup the record matching `target`. O(log N) when a block-index
+    /// sidecar is present (binary search the sidecar to identify the
+    /// block, then linear scan ≤ `block_size` bytes within it); O(N)
+    /// linear scan otherwise (v1.3 SSTables, or a corrupt sidecar that
+    /// was skipped on open).
+    ///
+    /// Returns the first record whose [`SSTableKey`] matches `target`;
+    /// returns `None` if the key isn't present.
     pub fn find(&mut self, target: &SSTableKey) -> Result<Option<Record>, SSTableError> {
-        for item in self.iter() {
+        let start_offset = self
+            .block_index
+            .as_ref()
+            .and_then(|idx| idx.seek_offset(target))
+            .unwrap_or(0);
+        let start_offset = usize::try_from(start_offset).unwrap_or(usize::MAX);
+        let data_end =
+            usize::try_from(self.footer.data_size).unwrap_or(usize::MAX);
+        let mut iter = SSTableIter {
+            data: &self.mmap[..data_end],
+            pos: start_offset,
+            done: false,
+        };
+        for item in &mut iter {
             let (rec, _) = item?;
             let k = SSTableKey::for_record(&rec);
             if k == *target {
@@ -806,6 +873,61 @@ mod tests {
         let err = w.append(&dict(3, "A")).unwrap_err();
         assert!(matches!(err, SSTableError::OutOfOrder { index: 1 }));
         w.abort().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn finish_writes_block_index_sidecar() {
+        let dir = temp_dir("sidecar");
+        let path = dir.join("000001.ndb");
+        let records = sorted_corpus();
+        let mut w = SSTableWriter::create(&path).unwrap();
+        for r in &records {
+            w.append(r).unwrap();
+        }
+        w.finish().unwrap();
+        let sidecar = crate::block_index::sidecar_path_for(&path);
+        assert!(sidecar.exists(), "sidecar at {sidecar:?} must exist");
+        let r = SSTableReader::open(&path).unwrap();
+        assert!(r.has_block_index(), "reader must pick up the sidecar");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn find_uses_block_index_when_present_and_works_when_absent() {
+        let dir = temp_dir("find_sidecar");
+        let path = dir.join("000001.ndb");
+        let records = sorted_corpus();
+        let mut w = SSTableWriter::create(&path).unwrap();
+        for r in &records {
+            w.append(r).unwrap();
+        }
+        w.finish().unwrap();
+
+        // With sidecar — fast path.
+        {
+            let mut r = SSTableReader::open(&path).unwrap();
+            assert!(r.has_block_index());
+            for rec in &records {
+                let k = SSTableKey::for_record(rec);
+                let hit = r.find(&k).unwrap();
+                assert!(hit.is_some(), "key {k:?} should be present");
+            }
+        }
+
+        // Delete the sidecar — slow path (v1.3-compatible).
+        let sidecar = crate::block_index::sidecar_path_for(&path);
+        std::fs::remove_file(&sidecar).unwrap();
+        {
+            let mut r = SSTableReader::open(&path).unwrap();
+            assert!(!r.has_block_index(), "missing sidecar = no index loaded");
+            for rec in &records {
+                let k = SSTableKey::for_record(rec);
+                let hit = r.find(&k).unwrap();
+                assert!(hit.is_some(), "key {k:?} should still be found via linear scan");
+            }
+        }
+
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

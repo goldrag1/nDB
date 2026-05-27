@@ -867,10 +867,12 @@ impl Engine {
         self.sstables.clear();
         self.sstables.push(reader);
 
-        // Step 7: remove old files (best-effort).
+        // Step 7: remove old files (best-effort). Also remove the
+        // companion `<seq>.idx` block-index sidecar if it exists.
         for old_seq in old_sstable_seqs {
             let p = sstable_path(self.db.path(), old_seq);
             let _ = std::fs::remove_file(&p);
+            let _ = std::fs::remove_file(crate::block_index::sidecar_path_for(&p));
         }
 
         // Rebuild indexes since we dropped tombstoned records.
