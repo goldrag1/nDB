@@ -180,11 +180,18 @@ pub struct Manifest {
     /// Latest assigned transaction id (so the engine can resume monotonic
     /// `TxId` allocation across restarts).
     pub last_tx_id: u64,
+    /// Sequence number of the currently-active WAL (`<seq>.ndblog`).
+    /// `0` means "no active WAL" — the engine will create one on first
+    /// write or open. Updated whenever the WAL is rotated after a flush.
+    pub active_wal_seq: u64,
 }
 
 const MANIFEST_HEADER_LEN: usize = 8 /* magic */ + 1 /* fmt */ + 1 /* flags */ + 2 /* reserved */;
-const MANIFEST_BODY_FIXED_LEN: usize =
-    8 /* next_file_seq */ + 8 /* next_manifest_seq */ + 8 /* last_tx_id */ + 4 /* entry_count */;
+const MANIFEST_BODY_FIXED_LEN: usize = 8 /* next_file_seq */
+    + 8 /* next_manifest_seq */
+    + 8 /* last_tx_id */
+    + 8 /* active_wal_seq */
+    + 4 /* entry_count */;
 const MANIFEST_ENTRY_LEN: usize = 8 /* file_seq */ + 1 /* level */ + 7 /* padding */;
 const MANIFEST_FOOTER_CRC_LEN: usize = 4;
 
@@ -208,6 +215,7 @@ impl Manifest {
         buf.extend_from_slice(&self.next_file_seq.to_le_bytes());
         buf.extend_from_slice(&self.next_manifest_seq.to_le_bytes());
         buf.extend_from_slice(&self.last_tx_id.to_le_bytes());
+        buf.extend_from_slice(&self.active_wal_seq.to_le_bytes());
         let count = u32::try_from(self.sstables.len()).expect("entry count fits u32");
         buf.extend_from_slice(&count.to_le_bytes());
         for entry in &self.sstables {
@@ -248,7 +256,8 @@ impl Manifest {
         let next_file_seq = u64::from_le_bytes(bytes[12..20].try_into().unwrap());
         let next_manifest_seq = u64::from_le_bytes(bytes[20..28].try_into().unwrap());
         let last_tx_id = u64::from_le_bytes(bytes[28..36].try_into().unwrap());
-        let entry_count = u32::from_le_bytes(bytes[36..40].try_into().unwrap()) as usize;
+        let active_wal_seq = u64::from_le_bytes(bytes[36..44].try_into().unwrap());
+        let entry_count = u32::from_le_bytes(bytes[44..48].try_into().unwrap()) as usize;
         let expected_len = MANIFEST_HEADER_LEN
             + MANIFEST_BODY_FIXED_LEN
             + entry_count * MANIFEST_ENTRY_LEN
@@ -287,6 +296,7 @@ impl Manifest {
             next_file_seq,
             next_manifest_seq,
             last_tx_id,
+            active_wal_seq,
         })
     }
 }
@@ -412,6 +422,7 @@ impl Database {
             next_file_seq: 1,
             next_manifest_seq: 2,
             last_tx_id: 0,
+            active_wal_seq: 0, // engine layer mints + assigns the first WAL on open.
         };
         let initial_seq: u64 = 1;
         let initial_filename = manifest_filename(initial_seq);
@@ -583,6 +594,7 @@ mod tests {
             next_file_seq: 4,
             next_manifest_seq: 7,
             last_tx_id: 42,
+            active_wal_seq: 5,
         };
         let bytes = m.encode();
         let restored = Manifest::decode(&bytes).unwrap();
@@ -607,6 +619,7 @@ mod tests {
             next_file_seq: 2,
             next_manifest_seq: 2,
             last_tx_id: 0,
+            active_wal_seq: 0,
         };
         let mut bytes = m.encode();
         bytes[20] ^= 0xff;

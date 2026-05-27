@@ -29,6 +29,7 @@
 
 pub mod codec;
 pub mod db;
+pub mod engine;
 pub mod error;
 pub mod id;
 pub mod memtable;
@@ -43,6 +44,7 @@ pub use db::{
     MANIFEST_FORMAT_VERSION_MAX_SUPPORTED, MANIFEST_MAGIC, MANIFEST_PREFIX, MAX_LSM_LEVEL,
     Manifest, ManifestEntry, manifest_filename, parse_manifest_filename,
 };
+pub use engine::{Engine, EngineError, WriteTxn};
 pub use error::{DecodeError, EncodeError};
 pub use id::{EntityId, HyperedgeId, PropertyId, RoleId, TX_ACTIVE, TYPE_UNTYPED, TxId, TypeId};
 pub use memtable::Memtable;

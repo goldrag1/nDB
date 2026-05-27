@@ -45,6 +45,7 @@ const SIZE_PREFIX: usize = 4;
 ///
 /// One [`WriteAheadLog`] owns the active log file for a database. Appends
 /// are buffered; durability requires an explicit [`WriteAheadLog::sync`].
+#[derive(Debug)]
 pub struct WriteAheadLog {
     path: PathBuf,
     file: BufWriter<File>,
