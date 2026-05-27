@@ -7,7 +7,58 @@
   html, body { margin: 0; padding: 0; height: 100%; font-family: system-ui, -apple-system, sans-serif; color: #e8e8ec; background: #14141a; }
   #app { display: grid; grid-template-columns: 340px 1fr; height: 100vh; }
   #sidebar { background: #1c1c24; border-right: 1px solid #2b2b36; padding: 16px; overflow-y: auto; }
+  /* Right pane splits into two stacked viewers when a protein is "opened"
+     in the 3D viewer; the bottom half collapses by default. */
+  #right-pane { display: grid; grid-template-rows: 1fr 0; height: 100vh; transition: grid-template-rows 0.25s; }
+  #right-pane.three-d-open { grid-template-rows: 1fr 1fr; }
+  /* min-height:0 + min-width:0 is the standard fix for CSS-grid children
+     whose intrinsic content (canvases here) blocks 1fr distribution. */
+  #right-pane > * { min-height: 0; min-width: 0; }
   #graph-host { position: relative; background: #0d0d12; }
+  #viewer-3d { position: relative; background: #0a0a10; border-top: 1px solid #2b2b36; overflow: hidden; }
+  #viewer-3d canvas { display: block; }
+  #viewer-3d-info {
+    position: absolute; top: 8px; left: 12px; padding: 5px 9px;
+    background: rgba(20,20,26,0.75); border-radius: 4px; font-size: 12px;
+    color: #cfcfd6; pointer-events: none; max-width: 60%;
+  }
+  #viewer-3d-info b { color: #fff; }
+  #viewer-3d-close {
+    position: absolute; top: 8px; right: 8px; background: #2d2d3a;
+    color: #cfcfd6; border: none; padding: 4px 9px; border-radius: 4px;
+    cursor: pointer; font-size: 11px;
+  }
+  #viewer-3d-close:hover { background: #38384a; }
+  #ndb-model-pane {
+    position: absolute; bottom: 8px; right: 8px;
+    width: 380px; max-height: calc(100% - 60px);
+    background: rgba(20,20,26,0.95);
+    border: 1px solid #2b2b36; border-radius: 6px;
+    font-size: 12px; line-height: 1.45;
+    overflow-y: auto;
+    /* NGL mounts a canvas at z-index implicit; pin the pane on top. */
+    z-index: 10;
+  }
+  #viewer-3d-info, #viewer-3d-close { z-index: 10; }
+  #ndb-model-pane summary {
+    padding: 8px 10px; cursor: pointer; background: #1c1c24;
+    border-radius: 6px 6px 0 0; user-select: none;
+  }
+  #ndb-model-pane[open] summary { border-radius: 6px 6px 0 0; }
+  #ndb-model-pane summary b { color: #4a90e2; }
+  #ndb-model-pane .body { padding: 8px 12px; }
+  #ndb-model-pane h4 { font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.06em; color: #888; margin: 10px 0 4px; }
+  #ndb-model-pane pre {
+    background: #0a0a10; border: 1px solid #2b2b36; border-radius: 4px;
+    padding: 8px; margin: 4px 0; font-size: 11px;
+    overflow-x: auto; max-height: 180px;
+  }
+  #ndb-model-pane .pill {
+    display: inline-block; padding: 1px 6px; border-radius: 3px;
+    background: #2d2d3a; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px;
+  }
   h1 { font-size: 16px; margin: 0 0 4px; letter-spacing: 0.02em; }
   h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #888; margin: 18px 0 6px; }
   .stat { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; color: #cfcfd6; }
@@ -135,6 +186,16 @@
     <h2>Selected</h2>
     <div id="selected-card">Click a node or polygon centroid to inspect.</div>
     <div class="row" style="margin-top:6px">
+      <button class="btn" id="load-3d-btn" disabled>Load AlphaFold 3D structure</button>
+    </div>
+    <div class="hint" style="margin-top:4px">
+      Enabled when a protein with an AF-DB record is selected.
+      Opens the cartoon model in the right pane and colours residues
+      by per-atom pLDDT. Click a residue in the 3D view to jump back
+      to its nDB entity; click a structural-motif hyperedge to glow
+      its members in the structure.
+    </div>
+    <div class="row" style="margin-top:6px">
       <button class="btn" id="pulse-btn" disabled>Pulse signal</button>
       <button class="btn secondary" id="clear-highlights-btn" disabled>Clear glow</button>
     </div>
@@ -157,13 +218,24 @@
     </div>
   </aside>
 
-  <div id="graph-host">
-    <div id="hint-bar">drag to rotate · scroll to zoom · click a node to <b>highlight signal flow</b></div>
-    <div id="status"></div>
+  <div id="right-pane">
+    <div id="graph-host">
+      <div id="hint-bar">drag to rotate · scroll to zoom · click a node to <b>highlight signal flow</b></div>
+      <div id="status"></div>
+    </div>
+    <div id="viewer-3d" hidden>
+      <div id="viewer-3d-info"></div>
+      <button id="viewer-3d-close">Close 3D view</button>
+      <details id="ndb-model-pane">
+        <summary>What does <b>nDB</b> store for this protein? <span style="float:right;color:#888">click to expand</span></summary>
+        <div class="body" id="ndb-model-body"></div>
+      </details>
+    </div>
   </div>
 </div>
 
 <script src="https://unpkg.com/3d-force-graph@1.73.4/dist/3d-force-graph.min.js"></script>
+<script src="https://unpkg.com/ngl@2.3.1/dist/ngl.js"></script>
 <script>
 // ─── Configuration ─────────────────────────────────────────────
 // The example seeds these so the page is self-describing.
@@ -572,6 +644,36 @@ function setSelected(node) {
   $pulseBtn.disabled = !node;
   renderSelected();
   applyHighlights();
+  // 3D bridge — only when the NGL pane is open AND we have a useful node:
+  // - protein with AF-DB record → enable the Load button
+  // - residue → if its parent matches the loaded protein, ball+stick it
+  // - motif hyperedge → ball+stick every member residue
+  const $load3d = document.getElementById("load-3d-btn");
+  if ($load3d) {
+    $load3d.disabled = !(
+      node &&
+      node.nodeKind === "entity" &&
+      node.type_id === TYPES.protein.id &&
+      extractUniprot(node.record)
+    );
+  }
+  if (!nglComponent) return;
+  if (!node) { clear3DHighlights(); return; }
+  if (node.nodeKind === "entity" && node.type_id === TYPES.residue.id) {
+    const pos = extractProp(node.record, 50);
+    if (typeof pos === "number") highlight3DResidues([pos], extractName(node.record));
+  } else if (node.nodeKind === "hyperedge" && MOTIF_TYPE_IDS.has(node.type_id)) {
+    const positions = [];
+    for (const role of node.record.roles) {
+      const ent = entitiesById.get(role.entity_id);
+      if (!ent) continue;
+      const p = extractProp(ent, 50);
+      if (typeof p === "number") positions.push(p);
+    }
+    highlight3DResidues(positions, extractName(node.record));
+  } else {
+    clear3DHighlights();
+  }
 }
 
 function pulseSignal() {
@@ -888,6 +990,10 @@ document.getElementById("show-residues-toggle").addEventListener("change", async
   // — but we still refresh so the graph rebuilds with/without residues.
   await reload();
 });
+document.getElementById("load-3d-btn").addEventListener("click", () => {
+  if (selected) load3DStructureFor(selected);
+});
+document.getElementById("viewer-3d-close").addEventListener("click", closeNgl3dPane);
 document.getElementById("add-ent-btn").addEventListener("click", addEntity);
 document.getElementById("add-hed-btn").addEventListener("click", addHyperedge);
 document.getElementById("delete-btn").addEventListener("click", deleteSelected);
@@ -895,7 +1001,345 @@ document.getElementById("reload-btn").addEventListener("click", reload);
 $pulseBtn.addEventListener("click", pulseSignal);
 $clearHighlightsBtn.addEventListener("click", clearHighlights);
 
-// ─── Boot the 3D graph ─────────────────────────────────────────
+// ─── NGL 3D viewer (v2.2 §D) ───────────────────────────────────
+// We mount a single NGL.Stage in the right-pane viewer and load a
+// new CIF on demand. AlphaFold-DB CIFs encode per-residue pLDDT in
+// the B-factor field, so NGL's built-in "bfactor" colour scheme
+// renders the canonical AF palette directly. Reference:
+// https://nglviewer.org/ngl/api/
+let nglStage = null;
+let nglComponent = null;       // currently-loaded structure component
+let nglHighlightRepr = null;   // ball+stick representation for the
+                               // current highlight set (catalytic
+                               // triad members, single residue, etc.)
+let currentProteinNode = null; // the protein node whose CIF is loaded
+
+function nglStageInit() {
+  if (nglStage) return nglStage;
+  nglStage = new NGL.Stage("viewer-3d", { backgroundColor: "#0a0a10" });
+  // Click handler on the canvas — NGL gives us a "pickingProxy" with
+  // .atom which exposes residue index / name. We map back to our
+  // residue entities via (protein name, position).
+  nglStage.signals.clicked.add((pp) => {
+    if (!pp || !pp.atom || !currentProteinNode) return;
+    const resno = pp.atom.resno;
+    onNgl3DResidueClick(resno);
+  });
+  // Auto-resize when the pane opens/closes.
+  window.addEventListener("resize", () => nglStage && nglStage.handleResize());
+  return nglStage;
+}
+
+function openNgl3dPane() {
+  document.getElementById("right-pane").classList.add("three-d-open");
+  document.getElementById("viewer-3d").hidden = false;
+  nglStageInit();
+  // NGL needs a layout pass after the host element gains size.
+  setTimeout(() => nglStage && nglStage.handleResize(), 60);
+}
+function closeNgl3dPane() {
+  document.getElementById("right-pane").classList.remove("three-d-open");
+  document.getElementById("viewer-3d").hidden = true;
+  if (nglStage) nglStage.removeAllComponents();
+  nglComponent = null;
+  nglHighlightRepr = null;
+  currentProteinNode = null;
+  updateNdbModelPane(null);
+}
+
+function cifUrlForUniprot(acc, fragment = 1, version = 6) {
+  // AF-DB ships incrementing model versions; v6 is current as of
+  // May 2026. Multi-fragment proteins (>2700 aa) start at F1.
+  return `https://alphafold.ebi.ac.uk/files/AF-${acc}-F${fragment}-model_v${version}.cif`;
+}
+
+async function load3DStructureFor(node) {
+  if (!node || node.nodeKind !== "entity" || node.type_id !== TYPES.protein.id) {
+    showStatus("Select a protein to load its 3D structure", true);
+    return;
+  }
+  const acc = extractUniprot(node.record);
+  if (!acc) {
+    showStatus("This protein has no UniProt accession — can't fetch CIF", true);
+    return;
+  }
+  const proteinName = extractName(node.record) || acc;
+  openNgl3dPane();
+  document.getElementById("viewer-3d-info").innerHTML =
+    `<b>${proteinName}</b> (${acc}) — loading…`;
+  if (nglComponent) nglStage.removeAllComponents();
+  nglComponent = null;
+  nglHighlightRepr = null;
+  currentProteinNode = node;
+  try {
+    const url = cifUrlForUniprot(acc);
+    nglComponent = await nglStage.loadFile(url, { ext: "cif" });
+    // Cartoon coloured by B-factor (which AF-DB stores as per-residue
+    // pLDDT). NGL's "bfactor" scheme runs blue→white→red across the
+    // residue range; for AF the natural reading is high=blue (high
+    // confidence). The output matches alphafold.ebi.ac.uk visually.
+    // NGL's "bfactor" scheme maps the B-factor range to red→white→blue
+    // by default — i.e. high B-factor (which AlphaFold uses to encode
+    // high pLDDT) renders BLUE. Don't reverse — that's already the
+    // AlphaFold convention. Pin the colour scale to the canonical
+    // pLDDT range so trypsin (mostly high) and BRCA1 (mostly low) look
+    // comparable in the same session.
+    nglComponent.addRepresentation("cartoon", {
+      colorScheme: "bfactor",
+      colorScale: ["#FF7D45", "#FFDB13", "#65CBF3", "#0053D6"],
+      colorDomain: [40, 70, 90, 100],
+      smoothSheet: true,
+    });
+    nglComponent.autoView();
+    const len = nglComponent.structure.residueStore.count;
+    document.getElementById("viewer-3d-info").innerHTML =
+      `<b>${proteinName}</b> (${acc}) · ${len} residues · pLDDT colouring (AF palette)`;
+    // Refresh the model-explainer pane for this protein.
+    updateNdbModelPane(node);
+    // If the user selected a residue node first then hit "Load 3D",
+    // restore that highlight.
+    if (selected && selected.nodeKind === "entity" && selected.type_id === TYPES.residue.id) {
+      const pos = extractProp(selected.record, 50);
+      if (typeof pos === "number") highlight3DResidues([pos], "single residue");
+    }
+  } catch (e) {
+    document.getElementById("viewer-3d-info").innerHTML =
+      `<b>${proteinName}</b> (${acc}) — load failed: ${e.message}`;
+  }
+}
+
+function highlight3DResidues(positions, motifName) {
+  if (!nglComponent) return;
+  if (nglHighlightRepr) {
+    nglComponent.removeRepresentation(nglHighlightRepr);
+    nglHighlightRepr = null;
+  }
+  if (!positions || positions.length === 0) return;
+  // NGL selection language: "57 or 102 or 195" picks those residue
+  // numbers across all chains. Insulin's B-chain offset (+100) in our
+  // residue table won't map cleanly to the CIF — surface a warning so
+  // the user knows nothing's wrong with the data.
+  const cifMax = nglComponent.structure.residueStore.count;
+  const inRange = positions.filter(p => p >= 1 && p <= cifMax);
+  if (inRange.length === 0) {
+    document.getElementById("viewer-3d-info").innerHTML +=
+      ` <span style="color:#ff9554">— motif positions outside CIF range</span>`;
+    return;
+  }
+  const sel = inRange.join(" or ");
+  nglHighlightRepr = nglComponent.addRepresentation("ball+stick", {
+    sel,
+    color: "#ff5e8a",
+    aspectRatio: 1.5,
+    multipleBond: true,
+  });
+  // Also add a labelled spot so the user sees WHICH residue lit up.
+  nglComponent.addRepresentation("label", {
+    sel: `(${sel}) and .CA`,
+    color: "#fff",
+    labelType: "format",
+    labelFormat: "%(resname)s%(resno)s",
+    yOffset: 1.5,
+    showBackground: true,
+    backgroundColor: "#000",
+    backgroundOpacity: 0.55,
+  });
+  // Zoom to a window around the motif — pure `autoView(sel)` framings
+  // the 3 atoms so tight the cartoon disappears. Wrap with "within 12
+  // of" to keep the local fold visible behind the ball+stick highlight.
+  nglComponent.autoView(`(${sel}) or (within 12 of (${sel}))`, 500);
+}
+
+function clear3DHighlights() {
+  if (nglComponent && nglHighlightRepr) {
+    nglComponent.removeRepresentation(nglHighlightRepr);
+    nglHighlightRepr = null;
+  }
+}
+
+// Click in the NGL canvas → look up matching residue entity in nDB
+// and select it in the hypergraph (so the signal-flow lights up).
+function onNgl3DResidueClick(resno) {
+  if (!currentProteinNode) return;
+  const proteinId = currentProteinNode.id;
+  // Find the residue entity whose residue_of edge points at this
+  // protein AND whose position matches resno.
+  let match = null;
+  for (const node of graphData.nodes) {
+    if (node.nodeKind !== "entity") continue;
+    if (node.type_id !== TYPES.residue.id) continue;
+    const pos = extractProp(node.record, 50);
+    if (pos !== resno) continue;
+    // Check the residue_of edge ties it to the current protein.
+    const linksRes = graphData.links.some(L => {
+      const eid = L.edge_id;
+      const edge = edgesById.get(eid);
+      if (!edge || edge.type_id !== RESIDUE_OF_TYPE_ID) return false;
+      const fillers = edge.roles.map(r => r.entity_id);
+      return fillers.includes(node.id) && fillers.includes(proteinId);
+    });
+    if (linksRes) { match = node; break; }
+  }
+  if (match) {
+    setSelected(match);
+    // Camera centre in the hypergraph view too.
+    Graph.cameraPosition({ x: match.x * 1.2, y: match.y * 1.2, z: match.z * 1.2 }, match, 600);
+  } else {
+    // No matching residue in our curated dataset — toast it.
+    showStatus(`Residue ${resno} not in this protein's nDB residue set`);
+  }
+}
+
+// ─── nDB "model" pane — answers "how does the data look?" ───────
+// For the currently-loaded protein, walk graphData and render: the
+// protein entity itself, every residue + residue_of edge pointing at
+// it, every motif hyperedge whose member set includes one of its
+// residues, and every protein-level complex/cites/encodes edge it
+// participates in. Each appears as a tagged human label plus the
+// actual wire-format JSON, so the user can see exactly what nDB stores.
+function updateNdbModelPane(node) {
+  const $body = document.getElementById("ndb-model-body");
+  if (!$body) return;
+  if (!node) {
+    $body.innerHTML = '<div class="hint">Open a protein\'s 3D structure to inspect the nDB model.</div>';
+    return;
+  }
+  const pname = extractName(node.record) || "?";
+  const acc = extractUniprot(node.record) || "?";
+
+  // Collect related records.
+  const residues = [];
+  const residueOfEdges = [];
+  const motifEdges = [];
+  const proteinLevelEdges = [];
+  const residueIds = new Set();
+  // Residue_of edges pointing at the protein.
+  for (const edge of edgesById.values()) {
+    if (edge.type_id === RESIDUE_OF_TYPE_ID) {
+      const fillers = edge.roles.map(r => r.entity_id);
+      if (fillers.includes(node.id)) {
+        residueOfEdges.push(edge);
+        for (const eid of fillers) {
+          if (eid !== node.id) residueIds.add(eid);
+        }
+      }
+    }
+  }
+  // The residue entities themselves.
+  for (const rid of residueIds) {
+    const r = entitiesById.get(rid);
+    if (r) residues.push(r);
+  }
+  residues.sort((a, b) =>
+    (extractProp(a, 50) ?? 0) - (extractProp(b, 50) ?? 0));
+  // Motif hyperedges that involve any of these residues.
+  for (const edge of edgesById.values()) {
+    if (!MOTIF_TYPE_IDS.has(edge.type_id)) continue;
+    const fillers = new Set(edge.roles.map(r => r.entity_id));
+    let touches = false;
+    for (const rid of residueIds) {
+      if (fillers.has(rid)) { touches = true; break; }
+    }
+    if (touches) motifEdges.push(edge);
+  }
+  // Protein-level edges (complex, encodes, cites, authored).
+  for (const edge of edgesById.values()) {
+    if (MOTIF_TYPE_IDS.has(edge.type_id)) continue;
+    if (edge.type_id === RESIDUE_OF_TYPE_ID) continue;
+    const fillers = edge.roles.map(r => r.entity_id);
+    if (fillers.includes(node.id)) proteinLevelEdges.push(edge);
+  }
+
+  const sample = residues.slice(0, 2);
+  const motifSample = motifEdges[0];
+  const proteinLevelSample = proteinLevelEdges[0];
+
+  let html = `
+    <p>
+      nDB stores everything you see — proteins, residues, and the
+      relationships between them — as <b>entities</b> and
+      <b>hyperedges</b>. There are no tables and no foreign-key columns.
+      A hyperedge is an N-ary fact: it names a relationship type and
+      lists the entities playing each role in it.
+    </p>
+    <p>
+      Here is exactly what the current nDB holds for
+      <span class="pill">${pname}</span> (${acc}):
+    </p>
+    <h4>1 protein entity</h4>
+    <div>
+      <span class="pill">type protein (id 1)</span>
+      with properties for name, function, year, AlphaFold mean pLDDT
+      and bucket, UniProt accession, gene, organism, sequence length.
+    </div>
+    <pre>${escapeHtml(JSON.stringify({
+      kind: "entity",
+      entity_id: node.id.slice(0, 8) + "…",
+      type_id: 1,
+      properties: (node.record.properties || []).slice(0, 4),
+    }, null, 2))}</pre>
+    <h4>${residues.length} residue entities (type 6)</h4>
+    <div>Each is a separate record with position, three-letter code, per-residue pLDDT, and secondary structure.</div>
+    ${sample.length ? `<pre>${escapeHtml(JSON.stringify({
+      kind: "entity",
+      entity_id: sample[0].entity_id.slice(0, 8) + "…",
+      type_id: 6,
+      properties: sample[0].properties,
+    }, null, 2))}</pre>` : ""}
+    <h4>${residueOfEdges.length} <i>residue_of</i> hyperedges (arity 2)</h4>
+    <div>Bind each residue to this protein. Modelled as a hyperedge — not a property — so every relationship in nDB has the same shape.</div>
+    <h4>${motifEdges.length} structural-motif hyperedges</h4>
+    <div>
+      ${motifEdges.map(e =>
+        `<span class="pill">${typeNameById[e.type_id]} · arity ${e.roles.length}</span>`
+      ).join(" ") || '<i>none for this protein</i>'}
+    </div>
+    ${motifSample ? `<pre>${escapeHtml(JSON.stringify({
+      kind: "hyper_edge",
+      hyperedge_id: motifSample.hyperedge_id.slice(0, 8) + "…",
+      type_id: motifSample.type_id,
+      arity: motifSample.roles.length,
+      roles: motifSample.roles.slice(0, 4).map(r => ({
+        role_id: r.role_id,
+        entity_id: r.entity_id.slice(0, 8) + "…",
+      })),
+      properties: motifSample.properties,
+    }, null, 2))}</pre>` : ""}
+    <h4>${proteinLevelEdges.length} protein-level hyperedges</h4>
+    <div>
+      Connect this protein to other proteins / pathways / papers.
+      ${proteinLevelEdges.length ? proteinLevelEdges.map(e =>
+        `<span class="pill">${typeNameById[e.type_id]} · arity ${e.roles.length}</span>`
+      ).join(" ") : '<i>none</i>'}
+    </div>
+    ${proteinLevelSample ? `<pre>${escapeHtml(JSON.stringify({
+      kind: "hyper_edge",
+      hyperedge_id: proteinLevelSample.hyperedge_id.slice(0, 8) + "…",
+      type_id: proteinLevelSample.type_id,
+      arity: proteinLevelSample.roles.length,
+      properties: proteinLevelSample.properties,
+    }, null, 2))}</pre>` : ""}
+    <h4>Why this matters</h4>
+    <p>
+      A catalytic triad is a relationship between <b>three</b> residues
+      — Ser, His, Asp all together — and any single one without the
+      others is non-functional. In a binary-edge graph you'd need to
+      invent an extra "triad" node and connect three edges to it.
+      In nDB the relationship IS the hyperedge: type
+      <span class="pill">catalytic_triad</span>, arity 3, role-fillers
+      [Ser195, His57, Asp102]. Same for zinc fingers (arity 4),
+      α-helices (arity ~16), β-sheet pairs (arity 20), and any
+      protein complex with three or more members.
+    </p>`;
+  $body.innerHTML = html;
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+
 // Confidence-aware node styling — for a protein, the colour comes from
 // the AlphaFold-DB pLDDT bucket (blue-yellow-orange ramp) instead of the
 // type colour, AND the rendered size scales with the mean pLDDT so high-
