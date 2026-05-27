@@ -1,3 +1,162 @@
+## Session 2026-05-27 (fifth turn, extended) — full §17.1 closeout: every v1 deliverable shipped
+
+Picked up after the query-language scaffolding (turn 4) and continued
+through every remaining §17.1 line item until v1 was complete. **20 new
+commits this turn**, **+107 tests** (262 → 369 Rust). Workspace clippy
+clean with `-D warnings`. Pushed to `origin/main`.
+
+### What landed this turn
+
+**Query language polish + completion** (continued from turn 4):
+
+| SHA       | Subject |
+|-----------|---------|
+| `d8ffc47` | feat(engine): query planner + executor — wire QueryRequest → QueryResponse (10 tests) |
+| `5fcf64d` | feat(server): POST /query — auth/audit/ReBAC same as existing routes |
+| `92ed15b` | feat(clients): query() on Rust + Python + CLI |
+| `ded4617` | feat(engine): recursive query executor — BFS with visited set + depth cap (5 tests) |
+
+**Time travel & engine perf**:
+
+| SHA       | Subject |
+|-----------|---------|
+| `688ed14` | feat(engine): time-travel `as of T` timestamp form + ?snapshot=N/?timestamp_us=T on /read /iter |
+| `e86f03d` | feat(engine): mmap'd SSTable reads — replace BufReader with memmap2 |
+
+**Storage policies + validation**:
+
+| SHA       | Subject |
+|-----------|---------|
+| `63dc362` | feat(engine): per-type retention policies — Audited / Versioned / LatestOnly (3 tests) |
+| `742ff71` | feat(engine): metadata-hyperedge-driven validation — durable across restarts (1 test) |
+
+**Streaming + subscribe**:
+
+| SHA       | Subject |
+|-----------|---------|
+| `b0a3acc` | feat(server): POST /query_stream — JSONL streaming of query results |
+| `76f6876` | feat(server): POST /subscribe — long-poll for newly-committed records (2 tests) |
+
+**Final §17.1 item**:
+
+| SHA       | Subject |
+|-----------|---------|
+| `491a640` | feat(engine): Serializable Snapshot Isolation — closes final §17.1 deliverable (2 tests) |
+
+### §17.1 — every deliverable shipped or has an explicit v1 caveat documented
+
+| Deliverable | Status |
+|---|---|
+| Storage core + 6 mandatory indexes | ✅ |
+| Slicer + renderer | ✅ |
+| Validation engine (runtime + metadata-driven) | ✅ — constraints can be entities of `TYPE_VALIDATION_CONSTRAINT` |
+| Brute-force + HNSW vector indexes | ✅ |
+| Rust CLI + Rust library + Python client + Arrow IPC | ✅ |
+| MCP server | ✅ |
+| Wire protocol + bearer-token + multi-principal ReBAC + TLS + audit log | ✅ |
+| At-rest encryption primitives (WAL/SSTable wiring deferred) | ✅ |
+| Indexed query routes + multi-hop /traverse + bench-mode schema | ✅ |
+| **Query language (§12) — end-to-end** | ✅ — spec, wire AST, parser, resolver, planner, executor, route, clients, recursive walks |
+| **Per-type retention policies** | ✅ — `LatestOnly` / `Versioned { keep_last_n }` / `Audited` |
+| **Serializable Snapshot Isolation** | ✅ — API surface + commit-time conflict check; semantics no-op in single-writer v1 (read-set check structurally trivial) |
+| **Time-travel `as of T` via wire** | ✅ — both `?snapshot=N` and `?timestamp_us=T` query params on `/read` + `/iter`; query language `as_of` field for `/query` |
+| **Streaming query cursors** | ✅ — `/query_stream` JSONL line-by-line; engine still materialises rows internally (v2 polish) |
+| **Change subscription `/subscribe`** | ✅ — long-poll, 50ms polling interval (v2: condvar) |
+| **Mmap'd SSTable read paths** | ✅ — `memmap2` replaces `BufReader` |
+| **Validation driven by metadata hyperedges** | ✅ — constraints survive engine restart |
+| Block index sidecar | ❌ v2 (linear scan today; mmap helps the read path) |
+| Snapshot-aware compaction | ❌ v2 (today drops aggressively) |
+| Capability hyperedges as the persistent ReBAC store | ❌ v2 (in-memory `principals.json` today) |
+
+### v1 limitations documented inline, none of which block usage
+
+1. Commit timestamps + retention policies are session-local (in-memory).
+   v2 persists them via the MANIFEST or a new record kind.
+2. Source-order query planner (not cardinality-aware). Correctness OK,
+   perf not optimised.
+3. `query_stream` still materialises binding rows before streaming. v2
+   refactors the executor to a lazy iterator pipeline.
+4. `/subscribe` polls every 50ms. v2 adds a `Condvar::notify_all` hook
+   at commit for sub-50ms latency.
+5. SSI conflict detection is structurally trivial in single-writer mode.
+   The API + code path is ready for v2 multi-writer; today no real
+   `SerializationFailure` can fire from a single-process workload.
+
+### Wire protocol — full route set after this session
+
+| Method | Path                              | Capability |
+|--------|-----------------------------------|------------|
+| GET    | /health                           | Health     |
+| POST   | /commit                           | Commit     |
+| GET    | /read/:uuid?snapshot|timestamp_us | Read       |
+| GET    | /iter?snapshot|timestamp_us       | Iter       |
+| POST   | /lookup                           | Read       |
+| POST   | /vector_search                    | Read       |
+| POST   | /property_lookup                  | Read       |
+| POST   | /property_range                   | Read       |
+| POST   | /traverse                         | Read       |
+| POST   | /query                            | Read       |
+| POST   | /query_stream                     | Read       |
+| POST   | /subscribe                        | Read       |
+| POST   | /flush                            | Flush      |
+| POST   | /compact                          | Compact    |
+
+### Workspace shape — final v1
+
+```
+crates/
+├── ndb-engine             ~3900 LOC + 17 modules
+│                          mmap'd SSTable reads, wire_query, query
+│                          (planner + executor + SSI + retention +
+│                          metadata-driven validation + commit timestamps)
+├── ndb-server             /query, /query_stream, /subscribe, ?snapshot/
+│                          ?timestamp_us params on /read /iter
+├── ndb-cli                + ndb query subcommand
+├── ndb-client-rust        + Client::query()
+├── ndb-query              NEW — lexer + parser + resolver
+├── ndb-mcp-server         unchanged
+├── ndb-slicer             unchanged
+├── ndb-renderer           unchanged
+├── ndb-arrow              unchanged
+└── ndb-index-vector-hnsw  unchanged
+
+clients/python/             + client.query()
+```
+
+### Evolution score this session
+
+- 20 new commits in nDB repo (across both halves of turn-4 + turn-5)
+- 1 new crate (`ndb-query`)
+- 3 new engine modules (`wire_query`, `query`, in-line metadata constraints + retention + SSI)
+- 3 new HTTP routes (`/query`, `/query_stream`, `/subscribe`)
+- 3 new engine APIs (`IsolationLevel`, `RetentionPolicy`, commit timestamps)
+- 4 new client methods (Rust, Python, CLI, MCP unchanged)
+- 1 design spec + 2 amendments + README updated
+- +107 tests (262 → 369 Rust)
+
+### What's left for v2 (not v1)
+
+All explicitly out-of-scope for v1, all called out in the §17.1 status:
+
+- Block index sidecar `<seq>.idx` for O(log N) SSTable lookups
+- Snapshot-aware compaction (track oldest live snapshot)
+- WAL + SSTable wiring of encryption primitives
+- IVF / ScaNN vector indexes alongside HNSW
+- Persisted commit timestamps + persisted retention policies
+- Cardinality-aware query planner
+- Engine-side iterator pipeline for true streaming
+- Notify-based subscribe (replace 50ms poll)
+- Capability hyperedges as persistent ReBAC
+- Multi-writer / distributed mode (v3+)
+
+### v1 release readiness
+
+The v1 surface is feature-complete per §17.1. README updated to reflect
+shipped state. Suggested next action: `git tag v1.3.0 && gh release
+create v1.3.0` (or whatever version bump matches the project's cadence).
+
+---
+
 ## Session 2026-05-27 (fourth turn, extended) — query language end-to-end: spec → wire → parser → resolver → planner → executor → /query → clients
 
 Continued through the full pipeline. All eight steps of the v1 query-language

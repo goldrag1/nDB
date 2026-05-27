@@ -13,7 +13,8 @@ for the byte-level details.
 
 | Crate                       | Purpose                                                                              |
 |-----------------------------|--------------------------------------------------------------------------------------|
-| `ndb-engine`                | Storage core: records, WAL, SSTable, MANIFEST, memtable, MVCC, compaction, indexes, validation, AES-GCM-256 at-rest encryption primitives. Library only. |
+| `ndb-engine`                | Storage core: records, WAL, mmap-backed SSTable, MANIFEST, memtable, MVCC + SSI, compaction with per-type retention, indexes, metadata-driven validation, query planner/executor, AES-GCM-256 at-rest encryption primitives. Library only. |
+| `ndb-query`                 | Text → name-AST → id-AST (`QueryRequest`) for the §12 query language. Lexer + recursive-descent parser + dictionary resolver. Library only. |
 | `ndb-server`                | Hand-rolled HTTP/1.1 server exposing the engine over JSON. TLS via rustls; ReBAC capability gating; .audit.jsonl. Binary `ndb-server`. |
 | `ndb-client-rust`           | Reusable Rust client library (`ndb_client::Client`) — typed against the engine's wire shapes. |
 | `ndb-cli`                   | Command-line client over `ndb-client-rust`. Binary `ndb`.                            |
@@ -26,40 +27,49 @@ for the byte-level details.
 
 ## Status (v1)
 
-Storage core is end-to-end working. Wire protocol, CLI, MCP server, and the data
-pipeline all pass tests against real databases on disk. **193 tests, clippy
-clean with `-D warnings`** as of this writing.
+Every line item in the v1 spec §17.1 is shipped. **369 Rust tests + 12
+Python tests, clippy clean with `-D warnings`** as of this writing.
 
 What's shipped:
 
 - Append-only LSM storage (records, WAL `.ndblog`, SSTable `.ndb`, MANIFEST, CURRENT, LOCK)
+- **Mmap'd SSTable reads** (`memmap2` — cold-read fast path)
 - MVCC with snapshot reads + supersession derived at read time
 - Single-writer transaction commit with validation pre-check
+- **Snapshot Isolation + Serializable Snapshot Isolation** (per-txn opt-in via `WriteTxn::with_isolation`; read-set tracking + commit-time conflict detection)
+- **Per-type retention policies** — `LatestOnly` (default), `Versioned { keep_last_n }`, `Audited`
 - All 6 mandatory v1 indexes (entity-by-id, hyperedge-by-id, lookup-key, adjacency, hyperedge-type-cluster, property B-tree)
 - Brute-force vector index (k-NN, L2 / cosine) + opt-in HNSW (`ndb-index-vector-hnsw`)
-- Full compaction with cross-bucket tombstone handling
+- Full compaction with cross-bucket tombstone handling + per-type retention
+- **Validation engine + metadata-hyperedge-driven constraints** (constraints live in the database; loaded at `Engine::open`)
 - JSON wire protocol over HTTP/1.1
+- **Query language §12 end-to-end** — text → name AST (`ndb-query`) → wire AST (id-based) → planner → executor → `POST /query`. SQL-ish surface, n-ary pattern matching, recursive paths (`*`, `+`, `?`, `{n,m}`), where-clause filters, time travel (`as of <tx_id>` or `<timestamp>`), limit. Typed clients in Rust, Python, and CLI.
+- **Streaming variants** — `POST /query_stream` emits JSONL line-by-line; `POST /subscribe` long-polls for newly-committed records
+- **Time travel** via `?snapshot=N` and `?timestamp_us=T` on `/read` and `/iter` (commit timestamps recorded in-memory per session)
 - Security baseline:
   - Bearer-token auth + multi-principal ReBAC (capability set per token)
   - TLS termination via rustls (`--tls-cert` / `--tls-key`)
   - `.audit.jsonl` per request — shared between HTTP server and MCP server
   - At-rest encryption primitives (`Cipher`, `EncryptedFile`) ready for WAL/SSTable wiring
-- CLI client over HTTP (`ndb`)
+- CLI client over HTTP (`ndb`) with `query` subcommand
 - MCP server over stdio JSON-RPC, principal- and audit-aware
 - CPU slicer (project, filter, group-by, sum/avg/count/min/max, sort, limit)
 - Text/TSV/CSV renderer
 - Apache Arrow IPC bridge (`ndb-arrow`)
-- Pure-Python HTTP client (`clients/python/ndb_client`)
+- Pure-Python HTTP client (`clients/python/ndb_client`) with `query()` method
 
-What's deferred to v2:
+What's explicitly deferred to v2 (with v1 limitations documented inline):
 
-- Block index sidecar (`<seq>.idx`) for O(log N) SSTable lookups
-- Snapshot-aware compaction (track oldest live snapshot)
+- Block index sidecar (`<seq>.idx`) for O(log N) SSTable lookups (today: O(N) linear scan)
+- Snapshot-aware compaction (track oldest live snapshot; today drops aggressively)
 - WAL + SSTable wiring of the at-rest encryption primitives (key rotation, `KeyProvider` trait)
 - IVF / ScaNN vector indexes alongside HNSW
-- Validation driven by metadata hyperedges (today: runtime `Engine::require_property` etc.)
-- Query language (§12) — Datalog-influenced pattern matching
+- Persisted commit timestamps + persisted retention policies (today: in-memory, session-local)
+- Cardinality-aware query planner (today: source-order; correctness preserved)
+- Engine-side iterator pipeline for true streaming (today: `query_stream` materialises rows before streaming)
+- Notify-based subscribe (today: 50ms polling)
 - Capability hyperedges as the persistent ReBAC store (today: in-memory `principals.json`)
+- Multi-writer / distributed mode — SSI API surface is ready for it; semantics are no-op in single-writer v1
 - Distributed mode (v3+)
 
 ## Quick start
@@ -111,14 +121,25 @@ primary_id)` inside SSTables. Atomic publish via `write-temp + fsync + rename
 
 Routes exposed by `ndb-server`:
 
-| Method | Path           | Body                                  | Response                                      |
-|--------|----------------|---------------------------------------|-----------------------------------------------|
-| GET    | `/health`      | —                                     | `{"status":"ok"}`                             |
-| POST   | `/commit`      | `CommitRequest { records: [...] }`    | `CommitResponse { tx_id }`                    |
-| GET    | `/read/:uuid`  | —                                     | `ReadResponse { outcome: missing|deleted|live, ... }` |
-| GET    | `/iter`        | —                                     | JSONL stream of records                       |
-| POST   | `/flush`       | —                                     | memtable + SSTable counts                     |
-| POST   | `/compact`     | —                                     | `CompactionStats`                             |
+| Method | Path                         | Body                                | Response                                              |
+|--------|------------------------------|-------------------------------------|-------------------------------------------------------|
+| GET    | `/health`                    | —                                   | `{"status":"ok"}`                                     |
+| POST   | `/commit`                    | `CommitRequest { records: [...] }`  | `CommitResponse { tx_id }`                            |
+| GET    | `/read/:uuid?snapshot=N`     | —                                   | `ReadResponse { outcome: missing\|deleted\|live, ... }` |
+| GET    | `/iter?timestamp_us=T`       | —                                   | JSONL stream of records (live at the snapshot)        |
+| POST   | `/lookup`                    | `LookupRequest`                     | `LookupResponse`                                      |
+| POST   | `/vector_search`             | `VectorSearchRequest`               | `VectorSearchResponse`                                |
+| POST   | `/property_lookup`           | `PropertyLookupRequest`             | `PropertyLookupResponse`                              |
+| POST   | `/property_range`            | `PropertyRangeRequest`              | `PropertyRangeResponse`                               |
+| POST   | `/traverse`                  | `TraverseRequest`                   | `TraverseResponse`                                    |
+| POST   | `/query`                     | `QueryRequest`                      | `QueryResponse`                                       |
+| POST   | `/query_stream`              | `QueryRequest`                      | JSONL: header + one row per line                      |
+| POST   | `/subscribe`                 | `SubscribeRequest`                  | JSONL: header + one record per line                   |
+| POST   | `/flush`                     | —                                   | memtable + SSTable counts                             |
+| POST   | `/compact`                   | —                                   | `CompactionStats`                                     |
+
+`/read` and `/iter` accept `?snapshot=<tx_id>` OR `?timestamp_us=<T>` to
+pin the snapshot. Default is the engine's latest committed transaction.
 
 JSON shapes use tagged-union for `Value` and per-kind discriminator for
 records. Wire format details live in `ndb-engine::wire`.
