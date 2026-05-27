@@ -191,6 +191,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ndb-mcp-server"
+version = "0.1.0"
+dependencies = [
+ "ndb-engine",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "ndb-renderer"
 version = "0.1.0"
 dependencies = [

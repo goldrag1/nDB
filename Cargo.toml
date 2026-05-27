@@ -6,6 +6,7 @@ members = [
     "crates/ndb-cli",
     "crates/ndb-slicer",
     "crates/ndb-renderer",
+    "crates/ndb-mcp-server",
 ]
 
 [workspace.package]
