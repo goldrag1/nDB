@@ -391,6 +391,69 @@ fn principals_health_open_even_without_token() {
 }
 
 #[test]
+fn tls_round_trip_health() {
+    use rcgen::generate_simple_self_signed;
+    use std::io::Read as _;
+    use std::sync::Arc;
+
+    let dir = temp_dir("tls");
+
+    // Generate self-signed cert for localhost.
+    let subject_alt_names = vec!["localhost".to_string()];
+    let cert = generate_simple_self_signed(subject_alt_names).expect("rcgen");
+    let cert_path = dir.join(".test-cert.pem");
+    let key_path = dir.join(".test-key.pem");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(&cert_path, cert.cert.pem()).unwrap();
+    std::fs::write(&key_path, cert.key_pair.serialize_pem()).unwrap();
+
+    let server = Arc::new(
+        Server::open(&dir)
+            .unwrap()
+            .with_tls_pem(&cert_path, &key_path)
+            .expect("tls config"),
+    );
+    let bind = server.bind_tls("127.0.0.1:0").unwrap();
+    let addr = bind.local_addr().unwrap();
+    drop(bind);
+
+    let srv = Arc::clone(&server);
+    thread::spawn(move || {
+        let bind = srv.bind_tls(addr).unwrap();
+        let _ = bind.serve_n(1);
+    });
+    thread::sleep(Duration::from_millis(100));
+
+    // Client side: use rustls to dial.
+    let der_cert = cert.cert.der().clone();
+    let mut root_store = rustls::RootCertStore::empty();
+    root_store.add(der_cert).unwrap();
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let cfg = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+
+    let server_name = rustls::pki_types::ServerName::try_from("localhost")
+        .unwrap()
+        .to_owned();
+    let mut conn = rustls::ClientConnection::new(Arc::new(cfg), server_name).unwrap();
+    let mut sock = std::net::TcpStream::connect(addr).unwrap();
+    let mut tls = rustls::Stream::new(&mut conn, &mut sock);
+
+    let req = b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    tls.write_all(req).unwrap();
+    let mut buf = Vec::new();
+    tls.read_to_end(&mut buf).ok(); // close_notify may be present or absent
+    let text = std::str::from_utf8(&buf).unwrap();
+    assert!(text.starts_with("HTTP/1.1 200"), "got: {text:?}");
+    assert!(text.contains("\"status\":\"ok\""), "got: {text:?}");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn principals_load_from_disk() {
     use std::collections::BTreeSet;
     let dir = temp_dir("rebac_disk");

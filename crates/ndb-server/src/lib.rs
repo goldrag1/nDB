@@ -181,6 +181,11 @@ pub struct Server {
     /// Append-only `.audit.jsonl` under the database directory. Every
     /// dispatched request gets one line. None when auditing is disabled.
     audit: Option<Arc<Mutex<AuditLog>>>,
+    /// Optional pre-built rustls `ServerConfig`. When present, the server
+    /// can be bound via [`run_tls`](Self::run_tls) / [`bind_tls`](Self::bind_tls)
+    /// to terminate TLS itself instead of relying on a reverse proxy
+    /// (§13.3). When absent, only the plain-TCP paths are available.
+    tls_config: Option<Arc<rustls::ServerConfig>>,
 }
 
 /// Append-only audit log. One JSON line per request. Synchronous flush
@@ -258,6 +263,7 @@ impl Server {
             auth_token: None,
             principals: None,
             audit: None,
+            tls_config: None,
         })
     }
 
@@ -269,6 +275,7 @@ impl Server {
             auth_token: None,
             principals: None,
             audit: None,
+            tls_config: None,
         }
     }
 
@@ -305,6 +312,43 @@ impl Server {
             Some(p) => Ok((self.with_principals(p), true)),
             None => Ok((self, false)),
         }
+    }
+
+    /// Install a pre-built rustls `ServerConfig`. Once present, the
+    /// server gains TLS-bind / TLS-run methods. Plain-TCP routes still
+    /// work in parallel.
+    #[must_use]
+    pub fn with_tls(mut self, cfg: Arc<rustls::ServerConfig>) -> Self {
+        self.tls_config = Some(cfg);
+        self
+    }
+
+    /// Convenience: load a PEM-encoded certificate chain and PKCS#8
+    /// private key from disk, build a rustls `ServerConfig` with safe
+    /// defaults (TLS 1.2 + 1.3, ring-backed crypto), and install it.
+    pub fn with_tls_pem(self, cert_path: &Path, key_path: &Path) -> Result<Self, ServerError> {
+        let cfg = build_rustls_config(cert_path, key_path)?;
+        Ok(self.with_tls(Arc::new(cfg)))
+    }
+
+    /// Bind a TLS listener on `addr`. Returns an [`BoundTlsServer`].
+    pub fn bind_tls<A: ToSocketAddrs>(&self, addr: A) -> Result<BoundTlsServer<'_>, ServerError> {
+        let cfg = self
+            .tls_config
+            .clone()
+            .ok_or(ServerError::BadRequest("TLS not configured"))?;
+        let listener = TcpListener::bind(addr)?;
+        Ok(BoundTlsServer {
+            server: self,
+            listener,
+            cfg,
+        })
+    }
+
+    /// Block forever accepting TLS connections on `addr`.
+    pub fn run_tls<A: ToSocketAddrs>(&self, addr: A) -> Result<(), ServerError> {
+        let bound = self.bind_tls(addr)?;
+        bound.serve()
     }
 
     /// Enable audit logging. Every dispatched request appends one line
@@ -381,13 +425,28 @@ impl Server {
         })
     }
 
-    /// Handle one connection: parse a single HTTP/1.1 request, dispatch,
-    /// write a response, close. (No keep-alive in v1.)
-    pub fn handle_connection(&self, mut stream: TcpStream) -> Result<(), ServerError> {
-        let (req, body) = parse_request(&mut stream)?;
+    /// Handle one plain-TCP connection. Convenience wrapper for the
+    /// generic [`handle_io`](Self::handle_io).
+    pub fn handle_connection(&self, stream: TcpStream) -> Result<(), ServerError> {
+        // BufReader needs ownership, but we still need to write back on
+        // the same socket — clone the file descriptor for reading.
+        let read = stream.try_clone()?;
+        let mut write = stream;
+        self.handle_io(read, &mut write)
+    }
+
+    /// Handle one connection over arbitrary `Read` + `Write` halves.
+    /// Used by the TLS path to wrap a `rustls::StreamOwned` and reuse the
+    /// same dispatch logic.
+    pub fn handle_io<R: Read, W: Write>(
+        &self,
+        reader: R,
+        writer: &mut W,
+    ) -> Result<(), ServerError> {
+        let (req, body) = parse_request(reader)?;
         let mut outcome = DispatchOutcome::default();
-        let dispatch_result = self.dispatch(&req, &body, &mut stream, &mut outcome);
-        let _ = stream.flush();
+        let dispatch_result = self.dispatch(&req, &body, writer, &mut outcome);
+        let _ = writer.flush();
         // Audit AFTER response is flushed; failures here don't break the request.
         let principal = if outcome.principal.is_empty() {
             if self.auth_token.is_none() { "anonymous" } else { "unknown" }
@@ -409,7 +468,7 @@ impl Server {
         &self,
         req: &Request,
         body: &[u8],
-        out: &mut TcpStream,
+        out: &mut dyn Write,
         outcome: &mut DispatchOutcome,
     ) -> Result<(), ServerError> {
         let path_no_q = req.path_no_query();
@@ -488,7 +547,7 @@ impl Server {
 
     fn handle_flush(
         &self,
-        out: &mut TcpStream,
+        out: &mut dyn Write,
         outcome: &mut DispatchOutcome,
     ) -> Result<(), ServerError> {
         let mut engine = self.engine.lock().expect("engine mutex poisoned");
@@ -508,7 +567,7 @@ impl Server {
 
     fn handle_compact(
         &self,
-        out: &mut TcpStream,
+        out: &mut dyn Write,
         outcome: &mut DispatchOutcome,
     ) -> Result<(), ServerError> {
         let mut engine = self.engine.lock().expect("engine mutex poisoned");
@@ -529,7 +588,7 @@ impl Server {
     fn handle_commit(
         &self,
         body: &[u8],
-        out: &mut TcpStream,
+        out: &mut dyn Write,
         outcome: &mut DispatchOutcome,
     ) -> Result<(), ServerError> {
         let req: CommitRequest = match serde_json::from_slice(body) {
@@ -578,7 +637,7 @@ impl Server {
     fn handle_read(
         &self,
         uuid_str: &str,
-        out: &mut TcpStream,
+        out: &mut dyn Write,
         outcome: &mut DispatchOutcome,
     ) -> Result<(), ServerError> {
         let Ok(uuid) = uuid::Uuid::parse_str(uuid_str) else {
@@ -604,7 +663,7 @@ impl Server {
 
     fn handle_iter(
         &self,
-        out: &mut TcpStream,
+        out: &mut dyn Write,
         outcome: &mut DispatchOutcome,
     ) -> Result<(), ServerError> {
         let mut engine = self.engine.lock().expect("engine mutex poisoned");
@@ -631,6 +690,52 @@ impl Server {
     pub fn engine(&self) -> Arc<Mutex<Engine>> {
         Arc::clone(&self.engine)
     }
+}
+
+/// Build a rustls `ServerConfig` from PEM-encoded cert chain + PKCS#8 key.
+fn build_rustls_config(
+    cert_path: &Path,
+    key_path: &Path,
+) -> Result<rustls::ServerConfig, ServerError> {
+    use rustls_pemfile::Item;
+    let cert_bytes = std::fs::read(cert_path)?;
+    let mut cert_reader = std::io::BufReader::new(cert_bytes.as_slice());
+    let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
+        rustls_pemfile::certs(&mut cert_reader).collect::<Result<Vec<_>, _>>()?;
+    if certs.is_empty() {
+        return Err(ServerError::BadRequest("no PEM certificates found"));
+    }
+    let key_bytes = std::fs::read(key_path)?;
+    let mut key_reader = std::io::BufReader::new(key_bytes.as_slice());
+    let key = loop {
+        match rustls_pemfile::read_one(&mut key_reader)
+            .map_err(|e| ServerError::Io(std::io::Error::other(e)))?
+        {
+            Some(Item::Pkcs8Key(k)) => {
+                break rustls::pki_types::PrivateKeyDer::Pkcs8(k);
+            }
+            Some(Item::Pkcs1Key(k)) => break rustls::pki_types::PrivateKeyDer::Pkcs1(k),
+            Some(Item::Sec1Key(k)) => break rustls::pki_types::PrivateKeyDer::Sec1(k),
+            Some(_) => {}
+            None => {
+                return Err(ServerError::BadRequest("no private key found"));
+            }
+        }
+    };
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let cfg = rustls::ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| {
+            ServerError::Io(std::io::Error::other(format!("rustls protocol error: {e}")))
+        })?
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|e| {
+            ServerError::Io(std::io::Error::other(format!(
+                "rustls server cert error: {e}"
+            )))
+        })?;
+    Ok(cfg)
 }
 
 /// Server bound to an address; useful for tests that pick port 0.
@@ -673,6 +778,83 @@ impl BoundServer<'_> {
     }
 }
 
+/// TLS-bound server. Same shape as [`BoundServer`] but wraps each
+/// accepted `TcpStream` in a `rustls::ServerConnection` before dispatch.
+pub struct BoundTlsServer<'a> {
+    /// Reference back to the server.
+    pub server: &'a Server,
+    listener: TcpListener,
+    cfg: Arc<rustls::ServerConfig>,
+}
+
+impl BoundTlsServer<'_> {
+    /// Local address (with concrete port if 0 was supplied).
+    pub fn local_addr(&self) -> std::io::Result<std::net::SocketAddr> {
+        self.listener.local_addr()
+    }
+
+    fn handle_one(&self, stream: TcpStream) -> Result<(), ServerError> {
+        let conn = rustls::ServerConnection::new(Arc::clone(&self.cfg))
+            .map_err(|e| ServerError::Io(std::io::Error::other(format!("rustls: {e}"))))?;
+        // StreamOwned drives the TLS handshake + record layer transparently.
+        let mut tls = rustls::StreamOwned::new(conn, stream);
+        // Split borrow: the same stream is both reader and writer. We read
+        // headers + body up-front via BufReader (owning a &mut to tls), then
+        // write directly back through tls afterwards.
+        let (req, body) = {
+            let r = &mut tls;
+            parse_request(r)?
+        };
+        let mut outcome = DispatchOutcome::default();
+        let dispatch_result = self.server.dispatch(&req, &body, &mut tls, &mut outcome);
+        let _ = tls.flush();
+        let principal = if outcome.principal.is_empty() {
+            if self.server.auth_token.is_none() && self.server.principals.is_none() {
+                "anonymous"
+            } else {
+                "unknown"
+            }
+        } else {
+            outcome.principal.as_str()
+        };
+        self.server.record_audit(
+            principal,
+            &req.method,
+            req.path_no_query(),
+            outcome.status,
+            outcome.tx_id,
+            outcome.failure.as_deref(),
+        );
+        dispatch_result
+    }
+
+    /// Accept and serve forever.
+    pub fn serve(&self) -> Result<(), ServerError> {
+        for stream in self.listener.incoming() {
+            match stream {
+                Ok(s) => {
+                    if let Err(e) = self.handle_one(s) {
+                        eprintln!("tls connection error: {e}");
+                    }
+                }
+                Err(e) => eprintln!("tls accept error: {e}"),
+            }
+        }
+        Ok(())
+    }
+
+    /// Accept and serve N connections, then return.
+    pub fn serve_n(&self, n: usize) -> Result<(), ServerError> {
+        for _ in 0..n {
+            let (stream, _addr) = self.listener.accept()?;
+            if let Err(e) = self.handle_one(stream) {
+                eprintln!("tls connection error: {e}");
+            }
+        }
+        Ok(())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Hand-rolled HTTP/1.1 parsing + response writing
 // ---------------------------------------------------------------------------
@@ -694,8 +876,8 @@ impl Request {
     }
 }
 
-fn parse_request(stream: &mut TcpStream) -> Result<(Request, Vec<u8>), ServerError> {
-    let mut reader = BufReader::new(stream.try_clone()?);
+fn parse_request<R: Read>(stream: R) -> Result<(Request, Vec<u8>), ServerError> {
+    let mut reader = BufReader::new(stream);
     let mut request_line = String::new();
     if reader.read_line(&mut request_line)? == 0 {
         return Err(ServerError::BadRequest("empty request"));
@@ -830,11 +1012,11 @@ fn status_text(code: u16) -> &'static str {
     }
 }
 
-fn write_status_line(out: &mut TcpStream, code: u16) -> std::io::Result<()> {
+fn write_status_line(out: &mut dyn Write, code: u16) -> std::io::Result<()> {
     write!(out, "HTTP/1.1 {code} {}\r\n", status_text(code))
 }
 
-fn write_json<T: Serialize>(out: &mut TcpStream, code: u16, body: &T) -> Result<(), ServerError> {
+fn write_json<T: Serialize>(out: &mut dyn Write, code: u16, body: &T) -> Result<(), ServerError> {
     let bytes = serde_json::to_vec(body)
         .map_err(|e| ServerError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
     write_status_line(out, code)?;
@@ -849,7 +1031,7 @@ fn write_json<T: Serialize>(out: &mut TcpStream, code: u16, body: &T) -> Result<
     Ok(())
 }
 
-fn write_error(out: &mut TcpStream, code: u16, err: &str, detail: &str) -> Result<(), ServerError> {
+fn write_error(out: &mut dyn Write, code: u16, err: &str, detail: &str) -> Result<(), ServerError> {
     let body = ErrorResponse {
         error: err.to_owned(),
         detail: detail.to_owned(),

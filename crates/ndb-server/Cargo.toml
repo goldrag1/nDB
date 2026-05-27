@@ -17,11 +17,16 @@ name = "ndb-server"
 path = "src/main.rs"
 
 [dependencies]
-ndb-engine = { path = "../ndb-engine" }
-serde      = { workspace = true }
-serde_json = { workspace = true }
-thiserror  = { workspace = true }
-uuid       = { workspace = true }
+ndb-engine     = { path = "../ndb-engine" }
+serde          = { workspace = true }
+serde_json     = { workspace = true }
+thiserror      = { workspace = true }
+uuid           = { workspace = true }
+rustls         = { version = "0.23", default-features = false, features = ["std", "ring", "logging", "tls12"] }
+rustls-pemfile = "2"
+
+[dev-dependencies]
+rcgen = "0.13"
 
 [lints]
 workspace = true

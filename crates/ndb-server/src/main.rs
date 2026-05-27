@@ -7,11 +7,15 @@ use ndb_server::Server;
 
 fn usage() {
     eprintln!(
-        "Usage: ndb-server --path <database-dir> [--bind 127.0.0.1:8742] [--audit]\n\
+        "Usage: ndb-server --path <database-dir> [--bind 127.0.0.1:8742] [--audit] \\\n\
+         \t[--tls-cert <path> --tls-key <path>]\n\
          \n\
          Environment:\n\
            NDB_TOKEN=<token>   Require Authorization: Bearer <token> on every route except /health.\n\
            NDB_AUDIT=1         Equivalent to --audit (append <db>/.audit.jsonl per request).\n\
+         \n\
+         When both --tls-cert and --tls-key are supplied, the server binds TLS on --bind.\n\
+         When only one is supplied or neither, the server binds plain HTTP on --bind.\n\
          \n\
          Routes:\n  GET  /health\n  POST /commit\n  GET  /read/:uuid\n  GET  /iter\n  POST /flush\n  POST /compact\n"
     );
@@ -21,6 +25,8 @@ struct Args {
     path: String,
     bind: String,
     audit: bool,
+    tls_cert: Option<String>,
+    tls_key: Option<String>,
 }
 
 fn parse_args() -> Option<Args> {
@@ -28,11 +34,15 @@ fn parse_args() -> Option<Args> {
     let mut path: Option<String> = None;
     let mut bind: Option<String> = None;
     let mut audit = false;
+    let mut tls_cert: Option<String> = None;
+    let mut tls_key: Option<String> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--path" | "-p" => path = args.next(),
             "--bind" | "-b" => bind = args.next(),
             "--audit" => audit = true,
+            "--tls-cert" => tls_cert = args.next(),
+            "--tls-key" => tls_key = args.next(),
             "--help" | "-h" => {
                 usage();
                 return None;
@@ -48,6 +58,8 @@ fn parse_args() -> Option<Args> {
         path: path?,
         bind: bind.unwrap_or_else(|| "127.0.0.1:8742".to_owned()),
         audit,
+        tls_cert,
+        tls_key,
     })
 }
 
@@ -97,7 +109,34 @@ fn main() -> ExitCode {
             }
         };
     }
-    if let Err(e) = server.run(&args.bind) {
+    // Decide TLS or plain TCP. Both --tls-cert and --tls-key must be
+    // supplied together; either-without-the-other is a config error.
+    let use_tls = match (&args.tls_cert, &args.tls_key) {
+        (Some(c), Some(k)) => {
+            server = match server.with_tls_pem(std::path::Path::new(c), std::path::Path::new(k)) {
+                Ok(s) => {
+                    eprintln!("ndb-server: TLS enabled (cert={c}, key={k})");
+                    s
+                }
+                Err(e) => {
+                    eprintln!("failed to load TLS material: {e}");
+                    return ExitCode::from(1);
+                }
+            };
+            true
+        }
+        (None, None) => false,
+        _ => {
+            eprintln!("--tls-cert and --tls-key must be supplied together");
+            return ExitCode::from(2);
+        }
+    };
+    let run_result = if use_tls {
+        server.run_tls(&args.bind)
+    } else {
+        server.run(&args.bind)
+    };
+    if let Err(e) = run_result {
         eprintln!("server error: {e}");
         return ExitCode::from(1);
     }
