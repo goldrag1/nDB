@@ -194,6 +194,81 @@ fn csv_quote(s: &str) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// v2.1 §2.7 — Markdown table renderer
+// ---------------------------------------------------------------------------
+
+/// GitHub-flavored Markdown table — header row, alignment row, body
+/// rows. Cells that contain pipes / newlines / leading `-` / leading
+/// `+` get backtick-wrapped to keep the table machine-parseable.
+///
+/// Used for paste-into-issue and paste-into-doc workflows.
+#[must_use]
+pub fn render_markdown(t: &Table) -> String {
+    let mut out = String::new();
+    // Header row.
+    out.push_str("| ");
+    out.push_str(
+        &t.headers
+            .iter()
+            .map(|h| md_escape(h))
+            .collect::<Vec<_>>()
+            .join(" | "),
+    );
+    out.push_str(" |\n");
+    // Alignment row — left-align everything (GFM `|---|` syntax).
+    out.push('|');
+    for _ in &t.headers {
+        out.push_str(" --- |");
+    }
+    out.push('\n');
+    // Body rows.
+    for row in &t.rows {
+        out.push_str("| ");
+        let cells: Vec<String> = row.iter().map(|c| md_escape(&format_cell(c))).collect();
+        out.push_str(&cells.join(" | "));
+        out.push_str(" |\n");
+    }
+    out
+}
+
+/// Escape a cell for GFM tables. Cells containing `|` / `\n` / leading
+/// `-` / leading `+` are backtick-wrapped; embedded backticks get
+/// doubled inside the wrap (per CommonMark).
+fn md_escape(s: &str) -> String {
+    let needs_wrap = s.contains('|')
+        || s.contains('\n')
+        || s.starts_with('-')
+        || s.starts_with('+');
+    if needs_wrap {
+        // CommonMark code spans: more backticks outside than inside.
+        // Find the longest run of backticks in `s` and use one more.
+        let max_run = max_backtick_run(s);
+        let fence: String = "`".repeat(max_run + 1);
+        // GFM converts `\n` inside table cells to `<br>` — fold here.
+        let body = s.replace('\n', "<br>");
+        format!("{fence}{body}{fence}")
+    } else {
+        s.to_owned()
+    }
+}
+
+fn max_backtick_run(s: &str) -> usize {
+    let mut max = 0;
+    let mut cur = 0;
+    for ch in s.chars() {
+        if ch == '`' {
+            cur += 1;
+            if cur > max {
+                max = cur;
+            }
+        } else {
+            cur = 0;
+        }
+    }
+    max
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,5 +345,81 @@ mod tests {
         let s = render_csv(&t);
         let lines: Vec<&str> = s.lines().collect();
         assert_eq!(lines[1], "");
+    }
+
+    // ---------------------------------------------------------------------
+    // v2.1 §2.7 — Markdown renderer
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn markdown_basic_table_shape() {
+        let s = render_markdown(&sample_table());
+        let lines: Vec<&str> = s.lines().collect();
+        assert_eq!(lines[0], "| color | n |");
+        assert_eq!(lines[1], "| --- | --- |");
+        // Body rows present
+        assert!(lines.iter().any(|l| l.contains("red") && l.contains('2')));
+        assert!(lines.iter().any(|l| l.contains("blue") && l.contains('1')));
+    }
+
+    #[test]
+    fn markdown_escapes_pipes_in_cells() {
+        let t = Table {
+            headers: vec!["k".into(), "v".into()],
+            rows: vec![vec![Value::String("a|b".into()), Value::I64(1)]],
+        };
+        let s = render_markdown(&t);
+        // The pipe-bearing cell must be backtick-wrapped.
+        assert!(s.contains("`a|b`"), "expected backtick-wrapped pipe; got: {s}");
+    }
+
+    #[test]
+    fn markdown_escapes_newline_to_br() {
+        let t = Table {
+            headers: vec!["k".into()],
+            rows: vec![vec![Value::String("line1\nline2".into())]],
+        };
+        let s = render_markdown(&t);
+        // Newline inside a cell becomes <br>, wrapped in backticks.
+        assert!(s.contains("`line1<br>line2`"), "got: {s}");
+        // Result remains parseable line-by-line (no raw newlines inside cells).
+        let body_line = s.lines().nth(2).unwrap();
+        assert!(body_line.contains("<br>"));
+    }
+
+    #[test]
+    fn markdown_empty_table_emits_header_and_alignment_only() {
+        let t = Table {
+            headers: vec!["only_col".into()],
+            rows: vec![],
+        };
+        let s = render_markdown(&t);
+        let lines: Vec<&str> = s.lines().collect();
+        assert_eq!(lines, vec!["| only_col |", "| --- |"]);
+    }
+
+    #[test]
+    fn markdown_escapes_leading_dash_and_plus() {
+        let t = Table {
+            headers: vec!["k".into()],
+            rows: vec![
+                vec![Value::String("-leading".into())],
+                vec![Value::String("+leading".into())],
+            ],
+        };
+        let s = render_markdown(&t);
+        assert!(s.contains("`-leading`"));
+        assert!(s.contains("`+leading`"));
+    }
+
+    #[test]
+    fn markdown_handles_embedded_backticks() {
+        let t = Table {
+            headers: vec!["k".into()],
+            rows: vec![vec![Value::String("a|`b`".into())]],
+        };
+        let s = render_markdown(&t);
+        // Embedded `b` has 1 backtick; outer fence must use ≥2.
+        assert!(s.contains("``a|`b```"), "got: {s}");
     }
 }
