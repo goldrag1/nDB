@@ -1384,10 +1384,16 @@ Graph = ForceGraph3D()(document.getElementById("graph-host"))
   .linkOpacity(0.5)
   .linkWidth(0.5)
   // Force simulation cools after ~300 ticks instead of running forever
-  // — the layout settles in ~3 seconds then sits still. Without this
-  // the nodes wiggle indefinitely, which reads as "everything's moving".
+  // — the layout settles in ~3 seconds then sits still. We also pin
+  // every node on engineStop so it stays put while the user rotates
+  // / zooms / interacts; no more micro-drift on camera moves.
   .cooldownTicks(300)
   .d3AlphaDecay(0.04)
+  .onEngineStop(() => {
+    for (const n of Graph.graphData().nodes) {
+      n.fx = n.x; n.fy = n.y; n.fz = n.z;
+    }
+  })
   .onNodeClick(n => {
     setSelected(n);
     // Centre camera on the clicked node.
@@ -1407,8 +1413,25 @@ Graph = ForceGraph3D()(document.getElementById("graph-host"))
     n.fz = n.z;
   });
 
-// First load.
-reload();
+// First load — populates the graph then auto-loads a default protein
+// structure on the right so the user sees an actual AlphaFold fold
+// from the very first frame. KRAS is chosen as the default because it
+// is small (189 aa), very high pLDDT, and has the iconic G-domain
+// fold + the famously-disordered C-terminal hypervariable region —
+// the canonical "structured core / disordered tail" picture that
+// makes the AF colour palette immediately legible.
+(async () => {
+  await reload();
+  const defaultProtein = graphData.nodes.find(
+    n => n.nodeKind === "entity" && n.label === "KRAS"
+  );
+  if (defaultProtein) {
+    setSelected(defaultProtein);
+    // Small delay so the force-graph layout settles before we start
+    // the CIF fetch + NGL canvas paint (they share the GPU).
+    setTimeout(() => load3DStructureFor(defaultProtein), 700);
+  }
+})();
 </script>
 </body>
 </html>
