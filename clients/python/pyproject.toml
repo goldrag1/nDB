@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ndb-client"
+version = "1.0.0"
+description = "nDB Python client — pure-Python HTTP shim for the nDB hypergraph database"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [{ name = "nDB contributors" }]
+keywords = ["hypergraph", "graph-database", "ndb", "ai", "rag", "knowledge-graph"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database :: Database Engines/Servers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = []
+
+[project.optional-dependencies]
+arrow = ["pyarrow>=14"]
+test = ["pytest>=8"]
+
+[project.urls]
+Repository = "https://github.com/goldrag1/nDB"
+Documentation = "https://github.com/goldrag1/nDB/tree/main/clients/python"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ndb_client*"]

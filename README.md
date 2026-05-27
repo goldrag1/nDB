@@ -11,14 +11,17 @@ for the byte-level details.
 
 ## Workspace
 
-| Crate              | Purpose                                                                              |
-|--------------------|--------------------------------------------------------------------------------------|
-| `ndb-engine`       | Storage core: records, WAL, SSTable, MANIFEST, memtable, MVCC, compaction, indexes, validation. Library only. |
-| `ndb-server`       | Hand-rolled HTTP/1.1 server exposing the engine over JSON. Binary `ndb-server`.      |
-| `ndb-cli`          | Command-line client. Talks to `ndb-server` over HTTP. Binary `ndb`.                  |
-| `ndb-mcp-server`   | Model Context Protocol bridge — exposes the engine to AI agents via stdio JSON-RPC. Binary `ndb-mcp-server`. |
-| `ndb-slicer`       | CPU projection + aggregation over `Engine::snapshot_iter` output.                    |
-| `ndb-renderer`     | Text/TSV/CSV table output for `ndb-slicer` results.                                  |
+| Crate                       | Purpose                                                                              |
+|-----------------------------|--------------------------------------------------------------------------------------|
+| `ndb-engine`                | Storage core: records, WAL, SSTable, MANIFEST, memtable, MVCC, compaction, indexes, validation, AES-GCM-256 at-rest encryption primitives. Library only. |
+| `ndb-server`                | Hand-rolled HTTP/1.1 server exposing the engine over JSON. TLS via rustls; ReBAC capability gating; .audit.jsonl. Binary `ndb-server`. |
+| `ndb-cli`                   | Command-line client. Talks to `ndb-server` over HTTP. Binary `ndb`.                  |
+| `ndb-mcp-server`            | Model Context Protocol bridge — exposes the engine to AI agents via stdio JSON-RPC, with the same ReBAC + audit-log surface as `ndb-server`. Binary `ndb-mcp-server`. |
+| `ndb-slicer`                | CPU projection + aggregation over `Engine::snapshot_iter` output.                    |
+| `ndb-renderer`              | Text/TSV/CSV table output for `ndb-slicer` results.                                  |
+| `ndb-arrow`                 | Apache Arrow IPC bridge — `Engine::snapshot_iter` → `RecordBatch` + IPC bytes for Polars / pandas / DuckDB consumers. |
+| `ndb-index-vector-hnsw`     | HNSW ANN vector index (opt-in plugin) — drop-in replacement for the brute-force baseline once dataset size warrants it. |
+| `clients/python/ndb_client` | Pure-Python (`urllib`-only) HTTP client. `pip install ndb-client`.                  |
 
 ## Status (v1)
 
@@ -32,25 +35,30 @@ What's shipped:
 - MVCC with snapshot reads + supersession derived at read time
 - Single-writer transaction commit with validation pre-check
 - All 6 mandatory v1 indexes (entity-by-id, hyperedge-by-id, lookup-key, adjacency, hyperedge-type-cluster, property B-tree)
-- Brute-force vector index (k-NN, L2 / cosine)
+- Brute-force vector index (k-NN, L2 / cosine) + opt-in HNSW (`ndb-index-vector-hnsw`)
 - Full compaction with cross-bucket tombstone handling
-- JSON wire protocol over HTTP/1.1 with bearer-token auth
-- CLI client over HTTP
-- MCP server over stdio JSON-RPC
+- JSON wire protocol over HTTP/1.1
+- Security baseline:
+  - Bearer-token auth + multi-principal ReBAC (capability set per token)
+  - TLS termination via rustls (`--tls-cert` / `--tls-key`)
+  - `.audit.jsonl` per request — shared between HTTP server and MCP server
+  - At-rest encryption primitives (`Cipher`, `EncryptedFile`) ready for WAL/SSTable wiring
+- CLI client over HTTP (`ndb`)
+- MCP server over stdio JSON-RPC, principal- and audit-aware
 - CPU slicer (project, filter, group-by, sum/avg/count/min/max, sort, limit)
 - Text/TSV/CSV renderer
+- Apache Arrow IPC bridge (`ndb-arrow`)
+- Pure-Python HTTP client (`clients/python/ndb_client`)
 
 What's deferred to v2:
 
 - Block index sidecar (`<seq>.idx`) for O(log N) SSTable lookups
 - Snapshot-aware compaction (track oldest live snapshot)
-- Real ANN algorithm (HNSW vs IVF vs ScaNN)
-- TLS termination in the server (today: terminate at the reverse proxy)
-- ReBAC capability hyperedges, audit logging
+- WAL + SSTable wiring of the at-rest encryption primitives (key rotation, `KeyProvider` trait)
+- IVF / ScaNN vector indexes alongside HNSW
 - Validation driven by metadata hyperedges (today: runtime `Engine::require_property` etc.)
 - Query language (§12) — Datalog-influenced pattern matching
-- Python client
-- Arrow IPC interop
+- Capability hyperedges as the persistent ReBAC store (today: in-memory `principals.json`)
 - Distributed mode (v3+)
 
 ## Quick start
