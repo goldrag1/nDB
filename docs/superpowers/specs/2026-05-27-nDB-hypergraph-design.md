@@ -1264,11 +1264,15 @@ Same pattern as Google Zanzibar / SpiceDB, expressed natively in nDB without a s
 
 ### 13.4 Encryption at rest
 
-**v1: filesystem-level encryption** (LUKS, dm-crypt, FileVault, cloud-provider volume encryption). The engine itself does NOT encrypt SSTables in v1.
+**v1 default: filesystem-level encryption** (LUKS, dm-crypt, FileVault, cloud-provider volume encryption). For the vast majority of workloads, full-disk encryption is sufficient and operationally simple.
 
-Rationale: for the vast majority of workloads, full-disk encryption is sufficient and operationally simple. Engine-level encryption adds complexity (key management, key rotation, IV handling, compaction with encrypted blocks) that v1 doesn't need.
+**v1 opt-in: engine-level encryption primitives** ship in `ndb-engine::encryption`:
+- `Cipher` — AES-256-GCM wrapper. Keys sourced from `NDB_ENC_KEY` env (hex-encoded 32 bytes) or via `Cipher::from_raw_key` for programmatic configuration.
+- `EncryptedFile<F>` — a chunked-AEAD `Read + Write` wrapper. Drop-in replacement for `File` (the underlying inner stream can be any `Read + Write`). Plaintext chunks of up to 4 KiB are encrypted independently, each authenticated with a fresh random nonce; tampering on any chunk causes the read to fail with an AEAD error rather than returning silently-corrupted data. File header (magic + format version + chunk size) is plaintext so a reader without the key can identify the file as encrypted.
 
-**v2: optional engine-level SSTable encryption.** Per-database AES-256-GCM keys, integrated with external KMS via a plugin pattern. Enables HIPAA / SOC2 compliance scenarios.
+The primitive is integration-ready but not yet wired into the WAL and SSTable I/O paths — that integration is a focused follow-on (estimated ~1 week to land cleanly across recovery + compaction + tests). When the WAL/SSTable paths gain encryption, the on-disk semantics will be: encrypted databases coexist with plain databases in the same directory (magic-byte sniff at open time), and the engine refuses to mix the two within one database.
+
+**v2: KMS plugin trait.** Replace the env-var key source with a pluggable `KeyProvider` so operators can integrate AWS KMS / Vault / GCP KMS / HSM-backed keys directly. Per-database key rotation lands here.
 
 **v3+: per-property encryption** for sensitive fields (national IDs, medical record numbers). Likely implemented as a slicer / app-layer pattern; the engine just stores the encrypted bytes.
 

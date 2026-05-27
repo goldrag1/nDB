@@ -29,6 +29,7 @@
 
 pub mod codec;
 pub mod db;
+pub mod encryption;
 pub mod engine;
 pub mod error;
 pub mod id;
@@ -42,6 +43,10 @@ pub mod value;
 pub mod wal;
 pub mod wire;
 
+pub use encryption::{
+    Cipher, DEFAULT_CHUNK_SIZE, ENCRYPTED_FILE_FORMAT_VERSION, ENCRYPTED_FILE_MAGIC, EncryptedFile,
+    EncryptionError, KEY_LEN, NONCE_LEN, TAG_LEN,
+};
 pub use db::{
     CURRENT_FILE, Database, DatabaseError, LOCK_FILE, MANIFEST_FORMAT_VERSION,
     MANIFEST_FORMAT_VERSION_MAX_SUPPORTED, MANIFEST_MAGIC, MANIFEST_PREFIX, MAX_LSM_LEVEL,
