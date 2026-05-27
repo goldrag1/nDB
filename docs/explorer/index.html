@@ -5,17 +5,29 @@
 <title>nDB Explorer — 3D hypergraph</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; font-family: system-ui, -apple-system, sans-serif; color: #e8e8ec; background: #14141a; }
-  /* Three-column layout:
-       320px   protein controls + currently-viewing card  (left)
-       1fr     full-bleed AlphaFold structure              (centre)
-       360px   live nDB record view + clicked-atom detail (right) */
-  #app { display: grid; grid-template-columns: 320px 1fr 360px; height: 100vh; }
-  #sidebar { background: #1c1c24; border-right: 1px solid #2b2b36; padding: 16px; overflow-y: auto; }
-  #db-sidebar { background: #1c1c24; border-left: 1px solid #2b2b36; padding: 16px; overflow-y: auto; }
-  /* Centre pane holds the 3D viewer at full size. The hypergraph view
-     is kept as an internal data structure but never rendered to DOM —
-     the right sidebar replaces it with a textual database view. */
-  #right-pane { position: relative; height: 100vh; }
+  /* Layout: a sticky top bar + a three-column body.
+       top      protein picker + AF-fetch + cache controls + viewing chip
+       360px    "Protein in nDB" — entity record, hyperedges, structure
+       1fr      full-bleed AlphaFold structure
+       360px    "Atom drill-down" — populated on atom click */
+  #app { display: grid; grid-template-rows: 56px 1fr; grid-template-columns: 360px 1fr 360px;
+         grid-template-areas: "top top top" "left centre right"; height: 100vh; }
+  #topbar { grid-area: top; background: #1c1c24; border-bottom: 1px solid #2b2b36;
+            display: flex; align-items: center; gap: 14px; padding: 0 18px; min-width: 0; }
+  #topbar h1 { font-size: 14px; margin: 0; letter-spacing: 0.02em; color: #fff; white-space: nowrap; }
+  #topbar .sep { width: 1px; height: 24px; background: #2b2b36; flex-shrink: 0; }
+  #topbar select, #topbar input { background: #14141a; border: 1px solid #303040; border-radius: 4px;
+    color: #fff; padding: 5px 8px; font-family: inherit; font-size: 12px; min-width: 0; }
+  #topbar .chip {
+    background: #14141a; border: 1px solid #2b2b36; border-radius: 4px;
+    padding: 4px 9px; font-size: 11.5px; color: #cfcfd6;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; white-space: nowrap;
+  }
+  #topbar .grow { flex: 1; min-width: 0; }
+  #sidebar { grid-area: left; background: #1c1c24; border-right: 1px solid #2b2b36; padding: 16px; overflow-y: auto; }
+  #db-sidebar { grid-area: right; background: #1c1c24; border-left: 1px solid #2b2b36; padding: 16px; overflow-y: auto; }
+  /* Centre pane holds the 3D viewer at full size. */
+  #right-pane { grid-area: centre; position: relative; min-width: 0; min-height: 0; }
   /* #graph-host is detached from the layout grid — it lives off-screen
      so 3d-force-graph still keeps its data + simulation alive (used
      internally for traversal) without occupying any pixels. */
@@ -133,6 +145,23 @@
     padding: 7px; margin: 5px 0 0; font-size: 10.5px; line-height: 1.4;
     overflow-x: auto; max-height: 180px; }
   .empty { color: #555; font-style: italic; }
+  /* Pipeline arrow diagram + clickable member chips. */
+  .pipeline { display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+              font-size: 11px; color: #cfcfd6; margin: 4px 0 6px; }
+  .pipeline .step { background: #2d2d3a; border-radius: 3px; padding: 2px 6px;
+                    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 10.5px; }
+  .pipeline .step.active { background: #1e3a8a; color: #fff; }
+  .pipeline .arrow { color: #555; font-size: 11px; }
+  .member-chip { display: inline-block; padding: 1px 6px; margin: 2px 3px 2px 0; border-radius: 3px;
+                 background: #2d2d3a; font-size: 11px; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .member-chip.protein { color: #65CBF3; cursor: pointer; }
+  .member-chip.protein:hover { background: #1e3a8a; color: #fff; }
+  .member-chip.pathway { color: #f5a623; }
+  .member-chip.gene { color: #7ed321; }
+  .role-label { color: #888; font-size: 10.5px; font-family: ui-monospace, "SF Mono", Menlo, monospace; margin-right: 4px; }
+  .ss-bar { display: flex; height: 8px; border-radius: 3px; overflow: hidden;
+            border: 1px solid #2b2b36; margin: 4px 0 6px; }
+  .ss-bar > div { transition: flex 0.2s; }
   .plddt-bar {
     display: flex; height: 10px; border-radius: 3px; overflow: hidden;
     margin: 4px 0 6px; border: 1px solid #2b2b36;
@@ -144,56 +173,74 @@
 </head>
 <body>
 <div id="app">
-  <aside id="sidebar">
+
+  <!-- ─── Top bar ─────────────────────────────────────────────── -->
+  <header id="topbar">
     <h1>alphafold_nDB</h1>
-    <div class="hint">Pick a protein below; its AlphaFold structure renders in the centre. Click an atom to see its nDB record on the right.</div>
+    <div class="sep"></div>
+    <span style="font-size:11px;color:#888">VIEW</span>
+    <select id="protein-picker"></select>
+    <span id="viewing-chip" class="chip"></span>
+    <div class="sep"></div>
+    <span style="font-size:11px;color:#888">FETCH</span>
+    <input id="af-fetch-acc" placeholder="UniProt acc (e.g. P38398)" autocomplete="off" style="width:170px">
+    <button class="btn" id="af-fetch-btn" style="padding:4px 10px;font-size:12px">Add</button>
+    <div class="grow"></div>
+    <button class="btn secondary" id="warm-cache-btn" style="padding:4px 10px;font-size:12px" title="Fetch every CIF + persist in nDB so the database works offline">Warm cache</button>
+    <label style="font-size:11px;color:#cfcfd6;display:flex;align-items:center;gap:5px;cursor:pointer">
+      <input type="checkbox" id="show-residues-toggle"> residue+motif data
+    </label>
+  </header>
 
-    <h2>View protein</h2>
-    <div class="form">
-      <select id="protein-picker"></select>
+  <!-- ─── LEFT: how this protein is stored in nDB ─────────────── -->
+  <aside id="sidebar">
+    <h2 style="margin-top:0">How this protein lives in nDB</h2>
+    <div class="hint" style="margin-bottom:10px">
+      nDB has no tables and no foreign keys. Every fact is an
+      <b>entity</b> (a typed record with properties) or a
+      <b>hyperedge</b> (a typed N-ary fact connecting any number
+      of entities, with role labels). Here is exactly what nDB
+      stores for the protein currently in the centre.
     </div>
 
-    <div id="protein-summary" class="db-section" style="margin-top:14px"></div>
-
-    <h2>Residue motifs</h2>
-    <div class="form">
-      <label><input type="checkbox" id="show-residues-toggle"> Enable residue + motif data</label>
-      <div class="hint">
-        Loads ~78 residue entities + 8 N-ary motif hyperedges across
-        the five showcase proteins (trypsin, TFIIIA, insulin, myoglobin,
-        GFP). When on, clicking a motif row on the right highlights
-        its residues in 3D.
+    <div class="db-section">
+      <h3>Pipeline</h3>
+      <div class="pipeline">
+        <span class="step" id="pipe-fetch">fetch AF-DB</span><span class="arrow">→</span>
+        <span class="step" id="pipe-commit">commit entity</span><span class="arrow">→</span>
+        <span class="step" id="pipe-cache">cache CIF</span><span class="arrow">→</span>
+        <span class="step" id="pipe-render">render</span>
+      </div>
+      <div class="hint" id="pipe-explainer">
+        Loading…
       </div>
     </div>
 
-    <h2>Fetch from AlphaFold-DB</h2>
-    <div class="form">
-      <label>UniProt accession</label>
-      <input id="af-fetch-acc" placeholder="e.g. P38398 (BRCA1)" autocomplete="off">
-      <button class="btn" id="af-fetch-btn">Fetch &amp; add</button>
-      <div class="hint">
-        Pulls real pLDDT + metadata from
-        <a href="https://alphafold.ebi.ac.uk/" target="_blank" rel="noreferrer">alphafold.ebi.ac.uk</a>,
-        commits it as a protein entity, and selects it in the viewer.
-      </div>
+    <div id="db-protein-entity" class="db-section"></div>
+
+    <div class="db-section">
+      <h3>CIF-derived structure summary</h3>
+      <div id="db-cif-summary"><div class="empty">No structure loaded yet.</div></div>
     </div>
 
-    <h2>Local coordinate cache</h2>
-    <div class="form">
-      <button class="btn secondary" id="warm-cache-btn">Warm coordinate cache</button>
-      <div id="warm-cache-status" class="hint" style="margin-top:4px">
-        Fetches the CIF for every protein once + persists it in nDB
-        so the database is self-contained. After warming, viewing any
-        protein works fully offline.
-      </div>
+    <div class="db-section">
+      <h3>Hyperedges (this protein as role-filler)</h3>
+      <div id="db-hyperedges"></div>
     </div>
 
-    <div class="hint" style="margin-top:18px">
+    <details class="db-section">
+      <summary style="cursor:pointer"><h3 style="display:inline">Advanced: record IDs</h3></summary>
+      <div id="db-advanced-ids" style="margin-top:6px"></div>
+    </details>
+
+    <div class="hint" style="margin-top:14px">
       Local nDB: <code id="db-path">…</code><br>
       API: <code id="api-url">…</code>
     </div>
 
-    <!-- Hidden plumbing kept for backwards-compatible helpers. -->
+    <div id="warm-cache-status" class="hint" style="margin-top:10px"></div>
+
+    <!-- Hidden plumbing kept for back-compat. -->
     <div style="display:none">
       <select id="add-ent-type"></select>
       <select id="add-hed-type"></select>
@@ -205,9 +252,11 @@
       <button id="reload-btn"></button>
       <div id="selected-card"></div>
       <div id="stats"></div><div id="type-legend"></div><div id="confidence-legend"></div>
+      <div id="protein-summary"></div>
     </div>
   </aside>
 
+  <!-- ─── CENTRE: full-bleed 3D structure ─────────────────────── -->
   <div id="right-pane">
     <div id="graph-host">
       <div id="hint-bar"></div>
@@ -218,20 +267,19 @@
     </div>
   </div>
 
+  <!-- ─── RIGHT: atom + residue drill-down on click ───────────── -->
   <aside id="db-sidebar">
-    <h1 style="margin-bottom:6px">nDB record</h1>
-    <div class="hint" style="margin-bottom:14px">Live view of what nDB stores for the protein you're looking at — every entity, every hyperedge. Click an atom on the centre canvas to drill into a specific residue.</div>
-
-    <div id="db-protein-entity" class="db-section"></div>
-
-    <div class="db-section">
-      <h3>Hyperedges involving this protein</h3>
-      <div id="db-hyperedges"></div>
+    <h2 style="margin-top:0">Drill down</h2>
+    <div class="hint" style="margin-bottom:10px">
+      Click any atom in the 3D view → see its coordinates, B-factor
+      (= pLDDT), the full atom list of its residue (from the CIF
+      stored in nDB), and — for curated showcase proteins — the
+      residue entity record + every motif hyperedge it's a member of.
     </div>
 
     <div class="db-section">
       <h3>Selected residue / atom</h3>
-      <div id="db-selected-residue"><div class="empty">Click any atom in the 3D view to inspect that residue's nDB record.</div></div>
+      <div id="db-selected-residue"><div class="empty">Click any atom in the 3D view.</div></div>
     </div>
   </aside>
 </div>
@@ -1146,15 +1194,11 @@ function nglStageInit() {
   // residue entities via (protein name, position).
   nglStage.signals.clicked.add((pp) => {
     if (!pp || !pp.atom || !currentProteinNode) return;
-    const resno = pp.atom.resno;
-    const resname = pp.atom.resname;
-    // Always update the right sidebar with the clicked residue, even
-    // when it's not in our curated nDB residue set — the sidebar will
-    // honestly say "this atom is in the CIF but not committed to nDB".
-    updateRightSelectedResidue(resno, resname);
-    // Also try to select the matching nDB entity in the (hidden)
-    // hypergraph so the highlight pipeline still works for motifs.
-    onNgl3DResidueClick(resno);
+    // Pass the full atom proxy so the right sidebar can surface
+    // coordinates, B-factor, atom name, element, chain — all
+    // coming from the CIF that lives in nDB.
+    updateRightSelectedResidue(pp.atom);
+    onNgl3DResidueClick(pp.atom.resno);
   });
   // Auto-resize when the pane opens/closes.
   window.addEventListener("resize", () => nglStage && nglStage.handleResize());
@@ -1334,6 +1378,7 @@ async function load3DStructureFor(node) {
       `<b>${proteinName}</b> (${acc}) · ${len} residues · pLDDT (AF palette) · ${sourceLabel}`;
     renderProteinSummary(node);
     updateRightSidebar(node);
+    updatePipeline(node, source);
     document.getElementById("db-selected-residue").innerHTML =
       '<div class="empty">Click any atom in the 3D view to inspect that residue\'s nDB record.</div>';
     if (selected && selected.nodeKind === "entity" && selected.type_id === TYPES.residue.id) {
@@ -1428,38 +1473,142 @@ function onNgl3DResidueClick(resno) {
   }
 }
 
-// ─── Right-sidebar nDB record view ─────────────────────────────
+// ─── Role-id lookup table ──────────────────────────────────────
+// Role IDs in nDB are arbitrary u32s but they carry semantic meaning
+// in our schema — show them by name so a reader can tell which
+// role-filler is "the protein", "the gene", "the pathway", etc.
+const ROLE_LABEL = {
+  10: "member",
+  11: "gene",
+  12: "protein",
+  16: "pathway",
+  20: "residue_of",
+  21: "residue",
+};
+
+// ─── Walk the loaded CIF (in nDB) and roll up per-protein stats ──
+// Returns null if no structure is loaded. The CIF is parsed by NGL
+// but its underlying bytes are nDB's Value::Bytes property — so this
+// summary is "derived from nDB data", not from a separate file.
+function computeStructureSummary() {
+  if (!nglComponent) return null;
+  let atomCount = 0;
+  let residueCount = 0;
+  let helix = 0, sheet = 0, coil = 0;
+  let sumB = 0;
+  nglComponent.structure.eachResidue((r) => {
+    residueCount++;
+    if (r.isHelix && r.isHelix()) helix++;
+    else if (r.isSheet && r.isSheet()) sheet++;
+    else coil++;
+  });
+  nglComponent.structure.eachAtom((a) => {
+    atomCount++;
+    sumB += a.bfactor;
+  });
+  // NGL's isHelix / isSheet aren't always available on AlphaFold CIF
+  // residues (they come from CIF struct_conf records). Fall back to
+  // counting secondary-structure codes on the proxy when available.
+  if (helix + sheet === 0 && residueCount > 0) {
+    nglComponent.structure.eachResidue((r) => {
+      // sstruc is the secondary-structure code (h/g/i = helix, e/b = sheet)
+      const s = (r.sstruc || "").toLowerCase();
+      if (s === "h" || s === "g" || s === "i") helix++;
+      else if (s === "e" || s === "b") sheet++;
+      // coil already counted as default; ignore here to avoid double
+    });
+    coil = Math.max(0, residueCount - helix - sheet);
+  }
+  return {
+    atomCount, residueCount,
+    helix, sheet, coil,
+    avgB: atomCount > 0 ? sumB / atomCount : 0,
+    helixPct: residueCount > 0 ? (helix / residueCount * 100) : 0,
+    sheetPct: residueCount > 0 ? (sheet / residueCount * 100) : 0,
+    coilPct: residueCount > 0 ? (coil / residueCount * 100) : 0,
+  };
+}
+
+// ─── Pipeline indicator + explainer ─────────────────────────────
+// The 4-step diagram at the top of the left sidebar lights up the
+// stage the loaded protein is currently in.
+function updatePipeline(node, source) {
+  const $ex = document.getElementById("pipe-explainer");
+  // Reset all to inactive.
+  for (const id of ["pipe-fetch", "pipe-commit", "pipe-cache", "pipe-render"]) {
+    document.getElementById(id)?.classList.remove("active");
+  }
+  if (!node) {
+    if ($ex) $ex.textContent = "Pick a protein to see how its data flows.";
+    return;
+  }
+  const acc = extractUniprot(node.record);
+  const cached = !!extractProp(node.record, PROP_CIF_BYTES);
+  // Mark the steps based on current state.
+  if (acc) document.getElementById("pipe-fetch").classList.add("active");
+  document.getElementById("pipe-commit").classList.add("active"); // by definition: we have the entity in nDB
+  if (cached) document.getElementById("pipe-cache").classList.add("active");
+  if (nglComponent && currentProteinNode && currentProteinNode.id === node.id) {
+    document.getElementById("pipe-render").classList.add("active");
+  }
+  if ($ex) {
+    const name = extractName(node.record) || acc || "?";
+    if (source === "ndb") {
+      $ex.innerHTML = `
+        ${escapeHtml(name)} was previously fetched from AlphaFold-DB and
+        persisted to nDB as a <code>Value::Bytes</code> property on the
+        protein entity. The viewer just loaded the CIF from local nDB
+        and rendered it — <b>no network hop</b>.`;
+    } else if (source === "afdb→ndb") {
+      $ex.innerHTML = `
+        Just fetched ${escapeHtml(name)}'s CIF from
+        <a href="https://alphafold.ebi.ac.uk/" target="_blank" rel="noreferrer">AlphaFold-DB</a>
+        and committed the bytes to nDB. Subsequent loads will read from
+        local nDB — refresh the page to see.`;
+    } else if (source === "afdb") {
+      $ex.innerHTML = `${escapeHtml(name)} is rendering from a fresh
+        AF-DB fetch (cache write failed — next time will refetch).`;
+    } else {
+      $ex.innerHTML = `${escapeHtml(name)} entity is in nDB. Click load
+        to fetch + cache its CIF.`;
+    }
+  }
+}
+
+// ─── Left-sidebar nDB record view ──────────────────────────────
 // For the currently-loaded protein, walks graphData and renders:
 //   1. The protein's own entity record (full property list + JSON)
-//   2. Every hyperedge that includes this protein as a role-filler
-//      (complexes, encodes, motifs touching its residues, residue_of)
-// updateRightSidebar is called whenever a new protein is loaded.
-// Each motif/hyperedge row is clickable — clicking it selects that
-// hyperedge and (if its members are residues of the loaded protein)
-// highlights them as ball+stick in the 3D viewer.
+//   2. CIF-derived structural summary (computed from the bytes in nDB)
+//   3. Every hyperedge that includes this protein as a role-filler,
+//      with role-labelled members + complex confidence values + clickable
+//      partner proteins
+// Called whenever a new protein is loaded.
+function updateLeftDbSidebar(node) {
+  updateRightSidebar(node);
+}
 function updateRightSidebar(node) {
   const $ent = document.getElementById("db-protein-entity");
   const $hed = document.getElementById("db-hyperedges");
+  const $sum = document.getElementById("db-cif-summary");
+  const $adv = document.getElementById("db-advanced-ids");
   if (!$ent || !$hed) return;
   if (!node) {
     $ent.innerHTML = '<h3>Protein entity</h3><div class="empty">No protein loaded.</div>';
     $hed.innerHTML = '<div class="empty">—</div>';
+    if ($sum) $sum.innerHTML = '<div class="empty">No structure loaded.</div>';
+    if ($adv) $adv.innerHTML = '<div class="empty">—</div>';
     return;
   }
 
-  // ── 1. The protein entity record ───────────────────────────────
+  // ── 1. The protein entity record ────────────────────────────────
   const r = node.record;
   const propsList = (r.properties || [])
-    // The CIF blob gets its own dedicated row below; don't print 50 KB
-    // of base64 in the friendly key/value list.
     .filter(p => p.prop_id !== PROP_CIF_BYTES)
     .map(p => {
       const v = p.value && (p.value.value ?? p.value);
       const label = PROP_LABEL[p.prop_id] || `p${p.prop_id}`;
       return `<div class="db-row"><span class="k">${label}</span><span class="v">${escapeHtml(String(v))}</span></div>`;
     }).join("");
-  // For the raw wire JSON expander, replace the CIF base64 with a stub
-  // marker so the expander stays readable; the real bytes are in nDB.
   const propsForJson = (r.properties || []).map(p => {
     if (p.prop_id === PROP_CIF_BYTES) {
       const b64 = p.value?.value || "";
@@ -1476,8 +1625,6 @@ function updateRightSidebar(node) {
     type_id: r.type_id,
     properties: propsForJson,
   }, null, 2);
-  // Surface whether the CIF coordinates are cached locally so the user
-  // knows whether they're depending on EBI right now.
   const cifB64 = extractProp(r, PROP_CIF_BYTES);
   const cifSizeKb = (typeof cifB64 === "string" && cifB64.length > 0)
     ? ((cifB64.length * 0.75) / 1024).toFixed(1)
@@ -1486,7 +1633,7 @@ function updateRightSidebar(node) {
     ? `<span class="v" style="color:#7ed321">stored locally · ${cifSizeKb} KB</span>`
     : `<span class="v" style="color:#888">not cached (will fetch from AF-DB)</span>`;
   $ent.innerHTML = `
-    <h3>Protein entity</h3>
+    <h3>Protein entity (Record::Entity)</h3>
     <div class="db-row"><span class="k">kind</span><span class="v">entity</span></div>
     <div class="db-row"><span class="k">type_id</span><span class="v">${r.type_id} (protein)</span></div>
     <div class="db-row"><span class="k">entity_id</span><span class="v">${r.entity_id.slice(0, 8)}…</span></div>
@@ -1498,7 +1645,33 @@ function updateRightSidebar(node) {
     </details>
   `;
 
-  // ── 2. Hyperedges involving this protein ───────────────────────
+  // ── 2. CIF-derived structural summary ──────────────────────────
+  if ($sum) {
+    const s = computeStructureSummary();
+    if (!s) {
+      $sum.innerHTML = '<div class="empty">No structure loaded yet.</div>';
+    } else {
+      $sum.innerHTML = `
+        <div class="hint" style="margin-bottom:6px">
+          Computed from the CIF stored in nDB. Rolling these up at
+          query time avoids duplicating them as properties.
+        </div>
+        <div class="db-row"><span class="k">atoms</span><span class="v">${s.atomCount}</span></div>
+        <div class="db-row"><span class="k">residues</span><span class="v">${s.residueCount}</span></div>
+        <div class="db-row"><span class="k">avg B-factor</span><span class="v">${s.avgB.toFixed(1)} (mean pLDDT)</span></div>
+        <div class="ss-bar">
+          <div title="α-helix ${s.helixPct.toFixed(1)}%" style="background:#ff9554;flex:${s.helix || 1}"></div>
+          <div title="β-sheet ${s.sheetPct.toFixed(1)}%"  style="background:#54d2ff;flex:${s.sheet || 1}"></div>
+          <div title="coil ${s.coilPct.toFixed(1)}%"      style="background:#444a55;flex:${s.coil  || 1}"></div>
+        </div>
+        <div class="db-row"><span class="k">α-helix</span><span class="v" style="color:#ff9554">${s.helix} (${s.helixPct.toFixed(1)}%)</span></div>
+        <div class="db-row"><span class="k">β-sheet</span><span class="v" style="color:#54d2ff">${s.sheet} (${s.sheetPct.toFixed(1)}%)</span></div>
+        <div class="db-row"><span class="k">coil</span><span class="v">${s.coil} (${s.coilPct.toFixed(1)}%)</span></div>
+      `;
+    }
+  }
+
+  // ── 3. Hyperedges involving this protein ───────────────────────
   // Resolve the set of residue IDs that belong to this protein —
   // a motif "involves" the protein if it touches any of its residues.
   const proteinResIds = new Set();
@@ -1518,39 +1691,70 @@ function updateRightSidebar(node) {
     if (!touchesProtein && !touchesViaResidue) continue;
     rows.push(e);
   }
-  // Sort so motifs come first (they're the "story"), then complexes, then plumbing.
   const typeOrder = (t) => {
     if (MOTIF_TYPE_IDS.has(t)) return 0;
     if (t === 100) return 1; // complex
     if (t === 101) return 2; // encodes
-    return 3;                // residue_of and friends
+    return 3;
   };
   rows.sort((a, b) => typeOrder(a.type_id) - typeOrder(b.type_id));
+
+  // Helper: format a single role-filler as a clickable chip when it's
+  // a protein the user can navigate to (high-impact #3).
+  const renderFiller = (role) => {
+    const ent = entitiesById.get(role.entity_id);
+    if (!ent) return `<span class="member-chip">${role.entity_id.slice(0, 6)}</span>`;
+    const name = extractName(ent) || role.entity_id.slice(0, 6);
+    const tname = typeNameById[ent.type_id] || `t${ent.type_id}`;
+    const klass = tname; // "protein" | "gene" | "pathway" | "residue"
+    const clickable = ent.type_id === TYPES.protein.id;
+    return `<span class="member-chip ${klass}" data-entity-id="${ent.entity_id}" ${clickable ? 'data-jump="1"' : ''}>${escapeHtml(name)}</span>`;
+  };
+  // Helper: render an arity-N hyperedge with role-grouped chips.
+  const renderHyperedge = (e) => {
+    const tname = typeNameById[e.type_id] || `type ${e.type_id}`;
+    const arity = e.roles.length;
+    const isMotif = MOTIF_TYPE_IDS.has(e.type_id);
+    const motifName = extractProp(e, 54);
+    const headline = isMotif && motifName ? escapeHtml(String(motifName)) : tname;
+    // Group role-fillers by role_id.
+    const byRole = {};
+    for (const role of e.roles) {
+      (byRole[role.role_id] ||= []).push(role);
+    }
+    let rolesHtml = "";
+    for (const [rid, roles] of Object.entries(byRole)) {
+      const rname = ROLE_LABEL[rid] || `role ${rid}`;
+      rolesHtml += `<div><span class="role-label">${rname} ·</span>${roles.map(renderFiller).join("")}</div>`;
+    }
+    // Complex confidence (high-impact #2).
+    let confBadge = "";
+    if (e.type_id === 100) {
+      const cc = extractProp(e, PROP_COMPLEX_CONFIDENCE);
+      if (typeof cc === "number") {
+        const cBucket = bucketForPlddt(cc);
+        const cColor = PLDDT_PALETTE[cBucket] || "#888";
+        confBadge = ` · <span style="color:${cColor}">confidence ${cc.toFixed(1)} (${cBucket})</span>`;
+      } else {
+        confBadge = ` · <span style="color:#666">confidence n/a</span>`;
+      }
+    }
+    return `
+      <div class="hed-row clickable" data-hed-id="${e.hyperedge_id}">
+        <div><span class="pill">${tname}</span> · arity ${arity}${confBadge}</div>
+        ${isMotif && motifName ? `<div class="members" style="color:#cfcfd6">${headline}</div>` : ""}
+        <div class="members" style="margin-top:4px">${rolesHtml}</div>
+      </div>
+    `;
+  };
+
   if (rows.length === 0) {
     $hed.innerHTML = '<div class="empty">No hyperedges involving this protein.</div>';
   } else {
-    $hed.innerHTML = rows.map(e => {
-      const tname = typeNameById[e.type_id] || `type ${e.type_id}`;
-      const arity = e.roles.length;
-      const isMotif = MOTIF_TYPE_IDS.has(e.type_id);
-      const isResidueOf = e.type_id === RESIDUE_OF_TYPE_ID;
-      const memberLabels = e.roles.slice(0, 6).map(role => {
-        const ent = entitiesById.get(role.entity_id);
-        return ent ? extractName(ent) : role.entity_id.slice(0, 6);
-      });
-      const more = e.roles.length > 6 ? `, +${e.roles.length - 6} more` : "";
-      const motifName = extractProp(e, 54);
-      const headline = isMotif && motifName ? escapeHtml(String(motifName)) : tname;
-      // residue_of clutters the list — collapse it into a count row.
-      if (isResidueOf) return ""; // we summarise these instead below
-      return `
-        <div class="hed-row clickable" data-hed-id="${e.hyperedge_id}">
-          <div><span class="pill">${tname}</span> · arity ${arity}</div>
-          <div class="members">${escapeHtml(headline)}<br>${escapeHtml(memberLabels.join(", "))}${more}</div>
-        </div>
-      `;
-    }).filter(Boolean).join("");
-    // Summary of residue_of edges (one per residue is too noisy to list).
+    // Don't list each residue_of edge — collapse to a single summary.
+    $hed.innerHTML = rows
+      .filter(e => e.type_id !== RESIDUE_OF_TYPE_ID)
+      .map(renderHyperedge).join("");
     const nResidueOf = rows.filter(e => e.type_id === RESIDUE_OF_TYPE_ID).length;
     if (nResidueOf > 0) {
       $hed.innerHTML += `
@@ -1560,111 +1764,199 @@ function updateRightSidebar(node) {
         </div>
       `;
     }
-    // Wire click handlers on the clickable rows.
+    // Wire clicks: motif row → select; protein chip → swap protein.
     $hed.querySelectorAll(".hed-row.clickable[data-hed-id]").forEach(row => {
-      row.addEventListener("click", () => {
+      row.addEventListener("click", (e) => {
+        // Don't fire when a child .member-chip handles the click.
+        if (e.target.closest(".member-chip[data-jump]")) return;
         const hedId = row.getAttribute("data-hed-id");
         const hedNode = graphData.nodes.find(n => n.nodeKind === "hyperedge" && n.id === hedId);
         if (hedNode) setSelected(hedNode);
       });
     });
+    $hed.querySelectorAll(".member-chip[data-jump]").forEach(chip => {
+      chip.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const entId = chip.getAttribute("data-entity-id");
+        const otherNode = graphData.nodes.find(n => n.id === entId && n.type_id === TYPES.protein.id);
+        if (otherNode) {
+          document.getElementById("protein-picker").value = otherNode.id;
+          setSelected(otherNode);
+          load3DStructureFor(otherNode);
+        }
+      });
+    });
+  }
+
+  // ── 4. Advanced: raw record IDs (high-impact #5) ───────────────
+  if ($adv) {
+    $adv.innerHTML = `
+      <div class="db-row"><span class="k">entity.entity_id</span><span class="v">${r.entity_id}</span></div>
+      <div class="db-row"><span class="k">entity.type_id</span><span class="v">${r.type_id}</span></div>
+      <h3 style="margin-top:8px">Hyperedges</h3>
+      ${rows.slice(0, 20).map(e => `
+        <div class="db-row"><span class="k">${typeNameById[e.type_id] || e.type_id}</span><span class="v">${e.hyperedge_id.slice(0, 12)}…</span></div>
+      `).join("")}
+      <div class="hint" style="margin-top:6px">
+        Every record carries a UUIDv7 id. nDB indexes by (record_kind,
+        primary_id) inside SSTables; reads are O(log N) via the block
+        index sidecar.
+      </div>
+    `;
+  }
+
+  // ── 5. Top-bar viewing chip + pipeline diagram ─────────────────
+  const chip = document.getElementById("viewing-chip");
+  if (chip) {
+    const acc = extractUniprot(r) || "?";
+    const plddt = extractPlddtMean(r);
+    const bucket = extractPlddtBucket(r) || bucketForPlddt(plddt) || "no AF-DB";
+    const c = PLDDT_PALETTE[bucket] || "#888";
+    chip.innerHTML = `${escapeHtml(extractName(r) || "?")} · ${acc}` +
+      (typeof plddt === "number"
+        ? ` · <span style="color:${c}">pLDDT ${plddt.toFixed(1)} ${bucket}</span>`
+        : ` · <span style="color:#888">no AF-DB</span>`);
   }
 }
 
 // ─── Right-sidebar: clicked-atom residue card ───────────────────
 // Called when the user clicks an atom in the NGL canvas. Receives
-// the residue position; we look up the matching residue entity (if
-// it exists in our curated dataset) and render its full record plus
-// any motif hyperedges that include it.
-function updateRightSelectedResidue(resno, ngllResNameHint) {
+// the NGL AtomProxy itself — which exposes per-atom coordinates,
+// B-factor (= pLDDT in AF), atomname, element, chain, and lets us
+// walk the rest of the residue. All of these values come from the
+// CIF that lives IN nDB; NGL is just the parser.
+function updateRightSelectedResidue(atomProxy) {
   const $el = document.getElementById("db-selected-residue");
-  if (!$el || !currentProteinNode) return;
+  if (!$el || !currentProteinNode || !atomProxy) return;
 
-  // Find the residue entity tied to the current protein at this position.
-  let residue = null;
+  // ── 1. Pull the clicked atom's properties from the parsed CIF.
+  const resno = atomProxy.resno;
+  const resname = atomProxy.resname;
+  const atomname = atomProxy.atomname;
+  const element = atomProxy.element;
+  const serial = atomProxy.serial;
+  const chain = atomProxy.chainname;
+  const x = atomProxy.x;
+  const y = atomProxy.y;
+  const z = atomProxy.z;
+  const bfactor = atomProxy.bfactor;
+
+  // ── 2. Enumerate every atom of this residue + compute center of geometry.
+  // The AtomProxy walks the structure store cheaply; for an average
+  // residue (~8 atoms) this is microseconds.
+  const allAtoms = [];
+  let cogX = 0, cogY = 0, cogZ = 0;
+  if (nglComponent && nglComponent.structure) {
+    const residueProxy = atomProxy.residue;
+    residueProxy.eachAtom((a) => {
+      allAtoms.push({
+        atomname: a.atomname,
+        element: a.element,
+        serial: a.serial,
+        x: a.x, y: a.y, z: a.z,
+        bfactor: a.bfactor,
+      });
+      cogX += a.x; cogY += a.y; cogZ += a.z;
+    });
+    if (allAtoms.length > 0) {
+      cogX /= allAtoms.length;
+      cogY /= allAtoms.length;
+      cogZ /= allAtoms.length;
+    }
+  }
+
+  // ── 3. Look up a matching residue entity in nDB (only present for
+  // the 5 showcase proteins). When found we surface the entity record;
+  // when not, we still show the coordinates (they're in nDB via the
+  // CIF blob, just not surfaced as their own entities).
+  let residueNode = null;
   const proteinId = currentProteinNode.id;
   for (const node of graphData.nodes) {
     if (node.nodeKind !== "entity" || node.type_id !== TYPES.residue.id) continue;
-    const pos = extractProp(node.record, 50);
-    if (pos !== resno) continue;
-    const linksRes = graphData.links.some(L => {
+    if (extractProp(node.record, 50) !== resno) continue;
+    const linked = graphData.links.some(L => {
       const edge = edgesById.get(L.edge_id);
       if (!edge || edge.type_id !== RESIDUE_OF_TYPE_ID) return false;
       const fillers = edge.roles.map(rr => rr.entity_id);
       return fillers.includes(node.id) && fillers.includes(proteinId);
     });
-    if (linksRes) { residue = node; break; }
+    if (linked) { residueNode = node; break; }
   }
-
-  if (!residue) {
-    // No curated entity for this residue (most proteins only have
-    // residues for the 5 structural showcase entries). Tell the user
-    // honestly what they're seeing rather than pretending it's in nDB.
-    $el.innerHTML = `
-      <div class="db-row"><span class="k">position</span><span class="v">${resno}</span></div>
-      ${ngllResNameHint ? `<div class="db-row"><span class="k">residue</span><span class="v">${escapeHtml(ngllResNameHint)}</span></div>` : ""}
-      <div class="empty" style="margin-top:6px">
-        This residue is in the AlphaFold CIF but not committed as an
-        nDB entity. The five showcase proteins (trypsin, TFIIIA,
-        insulin, myoglobin, GFP) carry per-residue entities; toggle
-        "Enable residue + motif data" in the left sidebar and pick
-        one of those to see entity-level data here.
-      </div>
-    `;
-    return;
-  }
-
-  const rec = residue.record;
-  const aa = extractProp(rec, 51) || "?";
-  const pos = extractProp(rec, 50);
-  const plddt = extractProp(rec, 52);
-  const ss = extractProp(rec, 53);
-  const ssLabel = { H: "α-helix (H)", E: "β-sheet (E)", C: "coil (C)" }[ss] || ss;
-  const bucket = bucketForPlddt(plddt);
-  const bucketColor = PLDDT_PALETTE[bucket] || "#888";
-
-  // Motif hyperedges this residue is in.
   const motifs = [];
-  for (const e of edgesById.values()) {
-    if (!MOTIF_TYPE_IDS.has(e.type_id)) continue;
-    const fillers = e.roles.map(rr => rr.entity_id);
-    if (fillers.includes(residue.id)) motifs.push(e);
+  if (residueNode) {
+    for (const e of edgesById.values()) {
+      if (!MOTIF_TYPE_IDS.has(e.type_id)) continue;
+      const fillers = e.roles.map(rr => rr.entity_id);
+      if (fillers.includes(residueNode.id)) motifs.push(e);
+    }
   }
+  const plddtBucket = bucketForPlddt(bfactor);
+  const bucketColor = PLDDT_PALETTE[plddtBucket] || "#888";
+  const fmtCoord = (v) => v.toFixed(3).padStart(8);
 
-  const wireJson = JSON.stringify({
-    kind: "entity",
-    entity_id: rec.entity_id,
-    type_id: rec.type_id,
-    properties: rec.properties,
-  }, null, 2);
+  // ── 4. Render. The story is told in three sub-sections:
+  //   A. The exact atom you clicked — coords + element + B-factor
+  //   B. All atoms of the residue (from the CIF in nDB)
+  //   C. Residue entity record + motif memberships (when curated)
+  const atomTable = allAtoms.length === 0 ? "" : `
+    <h3 style="margin-top:8px">All atoms (${allAtoms.length}) of ${escapeHtml(resname)}${resno} — from CIF in nDB</h3>
+    <pre style="font-size:10.5px;line-height:1.35">${
+      allAtoms.map(a => {
+        const tag = a.atomname === atomname ? "→ " : "  ";
+        return `${tag}${a.atomname.padEnd(4)} ${a.element.padEnd(2)} ${fmtCoord(a.x)} ${fmtCoord(a.y)} ${fmtCoord(a.z)}  B=${a.bfactor.toFixed(1)}`;
+      }).join("\n")
+    }</pre>
+  `;
+  const entityBlock = residueNode ? (() => {
+    const rec = residueNode.record;
+    const wireJson = JSON.stringify({
+      kind: "entity",
+      entity_id: rec.entity_id,
+      type_id: rec.type_id,
+      properties: rec.properties,
+    }, null, 2);
+    return `
+      <h3 style="margin-top:10px">nDB residue entity (curated)</h3>
+      <div class="db-row"><span class="k">entity_id</span><span class="v">${rec.entity_id.slice(0,8)}…</span></div>
+      ${motifs.length > 0 ? `
+        <h3 style="margin-top:8px">In ${motifs.length} motif hyperedge${motifs.length === 1 ? "" : "s"}</h3>
+        ${motifs.map(e => {
+          const tname = typeNameById[e.type_id] || `type ${e.type_id}`;
+          const mname = extractProp(e, 54) || tname;
+          return `
+            <div class="hed-row clickable" data-hed-id="${e.hyperedge_id}">
+              <div><span class="pill">${tname}</span> · arity ${e.roles.length}</div>
+              <div class="members">${escapeHtml(String(mname))}</div>
+            </div>
+          `;
+        }).join("")}
+      ` : ""}
+      <details style="margin-top:6px"><summary>raw wire JSON</summary><pre>${escapeHtml(wireJson)}</pre></details>
+    `;
+  })() : `
+    <div class="empty" style="margin-top:6px">
+      Atom data above is from the CIF stored in nDB. No separate
+      per-residue <i>entity</i> for this position — those are curated
+      for the 5 showcase proteins (trypsin, TFIIIA, insulin,
+      myoglobin, GFP). Switch to one of those to see motif memberships.
+    </div>
+  `;
 
   $el.innerHTML = `
-    <div class="db-row"><span class="k">kind</span><span class="v">entity (residue)</span></div>
-    <div class="db-row"><span class="k">type_id</span><span class="v">${rec.type_id}</span></div>
-    <div class="db-row"><span class="k">name</span><span class="v">${escapeHtml(extractName(rec) || "?")}</span></div>
-    <div class="db-row"><span class="k">amino_acid</span><span class="v">${escapeHtml(String(aa))}</span></div>
-    <div class="db-row"><span class="k">position</span><span class="v">${pos}</span></div>
-    ${plddt != null ? `<div class="db-row"><span class="k">pLDDT</span><span class="v" style="color:${bucketColor}">${plddt.toFixed(1)} · ${bucket}</span></div>` : ""}
-    ${ss ? `<div class="db-row"><span class="k">sec_struct</span><span class="v">${ssLabel}</span></div>` : ""}
-    ${motifs.length > 0 ? `
-      <h3 style="margin-top:10px">In ${motifs.length} motif hyperedge${motifs.length === 1 ? "" : "s"}</h3>
-      ${motifs.map(e => {
-        const tname = typeNameById[e.type_id] || `type ${e.type_id}`;
-        const mname = extractProp(e, 54) || tname;
-        return `
-          <div class="hed-row clickable" data-hed-id="${e.hyperedge_id}">
-            <div><span class="pill">${tname}</span> · arity ${e.roles.length}</div>
-            <div class="members">${escapeHtml(String(mname))}</div>
-          </div>
-        `;
-      }).join("")}
-    ` : ""}
-    <details style="margin-top:8px">
-      <summary>raw wire JSON</summary>
-      <pre>${escapeHtml(wireJson)}</pre>
-    </details>
+    <h3>Atom clicked</h3>
+    <div class="db-row"><span class="k">atom_name</span><span class="v">${escapeHtml(String(atomname))}</span></div>
+    <div class="db-row"><span class="k">element</span><span class="v">${escapeHtml(String(element))}</span></div>
+    <div class="db-row"><span class="k">serial</span><span class="v">${serial}</span></div>
+    <div class="db-row"><span class="k">chain</span><span class="v">${escapeHtml(String(chain || "A"))}</span></div>
+    <div class="db-row"><span class="k">residue</span><span class="v">${escapeHtml(String(resname))}${resno}</span></div>
+    <div class="db-row"><span class="k">x (Å)</span><span class="v">${x.toFixed(3)}</span></div>
+    <div class="db-row"><span class="k">y (Å)</span><span class="v">${y.toFixed(3)}</span></div>
+    <div class="db-row"><span class="k">z (Å)</span><span class="v">${z.toFixed(3)}</span></div>
+    <div class="db-row"><span class="k">B-factor</span><span class="v" style="color:${bucketColor}">${bfactor.toFixed(2)} (pLDDT · ${plddtBucket})</span></div>
+    ${allAtoms.length > 0 ? `<div class="db-row"><span class="k">residue centre</span><span class="v">${cogX.toFixed(2)}, ${cogY.toFixed(2)}, ${cogZ.toFixed(2)}</span></div>` : ""}
+    ${atomTable}
+    ${entityBlock}
   `;
-  // Wire motif clicks
   $el.querySelectorAll(".hed-row.clickable[data-hed-id]").forEach(row => {
     row.addEventListener("click", () => {
       const id = row.getAttribute("data-hed-id");
