@@ -326,6 +326,29 @@ pub struct AggSpec {
 // Pipeline
 // ---------------------------------------------------------------------------
 
+/// One key in a multi-column sort. Earlier keys take precedence; later
+/// keys break ties.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SortKey {
+    /// Column index (0-based) into the projected / aggregated output.
+    pub column: usize,
+    /// `true` = ascending, `false` = descending.
+    pub ascending: bool,
+}
+
+impl SortKey {
+    /// Shorthand for `SortKey { column, ascending: true }`.
+    #[must_use]
+    pub const fn asc(column: usize) -> Self {
+        Self { column, ascending: true }
+    }
+    /// Shorthand for `SortKey { column, ascending: false }`.
+    #[must_use]
+    pub const fn desc(column: usize) -> Self {
+        Self { column, ascending: false }
+    }
+}
+
 /// Slicer pipeline. Build with `Pipeline::new` and call `run`.
 #[derive(Default)]
 pub struct Pipeline {
@@ -338,8 +361,9 @@ pub struct Pipeline {
     having: Option<Box<dyn Fn(&[Value]) -> bool + Send + Sync>>,
     group_by: Vec<usize>,
     aggregates: Vec<AggSpec>,
-    sort_column: Option<usize>,
-    sort_asc: bool,
+    /// v2.1 §2.6: ordered list of sort keys. Earlier keys take
+    /// precedence; later keys break ties. Empty = no sort.
+    sort_keys: Vec<SortKey>,
     limit: Option<usize>,
 }
 
@@ -351,8 +375,7 @@ impl std::fmt::Debug for Pipeline {
             .field("having", &self.having.as_ref().map(|_| "<fn>"))
             .field("group_by", &self.group_by)
             .field("aggregates", &self.aggregates)
-            .field("sort_column", &self.sort_column)
-            .field("sort_asc", &self.sort_asc)
+            .field("sort_keys", &self.sort_keys)
             .field("limit", &self.limit)
             .finish()
     }
@@ -419,19 +442,30 @@ impl Pipeline {
         self
     }
 
-    /// Sort by one column, ascending.
+    /// Sort by one column, ascending. v2.0 shortcut for
+    /// `.sort([SortKey::asc(column)])` — replaces any prior sort keys.
     #[must_use]
     pub fn sort_asc(mut self, column: usize) -> Self {
-        self.sort_column = Some(column);
-        self.sort_asc = true;
+        self.sort_keys = vec![SortKey::asc(column)];
         self
     }
 
-    /// Sort by one column, descending.
+    /// Sort by one column, descending. v2.0 shortcut for
+    /// `.sort([SortKey::desc(column)])` — replaces any prior sort keys.
     #[must_use]
     pub fn sort_desc(mut self, column: usize) -> Self {
-        self.sort_column = Some(column);
-        self.sort_asc = false;
+        self.sort_keys = vec![SortKey::desc(column)];
+        self
+    }
+
+    /// v2.1 §2.6: ordered multi-key sort. Earlier keys take precedence;
+    /// later keys break ties. Replaces any prior sort configuration.
+    ///
+    /// Example: `pipeline.sort([SortKey::asc(0), SortKey::desc(2)])`
+    /// — primary ascending on column 0, secondary descending on column 2.
+    #[must_use]
+    pub fn sort(mut self, keys: impl IntoIterator<Item = SortKey>) -> Self {
+        self.sort_keys = keys.into_iter().collect();
         self
     }
 
@@ -478,12 +512,20 @@ impl Pipeline {
             rows.retain(|r| having(r));
         }
 
-        // 3. Sort.
-        if let Some(col) = self.sort_column {
-            let asc = self.sort_asc;
+        // 3. Sort. Multi-key: earlier keys take precedence; later keys
+        // break ties (v2.1 §2.6).
+        if !self.sort_keys.is_empty() {
+            let keys = self.sort_keys.clone();
             rows.sort_by(|a, b| {
-                let ord = value_partial_cmp(&a[col], &b[col]).unwrap_or(Ordering::Equal);
-                if asc { ord } else { ord.reverse() }
+                for key in &keys {
+                    let ord = value_partial_cmp(&a[key.column], &b[key.column])
+                        .unwrap_or(Ordering::Equal);
+                    let ord = if key.ascending { ord } else { ord.reverse() };
+                    if ord != Ordering::Equal {
+                        return ord;
+                    }
+                }
+                Ordering::Equal
             });
         }
 
@@ -1318,6 +1360,73 @@ mod tests {
         assert_eq!(bucket_floor(0, 60, 0), 0);
         assert_eq!(bucket_floor(59, 60, 0), 0);
         assert_eq!(bucket_floor(61, 60, 0), 60);
+    }
+
+    // ---------------------------------------------------------------------
+    // §2.6 Multi-column sort
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn multi_sort_primary_asc_secondary_desc_tiebreaks() {
+        // (region, revenue) pairs with ties on region:
+        //   (a, 50), (a, 100), (b, 10), (b, 30)
+        // Sort primary region asc, secondary revenue desc → expected:
+        //   (a, 100), (a, 50), (b, 30), (b, 10)
+        let records = vec![
+            entity(EntityId::now_v7(), 1, vec![(10, Value::String("b".into())), (11, Value::I64(30))]),
+            entity(EntityId::now_v7(), 1, vec![(10, Value::String("a".into())), (11, Value::I64(50))]),
+            entity(EntityId::now_v7(), 1, vec![(10, Value::String("b".into())), (11, Value::I64(10))]),
+            entity(EntityId::now_v7(), 1, vec![(10, Value::String("a".into())), (11, Value::I64(100))]),
+        ];
+        let p = Pipeline::new()
+            .select(Column::entity_property("region", PropertyId::new(10)))
+            .select(Column::entity_property("revenue", PropertyId::new(11)))
+            .sort([SortKey::asc(0), SortKey::desc(1)]);
+        let t = p.run(records);
+        let actual: Vec<(String, i64)> = t
+            .rows
+            .iter()
+            .filter_map(|r| match (&r[0], &r[1]) {
+                (Value::String(s), Value::I64(n)) => Some((s.clone(), *n)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            vec![
+                ("a".into(), 100),
+                ("a".into(), 50),
+                ("b".into(), 30),
+                ("b".into(), 10),
+            ]
+        );
+    }
+
+    #[test]
+    fn single_key_sort_asc_backward_compat() {
+        // The legacy `sort_asc(0)` API must still produce the same
+        // result as `sort([SortKey::asc(0)])`.
+        let records = vec![
+            entity(EntityId::now_v7(), 1, vec![(10, Value::I64(3))]),
+            entity(EntityId::now_v7(), 1, vec![(10, Value::I64(1))]),
+            entity(EntityId::now_v7(), 1, vec![(10, Value::I64(2))]),
+        ];
+        let t_legacy = Pipeline::new()
+            .select(Column::entity_property("n", PropertyId::new(10)))
+            .sort_asc(0)
+            .run(records.clone());
+        let t_new = Pipeline::new()
+            .select(Column::entity_property("n", PropertyId::new(10)))
+            .sort([SortKey::asc(0)])
+            .run(records);
+        assert_eq!(t_legacy.rows, t_new.rows);
+        // Confirm order is actually ascending.
+        let vals: Vec<i64> = t_legacy
+            .rows
+            .iter()
+            .filter_map(|r| if let Value::I64(n) = &r[0] { Some(*n) } else { None })
+            .collect();
+        assert_eq!(vals, vec![1, 2, 3]);
     }
 
     #[test]
