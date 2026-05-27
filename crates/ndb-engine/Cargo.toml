@@ -21,6 +21,18 @@ thiserror  = { workspace = true }
 uuid       = { workspace = true }
 aes-gcm    = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
 rand_core  = { version = "0.6", features = ["getrandom"] }
+memmap2    = "0.9"
 
 [lints]
-workspace = true
+# Mmap requires unsafe by API contract (the OS can't enforce that the
+# mapped file's bytes won't change). This crate downgrades `unsafe_code`
+# from `forbid` (workspace) to `deny` so the one mmap::map() call in
+# sstable.rs can `#[allow(unsafe_code)]` with a SAFETY argument. Every
+# other workspace lint is inherited verbatim.
+rust.unsafe_code  = "deny"
+rust.missing_docs = "warn"
+clippy.pedantic = { level = "warn", priority = -1 }
+clippy.module_name_repetitions = "allow"
+clippy.must_use_candidate      = "allow"
+clippy.missing_errors_doc      = "allow"
+clippy.missing_panics_doc      = "allow"

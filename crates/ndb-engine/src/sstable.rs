@@ -48,7 +48,7 @@
 //! needed.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufReader, BufWriter, ErrorKind, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufWriter, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use crc32fast::Hasher;
@@ -448,18 +448,27 @@ fn decode_footer(bytes: &[u8; SSTABLE_FOOTER_SIZE]) -> Result<SSTableFooter, SST
 #[derive(Debug)]
 pub struct SSTableReader {
     path: PathBuf,
-    file: File,
+    /// Memory-mapped view of the file. Used for all reads — sequential
+    /// iteration and (future) random-access block lookups. The map covers
+    /// the entire file including the footer. v1 reads are sequential;
+    /// mmap pays off most for the eventual block-index path because it
+    /// lets the kernel page in only what we touch.
+    mmap: memmap2::Mmap,
+    /// Keeps the underlying file descriptor alive for the lifetime of the
+    /// mmap. We never write through the FD — SSTable files are
+    /// write-temp-then-rename and read-only after `open()`.
+    _file: File,
     file_len: u64,
     footer: SSTableFooter,
 }
 
 impl SSTableReader {
-    /// Open `path`, validate the footer, and return a handle ready for
-    /// iteration / lookup.
+    /// Open `path`, validate the footer, mmap the file, and return a
+    /// handle ready for iteration / lookup.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, SSTableError> {
         let path = path.as_ref().to_path_buf();
-        let mut file = File::open(&path)?;
-        let file_len = file.seek(SeekFrom::End(0))?;
+        let file = File::open(&path)?;
+        let file_len = file.metadata()?.len();
         let needed = SSTABLE_FOOTER_SIZE as u64;
         if file_len < needed {
             return Err(SSTableError::TooShort {
@@ -467,9 +476,24 @@ impl SSTableReader {
                 needed,
             });
         }
-        file.seek(SeekFrom::Start(file_len - needed))?;
+        // SAFETY: We open the file read-only and rely on the engine's
+        // append-only + write-temp-then-rename invariants to guarantee
+        // the file content doesn't mutate under us. SSTable files are
+        // immutable after publish; the only modification is deletion
+        // (which leaves an existing mmap valid via the inode lifetime).
+        #[allow(unsafe_code)]
+        let mmap = unsafe { memmap2::Mmap::map(&file)? };
+        let mmap_len = mmap.len() as u64;
+        if mmap_len != file_len {
+            return Err(SSTableError::TooShort {
+                len: mmap_len,
+                needed: file_len,
+            });
+        }
+        let footer_off = usize::try_from(file_len - needed)
+            .map_err(|_| SSTableError::TooShort { len: file_len, needed: usize::MAX as u64 })?;
         let mut footer_bytes = [0u8; SSTABLE_FOOTER_SIZE];
-        file.read_exact(&mut footer_bytes)?;
+        footer_bytes.copy_from_slice(&mmap[footer_off..footer_off + SSTABLE_FOOTER_SIZE]);
         let footer = decode_footer(&footer_bytes)?;
         if footer.data_size + needed != file_len {
             // data_size in the footer disagrees with the file length — clear
@@ -479,11 +503,10 @@ impl SSTableReader {
                 needed: footer.data_size + needed,
             });
         }
-        // Reposition for sequential reads.
-        file.seek(SeekFrom::Start(0))?;
         Ok(Self {
             path,
-            file,
+            mmap,
+            _file: file,
             file_len,
             footer,
         })
@@ -511,13 +534,9 @@ impl SSTableReader {
     /// record yielded. On a CRC failure mid-stream, the iterator returns
     /// `Some(Err(_))`; subsequent calls return `None`.
     pub fn iter(&mut self) -> SSTableIter<'_> {
-        // Seek to start so iteration starts cleanly even if the caller
-        // poked at the file handle.
-        let _ = self.file.seek(SeekFrom::Start(0));
         SSTableIter {
-            reader: BufReader::new(&mut self.file),
+            data: &self.mmap[..usize::try_from(self.footer.data_size).unwrap_or(usize::MAX)],
             pos: 0,
-            data_end: self.footer.data_size,
             done: false,
         }
     }
@@ -542,57 +561,55 @@ impl SSTableReader {
 }
 
 /// Streaming record iterator returned by [`SSTableReader::iter`].
+///
+/// Backed by a mmap'd byte slice — no `Read`/`Seek` machinery. Each
+/// record is decoded in-place by `Record::decode` over a sub-slice;
+/// nothing is copied for the size prefix, and only the variable-length
+/// payload that `Record::decode` chooses to materialise is allocated.
 #[derive(Debug)]
 pub struct SSTableIter<'a> {
-    reader: BufReader<&'a mut File>,
+    /// Slice covering the data section (excludes footer). Length is
+    /// `footer.data_size`.
+    data: &'a [u8],
     /// Position inside the data section (0 = first byte of file).
-    pos: u64,
-    /// End-of-data offset (= footer start).
-    data_end: u64,
+    pos: usize,
     /// Set after a CRC failure so subsequent `next()` returns `None`.
     done: bool,
 }
 
 impl SSTableIter<'_> {
     fn read_one(&mut self) -> Result<Option<(Record, u64)>, SSTableError> {
-        if self.done || self.pos >= self.data_end {
+        if self.done || self.pos >= self.data.len() {
             return Ok(None);
         }
-        let remaining = self.data_end - self.pos;
+        let remaining = self.data.len() - self.pos;
         if remaining < 4 {
-            // Footer claimed data extends past where a size prefix could fit.
             return Err(SSTableError::Decode {
-                offset: self.pos,
+                offset: self.pos as u64,
                 source: DecodeError::Truncated {
-                    offset: usize::try_from(self.pos).unwrap_or(usize::MAX),
-                    needed: 4 - usize::try_from(remaining).unwrap_or(0),
+                    offset: self.pos,
+                    needed: 4 - remaining,
                 },
             });
         }
-        let mut size_buf = [0u8; 4];
-        self.reader.read_exact(&mut size_buf)?;
-        let claimed = u64::from(u32::from_le_bytes(size_buf));
+        let size_buf = &self.data[self.pos..self.pos + 4];
+        let claimed = u32::from_le_bytes(size_buf.try_into().unwrap()) as usize;
         if claimed == 0 || claimed > remaining {
             return Err(SSTableError::Decode {
-                offset: self.pos,
+                offset: self.pos as u64,
                 source: DecodeError::InvalidRecordSize {
-                    claimed: usize::try_from(claimed).unwrap_or(usize::MAX),
-                    available: usize::try_from(remaining).unwrap_or(usize::MAX),
+                    claimed,
+                    available: remaining,
                 },
             });
         }
-        let claimed_usize = usize::try_from(claimed).map_err(|_| {
-            io::Error::new(ErrorKind::InvalidData, "SSTable record too large for usize")
-        })?;
-        let mut full = vec![0u8; claimed_usize];
-        full[..4].copy_from_slice(&size_buf);
-        self.reader.read_exact(&mut full[4..])?;
-        let lsn = self.pos;
-        let (rec, consumed) = Record::decode(&full).map_err(|e| SSTableError::Decode {
+        let lsn = self.pos as u64;
+        let slice = &self.data[self.pos..self.pos + claimed];
+        let (rec, consumed) = Record::decode(slice).map_err(|e| SSTableError::Decode {
             offset: lsn,
             source: e,
         })?;
-        debug_assert_eq!(consumed, claimed_usize);
+        debug_assert_eq!(consumed, claimed);
         self.pos += claimed;
         Ok(Some((rec, lsn)))
     }
