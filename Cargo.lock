@@ -173,14 +173,14 @@ checksum = "6b947ae49db0d222b1dbc6b113ce7248a3fc3a6ca21b696717bfc000ba4484d8"
 
 [[package]]
 name = "ndb-cli"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "ndb-engine"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "base64",
  "crc32fast",
@@ -192,7 +192,7 @@ dependencies = [
 
 [[package]]
 name = "ndb-mcp-server"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "ndb-engine",
  "serde",
@@ -203,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "ndb-renderer"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "ndb-engine",
  "ndb-slicer",
@@ -211,7 +211,7 @@ dependencies = [
 
 [[package]]
 name = "ndb-server"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "ndb-engine",
  "serde",
@@ -222,7 +222,7 @@ dependencies = [
 
 [[package]]
 name = "ndb-slicer"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "ndb-engine",
 ]
