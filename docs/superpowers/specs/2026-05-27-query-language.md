@@ -382,6 +382,96 @@ Closed (locked) decisions:
   limit down past joins where correctness allows. Result is unordered for
   v1 — `limit` is "stop after N", not "top-N".
 
+### 5.7 Hyperedge pattern semantics (locked)
+
+The locks below resolve specific n-arity questions surfaced in the
+2026-05-27 review.
+
+**Partial role match is the default.** A pattern names ONLY the roles
+the user cares about. Unnamed roles are wildcards — they may be bound
+to any entity in the candidate hyperedge. A 5-arity `prescription`
+hyperedge with roles `patient`, `prescriber`, `medication`, `dose`,
+`frequency` is matched by:
+
+```
+prescription(patient: ?p, medication: ?m)
+```
+
+→ any prescription where `patient` and `medication` exist, regardless
+of the other three role values. The planner asks the engine for
+hyperedges of type `prescription`, then filters by the two named
+bindings. The three unconstrained roles contribute nothing to the
+filter — they do not require explicit `_` placeholders.
+
+To require a role to be PRESENT but unconstrained (e.g. you want only
+prescriptions that have a `prescriber` role bound, regardless of who),
+use `_`: `prescription(patient: ?p, prescriber: _)`. v1 treats `_` as
+a fresh anonymous variable that doesn't participate in joins or
+returns.
+
+**Same-hyperedge variable repetition unifies.** A variable mentioned
+twice in the same pattern requires the two role bindings to be equal:
+
+```
+approval(document: ?d, approver: ?p, document_owner: ?p)
+```
+
+→ matches approvals where the approver and the document_owner role are
+bound to the same entity. No join needed; unification is intrinsic.
+
+**Role vs property name resolution (Option A — overload by name).**
+The single binding-list syntax accepts both roles and properties. The
+resolver decides for each name:
+
+- Name registered as a role for this type → role binding.
+- Name registered as a property key for this type → property filter.
+- Name registered as BOTH a role and a property key for this type →
+  resolver returns `ambiguous_name` error with the type and name. The
+  fix at schema-definition time is to rename one or the other. This is
+  rare; nDB's schemaless core doesn't enforce role/property name
+  partitioning, but real schemas naturally separate them.
+- Name registered as neither → `unknown_role_or_property` error.
+
+This preserves the §12.6 example syntax verbatim
+(`approval(document: ?doc, approver: ?alice, workflow: "fast-track")`)
+without forcing users to memorise role-vs-property tax. The
+ambiguity-error path catches naming collisions early.
+
+**Hyperedge recursion across higher-arity types.** A recursive pattern
+must name exactly two roles for the walk endpoints (start and end).
+Other roles of the hyperedge type may also be named to constrain the
+walk:
+
+```
+contains*(parent: body_42, child: ?leaf, layer: "organ")
+```
+
+→ traverses `contains` hyperedges where `layer = "organ"` AT EVERY
+STEP, walking from `parent = body_42` outward. Roles not named are
+wildcards per step.
+
+**Hyperedge UUID binding.** The hyperedge record's own UUID is bound
+via `as ?var`. The UUID is then a regular variable for joining,
+filtering, and returning. Two hyperedges of the same type with the
+same role bindings can be distinguished by their UUIDs.
+
+**Hyperedge property filtering inside the pattern.** Properties of the
+hyperedge itself (not its role-bound entities) appear in the same
+binding list as roles, distinguished by the resolver per the
+role-vs-property rule above. To filter by a hyperedge property
+comparison (not equality), bind the hyperedge to a variable and use
+`where`:
+
+```
+approval(document: ?d, approver: ?a) as ?app
+where ?app != ?prev_app
+```
+
+Variable-vs-variable comparisons and inequality operators on properties
+require the where-clause path — pattern-internal filters are always
+equality (or, equivalently, "bind a variable and use `where`"). v2 may
+add inline property comparisons (`property OP literal`).
+
 ---
 
 ## 6. Error model
@@ -408,6 +498,8 @@ list when one-of-N would be useful (e.g. `expected: '(' or 'as'`).
 | `ambiguous_type` | Name matches both entity and hyperedge dictionaries |
 | `unknown_role` | Role name not in dictionary OR not valid for this type |
 | `unknown_property` | Property name not in dictionary |
+| `unknown_role_or_property` | Binding name neither a role nor a property for this type |
+| `ambiguous_name` | Binding name registered as BOTH a role and a property for this type |
 | `unbound_variable` | Variable in `return` or `where` not bound by any pattern |
 | `type_mismatch` | Filter compares incompatible tags |
 | `arity_violation` | Recursive pattern doesn't name exactly two roles |
