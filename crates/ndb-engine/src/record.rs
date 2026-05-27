@@ -162,6 +162,119 @@ pub struct PropertyKeyRecord {
 }
 
 // ---------------------------------------------------------------------------
+// Any-record enum — convenience wrapper used by the WAL replayer and the
+// scan-recovery loop.
+// ---------------------------------------------------------------------------
+
+/// Union of every record kind, used by code that handles a heterogeneous
+/// stream of records (WAL replay, `SSTable` iteration, scan-recovery).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Record {
+    /// `0x01` — `EntityRecord`.
+    Entity(EntityRecord),
+    /// `0x02` — `HyperEdgeRecord`.
+    HyperEdge(HyperEdgeRecord),
+    /// `0x03` — `TombstoneRecord`.
+    Tombstone(TombstoneRecord),
+    /// `0x04` — `TypeNameRecord`.
+    TypeName(TypeNameRecord),
+    /// `0x05` — `RoleNameRecord`.
+    RoleName(RoleNameRecord),
+    /// `0x06` — `PropertyKeyRecord`.
+    PropertyKey(PropertyKeyRecord),
+}
+
+impl Record {
+    /// `RecordKind` discriminant for this record.
+    #[must_use]
+    pub fn kind(&self) -> RecordKind {
+        match self {
+            Self::Entity(_) => RecordKind::Entity,
+            Self::HyperEdge(_) => RecordKind::HyperEdge,
+            Self::Tombstone(_) => RecordKind::Tombstone,
+            Self::TypeName(_) => RecordKind::TypeName,
+            Self::RoleName(_) => RecordKind::RoleName,
+            Self::PropertyKey(_) => RecordKind::PropertyKey,
+        }
+    }
+
+    /// Encode whichever variant is active onto `out`. Returns bytes appended.
+    pub fn encode(&self, out: &mut Vec<u8>) -> Result<usize, EncodeError> {
+        match self {
+            Self::Entity(r) => r.encode(out),
+            Self::HyperEdge(r) => r.encode(out),
+            Self::Tombstone(r) => r.encode(out),
+            Self::TypeName(r) => r.encode(out),
+            Self::RoleName(r) => r.encode(out),
+            Self::PropertyKey(r) => r.encode(out),
+        }
+    }
+
+    /// Peek at the leading envelope bytes of `input` to discover the record
+    /// kind, then dispatch to the matching decoder.
+    pub fn decode(input: &[u8]) -> Result<(Self, usize), DecodeError> {
+        let kind = peek_record_kind(input)?;
+        Ok(match kind {
+            RecordKind::Entity => {
+                let (r, n) = EntityRecord::decode(input)?;
+                (Self::Entity(r), n)
+            }
+            RecordKind::HyperEdge => {
+                let (r, n) = HyperEdgeRecord::decode(input)?;
+                (Self::HyperEdge(r), n)
+            }
+            RecordKind::Tombstone => {
+                let (r, n) = TombstoneRecord::decode(input)?;
+                (Self::Tombstone(r), n)
+            }
+            RecordKind::TypeName => {
+                let (r, n) = TypeNameRecord::decode(input)?;
+                (Self::TypeName(r), n)
+            }
+            RecordKind::RoleName => {
+                let (r, n) = RoleNameRecord::decode(input)?;
+                (Self::RoleName(r), n)
+            }
+            RecordKind::PropertyKey => {
+                let (r, n) = PropertyKeyRecord::decode(input)?;
+                (Self::PropertyKey(r), n)
+            }
+        })
+    }
+}
+
+impl From<EntityRecord> for Record {
+    fn from(r: EntityRecord) -> Self {
+        Self::Entity(r)
+    }
+}
+impl From<HyperEdgeRecord> for Record {
+    fn from(r: HyperEdgeRecord) -> Self {
+        Self::HyperEdge(r)
+    }
+}
+impl From<TombstoneRecord> for Record {
+    fn from(r: TombstoneRecord) -> Self {
+        Self::Tombstone(r)
+    }
+}
+impl From<TypeNameRecord> for Record {
+    fn from(r: TypeNameRecord) -> Self {
+        Self::TypeName(r)
+    }
+}
+impl From<RoleNameRecord> for Record {
+    fn from(r: RoleNameRecord) -> Self {
+        Self::RoleName(r)
+    }
+}
+impl From<PropertyKeyRecord> for Record {
+    fn from(r: PropertyKeyRecord) -> Self {
+        Self::PropertyKey(r)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Envelope helpers (write + read)
 // ---------------------------------------------------------------------------
 

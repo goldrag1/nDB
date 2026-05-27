@@ -32,12 +32,14 @@ pub mod error;
 pub mod id;
 pub mod record;
 pub mod value;
+pub mod wal;
 
 pub use error::{DecodeError, EncodeError};
 pub use id::{EntityId, HyperedgeId, PropertyId, RoleId, TX_ACTIVE, TYPE_UNTYPED, TxId, TypeId};
 pub use record::{
     ENVELOPE_OVERHEAD, EntityRecord, FORMAT_VERSION, FORMAT_VERSION_MAX_SUPPORTED, HyperEdgeRecord,
-    PropertyKeyRecord, RecordKind, RoleNameRecord, TombstoneRecord, TypeNameRecord,
+    PropertyKeyRecord, Record, RecordKind, RoleNameRecord, TombstoneRecord, TypeNameRecord,
     peek_record_kind, peek_record_size,
 };
 pub use value::Value;
+pub use wal::{WAL_EXTENSION, WalReadError, WalReader, WalRecovery, WriteAheadLog};
