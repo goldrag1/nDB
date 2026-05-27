@@ -1239,3 +1239,76 @@ fn engine_backed_dispatch_revokes_capability_without_restart() {
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// v2.2 preview — CORS preflight + ACAO header injection
+// ---------------------------------------------------------------------------
+
+fn raw_full(addr: std::net::SocketAddr, req: &[u8]) -> (u16, String) {
+    let mut s = TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    s.write_all(req).unwrap();
+    s.flush().unwrap();
+    let mut buf = Vec::new();
+    s.read_to_end(&mut buf).unwrap();
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    let status: u16 = text
+        .lines()
+        .next()
+        .unwrap()
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .parse()
+        .unwrap();
+    (status, text)
+}
+
+#[test]
+fn cors_options_preflight_returns_204_with_acao() {
+    let dir = temp_dir("cors_preflight");
+    let server = Arc::new(Server::open(&dir).unwrap().with_cors_origin("*"));
+    let addr = spawn_server(Arc::clone(&server), 1);
+    let req = b"OPTIONS /commit HTTP/1.1\r\nHost: x\r\nOrigin: http://example.com\r\nAccess-Control-Request-Method: POST\r\nConnection: close\r\n\r\n";
+    let (status, raw) = raw_full(addr, req);
+    assert_eq!(status, 204);
+    assert!(raw.contains("Access-Control-Allow-Origin: *"));
+    assert!(raw.contains("Access-Control-Allow-Methods:"));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn cors_get_response_carries_acao_header() {
+    let dir = temp_dir("cors_get");
+    let server = Arc::new(Server::open(&dir).unwrap().with_cors_origin("*"));
+    let addr = spawn_server(Arc::clone(&server), 1);
+    let (status, raw) = raw_full(
+        addr,
+        b"GET /health HTTP/1.1\r\nHost: x\r\nOrigin: http://localhost\r\nConnection: close\r\n\r\n",
+    );
+    assert_eq!(status, 200);
+    assert!(
+        raw.contains("Access-Control-Allow-Origin: *"),
+        "missing ACAO header. Raw response:\n{raw}"
+    );
+    // Body still parses as the health JSON.
+    assert!(raw.contains("\"status\":\"ok\""));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn cors_disabled_by_default() {
+    let dir = temp_dir("cors_default_off");
+    let server = Arc::new(Server::open(&dir).unwrap());
+    let addr = spawn_server(Arc::clone(&server), 1);
+    let (status, raw) = raw_full(
+        addr,
+        b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+    );
+    assert_eq!(status, 200);
+    assert!(
+        !raw.to_lowercase().contains("access-control-allow-origin"),
+        "expected no CORS headers; got:\n{raw}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}

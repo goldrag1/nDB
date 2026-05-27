@@ -259,6 +259,13 @@ pub struct Server {
     /// every successful commit. `/subscribe` blocks on this condvar
     /// instead of polling every 50ms — sub-millisecond latency.
     commit_notify: Arc<(Mutex<u64>, std::sync::Condvar)>,
+    /// v2.2 preview: when set, every response carries
+    /// `Access-Control-Allow-Origin: <value>` and `OPTIONS` preflight
+    /// requests get a 204 with the matching ACAO. Use `"*"` to allow
+    /// any origin. Designed for the local `ndb-explorer` SPA; not
+    /// for production-internet exposure (use a reverse proxy with
+    /// per-origin policy for that).
+    cors_origin: Option<String>,
 }
 
 /// Append-only audit log. One JSON line per request. Synchronous flush
@@ -464,6 +471,7 @@ impl Server {
             audit: None,
             tls_config: None,
             commit_notify: Arc::new((Mutex::new(initial_tx), std::sync::Condvar::new())),
+            cors_origin: None,
         })
     }
 
@@ -478,7 +486,20 @@ impl Server {
             audit: None,
             tls_config: None,
             commit_notify: Arc::new((Mutex::new(initial_tx), std::sync::Condvar::new())),
+            cors_origin: None,
         }
+    }
+
+    /// v2.2 preview: enable `Access-Control-Allow-Origin` headers on
+    /// every response, plus `OPTIONS` preflight handling. Pass `"*"`
+    /// to allow any origin (fine for localhost-only `ndb-explorer`
+    /// usage). For production-internet exposure, terminate CORS at a
+    /// reverse proxy instead.
+    #[must_use]
+    pub fn with_cors_origin(mut self, origin: impl Into<String>) -> Self {
+        let v = origin.into();
+        self.cors_origin = if v.is_empty() { None } else { Some(v) };
+        self
     }
 
     /// Require an `Authorization: Bearer <token>` header on every
@@ -707,7 +728,23 @@ impl Server {
     ) -> Result<(), ServerError> {
         let (req, body) = parse_request(reader)?;
         let mut outcome = DispatchOutcome::default();
-        let dispatch_result = self.dispatch(&req, &body, writer, &mut outcome);
+        // v2.2 CORS: wrap the writer so every response gets an
+        // `Access-Control-Allow-Origin` header injected right after
+        // the last response header. The injector buffers up to the
+        // `\r\n\r\n` terminator, then passes everything else through —
+        // streaming responses (/iter, /query_stream, /subscribe) keep
+        // their streaming behaviour.
+        let dispatch_result = if let Some(origin) = self.cors_origin.clone() {
+            let mut inject = HeaderInjector::new(
+                writer,
+                format!("Access-Control-Allow-Origin: {origin}\r\n").into_bytes(),
+            );
+            let r = self.dispatch(&req, &body, &mut inject, &mut outcome);
+            let _ = inject.flush();
+            r
+        } else {
+            self.dispatch(&req, &body, writer, &mut outcome)
+        };
         let _ = writer.flush();
         // Audit AFTER response is flushed; failures here don't break the request.
         let principal = if outcome.principal.is_empty() {
@@ -726,6 +763,7 @@ impl Server {
         dispatch_result
     }
 
+    #[allow(clippy::too_many_lines)] // long match over routes is the natural shape
     fn dispatch(
         &self,
         req: &Request,
@@ -734,6 +772,18 @@ impl Server {
         outcome: &mut DispatchOutcome,
     ) -> Result<(), ServerError> {
         let path_no_q = req.path_no_query();
+
+        // v2.2 CORS preflight: respond to OPTIONS with the configured
+        // ACAO + the headers/methods the explorer SPA needs. Browsers
+        // require a 2xx response before they'll send the real request.
+        // Without CORS configured, OPTIONS falls through to a 404.
+        if req.method == "OPTIONS"
+            && let Some(origin) = &self.cors_origin
+        {
+            outcome.status = 204;
+            return write_cors_preflight(out, origin);
+        }
+
         let needed = required_capability(&req.method, path_no_q);
 
         // /health and unmatched paths bypass auth — let dispatch route them
@@ -1900,5 +1950,83 @@ fn stamp_and_push(txn: &mut WriteTxn<'_>, r: Record) {
         // not gate them currently. v2 may decide that dictionary
         // entries are admin-only and reject non-admin commits.
         other => txn.put_raw(other),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// v2.2 — CORS preflight + streaming ACAO header injector
+// ---------------------------------------------------------------------------
+
+fn write_cors_preflight(out: &mut dyn Write, origin: &str) -> Result<(), ServerError> {
+    write!(
+        out,
+        "HTTP/1.1 204 No Content\r\n\
+         Access-Control-Allow-Origin: {origin}\r\n\
+         Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
+         Access-Control-Allow-Headers: Content-Type, Authorization\r\n\
+         Access-Control-Max-Age: 600\r\n\
+         Connection: close\r\n\r\n",
+    )?;
+    Ok(())
+}
+
+/// Streaming `Write` wrapper that injects a fixed sequence of header
+/// bytes (e.g. `Access-Control-Allow-Origin: ...\r\n`) into the first
+/// HTTP response header block written through it.
+///
+/// Buffers the byte stream until `\r\n\r\n` is observed (the
+/// header-block terminator), splices the injection in just before the
+/// empty CRLF, flushes everything, and then passes subsequent writes
+/// through directly. This keeps streaming responses (/iter,
+/// /query_stream, /subscribe) streaming after their headers land.
+struct HeaderInjector<'a, W: Write> {
+    inner: &'a mut W,
+    inject: Vec<u8>,
+    pending: Vec<u8>,
+    headers_done: bool,
+}
+
+impl<'a, W: Write> HeaderInjector<'a, W> {
+    fn new(inner: &'a mut W, inject: Vec<u8>) -> Self {
+        Self {
+            inner,
+            inject,
+            pending: Vec::with_capacity(256),
+            headers_done: false,
+        }
+    }
+}
+
+impl<W: Write> Write for HeaderInjector<'_, W> {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        if self.headers_done {
+            return self.inner.write(b);
+        }
+        self.pending.extend_from_slice(b);
+        if let Some(pos) = self
+            .pending
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+        {
+            // Insert injection between the last header line's CRLF and
+            // the empty CRLF that terminates the header block.
+            self.inner.write_all(&self.pending[..pos + 2])?;
+            self.inner.write_all(&self.inject)?;
+            self.inner.write_all(&self.pending[pos + 2..])?;
+            self.pending.clear();
+            self.headers_done = true;
+        }
+        Ok(b.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if !self.headers_done && !self.pending.is_empty() {
+            // No header terminator was emitted (malformed response —
+            // shouldn't happen for our routes). Flush whatever we have
+            // so the client sees a non-empty error rather than a hang.
+            self.inner.write_all(&self.pending)?;
+            self.pending.clear();
+        }
+        self.inner.flush()
     }
 }
