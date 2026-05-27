@@ -162,6 +162,21 @@
   .ss-bar { display: flex; height: 8px; border-radius: 3px; overflow: hidden;
             border: 1px solid #2b2b36; margin: 4px 0 6px; }
   .ss-bar > div { transition: flex 0.2s; }
+  /* Side-by-side data-model comparison table. */
+  .compare {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    margin-top: 4px; font-size: 11px; line-height: 1.4;
+  }
+  .compare > div { background: #0a0a10; border: 1px solid #2b2b36; border-radius: 4px; padding: 8px; }
+  .compare .head { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+                   color: #cfcfd6; margin-bottom: 6px; font-weight: 600; }
+  .compare .pdbx .head { color: #f5a623; }
+  .compare .ndb  .head { color: #65CBF3; }
+  .compare ul { margin: 0; padding-left: 14px; }
+  .compare li { margin: 2px 0; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 10.5px; }
+  .compare .total { margin-top: 6px; padding-top: 5px; border-top: 1px dashed #2b2b36;
+                    color: #888; font-size: 11px; }
+  .compare .total b { color: #fff; }
   .plddt-bar {
     display: flex; height: 10px; border-radius: 3px; overflow: hidden;
     margin: 4px 0 6px; border: 1px solid #2b2b36;
@@ -280,6 +295,11 @@
     <div class="db-section">
       <h3>Selected residue / atom</h3>
       <div id="db-selected-residue"><div class="empty">Click any atom in the 3D view.</div></div>
+    </div>
+
+    <div class="db-section">
+      <h3>How AF-DB (mmCIF) vs nDB store this protein</h3>
+      <div id="db-comparison"></div>
     </div>
   </aside>
 </div>
@@ -1473,6 +1493,132 @@ function onNgl3DResidueClick(resno) {
   }
 }
 
+// ─── Side-by-side: mmCIF/PDBx vs nDB ────────────────────────────
+// AlphaFold-DB serves predictions as mmCIF files; the PDB itself
+// is mirrored as a relational store (PDBx) with ~80 categories.
+// Express the same protein in both models and put the numbers next
+// to each other — using LIVE counts from the loaded CIF + nDB so
+// the user sees an honest comparison for the specific protein on
+// screen, not generic marketing.
+function updateModelComparison(node) {
+  const $el = document.getElementById("db-comparison");
+  if (!$el) return;
+  if (!node) {
+    $el.innerHTML = '<div class="empty">Pick a protein to see the comparison.</div>';
+    return;
+  }
+  const r = node.record;
+  const name = extractName(r) || "?";
+  const acc = extractUniprot(r) || "?";
+
+  // Live nDB-side counts for THIS protein.
+  let ndbResidues = 0;
+  let ndbMotifs = 0;
+  let ndbResidueOf = 0;
+  let ndbComplex = 0;
+  let ndbEncodes = 0;
+  const residueIdsForProtein = new Set();
+  for (const e of edgesById.values()) {
+    if (e.type_id === RESIDUE_OF_TYPE_ID) {
+      const fillers = e.roles.map(rr => rr.entity_id);
+      if (fillers.includes(r.entity_id)) {
+        ndbResidueOf++;
+        for (const id of fillers) if (id !== r.entity_id) residueIdsForProtein.add(id);
+      }
+    }
+  }
+  ndbResidues = residueIdsForProtein.size;
+  for (const e of edgesById.values()) {
+    const fillers = e.roles.map(rr => rr.entity_id);
+    const includesProtein = fillers.includes(r.entity_id);
+    const includesResidue = fillers.some(id => residueIdsForProtein.has(id));
+    if (MOTIF_TYPE_IDS.has(e.type_id) && includesResidue) ndbMotifs++;
+    if (e.type_id === 100 && includesProtein) ndbComplex++;
+    if (e.type_id === 101 && includesProtein) ndbEncodes++;
+  }
+  const ndbTotalRecords = 1 /* protein entity */
+                        + ndbResidues
+                        + ndbResidueOf
+                        + ndbMotifs
+                        + ndbComplex
+                        + ndbEncodes;
+
+  // Estimate mmCIF/PDBx categories needed for the same protein.
+  // Counts derived from looking at a typical AF-DB CIF (model_v6):
+  //   data_AF-* + entity, entity_poly, entity_poly_seq, struct, struct_asym,
+  //   struct_conf, struct_sheet, struct_sheet_range, atom_site, atom_type,
+  //   ma_data, ma_software_group, ma_target_entity, ma_qa_metric,
+  //   ma_qa_metric_local — ~15+ categories. _atom_site has one row per atom.
+  const s = computeStructureSummary();
+  const atomRows = s?.atomCount ?? 0;
+  const residueRows = s?.residueCount ?? 0;
+  // Counts in the typical AF-DB CIF for a single-chain protein.
+  const helixSheetRows = (s?.helix ?? 0) + (s?.sheet ?? 0);
+
+  $el.innerHTML = `
+    <div class="hint" style="margin-bottom:6px">
+      Same protein, same biology — two storage layouts. Counts below
+      are live for <b>${escapeHtml(name)}</b> (${acc}).
+    </div>
+    <div class="compare">
+      <div class="pdbx">
+        <div class="head">AlphaFold-DB · mmCIF / PDBx</div>
+        <ul>
+          <li>_entity (1)</li>
+          <li>_entity_poly (1)</li>
+          <li>_entity_poly_seq (${residueRows || "N"} rows)</li>
+          <li>_struct (1)</li>
+          <li>_struct_asym (1+)</li>
+          <li>_struct_conf (${s?.helix ?? "?"} helix rows)</li>
+          <li>_struct_sheet_range (${s?.sheet ?? "?"} sheet rows)</li>
+          <li>_atom_site (${atomRows || "N"} rows)</li>
+          <li>_atom_type (≈10 rows)</li>
+          <li>_ma_qa_metric_local (per-residue pLDDT)</li>
+          <li>+ ~6 more <code>_ma_*</code> categories</li>
+        </ul>
+        <div class="total">
+          ~15 categories ·
+          <b>${atomRows + residueRows + helixSheetRows + 20}</b> rows total
+          across them. Catalytic triad / disulfide bond / zinc finger
+          need extra rows in <code>_struct_site</code> +
+          <code>_struct_site_gen</code> + <code>_struct_conn</code>
+          joined by <code>entity_id</code>/<code>asym_id</code>/
+          <code>seq_id</code>. Cross-protein relations (this protein
+          is in a complex with X) live in a separate database entirely.
+        </div>
+      </div>
+      <div class="ndb">
+        <div class="head">nDB</div>
+        <ul>
+          <li>1 entity (type 1, protein)</li>
+          <li>+ CIF bytes as a property on it</li>
+          ${ndbResidues > 0 ? `<li>${ndbResidues} residue entities (type 6)</li>` : ""}
+          ${ndbResidueOf > 0 ? `<li>${ndbResidueOf} residue_of hyperedges (arity 2)</li>` : ""}
+          ${ndbMotifs > 0 ? `<li>${ndbMotifs} motif hyperedges (arity 3-20)</li>` : ""}
+          ${ndbComplex > 0 ? `<li>${ndbComplex} complex hyperedge${ndbComplex === 1 ? "" : "s"} (arity 3-5)</li>` : ""}
+          ${ndbEncodes > 0 ? `<li>${ndbEncodes} encodes hyperedge (arity 2)</li>` : ""}
+        </ul>
+        <div class="total">
+          1 record kind (entity) + 1 record kind (hyperedge) ·
+          <b>${ndbTotalRecords}</b> records total for this protein.
+          A catalytic triad IS one record — arity 3, role-fillers
+          [Ser195, His57, Asp102]. Same shape for residues, motifs,
+          complexes, encodes; same shape if you tomorrow add gene
+          ontology, structural homology, or anything else.
+        </div>
+      </div>
+    </div>
+    <div class="hint" style="margin-top:8px">
+      The point isn't that PDBx is bad — it's that a relational schema
+      hard-codes the relationships it can express. A catalytic triad
+      is intrinsically 3-ary; in PDBx it lives as joins between
+      <code>_struct_site</code> + <code>_struct_site_gen</code> +
+      <code>_atom_site</code>. In nDB it lives as one hyperedge.
+      Same machinery works for any arity, any new relation type.
+    </div>
+  `;
+}
+
 // ─── Role-id lookup table ──────────────────────────────────────
 // Role IDs in nDB are arbitrary u32s but they carry semantic meaning
 // in our schema — show them by name so a reader can tell which
@@ -1817,6 +1963,9 @@ function updateRightSidebar(node) {
         ? ` · <span style="color:${c}">pLDDT ${plddt.toFixed(1)} ${bucket}</span>`
         : ` · <span style="color:#888">no AF-DB</span>`);
   }
+
+  // ── 6. Side-by-side: PDBx vs nDB for THIS protein ─────────────
+  updateModelComparison(node);
 }
 
 // ─── Right-sidebar: clicked-atom residue card ───────────────────
