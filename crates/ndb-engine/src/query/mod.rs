@@ -1,29 +1,32 @@
 //! Query planner + executor — wire `QueryRequest` → `QueryResponse`.
 //!
-//! Authoritative spec:
-//! `docs/superpowers/specs/2026-05-27-query-language.md` (§5 semantics,
-//! §7 planner sketch).
+//! Authoritative specs:
+//! `docs/superpowers/specs/2026-05-27-query-language.md` (§5 semantics);
+//! `docs/superpowers/specs/2026-05-27-v2-working-spec.md` (§2.6 planner).
 //!
-//! v1 implementation:
+//! v2 implementation:
 //!
-//! - **Planner is greedy + source-order for v0.** Patterns execute in
-//!   the order they appear in the request. The locked design calls for
-//!   smallest-cardinality-first; this lands later as a sort pass over
-//!   patterns. Greedy source-order is provably correct (only the order
-//!   changes, not the result set) and shortest path to end-to-end.
+//! - **Cardinality-aware planner.** [`plan::plan`] estimates each atom's
+//!   cardinality from existing indexes (B-tree, adjacency, type cluster)
+//!   and walks greedily from the smallest seed. Tiebreak on subsequent
+//!   atoms = max shared variables with the bound set. See `plan.rs`.
 //! - **Executor materialises bindings.** Each pattern transforms a
 //!   `Vec<Bindings>` (current partial assignments) to a new `Vec<Bindings>`
 //!   (extended assignments). Result set is materialised in memory; the
-//!   streaming variant is a separate workitem.
-//! - **Recursive patterns return `RecursionNotYetSupported`** in this
-//!   commit. Follow-on commit adds BFS executor with visited set + depth
-//!   cap per §5.3.
-//! - **`as_of`**: `tx_id` form is honoured; `timestamp_us` form returns
-//!   `TimestampNotYetSupported` until commit timestamps land.
+//!   streaming variant lives in `Engine::snapshot_iter_streaming` and is
+//!   used by `/query_stream` for IO, not by the executor's join machinery.
+//! - **Recursive patterns** use BFS with a visited set and a depth cap;
+//!   see `execute_recursive_hyperedge` + §5.3 of the language spec.
+//! - **`as_of`**: both `tx_id` and `timestamp_us` forms are honoured;
+//!   missing timestamps raise `TimestampUnavailable`.
 //!
 //! Bindings are stored as the engine's native `Value` (not `JsonValue`)
 //! to avoid round-tripping through tag enums on the hot path. The wire
 //! layer converts on output.
+
+pub mod plan;
+
+pub use plan::{ExplainEntry, Plan, plan as plan_query};
 
 use std::collections::{HashMap, HashSet};
 
@@ -108,8 +111,12 @@ pub fn execute(engine: &mut Engine, req: QueryRequest) -> Result<QueryResponse, 
     let snapshot = resolve_snapshot(engine, req.as_of)?;
     let mut rows: Vec<Bindings> = vec![Bindings::new()];
 
-    // v0: source-order. Cardinality-aware ordering goes here later.
-    for pattern in &req.patterns {
+    // Cardinality-aware planner (v2.0): greedy smallest-seed,
+    // shared-vars-first tiebreak. Result set is identical to source-order
+    // execution — patterns commute under unification.
+    let plan = plan::plan(engine, &req.patterns);
+    for &idx in &plan.order {
+        let pattern = &req.patterns[idx];
         rows = execute_pattern(engine, snapshot, pattern, rows)?;
         if rows.is_empty() {
             break;

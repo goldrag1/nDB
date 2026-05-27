@@ -463,6 +463,41 @@ impl Engine {
         self.type_cluster.by_type_vec(type_id)
     }
 
+    /// Count of hyperedges of `type_id`. Constant-time index probe; used
+    /// by the planner to estimate cardinality without materialising.
+    #[must_use]
+    pub fn hyperedge_type_count(&self, type_id: TypeId) -> usize {
+        self.type_cluster.count(type_id)
+    }
+
+    /// Degree of `entity` in the adjacency index — number of hyperedges
+    /// that name it in any role. Planner uses this for hyperedge atoms
+    /// with at least one role bound to a concrete entity.
+    #[must_use]
+    pub fn adjacency_degree(&self, entity: EntityId) -> usize {
+        self.adjacency.degree(entity)
+    }
+
+    /// Total hyperedges tracked by the adjacency index, and the count of
+    /// distinct entities that participate in at least one. Used by the
+    /// planner to compute an average-degree estimate when no role is
+    /// bound yet.
+    #[must_use]
+    pub fn adjacency_overview(&self) -> (usize, usize) {
+        (
+            self.adjacency.hyperedge_count(),
+            self.adjacency.entity_count(),
+        )
+    }
+
+    /// Whether `(type_id, property_id)` has a property B-tree index.
+    /// Planner uses this to decide whether a literal-eq filter can give
+    /// an exact cardinality estimate.
+    #[must_use]
+    pub fn property_btree_registered(&self, type_id: TypeId, property_id: PropertyId) -> bool {
+        self.property_btree.is_registered(type_id, property_id)
+    }
+
     /// Declare an entity property as carrying vector embeddings. Subsequent
     /// commits will index it for k-NN search. Already-committed entities
     /// are NOT retroactively indexed — call `rebuild_indexes` after late
@@ -729,6 +764,17 @@ impl Engine {
     pub fn snapshot_iter(&mut self, snapshot: TxId) -> Result<Vec<Record>, EngineError> {
         self.snapshot_iter_streaming(snapshot)
             .collect::<Result<Vec<_>, _>>()
+    }
+
+    /// EXPLAIN-style trace for a query. Runs the planner and returns one
+    /// entry per pattern in planned order: original index, cardinality
+    /// estimate at the moment of selection, a brief shape summary, and
+    /// the binds-vs-uses split for variables.
+    ///
+    /// Side-effect-free; doesn't execute the query.
+    #[must_use]
+    pub fn explain_query(&self, req: &crate::wire_query::QueryRequest) -> Vec<crate::query::ExplainEntry> {
+        crate::query::plan::explain(self, &req.patterns)
     }
 
     /// Drain the memtable into a new SSTable, update MANIFEST, rotate
