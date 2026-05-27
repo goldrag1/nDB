@@ -1,3 +1,118 @@
+## Session 2026-05-27 (third turn) — v1.2.0 — multi-hop traversal + indexed routes + biology bench dashboard
+
+Built on top of v1.1.0 to make nDB usable from real applications without N+1
+round-trips and to provide a benchmark surface that exercises every index.
+
+**11 new commits** (since v1.1.0), **+19 tests** (243 → 262 Rust + 12 Python).
+Workspace clippy clean. **v1.2.0 tagged + pushed + released**.
+
+### What landed this turn (in nDB repo)
+
+| SHA       | Subject |
+|-----------|---------|
+| `a8ce398` | feat(server): indexed query routes — /lookup, /vector_search, /property_lookup, /property_range |
+| `911fafb` | feat(client-rust): ndb-client-rust — reusable Rust HTTP library + CLI rewrite |
+| `311bf66` | feat(server): --bench-mode flag — pre-register simple workload schema |
+| `c15b157` | feat(server): biology schema in --bench-mode |
+| `a9fa2bd` | release: nDB v1.2.0 — +/traverse, +biology bench schema, +ndb-client-rust |
+
+`v1.2.0` tag: <https://github.com/goldrag1/nDB/releases/tag/v1.2.0>
+
+### What landed in `/home/long/long/rust/` (separate workspace, not git-tracked)
+
+A live benchmark dashboard at http://127.0.0.1:8766/ with four tabs:
+
+1. **Prime Race** (untouched from before — Rust / ASM / Python prime counting)
+2. **nDB Bench** — Rust client vs Python client, simple workload
+3. **🧬 Biology Bench** — Rust client vs Python client, pharmacogenomic workload
+4. **🐘 Rust+nDB vs Python+PostgreSQL** — head-to-head on biology workload
+
+Files:
+- `rust/ndb-bench/src/main.rs` — Rust bench, biology + simple modes, hub-routed fanout
+- `rust/python/ndb_bench.py` — Python bench, same modes
+- `rust/python/pg_bench.py` — Python+psycopg3 against PG with pgvector
+- `rust/server/src/main.rs` — orchestrator with `/ndb_bench` SSE + `/ndb_bench/inspect` proxy + parked-children `BenchState`
+- `rust/web/index.html` — 4-tab dashboard with scaling-trend chart on PG tab
+
+### Locked v1.2 decisions (in module preambles)
+
+| Concern | Decision | Module |
+|---|---|---|
+| Multi-hop traversal | Server-side BFS via `POST /traverse` — single round-trip with per-hop type filters | `ndb-server/src/lib.rs::handle_traverse` |
+| Traversal frontier | `HashSet<EntityId>` dedup, BFS layer-by-layer; reads each hyperedge to get role bindings | same |
+| Indexed query route gating | All four indexed query routes plus `/traverse` mapped to `Capability::Read` | `required_capability()` |
+| `--bench-mode` schema | Two pre-registered workloads (simple users + biology drug/protein/disease/publication) co-exist | `ndb-server/src/main.rs` |
+| Biology schema constants | TYPE 100-103 entities, 200-202 hyperedges, PROP 30-41, ROLE 10-16 — pub from `main.rs` for clients | same |
+| Vector cap on `/vector_search` | `MAX_VECTOR_K = 1000` — enforced server-side, returns 400 on bigger k | `ndb-server/src/lib.rs` |
+| `/iter` semantics at scale | Bench programs skip iter past N=50k client-side; server still serves it but materialises full set | `ndb-bench/src/main.rs`, `ndb_bench.py`, `pg_bench.py` |
+| Benchmark fanout shape | Hub routing: every 20th protein slot is a "hub", ~50% of edges land there → 20× heavy-tail | `hub_idx()` in all three benches |
+
+### Bench measurements observed this turn (commodity laptop)
+
+Biology workload, Rust+nDB vs Python+Postgres, scaling trend:
+
+| N | Rust+nDB | Python+PG | Winner | Ratio |
+|---|---|---|---|---|
+| 400 | 183 ms | 122 ms | postgres | 1.50× |
+| 2,000 | 860 ms | 745 ms | postgres | 1.15× |
+| 10,000 | ~8 s | ~10 s | **rust+nDB** | 1.30–1.40× |
+| 50,000 | ~42 s | ~75 s | **rust+nDB** | **1.80×** |
+
+Crossover ≈ N=10k on this machine. nDB's adjacency-walk traversal pulls ahead
+as N grows; PG's per-query baseline (libpq + planner) advantage fades.
+
+3-hop traversal at N=2,000: nDB **2.00×** PG (vs the 2-hop 1.29×).
+3-hop with hub fanout will show wider gaps at production-shape N.
+
+### Bugs caught + fixed inline this turn
+
+1. **clippy `match → let-else`** — bumped on first compile of `/traverse` handler; trivial fix but worth noting that v1.95 clippy is more aggressive.
+2. **8 orphaned `ndb-server` children across dashboard restarts** — the `/home/long/long/rust/server` doesn't install a SIGINT handler, so its `BenchState::teardown` never runs on shutdown. Children get adopted by init. Documented as a follow-on; recovery is `pkill -af 'ndb-server --bench-mode'` by PID excluding own shell.
+3. **Tokio `Child::kill().await` leaves a zombie** — kill sends SIGKILL but doesn't `wait()`. The PID lingers as `<defunct>` until the parent process exits. Cost: one process-table entry, no resources.
+4. **Self-kill `pkill -f` re-triggered** — already in `shell-quirks.md`; my own bash shell argv contained the literal `rust/target/release/ndb-bench` because of how the harness eval'd it. Mitigated by enumerate-PIDs-then-kill pattern (rule already exists).
+5. **Section-tag balance** — inserting big HTML blocks via Edit twice in a row over-closed `</section>` — both times caught by `grep -nE '^</?section'` post-edit. Worth doing every time after a large HTML insertion.
+
+### §17.1 status after v1.2.0 (honest read)
+
+**Shipped:**
+- Storage core + 6 mandatory indexes ✅
+- Slicer + renderer ✅
+- Validation (runtime) ✅
+- Brute-force + HNSW vector indexes ✅
+- Rust CLI + Rust library + Python client + Arrow IPC ✅
+- MCP server ✅
+- Wire protocol + bearer-token + multi-principal ReBAC + TLS + audit log ✅
+- At-rest encryption primitives (WAL/SSTable wiring deferred) ✅
+- Indexed query routes + multi-hop /traverse + bench-mode schema ✅
+
+**Spec §17.1 deliverables not yet built:**
+- **Query language (§12) — the dominant missing piece**. Datalog-influenced pattern-match DSL, structured AST wire format, optional Rust embedded DSL.
+- Per-type retention policies (Audited / Versioned / LatestOnly)
+- Hot/cold SSTable tiering
+- Serializable Snapshot Isolation (SI is shipped; SSI is not)
+- Time-travel `as of T` syntax exposed via wire (engine supports snapshot reads internally)
+- Streaming query cursors / change subscription (`subscribe`)
+- Mmap'd SSTable files (still BufReader)
+- Validation driven by metadata hyperedges (today runtime-only)
+- Block index sidecar `<seq>.idx` (deferred to v2 per design)
+- Real-world pilot + Neo4j comparison + documentation site
+
+### Next session priorities (for the v1-completion session)
+
+The top item is the **query language (§12)**. Everything else is smaller and
+can be batched. A separate "start next session" prompt is being prepared
+alongside this session-last.
+
+### Evolution score this turn
+
+- 11 new commits in nDB repo
+- 1 new tag (v1.2.0) + GitHub release
+- +19 tests (243 → 262 Rust + 12 Python = 274 total)
+- 1 new live benchmark dashboard (4 tabs, 1 SSE orchestrator, 1 inspect proxy, scaling-trend chart)
+- 2 cross-project rules promoted (see `.pending-promotions.md`)
+
+---
+
 ## Session 2026-05-27 — nDB v1 storage core + companion crates + wire + AI bridge
 
 ### Đã làm (initial v1.0.0 release)
