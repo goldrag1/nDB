@@ -3,12 +3,30 @@
 
 use std::process::ExitCode;
 
+use ndb_engine::{PropertyId, TypeId};
 use ndb_server::Server;
+
+// Bench-mode schema constants — exported so benchmark clients can compile
+// against the same shape. Pre-registered indexes on `--bench-mode`.
+/// Type id used for bench-mode user entities.
+pub const BENCH_TYPE_USER: u32 = 1;
+/// Property id for `name` (Utf8).
+pub const BENCH_PROP_NAME: u32 = 10;
+/// Property id for `email` — registered as a lookup-key in `--bench-mode`.
+pub const BENCH_PROP_EMAIL: u32 = 11;
+/// Property id for `age` — registered for property-B-tree in `--bench-mode`.
+pub const BENCH_PROP_AGE: u32 = 12;
+/// Property id for `vector` — registered for vector search in `--bench-mode`.
+pub const BENCH_PROP_VECTOR: u32 = 13;
 
 fn usage() {
     eprintln!(
         "Usage: ndb-server --path <database-dir> [--bind 127.0.0.1:8742] [--audit] \\\n\
-         \t[--tls-cert <path> --tls-key <path>]\n\
+         \t[--bench-mode] [--tls-cert <path> --tls-key <path>]\n\
+         \n\
+         --bench-mode pre-registers a known schema (type=1, props 10..13) so the\n\
+         indexed routes return real hits against a fresh database. Used by the\n\
+         Rust-vs-Python benchmark dashboard. Does not change any other behaviour.\n\
          \n\
          Environment:\n\
            NDB_TOKEN=<token>   Require Authorization: Bearer <token> on every route except /health.\n\
@@ -35,6 +53,7 @@ struct Args {
     path: String,
     bind: String,
     audit: bool,
+    bench_mode: bool,
     tls_cert: Option<String>,
     tls_key: Option<String>,
 }
@@ -44,6 +63,7 @@ fn parse_args() -> Option<Args> {
     let mut path: Option<String> = None;
     let mut bind: Option<String> = None;
     let mut audit = false;
+    let mut bench_mode = false;
     let mut tls_cert: Option<String> = None;
     let mut tls_key: Option<String> = None;
     while let Some(a) = args.next() {
@@ -51,6 +71,7 @@ fn parse_args() -> Option<Args> {
             "--path" | "-p" => path = args.next(),
             "--bind" | "-b" => bind = args.next(),
             "--audit" => audit = true,
+            "--bench-mode" => bench_mode = true,
             "--tls-cert" => tls_cert = args.next(),
             "--tls-key" => tls_key = args.next(),
             "--help" | "-h" => {
@@ -68,6 +89,7 @@ fn parse_args() -> Option<Args> {
         path: path?,
         bind: bind.unwrap_or_else(|| "127.0.0.1:8742".to_owned()),
         audit,
+        bench_mode,
         tls_cert,
         tls_key,
     })
@@ -84,6 +106,20 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    if args.bench_mode {
+        let engine = server.engine();
+        let mut e = engine.lock().expect("engine mutex poisoned");
+        e.register_lookup_key(PropertyId::new(BENCH_PROP_EMAIL));
+        e.register_property_btree(
+            TypeId::new(BENCH_TYPE_USER),
+            PropertyId::new(BENCH_PROP_AGE),
+        );
+        e.register_vector_property(PropertyId::new(BENCH_PROP_VECTOR));
+        eprintln!(
+            "ndb-server: --bench-mode active — registered lookup_key on {BENCH_PROP_EMAIL}, \
+             property_btree on ({BENCH_TYPE_USER}, {BENCH_PROP_AGE}), vector on {BENCH_PROP_VECTOR}",
+        );
+    }
     if let Ok(token) = std::env::var("NDB_TOKEN")
         && !token.is_empty()
     {
