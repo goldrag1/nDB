@@ -257,46 +257,104 @@ These are real costs. The architectural payoff — honest representation of n-di
 
 ## 6. Schema Philosophy: Layered / Optional
 
-Schema is **not** a property of the storage core. Schema is metadata layered on top, expressed as hyperedges themselves (self-describing). Apps choose enforcement strictness per namespace.
+### 6.1 What "schema" means in nDB
 
-### 6.1 The four layers
+Schema is **not** a separate engine primitive. It has no own storage, no own language, no own API. It is **the collection of metadata hyperedges that describe other hyperedges** — type assertions, constraints, index declarations, inference rules.
+
+Schemas are written using the same query DSL that writes any data. The engine's "schema layer" is a *consumer* of these metadata hyperedges, not a separate writer.
+
+The word "schema" is retained as familiar shorthand, but it does NOT carry the traditional SQL meaning (separate CREATE TABLE language, ALTER TABLE machinery, system catalog). In nDB it means: "the metadata about how data is shaped, expressed as data."
+
+This is the Datomic pattern, generalized: a schema in Datomic is just a set of datoms describing attributes. In nDB, a schema is just a set of hyperedges describing types, constraints, indexes, and rules.
+
+Apps choose enforcement strictness per namespace.
+
+### 6.2 The four layers
+
+The "layers" describe **what kinds of metadata hyperedges** exist, ordered by how much the engine does with them. Apps opt into each layer per namespace.
 
 ```
 Layer 4: Ontology + reasoning      <- reasoning apps opt in
 Layer 3: Constraints + validation  <- ERP, strict mode
 Layer 2: Type assertions           <- AI apps, flexible mode
-Layer 1: Raw hyperedges            <- storage core, schemaless
+Layer 1: Raw hyperedges            <- storage core, no metadata required
 ```
 
-- **Layer 1** — Raw hyperedge storage. No type checking, no constraints. Fast, simple, universal.
-- **Layer 2** — Entities and hyperedges declare types via type-assertion hyperedges. Drift-tolerant. Used by AI/extraction workloads.
-- **Layer 3** — Constraints declared per type (cardinality, required roles, value domains). Validated at write-time or read-time per app config. Used by ERP.
-- **Layer 4** — Ontology with class hierarchies, equivalence, inference rules. Used by reasoning systems.
+- **Layer 1** — Raw hyperedge storage. No metadata required. Engine accepts any hyperedge of any arity with any role names. Fast, simple, universal.
+- **Layer 2** — Entities and hyperedges declare types via `type_def` metadata hyperedges. Apps can query "what type is this entity" and "what entities are of type Customer". Drift-tolerant. Used by AI/extraction workloads.
+- **Layer 3** — Constraint hyperedges declare rules per type (cardinality, required roles, value domains). Validated at write-time or read-time per app config. Used by ERP.
+- **Layer 4** — Ontology hyperedges declare class hierarchies, equivalence, inference rules. Used by reasoning systems.
 
-### 6.2 Enforcement modes
-
-Apps configure per namespace:
+### 6.3 Enforcement modes (per namespace)
 
 - **Strict write** — invalid writes rejected (ERP default)
 - **Soft read** — invalid reads flagged but returned (AI extraction default)
-- **Inference on** — derived facts computed from rules (reasoning systems)
+- **Inference on** — derived facts computed from Layer 4 rules (reasoning systems)
 
 Different namespaces in the same database can run at different strictness levels.
 
-### 6.3 Precedent
+### 6.4 What metadata hyperedges look like (concrete)
+
+A "schema" for a Customer entity type, expressed entirely in hyperedge writes:
+
+```
+# Type assertion (Layer 2)
+write
+  type_def(
+    name: "Customer",
+    description: "A purchasing entity",
+    required_properties: ["customer_code", "name"]
+  )
+
+# Constraint (Layer 3)
+write
+  constraint(
+    target_type: "Customer",
+    rule_expr: "matches(tax_id, '^[0-9]{10,13}$')",
+    severity: "strict"
+  )
+
+# Index declaration (schema-driven indexing — see Section 13.2)
+write
+  index_declaration(
+    target_type: "Customer",
+    property: "email",
+    index_kind: "btree",
+    unique: true
+  )
+
+# Ontology rule (Layer 4)
+write
+  inference_rule(
+    name: "vip_customer",
+    when: "Customer.total_purchases_last_year > 1000000",
+    derive: "vip_status(customer: ?c)"
+  )
+```
+
+These are all just hyperedges. They're written using the same DSL as any other data (Section 12). The engine reads them and:
+
+- Layer 2 → indexes them so type queries work
+- Layer 3 → validates incoming writes against constraints
+- Index framework → creates the declared B-trees / vector indexes / etc.
+- Layer 4 → runs inference at query time
+
+Schemas can be queried like any other data: `match type_def(name: ?t)` returns every declared type. `match constraint(target_type: "Customer")` returns every Customer constraint.
+
+### 6.5 Precedent
 
 This pattern is RDF/OWL applied to hyperedges instead of triples. The Semantic Web stack proves the architecture is viable:
 
 - RDF = schemaless triples
-- RDFS = light schema
-- OWL = full ontology
-- SHACL = constraint validation
+- RDFS = light schema (more triples)
+- OWL = full ontology (more triples with semantics)
+- SHACL = constraint validation (more triples)
 
-We do the same thing, one arity-level up.
+We do the same thing, one arity-level up: schemaless hyperedges + metadata hyperedges describing them.
 
-### 6.4 Why not schema-strict only (TypeDB approach)
+### 6.6 Why not schema-strict only (TypeDB approach)
 
-TypeDB requires schemas declared upfront. This excludes the AI/extraction use case where types emerge from data. We refuse this exclusion. The schemaless core is non-negotiable; schema is opt-in.
+TypeDB requires schemas declared upfront, with a separate TypeQL Define language as a distinct primitive. This excludes the AI/extraction use case where types emerge from data. We refuse this exclusion. The schemaless core is non-negotiable; schema-as-metadata is opt-in.
 
 ---
 
