@@ -96,6 +96,30 @@ pub enum EncryptionError {
     #[error("unsupported encrypted-file format version: {0}")]
     UnsupportedVersion(u32),
 
+    /// Encryption marker file is shorter than the expected layout.
+    #[error("encryption marker truncated: expected {expected} bytes, got {got}")]
+    MarkerTruncated {
+        /// Required marker length.
+        expected: usize,
+        /// Bytes actually read.
+        got: usize,
+    },
+
+    /// Encryption marker file magic header doesn't match.
+    #[error("encryption marker bad magic: 0x{got:08x}")]
+    MarkerBadMagic {
+        /// The bytes we observed at offset 0.
+        got: u32,
+    },
+
+    /// Encryption marker's `format_version` field isn't one we recognise.
+    #[error("encryption marker unsupported format version: {0}")]
+    MarkerUnsupportedVersion(u32),
+
+    /// Encryption marker's `algorithm` field isn't one we recognise.
+    #[error("encryption marker unsupported algorithm id: {0}")]
+    MarkerUnsupportedAlgorithm(u32),
+
     /// Hex decoding of `NDB_ENC_KEY` failed.
     #[error("invalid hex key: {0}")]
     KeyHex(String),
@@ -188,7 +212,40 @@ impl Cipher {
             .decrypt(Nonce::from_slice(nonce_bytes), ciphertext)
             .map_err(|_| EncryptionError::Aead)
     }
+
+    /// Deterministic 16-byte key fingerprint — AES-GCM the fixed
+    /// plaintext `b"ndb-fingerprint!"` with an all-zero nonce + empty
+    /// AAD; take the 16-byte authentication tag.
+    ///
+    /// **Important:** uses a static nonce, which would be insecure for
+    /// general AEAD encryption (nonce reuse leaks plaintext XORs). It is
+    /// safe HERE because the plaintext is also static and never carries
+    /// secret material — the purpose is purely "did the operator load
+    /// the same key as last time?"
+    ///
+    /// Different keys produce different fingerprints with overwhelming
+    /// probability (collision space ≈ 2^128). The fingerprint is stored
+    /// in the encryption marker file; on engine open it's compared
+    /// against the running cipher's fingerprint to refuse wrong-key
+    /// opens before any actual decryption fails.
+    #[must_use]
+    pub fn fingerprint(&self) -> [u8; FINGERPRINT_LEN] {
+        const PLAINTEXT: &[u8; 16] = b"ndb-fingerprint!";
+        let nonce = [0u8; NONCE_LEN];
+        let ct = self
+            .inner
+            .encrypt(Nonce::from_slice(&nonce), &PLAINTEXT[..])
+            .expect("AES-GCM encrypt over fixed input cannot fail");
+        // ct = ciphertext (16 bytes) || tag (16 bytes). Take the tag —
+        // it commits to both plaintext and key, so it's a clean fingerprint.
+        let mut out = [0u8; FINGERPRINT_LEN];
+        out.copy_from_slice(&ct[ct.len() - FINGERPRINT_LEN..]);
+        out
+    }
 }
+
+/// Length of [`Cipher::fingerprint`] output. 16 bytes (AES-GCM tag size).
+pub const FINGERPRINT_LEN: usize = 16;
 
 fn decode_hex(s: &str) -> Result<Vec<u8>, EncryptionError> {
     if !s.len().is_multiple_of(2) {
@@ -303,6 +360,21 @@ impl<F: Write> EncryptedFile<F> {
     pub fn finish(mut self) -> Result<F, EncryptionError> {
         self.flush_chunk()?;
         Ok(self.inner)
+    }
+
+    /// Seal the in-progress chunk (if any) WITHOUT consuming the file.
+    /// Used by the WAL writer's `sync()` path — the in-memory plaintext
+    /// buffer would otherwise be lost on crash. Idempotent: no-op when
+    /// the buffer is empty or when called on a reader.
+    pub fn flush_pending(&mut self) -> Result<(), EncryptionError> {
+        self.flush_chunk()
+    }
+
+    /// Mutable access to the underlying writer. Used so the WAL sync
+    /// path can call `sync_data()` on the wrapped `File` after sealing
+    /// the in-progress chunk.
+    pub fn inner_mut(&mut self) -> &mut F {
+        &mut self.inner
     }
 
     fn flush_chunk(&mut self) -> Result<(), EncryptionError> {
@@ -460,6 +532,120 @@ impl<F: Read> EncryptedFile<F> {
             .map_err(|e| io::Error::other(e.to_string()))?;
         *remaining = plain;
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EncryptionMarker — `<db>/.encryption` file on disk
+// ---------------------------------------------------------------------------
+
+/// 4-byte magic at the start of `.encryption`: spells "NDEM" (nDB Encrypted
+/// Marker).
+pub const ENCRYPTION_MARKER_MAGIC: u32 = 0x4D45_444E;
+
+/// On-disk format version of the marker file.
+pub const ENCRYPTION_MARKER_FORMAT_VERSION: u32 = 1;
+
+/// Algorithm id stored in the marker. Currently only AES-GCM-256 = 1.
+pub const ENCRYPTION_ALGO_AES_GCM_256: u32 = 1;
+
+/// Filename used inside the database directory.
+pub const ENCRYPTION_MARKER_FILENAME: &str = ".encryption";
+
+/// On-disk layout: `magic(4)` + `version(4)` + `algo(4)` + `chunk_size(4)`
+/// + `fingerprint(16)` + `reserved(32)` = 64 bytes.
+const MARKER_LEN: usize = 64;
+
+/// Engine encryption marker, stored at `<db>/.encryption`.
+///
+/// Presence of this file means the database WAS encrypted on its last
+/// flush. The cipher loaded at open must produce a matching fingerprint
+/// (compared byte-for-byte against [`Self::fingerprint`]); otherwise the
+/// engine refuses to open with an "encryption-key-mismatch" error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EncryptionMarker {
+    /// On-disk format version. Bumped when this layout evolves.
+    pub format_version: u32,
+    /// Algorithm id — see [`ENCRYPTION_ALGO_AES_GCM_256`].
+    pub algorithm: u32,
+    /// Chunk size (plaintext bytes per AEAD chunk) — must match the
+    /// chunk size used by `EncryptedFile` for this database.
+    pub chunk_size: u32,
+    /// Key fingerprint — see [`Cipher::fingerprint`].
+    pub fingerprint: [u8; FINGERPRINT_LEN],
+}
+
+impl EncryptionMarker {
+    /// Build a marker for the given cipher + chunk size.
+    #[must_use]
+    pub fn new(cipher: &Cipher, chunk_size: u32) -> Self {
+        Self {
+            format_version: ENCRYPTION_MARKER_FORMAT_VERSION,
+            algorithm: ENCRYPTION_ALGO_AES_GCM_256,
+            chunk_size,
+            fingerprint: cipher.fingerprint(),
+        }
+    }
+
+    /// Encode to the on-disk byte layout. Always 64 bytes.
+    #[must_use]
+    pub fn encode(&self) -> [u8; MARKER_LEN] {
+        let mut out = [0u8; MARKER_LEN];
+        out[0..4].copy_from_slice(&ENCRYPTION_MARKER_MAGIC.to_le_bytes());
+        out[4..8].copy_from_slice(&self.format_version.to_le_bytes());
+        out[8..12].copy_from_slice(&self.algorithm.to_le_bytes());
+        out[12..16].copy_from_slice(&self.chunk_size.to_le_bytes());
+        out[16..32].copy_from_slice(&self.fingerprint);
+        // bytes [32..64] reserved zero
+        out
+    }
+
+    /// Decode from the on-disk byte layout. Strict — refuses anything
+    /// other than the documented shape.
+    pub fn decode(bytes: &[u8]) -> Result<Self, EncryptionError> {
+        if bytes.len() < MARKER_LEN {
+            return Err(EncryptionError::MarkerTruncated {
+                expected: MARKER_LEN,
+                got: bytes.len(),
+            });
+        }
+        let magic = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+        if magic != ENCRYPTION_MARKER_MAGIC {
+            return Err(EncryptionError::MarkerBadMagic { got: magic });
+        }
+        let format_version = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+        if format_version != ENCRYPTION_MARKER_FORMAT_VERSION {
+            return Err(EncryptionError::MarkerUnsupportedVersion(format_version));
+        }
+        let algorithm = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+        if algorithm != ENCRYPTION_ALGO_AES_GCM_256 {
+            return Err(EncryptionError::MarkerUnsupportedAlgorithm(algorithm));
+        }
+        let chunk_size = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
+        let mut fingerprint = [0u8; FINGERPRINT_LEN];
+        fingerprint.copy_from_slice(&bytes[16..32]);
+        Ok(Self {
+            format_version,
+            algorithm,
+            chunk_size,
+            fingerprint,
+        })
+    }
+
+    /// Verify a candidate cipher matches this marker's fingerprint.
+    /// Constant-time comparison — fingerprint mismatch reveals nothing
+    /// about the actual key.
+    #[must_use]
+    pub fn matches(&self, cipher: &Cipher) -> bool {
+        let actual = cipher.fingerprint();
+        // Byte-for-byte equal-time compare. 16 bytes is short enough
+        // that the optimizer wouldn't introduce a branch anyway, but the
+        // explicit fold makes the intent clear.
+        let mut diff: u8 = 0;
+        for (a, b) in self.fingerprint.iter().zip(actual.iter()) {
+            diff |= a ^ b;
+        }
+        diff == 0
     }
 }
 
@@ -621,5 +807,62 @@ mod tests {
         let plain: &[u8] = b"\x00\x00\x00\x00plain";
         let detected = EncryptedFile::<&[u8]>::sniff_magic(Cursor::new(plain)).unwrap();
         assert!(!detected);
+    }
+
+    #[test]
+    fn fingerprint_is_deterministic_and_distinguishes_keys() {
+        let a = Cipher::from_raw_key(&[0x11u8; KEY_LEN]).unwrap();
+        let b = Cipher::from_raw_key(&[0x11u8; KEY_LEN]).unwrap();
+        let c = Cipher::from_raw_key(&[0x22u8; KEY_LEN]).unwrap();
+        assert_eq!(a.fingerprint(), b.fingerprint(), "same key → same fingerprint");
+        assert_ne!(a.fingerprint(), c.fingerprint(), "different key → different fingerprint");
+    }
+
+    #[test]
+    fn marker_round_trip_and_match_check() {
+        let key = Cipher::from_raw_key(&[0x33u8; KEY_LEN]).unwrap();
+        let marker = EncryptionMarker::new(&key, DEFAULT_CHUNK_SIZE);
+        let bytes = marker.encode();
+        assert_eq!(bytes.len(), 64);
+        let decoded = EncryptionMarker::decode(&bytes).unwrap();
+        assert_eq!(decoded, marker);
+        assert!(decoded.matches(&key));
+
+        let wrong = Cipher::from_raw_key(&[0xAAu8; KEY_LEN]).unwrap();
+        assert!(!decoded.matches(&wrong));
+    }
+
+    #[test]
+    fn marker_decode_rejects_bad_magic() {
+        let mut bytes = [0u8; 64];
+        bytes[0..4].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
+        let err = EncryptionMarker::decode(&bytes).unwrap_err();
+        assert!(matches!(err, EncryptionError::MarkerBadMagic { .. }));
+    }
+
+    #[test]
+    fn marker_decode_rejects_truncated_input() {
+        let err = EncryptionMarker::decode(&[0u8; 8]).unwrap_err();
+        assert!(matches!(err, EncryptionError::MarkerTruncated { .. }));
+    }
+
+    #[test]
+    fn marker_decode_rejects_unsupported_version() {
+        let mut bytes = [0u8; 64];
+        bytes[0..4].copy_from_slice(&ENCRYPTION_MARKER_MAGIC.to_le_bytes());
+        bytes[4..8].copy_from_slice(&999u32.to_le_bytes());
+        bytes[8..12].copy_from_slice(&ENCRYPTION_ALGO_AES_GCM_256.to_le_bytes());
+        let err = EncryptionMarker::decode(&bytes).unwrap_err();
+        assert!(matches!(err, EncryptionError::MarkerUnsupportedVersion(999)));
+    }
+
+    #[test]
+    fn marker_decode_rejects_unsupported_algorithm() {
+        let mut bytes = [0u8; 64];
+        bytes[0..4].copy_from_slice(&ENCRYPTION_MARKER_MAGIC.to_le_bytes());
+        bytes[4..8].copy_from_slice(&ENCRYPTION_MARKER_FORMAT_VERSION.to_le_bytes());
+        bytes[8..12].copy_from_slice(&42u32.to_le_bytes());
+        let err = EncryptionMarker::decode(&bytes).unwrap_err();
+        assert!(matches!(err, EncryptionError::MarkerUnsupportedAlgorithm(42)));
     }
 }

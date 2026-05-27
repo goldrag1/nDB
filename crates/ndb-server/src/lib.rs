@@ -268,12 +268,16 @@ impl Server {
     /// Open an existing database (or create one if missing) and prepare
     /// the server for `run` / handle_connection. Authentication is off
     /// by default; call [`with_auth_token`](Self::with_auth_token).
+    ///
+    /// At-rest encryption is sourced from `NDB_ENC_KEY` — if set, the
+    /// engine encrypts new files (on create) or refuses to open unless
+    /// the marker fingerprint matches.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, ServerError> {
         let path = path.as_ref();
         let engine = if path.exists() && path.join("CURRENT").exists() {
-            Engine::open(path)?
+            Engine::open_from_env(path)?
         } else {
-            Engine::create(path)?
+            Engine::create_from_env(path)?
         };
         let initial_tx = engine.manifest().last_tx_id;
         Ok(Self {

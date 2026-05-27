@@ -37,6 +37,9 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use crate::db::{Database, DatabaseError, Manifest, ManifestEntry};
+use crate::encryption::{
+    Cipher, DEFAULT_CHUNK_SIZE, ENCRYPTION_MARKER_FILENAME, EncryptionError, EncryptionMarker,
+};
 use crate::error::EncodeError;
 use crate::id::{EntityId, HyperedgeId, PropertyId, TX_ACTIVE, TxId, TypeId};
 use crate::index::{
@@ -124,6 +127,29 @@ pub enum EngineError {
         /// Tx_id at which the key was modified after the read.
         modified_at: u64,
     },
+
+    /// At-rest encryption is misconfigured: the running key does not
+    /// match the on-disk `.encryption` marker, or one side has a key
+    /// where the other does not.
+    ///
+    /// Specifically:
+    ///   - Env `NDB_ENC_KEY` set, marker present, fingerprints differ.
+    ///   - Env unset, marker present (database was encrypted; opening
+    ///     plaintext would silently corrupt it).
+    ///   - Env set, marker absent (database is plaintext; opening
+    ///     encrypted would silently re-encrypt). Use
+    ///     `Engine::reencrypt` (v2) to migrate explicitly.
+    #[error("encryption_key_mismatch: {detail}")]
+    EncryptionKeyMismatch {
+        /// Human-readable explanation, including which side carries
+        /// which state.
+        detail: String,
+    },
+
+    /// At-rest encryption primitive failed (marker decode, AEAD failure,
+    /// invalid key length, hex decode).
+    #[error(transparent)]
+    Encryption(#[from] EncryptionError),
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +223,12 @@ pub struct Engine {
     /// Active WAL, kept open for append. `None` only during create()
     /// before the first WAL exists.
     wal: Option<WriteAheadLog>,
+    /// At-rest cipher loaded when `NDB_ENC_KEY` is set and the on-disk
+    /// `.encryption` marker confirms a fingerprint match. `None` ⇒ the
+    /// database is plaintext. Every WAL append + SSTable write/read
+    /// path consults this; encrypted databases refuse to open without
+    /// a key, plaintext databases refuse to open with one.
+    cipher: Option<Cipher>,
     /// Lookup-key reverse index — `(property_id, value) → entity_id`.
     lookup_key: LookupKeyIndex,
     /// Adjacency index — `entity → [hyperedges referencing it]`.
@@ -227,12 +259,33 @@ pub struct Engine {
 }
 
 impl Engine {
-    /// Create a fresh database directory and engine.
+    /// Create a fresh plaintext database directory and engine.
+    ///
+    /// For an encrypted database, use [`Engine::create_with_cipher`].
+    /// The bare `create()` deliberately does NOT consult `NDB_ENC_KEY`
+    /// — server binaries that want env-driven encryption call
+    /// `create_from_env` (or build the cipher themselves and pass it
+    /// to `create_with_cipher`). Library callers stay in control.
     pub fn create<P: AsRef<Path>>(path: P) -> Result<Self, EngineError> {
+        Self::create_with_cipher(path, None)
+    }
+
+    /// Create a fresh database with an explicit at-rest cipher. When
+    /// `cipher = Some(_)`, the `.encryption` marker is written before
+    /// the first WAL allocation and every subsequent WAL append +
+    /// SSTable write goes through AES-GCM-256.
+    pub fn create_with_cipher<P: AsRef<Path>>(
+        path: P,
+        cipher: Option<Cipher>,
+    ) -> Result<Self, EngineError> {
         let mut db = Database::create(path)?;
+        if let Some(c) = cipher.as_ref() {
+            let marker = EncryptionMarker::new(c, DEFAULT_CHUNK_SIZE);
+            write_encryption_marker(db.path(), &marker)?;
+        }
         let wal_seq = db.allocate_file_seq();
         let wal_path = wal_path(db.path(), wal_seq);
-        let wal = WriteAheadLog::create(&wal_path)?;
+        let wal = WriteAheadLog::create_with_cipher(&wal_path, cipher.clone())?;
         let mut manifest = db.manifest().clone();
         manifest.active_wal_seq = wal_seq;
         db.write_manifest(manifest)?;
@@ -240,6 +293,7 @@ impl Engine {
             memtable: Memtable::new(),
             sstables: Vec::new(),
             wal: Some(wal),
+            cipher,
             lookup_key: LookupKeyIndex::new(),
             adjacency: AdjacencyIndex::new(),
             type_cluster: HyperEdgeTypeIndex::new(),
@@ -252,6 +306,17 @@ impl Engine {
         })
     }
 
+    /// Create a fresh database. Cipher is sourced from `NDB_ENC_KEY` —
+    /// if set, the database starts life encrypted; if unset, plaintext.
+    ///
+    /// This is the entry point intended for `ndb-server` and `ndb-cli`;
+    /// library code should prefer the explicit `create_with_cipher` so
+    /// tests don't accidentally race against the env.
+    pub fn create_from_env<P: AsRef<Path>>(path: P) -> Result<Self, EngineError> {
+        let cipher = Cipher::from_env()?;
+        Self::create_with_cipher(path, cipher)
+    }
+
     /// Open an existing database directory.
     ///
     /// Recovery flow:
@@ -262,7 +327,23 @@ impl Engine {
     ///    every clean record into a fresh memtable.
     /// 4. If `active_wal_seq == 0`, mint a new WAL and persist its seq.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, EngineError> {
+        Self::open_with_cipher(path, None)
+    }
+
+    /// Open an existing database with an explicit cipher hint. The
+    /// hint is reconciled against the on-disk `.encryption` marker via
+    /// [`resolve_cipher_against_marker`]; mismatches raise
+    /// [`EngineError::EncryptionKeyMismatch`].
+    pub fn open_with_cipher<P: AsRef<Path>>(
+        path: P,
+        hint: Option<Cipher>,
+    ) -> Result<Self, EngineError> {
         let mut db = Database::open(path)?;
+
+        // Reconcile the supplied cipher (if any) against the marker on
+        // disk. Refuses encrypted-no-key, plaintext-with-key, and
+        // wrong-key opens.
+        let cipher = resolve_cipher_against_marker(db.path(), hint)?;
 
         // Open active SSTables.
         let mut sstables: Vec<SSTableReader> = Vec::new();
@@ -272,7 +353,7 @@ impl Engine {
         entries.sort_by(|a, b| a.level.cmp(&b.level).then(b.file_seq.cmp(&a.file_seq)));
         for entry in &entries {
             let p = sstable_path(db.path(), entry.file_seq);
-            sstables.push(SSTableReader::open(&p)?);
+            sstables.push(SSTableReader::open_with_cipher(&p, cipher.clone())?);
         }
 
         // Replay WAL (or mint a fresh one).
@@ -284,11 +365,15 @@ impl Engine {
             let mut m = db.manifest().clone();
             m.active_wal_seq = new_seq;
             db.write_manifest(m)?;
-            WriteAheadLog::create(&p)?
+            WriteAheadLog::create_with_cipher(&p, cipher.clone())?
         } else {
             let p = wal_path(db.path(), wal_seq);
-            let (safe_end, max_tx_seen) = replay_wal_into(&p, &mut memtable)?;
-            truncate_to(&p, safe_end)?;
+            let (safe_end, max_tx_seen) = replay_wal_into(&p, &mut memtable, cipher.clone())?;
+            if cipher.is_none() {
+                // Plaintext WAL: truncate at the safe boundary so the
+                // next append starts at a clean spot.
+                truncate_to(&p, safe_end)?;
+            }
             if max_tx_seen > db.manifest().last_tx_id {
                 // Reconcile the MANIFEST with what the WAL just told us
                 // happened since the last flush. Persist immediately so a
@@ -298,13 +383,29 @@ impl Engine {
                 m.last_tx_id = max_tx_seen;
                 db.write_manifest(m)?;
             }
-            WriteAheadLog::open_append(&p)?
+            if cipher.is_some() {
+                // Encrypted WALs can't be mid-file appended — rotate
+                // every open. The just-replayed records are already in
+                // the memtable and will be re-WAL'd on the next commit.
+                let new_seq = db.allocate_file_seq();
+                let new_p = wal_path(db.path(), new_seq);
+                let new_wal = WriteAheadLog::create_with_cipher(&new_p, cipher.clone())?;
+                let mut m = db.manifest().clone();
+                m.active_wal_seq = new_seq;
+                db.write_manifest(m)?;
+                // Old segment can be deleted now — every record was replayed.
+                let _ = std::fs::remove_file(&p);
+                new_wal
+            } else {
+                WriteAheadLog::open_append_with_cipher(&p, cipher.as_ref())?
+            }
         };
 
         let mut engine = Self {
             memtable,
             sstables,
             wal: Some(wal),
+            cipher,
             lookup_key: LookupKeyIndex::new(),
             adjacency: AdjacencyIndex::new(),
             type_cluster: HyperEdgeTypeIndex::new(),
@@ -325,6 +426,14 @@ impl Engine {
         // they live in the primary store.
         engine.reload_constraints_from_metadata()?;
         Ok(engine)
+    }
+
+    /// Open an existing database, sourcing the cipher hint from
+    /// `NDB_ENC_KEY`. Server / CLI entry point — library code should
+    /// prefer `open_with_cipher` so tests don't race on the env.
+    pub fn open_from_env<P: AsRef<Path>>(path: P) -> Result<Self, EngineError> {
+        let cipher = Cipher::from_env()?;
+        Self::open_with_cipher(path, cipher)
     }
 
     /// Scan the latest snapshot for metadata constraint entities and
@@ -797,14 +906,14 @@ impl Engine {
         // Step 1 + 2: write memtable to new SSTable.
         let sst_seq = self.db.allocate_file_seq();
         let sst_path = sstable_path(self.db.path(), sst_seq);
-        let mut writer = SSTableWriter::create(&sst_path)?;
+        let mut writer = SSTableWriter::create_with_cipher(&sst_path, self.cipher.clone())?;
         self.memtable.flush_into(&mut writer)?;
         writer.finish()?;
 
         // Step 3: mint new WAL.
         let new_wal_seq = self.db.allocate_file_seq();
         let new_wal_path = wal_path(self.db.path(), new_wal_seq);
-        let new_wal = WriteAheadLog::create(&new_wal_path)?;
+        let new_wal = WriteAheadLog::create_with_cipher(&new_wal_path, self.cipher.clone())?;
 
         // Step 4: update MANIFEST + CURRENT.
         let mut manifest = self.db.manifest().clone();
@@ -817,7 +926,7 @@ impl Engine {
         self.db.write_manifest(manifest)?;
 
         // Step 5: open the new SSTable reader and prepend it.
-        let reader = SSTableReader::open(&sst_path)?;
+        let reader = SSTableReader::open_with_cipher(&sst_path, self.cipher.clone())?;
         self.sstables.insert(0, reader);
 
         // Replace WAL.
@@ -940,7 +1049,7 @@ impl Engine {
         // survivors.
         let new_seq = self.db.allocate_file_seq();
         let new_path = sstable_path(self.db.path(), new_seq);
-        let mut writer = SSTableWriter::create(&new_path)?;
+        let mut writer = SSTableWriter::create_with_cipher(&new_path, self.cipher.clone())?;
         let mut records_out: u64 = 0;
         for (_k, versions) in by_key {
             // Per-type retention policy decides how many versions to
@@ -1005,7 +1114,7 @@ impl Engine {
         self.db.write_manifest(manifest)?;
 
         // Step 6: re-open SSTable readers from the (now single) new entry.
-        let reader = SSTableReader::open(&new_path)?;
+        let reader = SSTableReader::open_with_cipher(&new_path, self.cipher.clone())?;
         self.sstables.clear();
         self.sstables.push(reader);
 
@@ -1486,11 +1595,15 @@ fn sstable_path(dir: &Path, seq: u64) -> PathBuf {
 /// persisted at the last flush. Any commits since then are in the WAL but
 /// not the MANIFEST. Without reconciling, a snapshot read at
 /// `manifest.last_tx_id` would treat the replayed records as invisible.
-fn replay_wal_into(path: &Path, memtable: &mut Memtable) -> Result<(u64, u64), EngineError> {
+fn replay_wal_into(
+    path: &Path,
+    memtable: &mut Memtable,
+    cipher: Option<Cipher>,
+) -> Result<(u64, u64), EngineError> {
     if !path.exists() {
         return Ok((0, 0));
     }
-    let mut reader = WalReader::open(path)?;
+    let mut reader = WalReader::open_with_cipher(path, cipher)?;
     let mut max_tx: u64 = 0;
     while let Some((rec, _lsn)) = reader.next_record()? {
         let tx = match &rec {
@@ -1509,6 +1622,75 @@ fn replay_wal_into(path: &Path, memtable: &mut Memtable) -> Result<(u64, u64), E
         memtable.insert(rec)?;
     }
     Ok((reader.pos(), max_tx))
+}
+
+// ---------------------------------------------------------------------------
+// Encryption marker resolution
+// ---------------------------------------------------------------------------
+
+/// Read the encryption marker file at `<db>/.encryption`, if any.
+fn read_encryption_marker(db_dir: &Path) -> Result<Option<EncryptionMarker>, EngineError> {
+    let p = db_dir.join(ENCRYPTION_MARKER_FILENAME);
+    match std::fs::read(&p) {
+        Ok(bytes) => Ok(Some(EncryptionMarker::decode(&bytes)?)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Atomic write of the marker: write-tmp + rename. Keeps the directory
+/// in a consistent state across crashes — either the old marker (or
+/// none) is visible, or the new marker is.
+fn write_encryption_marker(db_dir: &Path, marker: &EncryptionMarker) -> Result<(), EngineError> {
+    let final_path = db_dir.join(ENCRYPTION_MARKER_FILENAME);
+    let mut tmp_name = final_path.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(".tmp");
+    let tmp_path = final_path.with_file_name(tmp_name);
+    let bytes = marker.encode();
+    std::fs::write(&tmp_path, bytes)?;
+    std::fs::rename(&tmp_path, &final_path)?;
+    Ok(())
+}
+
+/// Reconcile an explicitly-supplied cipher hint against the on-disk
+/// marker. Returns the cipher to use for I/O (or `None` for plaintext).
+///
+/// Matrix:
+///
+/// | hint | marker | outcome |
+/// |------|--------|---------|
+/// | None | absent | `Ok(None)` — plaintext database |
+/// | None | present | `Err(EncryptionKeyMismatch)` — DB is encrypted, no key supplied |
+/// | Some | absent | `Err(EncryptionKeyMismatch)` — refuse implicit migration; use `Engine::reencrypt` |
+/// | Some | present + match | `Ok(Some(cipher))` |
+/// | Some | present + mismatch | `Err(EncryptionKeyMismatch)` |
+fn resolve_cipher_against_marker(
+    db_dir: &Path,
+    hint: Option<Cipher>,
+) -> Result<Option<Cipher>, EngineError> {
+    let marker = read_encryption_marker(db_dir)?;
+    match (hint, marker) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err(EngineError::EncryptionKeyMismatch {
+            detail: "database is encrypted but no key supplied; pass the cipher to \
+                     Engine::open_with_cipher (or set NDB_ENC_KEY + use open_from_env)"
+                .into(),
+        }),
+        (Some(_), None) => Err(EngineError::EncryptionKeyMismatch {
+            detail: "key supplied but database has no encryption marker; \
+                     use Engine::reencrypt to migrate, or drop the key to open plaintext"
+                .into(),
+        }),
+        (Some(c), Some(m)) => {
+            if m.matches(&c) {
+                Ok(Some(c))
+            } else {
+                Err(EngineError::EncryptionKeyMismatch {
+                    detail: "supplied key does not match the database's stored fingerprint".into(),
+                })
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2742,6 +2924,129 @@ mod tests {
         txn.put_entity(make_entity(EntityId::now_v7(), "real"));
         txn.commit().unwrap();
         engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // ---------------------------------------------------------------------
+    // Encryption marker behaviour. Tests pass the cipher explicitly via
+    // `create_with_cipher` / `open_with_cipher` to avoid racing against
+    // NDB_ENC_KEY in parallel runs.
+    // ---------------------------------------------------------------------
+
+    fn cipher_a() -> Cipher {
+        Cipher::from_raw_key(&[0x11u8; 32]).unwrap()
+    }
+    fn cipher_b() -> Cipher {
+        Cipher::from_raw_key(&[0x22u8; 32]).unwrap()
+    }
+
+    #[test]
+    fn encrypted_engine_create_writes_marker_and_round_trips() {
+        let dir = temp_dir("enc_engine_create");
+        let mut engine = Engine::create_with_cipher(&dir, Some(cipher_a())).unwrap();
+        let eid = EntityId::now_v7();
+        let mut txn = engine.begin_write();
+        txn.put_entity(make_entity(eid, "alice"));
+        txn.commit().unwrap();
+        engine.flush().unwrap();
+        engine.close().unwrap();
+
+        // Marker file present; the WAL + SSTable encryption is exercised
+        // by lower-layer tests; here we focus on the cross-restart flow.
+        let marker_path = dir.join(crate::encryption::ENCRYPTION_MARKER_FILENAME);
+        assert!(marker_path.exists(), "marker file should exist");
+
+        // Reopen with the same key → entity visible.
+        let mut engine = Engine::open_with_cipher(&dir, Some(cipher_a())).unwrap();
+        let snap = TxId::new(engine.manifest().last_tx_id);
+        let resolved = engine.snapshot_read(&eid.into_uuid(), snap).unwrap();
+        assert!(matches!(resolved, Resolved::Live(_)));
+        engine.close().unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_engine_wrong_key_refused() {
+        let dir = temp_dir("enc_engine_wrong_key");
+        let mut engine = Engine::create_with_cipher(&dir, Some(cipher_a())).unwrap();
+        let mut txn = engine.begin_write();
+        txn.put_entity(make_entity(EntityId::now_v7(), "alice"));
+        txn.commit().unwrap();
+        engine.close().unwrap();
+
+        let err = Engine::open_with_cipher(&dir, Some(cipher_b())).unwrap_err();
+        assert!(
+            matches!(err, EngineError::EncryptionKeyMismatch { .. }),
+            "wrong key must produce EncryptionKeyMismatch, got: {err:?}"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_engine_missing_key_on_open_refused() {
+        let dir = temp_dir("enc_engine_no_key");
+        Engine::create_with_cipher(&dir, Some(cipher_a()))
+            .unwrap()
+            .close()
+            .unwrap();
+
+        let err = Engine::open_with_cipher(&dir, None).unwrap_err();
+        assert!(
+            matches!(err, EngineError::EncryptionKeyMismatch { .. }),
+            "encrypted DB without key must be refused, got: {err:?}"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn plaintext_engine_with_unexpected_key_refused() {
+        let dir = temp_dir("enc_engine_unexpected_key");
+        // Create a plaintext database.
+        let mut engine = Engine::create(&dir).unwrap();
+        let mut txn = engine.begin_write();
+        txn.put_entity(make_entity(EntityId::now_v7(), "alice"));
+        txn.commit().unwrap();
+        engine.close().unwrap();
+
+        // Open with a key — must refuse (no implicit migration).
+        let err = Engine::open_with_cipher(&dir, Some(cipher_a())).unwrap_err();
+        assert!(
+            matches!(err, EngineError::EncryptionKeyMismatch { .. }),
+            "plaintext DB + key must be refused, got: {err:?}"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_engine_restart_replays_wal_and_flushes_encrypted_sstable() {
+        let dir = temp_dir("enc_engine_full_lifecycle");
+        // Commit some records BEFORE flush — they live only in the WAL.
+        // Restart must replay them out of the encrypted WAL.
+        let mut engine = Engine::create_with_cipher(&dir, Some(cipher_a())).unwrap();
+        let eid = EntityId::now_v7();
+        let mut txn = engine.begin_write();
+        txn.put_entity(make_entity(eid, "wal-only"));
+        txn.commit().unwrap();
+        engine.close().unwrap();
+
+        let mut engine = Engine::open_with_cipher(&dir, Some(cipher_a())).unwrap();
+        let snap = TxId::new(engine.manifest().last_tx_id);
+        let resolved = engine.snapshot_read(&eid.into_uuid(), snap).unwrap();
+        assert!(matches!(resolved, Resolved::Live(_)));
+        // Flush to encrypted SSTable, restart again, still visible.
+        engine.flush().unwrap();
+        engine.close().unwrap();
+
+        let mut engine = Engine::open_with_cipher(&dir, Some(cipher_a())).unwrap();
+        let snap = TxId::new(engine.manifest().last_tx_id);
+        let resolved = engine.snapshot_read(&eid.into_uuid(), snap).unwrap();
+        assert!(matches!(resolved, Resolved::Live(_)));
+        engine.close().unwrap();
+
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

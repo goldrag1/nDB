@@ -26,11 +26,12 @@
 //!   the per-record CRC catches).
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufWriter, ErrorKind, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufWriter, Cursor, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+use crate::encryption::{Cipher, DEFAULT_CHUNK_SIZE, EncryptedFile};
 use crate::error::DecodeError;
 use crate::record::{Record, peek_record_size};
 
@@ -41,6 +42,69 @@ pub const WAL_EXTENSION: &str = "ndblog";
 /// peek the length without parsing).
 const SIZE_PREFIX: usize = 4;
 
+/// Backing strategy for the WAL writer — plaintext via `BufWriter<File>`
+/// or chunked-AEAD via `EncryptedFile<File>`. Selected at create time
+/// based on whether the engine has a cipher loaded.
+///
+/// The encrypted variant owns several KiB of AES state + a chunk
+/// buffer, so the variants differ in size; boxing it adds an
+/// indirection on the per-record hot path with no benefit. Clippy's
+/// `large_enum_variant` lint is opt-out here on purpose.
+#[allow(clippy::large_enum_variant)]
+enum WalSink {
+    /// Default. `BufWriter` coalesces small record appends into ~4-8 KiB
+    /// writes before hitting the file.
+    Plain(BufWriter<File>),
+    /// Chunked-AEAD. `EncryptedFile` does its own buffering at chunk
+    /// granularity, so the extra `BufWriter` layer would just hide the
+    /// per-chunk seam.
+    Encrypted(EncryptedFile<File>),
+}
+
+impl WalSink {
+    fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
+        match self {
+            Self::Plain(w) => w.write_all(bytes),
+            Self::Encrypted(w) => w.write_all(bytes),
+        }
+    }
+
+    /// Flush in-memory buffers down to the OS and `fsync_data` the
+    /// underlying file. For the encrypted path this also seals any
+    /// in-progress chunk so the bytes are recoverable on crash.
+    fn flush_and_sync(&mut self) -> io::Result<()> {
+        match self {
+            Self::Plain(w) => {
+                w.flush()?;
+                w.get_ref().sync_data()
+            }
+            Self::Encrypted(w) => {
+                w.flush_pending()
+                    .map_err(|e| io::Error::other(format!("encrypted WAL flush: {e}")))?;
+                w.inner_mut().sync_data()
+            }
+        }
+    }
+
+    fn flush_only(&mut self) -> io::Result<()> {
+        match self {
+            Self::Plain(w) => w.flush(),
+            Self::Encrypted(w) => w
+                .flush_pending()
+                .map_err(|e| io::Error::other(format!("encrypted WAL flush: {e}"))),
+        }
+    }
+}
+
+impl std::fmt::Debug for WalSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Plain(_) => f.write_str("WalSink::Plain"),
+            Self::Encrypted(_) => f.write_str("WalSink::Encrypted"),
+        }
+    }
+}
+
 /// Append-only writer over a `.ndblog` file.
 ///
 /// One [`WriteAheadLog`] owns the active log file for a database. Appends
@@ -48,7 +112,7 @@ const SIZE_PREFIX: usize = 4;
 #[derive(Debug)]
 pub struct WriteAheadLog {
     path: PathBuf,
-    file: BufWriter<File>,
+    file: WalSink,
     /// Number of bytes durably written + buffered (the next-write LSN).
     bytes_written: u64,
 }
@@ -56,15 +120,34 @@ pub struct WriteAheadLog {
 impl WriteAheadLog {
     /// Create a fresh `.ndblog` file, failing if it already exists. Used when
     /// the engine starts a brand-new WAL segment.
+    ///
+    /// Equivalent to `create_with_cipher(path, None)` — writes plaintext.
     pub fn create<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+        Self::create_with_cipher(path, None)
+    }
+
+    /// Create a fresh `.ndblog` file. When `cipher` is `Some`, the file
+    /// is wrapped with [`EncryptedFile`] using the default chunk size;
+    /// every append is AEAD-encrypted before hitting disk.
+    pub fn create_with_cipher<P: AsRef<Path>>(
+        path: P,
+        cipher: Option<Cipher>,
+    ) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
         let file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&path)?;
+        let sink = match cipher {
+            None => WalSink::Plain(BufWriter::new(file)),
+            Some(c) => WalSink::Encrypted(
+                EncryptedFile::create(file, c, DEFAULT_CHUNK_SIZE)
+                    .map_err(|e| io::Error::other(format!("encrypted WAL create: {e}")))?,
+            ),
+        };
         Ok(Self {
             path,
-            file: BufWriter::new(file),
+            file: sink,
             bytes_written: 0,
         })
     }
@@ -73,13 +156,39 @@ impl WriteAheadLog {
     /// file length, so subsequent appends extend the file. Caller is
     /// responsible for having previously truncated any partial trailing
     /// record (see [`WalReader::recover`]).
+    ///
+    /// Plaintext only — encrypted WALs need a fresh segment on each
+    /// engine open (see `open_append_with_cipher`).
     pub fn open_append<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+        Self::open_append_with_cipher(path, None)
+    }
+
+    /// Open an existing WAL for append. With `cipher = None`, behaviour
+    /// matches the v1 path: seek to end, byte-counter = file length.
+    ///
+    /// With `cipher = Some(_)`, the chunked-AEAD framing of
+    /// `EncryptedFile` makes mid-file append impossible — every append
+    /// would have to be a new chunk, and the existing chunks include a
+    /// plaintext header that we cannot reseal partway through. For v2.0
+    /// we explicitly refuse append-mode opens on encrypted WALs; the
+    /// engine handles this by recovering the existing segment to a fresh
+    /// memtable and starting a new segment.
+    pub fn open_append_with_cipher<P: AsRef<Path>>(
+        path: P,
+        cipher: Option<&Cipher>,
+    ) -> io::Result<Self> {
+        if cipher.is_some() {
+            return Err(io::Error::new(
+                ErrorKind::Unsupported,
+                "encrypted WALs do not support open-append; rotate to a new segment",
+            ));
+        }
         let path = path.as_ref().to_path_buf();
         let mut file = OpenOptions::new().write(true).append(false).open(&path)?;
         let end = file.seek(SeekFrom::End(0))?;
         Ok(Self {
             path,
-            file: BufWriter::new(file),
+            file: WalSink::Plain(BufWriter::new(file)),
             bytes_written: end,
         })
     }
@@ -95,6 +204,13 @@ impl WriteAheadLog {
         self.file.write_all(record_bytes)?;
         self.bytes_written += record_bytes.len() as u64;
         Ok(lsn)
+    }
+
+    /// Whether this WAL is wrapping an encrypted file. Diagnostic /
+    /// recovery helpers use this to pick the matching reader path.
+    #[must_use]
+    pub fn is_encrypted(&self) -> bool {
+        matches!(self.file, WalSink::Encrypted(_))
     }
 
     /// Append a parsed record. Equivalent to encoding into a temporary buffer
@@ -133,9 +249,12 @@ impl WriteAheadLog {
     /// Uses `sync_data` (not `sync_all`) — we don't need metadata-only fields
     /// like atime to be flushed; only the file *contents* matter for
     /// recovery. Saves a syscall on platforms where it's distinct.
+    ///
+    /// For encrypted WALs, also seals any in-progress chunk before
+    /// `fsync_data` — without this the trailing record bytes would sit
+    /// in the writer's plaintext buffer and be lost on crash.
     pub fn sync(&mut self) -> io::Result<()> {
-        self.file.flush()?;
-        self.file.get_ref().sync_data()
+        self.file.flush_and_sync()
     }
 
     /// Bytes durably or buffered in this WAL. Equal to the file length at the
@@ -167,7 +286,7 @@ impl Drop for WriteAheadLog {
     fn drop(&mut self) {
         // Best-effort flush on drop; intentional final sync should go through
         // `close()` so the caller can observe errors.
-        let _ = self.file.flush();
+        let _ = self.file.flush_only();
     }
 }
 
@@ -210,10 +329,36 @@ pub struct WalRecovery {
     pub trailing_garbage: u64,
 }
 
+/// Backing storage for the WAL reader. Plain WAL files are read straight
+/// from the FD; encrypted WAL files are decrypted up-front into a
+/// `Vec<u8>` and read via a [`Cursor`]. The encrypted path costs O(N)
+/// memory at open — WAL segments are bounded by the flush threshold
+/// (~1-10 MiB in practice) so this is acceptable for v2.0.
+enum WalSource {
+    File(File),
+    Buffer(Cursor<Vec<u8>>),
+}
+
+impl WalSource {
+    fn seek_to(&mut self, pos: u64) -> io::Result<u64> {
+        match self {
+            Self::File(f) => f.seek(SeekFrom::Start(pos)),
+            Self::Buffer(c) => c.seek(SeekFrom::Start(pos)),
+        }
+    }
+
+    fn read_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
+        match self {
+            Self::File(f) => f.read_exact(buf),
+            Self::Buffer(c) => c.read_exact(buf),
+        }
+    }
+}
+
 /// Streaming reader for a `.ndblog` file. Reads records one at a time so
 /// large logs don't load entirely into memory.
 pub struct WalReader {
-    file: File,
+    source: WalSource,
     path: PathBuf,
     /// File length captured at open time, used to detect truncated trailing
     /// records.
@@ -223,18 +368,48 @@ pub struct WalReader {
 }
 
 impl WalReader {
-    /// Open `path` for read-only streaming.
+    /// Open `path` for read-only streaming. Plaintext path —
+    /// equivalent to `open_with_cipher(path, None)`.
     pub fn open<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+        Self::open_with_cipher(path, None)
+    }
+
+    /// Open `path` for read-only streaming. With `cipher = Some(_)`,
+    /// the file is read through [`EncryptedFile`] and the decrypted
+    /// plaintext is buffered in memory; subsequent `next_record` calls
+    /// read from the buffer.
+    pub fn open_with_cipher<P: AsRef<Path>>(
+        path: P,
+        cipher: Option<Cipher>,
+    ) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let mut file = File::open(&path)?;
-        let file_len = file.seek(SeekFrom::End(0))?;
-        file.seek(SeekFrom::Start(0))?;
-        Ok(Self {
-            file,
-            path,
-            file_len,
-            pos: 0,
-        })
+        let file = File::open(&path)?;
+        match cipher {
+            None => {
+                let mut file = file;
+                let file_len = file.seek(SeekFrom::End(0))?;
+                file.seek(SeekFrom::Start(0))?;
+                Ok(Self {
+                    source: WalSource::File(file),
+                    path,
+                    file_len,
+                    pos: 0,
+                })
+            }
+            Some(c) => {
+                let mut enc = EncryptedFile::open(file, c)
+                    .map_err(|e| io::Error::other(format!("encrypted WAL open: {e}")))?;
+                let mut buf = Vec::new();
+                enc.read_to_end(&mut buf)?;
+                let file_len = buf.len() as u64;
+                Ok(Self {
+                    source: WalSource::Buffer(Cursor::new(buf)),
+                    path,
+                    file_len,
+                    pos: 0,
+                })
+            }
+        }
     }
 
     /// Path of the underlying file.
@@ -277,13 +452,13 @@ impl WalReader {
             return Ok(None);
         }
 
-        // The previous call may have left the file cursor mid-stream after a
+        // The previous call may have left the cursor mid-stream after a
         // successful decode; an explicit seek keeps the read positionally
         // correct without depending on call order.
-        self.file.seek(SeekFrom::Start(self.pos))?;
+        self.source.seek_to(self.pos)?;
 
         let mut size_buf = [0u8; SIZE_PREFIX];
-        self.file.read_exact(&mut size_buf)?;
+        self.source.read_exact(&mut size_buf)?;
         let claimed = u64::from(u32::from_le_bytes(size_buf));
         if claimed == 0 {
             // Zero-sized record would loop forever; surface as a corruption
@@ -313,7 +488,7 @@ impl WalReader {
         })?;
         let mut full = vec![0u8; claimed_usize];
         full[..SIZE_PREFIX].copy_from_slice(&size_buf);
-        self.file.read_exact(&mut full[SIZE_PREFIX..])?;
+        self.source.read_exact(&mut full[SIZE_PREFIX..])?;
 
         let lsn = self.pos;
         let (record, consumed) = Record::decode(&full).map_err(|e| WalReadError::Decode {
@@ -664,6 +839,115 @@ mod tests {
         assert_eq!(recovery.records_read, 0);
         assert_eq!(recovery.durable_end, 0);
         assert_eq!(recovery.trailing_garbage, 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // ---------------------------------------------------------------------
+    // Encryption — round-trip + wrong-key rejection.
+    // ---------------------------------------------------------------------
+
+    fn test_cipher() -> Cipher {
+        Cipher::from_raw_key(&[0x55u8; 32]).unwrap()
+    }
+
+    #[test]
+    fn encrypted_wal_round_trip_through_sync_and_close() {
+        let dir = temp_dir("enc_wal_round_trip");
+        let path = dir.join("000001.ndblog");
+        let records = sample_records();
+
+        let mut wal = WriteAheadLog::create_with_cipher(&path, Some(test_cipher())).unwrap();
+        assert!(wal.is_encrypted());
+        let lsns = records
+            .iter()
+            .map(|r| wal.append(r).unwrap())
+            .collect::<Vec<_>>();
+        // Sync before close — must seal in-progress chunk so a later
+        // reader sees every record we acknowledged.
+        wal.sync().unwrap();
+        wal.close().unwrap();
+
+        // On-disk file is now encrypted; a plain reader sees garbage at
+        // best — must use open_with_cipher.
+        let mut reader = WalReader::open_with_cipher(&path, Some(test_cipher())).unwrap();
+        let (replayed, recovery) = reader.replay_all().unwrap();
+        assert_eq!(recovery.records_read, records.len());
+        let restored: Vec<_> = replayed.iter().map(|(r, _)| r.clone()).collect();
+        assert_eq!(restored, records);
+        // LSNs are PLAINTEXT byte offsets — must round-trip even though
+        // the on-disk layout is chunked.
+        let actual_lsns: Vec<_> = replayed.iter().map(|(_, l)| *l).collect();
+        assert_eq!(actual_lsns, lsns);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_wal_wrong_key_fails_to_open() {
+        let dir = temp_dir("enc_wal_wrong_key");
+        let path = dir.join("000001.ndblog");
+
+        let mut wal = WriteAheadLog::create_with_cipher(&path, Some(test_cipher())).unwrap();
+        wal.append(&Record::TypeName(TypeNameRecord {
+            id: TypeId::new(7),
+            name: "X".into(),
+        }))
+        .unwrap();
+        wal.close().unwrap();
+
+        let wrong = Cipher::from_raw_key(&[0xAAu8; 32]).unwrap();
+        // Magic + header decode succeeds; the first chunk's AEAD fails.
+        let result = WalReader::open_with_cipher(&path, Some(wrong));
+        assert!(result.is_err(), "wrong key must error at open time");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_wal_plain_reader_rejects() {
+        // Sanity: a plaintext WalReader on an encrypted file should fail
+        // immediately (the first 4 bytes are EncryptedFile's magic, not
+        // a record size that matches anything).
+        let dir = temp_dir("enc_wal_plain_reader");
+        let path = dir.join("000001.ndblog");
+
+        let mut wal = WriteAheadLog::create_with_cipher(&path, Some(test_cipher())).unwrap();
+        wal.append(&Record::TypeName(TypeNameRecord {
+            id: TypeId::new(7),
+            name: "X".into(),
+        }))
+        .unwrap();
+        wal.close().unwrap();
+
+        let mut reader = WalReader::open(&path).unwrap();
+        // Either a Decode error or a clean "partial trailing record"
+        // result is acceptable. What MUST NOT happen is a successful
+        // decode of one of the real records.
+        if let Ok((records, _recovery)) = reader.replay_all() {
+            // If reader thinks it parsed records, they'd be garbage —
+            // assert that the type name doesn't round-trip.
+            for (r, _) in &records {
+                if let Record::TypeName(t) = r {
+                    assert_ne!(t.name, "X");
+                }
+            }
+        }
+        // Err(_) is the other acceptable outcome.
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_wal_open_append_unsupported() {
+        let dir = temp_dir("enc_wal_no_append");
+        let path = dir.join("000001.ndblog");
+        WriteAheadLog::create_with_cipher(&path, Some(test_cipher()))
+            .unwrap()
+            .close()
+            .unwrap();
+        let c = test_cipher();
+        let err = WriteAheadLog::open_append_with_cipher(&path, Some(&c)).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Unsupported);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

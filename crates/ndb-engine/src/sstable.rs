@@ -51,6 +51,8 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+use crate::encryption::{Cipher, DEFAULT_CHUNK_SIZE, EncryptedFile};
+
 use crc32fast::Hasher;
 use thiserror::Error;
 
@@ -265,11 +267,17 @@ pub enum SSTableError {
 /// The file is written to `<path>.tmp` and renamed to `<path>` inside
 /// [`finish`](Self::finish). The parent directory is `fsync`'d after the
 /// rename so the link change is also durable.
+///
+/// When created via [`SSTableWriter::create_with_cipher`], the on-disk
+/// file is AES-GCM-chunk-encrypted (the same envelope used by the WAL).
+/// The footer + per-record CRC live inside the plaintext stream — readers
+/// decrypt first, then parse — so `data_size` and record offsets in the
+/// block-index sidecar are still PLAINTEXT byte positions.
 #[derive(Debug)]
 pub struct SSTableWriter {
     final_path: PathBuf,
     tmp_path: PathBuf,
-    file: BufWriter<File>,
+    sink: SSTableSink,
     record_count: u64,
     bytes_written: u64,
     last_key: Option<SSTableKey>,
@@ -280,9 +288,70 @@ pub struct SSTableWriter {
     block_index: crate::block_index::BlockIndexWriter,
 }
 
+/// Either a plaintext `BufWriter<File>` or a chunked-AEAD `EncryptedFile<File>`.
+/// Chosen at create time based on whether the engine has a cipher loaded.
+///
+/// `EncryptedFile` is dramatically larger than `BufWriter<File>` (it owns
+/// the AES-GCM state + a chunk-sized in-memory buffer), so the variants
+/// differ in size by several KiB. We accept that — boxing the encrypted
+/// variant adds an indirection to the hot per-record write path with no
+/// measurable benefit. Clippy's `large_enum_variant` lint is opt-out
+/// here on purpose.
+#[allow(clippy::large_enum_variant)]
+enum SSTableSink {
+    Plain(BufWriter<File>),
+    Encrypted(EncryptedFile<File>),
+}
+
+impl std::fmt::Debug for SSTableSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Plain(_) => f.write_str("SSTableSink::Plain"),
+            Self::Encrypted(_) => f.write_str("SSTableSink::Encrypted"),
+        }
+    }
+}
+
+impl SSTableSink {
+    fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
+        match self {
+            Self::Plain(w) => w.write_all(bytes),
+            Self::Encrypted(w) => w.write_all(bytes),
+        }
+    }
+
+    /// Drive the sink to "all bytes plaintext-flushed, file descriptor
+    /// surfaced". For the encrypted path this seals the final chunk via
+    /// [`EncryptedFile::finish`]; for the plain path it just unwraps
+    /// the `BufWriter`.
+    fn into_file(self) -> io::Result<File> {
+        match self {
+            Self::Plain(w) => w
+                .into_inner()
+                .map_err(|e| io::Error::other(format!("BufWriter into_inner failed: {e}"))),
+            Self::Encrypted(w) => w
+                .finish()
+                .map_err(|e| io::Error::other(format!("encrypted SSTable finish: {e}"))),
+        }
+    }
+}
+
 impl SSTableWriter {
     /// Open a temp file alongside `final_path` and prepare to receive records.
+    ///
+    /// Equivalent to `create_with_cipher(path, None)` — writes plaintext.
     pub fn create<P: AsRef<Path>>(final_path: P) -> Result<Self, SSTableError> {
+        Self::create_with_cipher(final_path, None)
+    }
+
+    /// Like [`SSTableWriter::create`] but optionally wraps the on-disk
+    /// file with [`EncryptedFile`]. Block-index entry offsets and the
+    /// footer's `data_size` field remain PLAINTEXT — the reader's
+    /// invariants don't change.
+    pub fn create_with_cipher<P: AsRef<Path>>(
+        final_path: P,
+        cipher: Option<Cipher>,
+    ) -> Result<Self, SSTableError> {
         let final_path = final_path.as_ref().to_path_buf();
         let tmp_path = tmp_sibling(&final_path);
         // O_TRUNC to clean up a crashed prior write attempt.
@@ -291,10 +360,17 @@ impl SSTableWriter {
             .create(true)
             .truncate(true)
             .open(&tmp_path)?;
+        let sink = match cipher {
+            None => SSTableSink::Plain(BufWriter::new(file)),
+            Some(c) => SSTableSink::Encrypted(
+                EncryptedFile::create(file, c, DEFAULT_CHUNK_SIZE)
+                    .map_err(|e| io::Error::other(format!("encrypted SSTable create: {e}")))?,
+            ),
+        };
         Ok(Self {
             final_path,
             tmp_path,
-            file: BufWriter::new(file),
+            sink,
             record_count: 0,
             bytes_written: 0,
             last_key: None,
@@ -322,7 +398,7 @@ impl SSTableWriter {
         record
             .encode(&mut buf)
             .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("encode failed: {e}")))?;
-        self.file.write_all(&buf)?;
+        self.sink.write_all(&buf)?;
         self.bytes_written += buf.len() as u64;
         self.record_count += 1;
         self.last_key = Some(key);
@@ -332,7 +408,7 @@ impl SSTableWriter {
     /// Append already-encoded record bytes. Skips the sort-order check
     /// (caller already encoded the record, so they own the contract).
     pub fn append_raw(&mut self, bytes: &[u8]) -> Result<(), SSTableError> {
-        self.file.write_all(bytes)?;
+        self.sink.write_all(bytes)?;
         self.bytes_written += bytes.len() as u64;
         self.record_count += 1;
         Ok(())
@@ -354,12 +430,8 @@ impl SSTableWriter {
             flags: 0,
         };
         let footer_bytes = encode_footer(&footer);
-        self.file.write_all(&footer_bytes)?;
-        self.file.flush()?;
-        let f = self
-            .file
-            .into_inner()
-            .map_err(|e| io::Error::other(format!("BufWriter into_inner failed: {e}")))?;
+        self.sink.write_all(&footer_bytes)?;
+        let f = self.sink.into_file()?;
         f.sync_data()?;
         std::fs::rename(&self.tmp_path, &self.final_path)?;
         // Sidecar is best-effort but should normally succeed. If it fails
@@ -378,7 +450,7 @@ impl SSTableWriter {
 
     /// Abort the build: close the temp file and remove it. Idempotent.
     pub fn abort(self) -> io::Result<()> {
-        drop(self.file);
+        drop(self.sink);
         match std::fs::remove_file(&self.tmp_path) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
@@ -477,17 +549,22 @@ fn decode_footer(bytes: &[u8; SSTABLE_FOOTER_SIZE]) -> Result<SSTableFooter, SST
 ///
 /// `open()` validates the footer up front; iteration streams records one at
 /// a time so large tables don't load entirely into memory.
+///
+/// Two backings:
+/// - **Plain SSTables** are memory-mapped; reads are zero-copy.
+/// - **Encrypted SSTables** are decrypted once at open time into a heap
+///   buffer; reads come from the buffer. The plaintext byte layout
+///   (records + footer + per-record CRCs + block-index offsets) is
+///   identical to the plain case, so the iter / find / footer logic is
+///   shared.
 #[derive(Debug)]
 pub struct SSTableReader {
     path: PathBuf,
-    /// Memory-mapped view of the file. Used for all reads — sequential
-    /// iteration and random-access block lookups. The map covers the
-    /// entire file including the footer.
-    mmap: memmap2::Mmap,
-    /// Keeps the underlying file descriptor alive for the lifetime of the
-    /// mmap. We never write through the FD — SSTable files are
-    /// write-temp-then-rename and read-only after `open()`.
-    _file: File,
+    backing: SSTableBacking,
+    /// Length of the PLAINTEXT byte stream. For plain SSTables this
+    /// equals the file size on disk; for encrypted SSTables this is the
+    /// decrypted size (smaller than disk size because chunks carry
+    /// nonce + tag overhead).
     file_len: u64,
     footer: SSTableFooter,
     /// Optional block-index sidecar. Present for SSTables written by
@@ -496,38 +573,103 @@ pub struct SSTableReader {
     block_index: Option<crate::block_index::BlockIndex>,
 }
 
+/// Backing storage for an [`SSTableReader`]. Plain files are mmap'd
+/// (zero-copy); encrypted files are decrypted to a heap buffer.
+enum SSTableBacking {
+    Mmap {
+        mmap: memmap2::Mmap,
+        /// Keeps the FD alive for the mmap lifetime. We never write.
+        _file: File,
+    },
+    Decrypted(Box<[u8]>),
+}
+
+impl std::fmt::Debug for SSTableBacking {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Mmap { .. } => f.write_str("SSTableBacking::Mmap"),
+            Self::Decrypted(_) => f.write_str("SSTableBacking::Decrypted"),
+        }
+    }
+}
+
+impl SSTableBacking {
+    fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Mmap { mmap, .. } => mmap,
+            Self::Decrypted(b) => b,
+        }
+    }
+}
+
 impl SSTableReader {
     /// Open `path`, validate the footer, mmap the file, and return a
     /// handle ready for iteration / lookup.
+    ///
+    /// Equivalent to `open_with_cipher(path, None)` — reads plaintext.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, SSTableError> {
+        Self::open_with_cipher(path, None)
+    }
+
+    /// Open `path` for read. When `cipher` is `Some`, the file is
+    /// decrypted via [`EncryptedFile`] into a heap buffer at open time
+    /// and subsequent reads use that buffer instead of mmap.
+    pub fn open_with_cipher<P: AsRef<Path>>(
+        path: P,
+        cipher: Option<Cipher>,
+    ) -> Result<Self, SSTableError> {
         let path = path.as_ref().to_path_buf();
-        let file = File::open(&path)?;
-        let file_len = file.metadata()?.len();
         let needed = SSTABLE_FOOTER_SIZE as u64;
-        if file_len < needed {
-            return Err(SSTableError::TooShort {
-                len: file_len,
-                needed,
-            });
-        }
-        // SAFETY: We open the file read-only and rely on the engine's
-        // append-only + write-temp-then-rename invariants to guarantee
-        // the file content doesn't mutate under us. SSTable files are
-        // immutable after publish; the only modification is deletion
-        // (which leaves an existing mmap valid via the inode lifetime).
-        #[allow(unsafe_code)]
-        let mmap = unsafe { memmap2::Mmap::map(&file)? };
-        let mmap_len = mmap.len() as u64;
-        if mmap_len != file_len {
-            return Err(SSTableError::TooShort {
-                len: mmap_len,
-                needed: file_len,
-            });
-        }
+        let (backing, file_len) = match cipher {
+            None => {
+                let file = File::open(&path)?;
+                let file_len = file.metadata()?.len();
+                if file_len < needed {
+                    return Err(SSTableError::TooShort {
+                        len: file_len,
+                        needed,
+                    });
+                }
+                // SAFETY: We open the file read-only and rely on the engine's
+                // append-only + write-temp-then-rename invariants to guarantee
+                // the file content doesn't mutate under us. SSTable files are
+                // immutable after publish; the only modification is deletion
+                // (which leaves an existing mmap valid via the inode lifetime).
+                #[allow(unsafe_code)]
+                let mmap = unsafe { memmap2::Mmap::map(&file)? };
+                let mmap_len = mmap.len() as u64;
+                if mmap_len != file_len {
+                    return Err(SSTableError::TooShort {
+                        len: mmap_len,
+                        needed: file_len,
+                    });
+                }
+                (
+                    SSTableBacking::Mmap { mmap, _file: file },
+                    file_len,
+                )
+            }
+            Some(c) => {
+                let file = File::open(&path)?;
+                let mut enc = EncryptedFile::open(file, c)
+                    .map_err(|e| io::Error::other(format!("encrypted SSTable open: {e}")))?;
+                let mut buf = Vec::new();
+                enc.read_to_end(&mut buf)?;
+                let len = buf.len() as u64;
+                if len < needed {
+                    return Err(SSTableError::TooShort {
+                        len,
+                        needed,
+                    });
+                }
+                (SSTableBacking::Decrypted(buf.into_boxed_slice()), len)
+            }
+        };
+        let bytes = backing.as_bytes();
         let footer_off = usize::try_from(file_len - needed)
             .map_err(|_| SSTableError::TooShort { len: file_len, needed: usize::MAX as u64 })?;
         let mut footer_bytes = [0u8; SSTABLE_FOOTER_SIZE];
-        footer_bytes.copy_from_slice(&mmap[footer_off..footer_off + SSTABLE_FOOTER_SIZE]);
+        footer_bytes.copy_from_slice(&bytes[footer_off..footer_off + SSTABLE_FOOTER_SIZE]);
         let footer = decode_footer(&footer_bytes)?;
         if footer.data_size + needed != file_len {
             // data_size in the footer disagrees with the file length — clear
@@ -555,8 +697,7 @@ impl SSTableReader {
         };
         Ok(Self {
             path,
-            mmap,
-            _file: file,
+            backing,
             file_len,
             footer,
             block_index,
@@ -592,8 +733,9 @@ impl SSTableReader {
     /// `Some(Err(_))`; subsequent calls return `None`.
     #[allow(clippy::iter_without_into_iter)]
     pub fn iter(&self) -> SSTableIter<'_> {
+        let bytes = self.backing.as_bytes();
         SSTableIter {
-            data: &self.mmap[..usize::try_from(self.footer.data_size).unwrap_or(usize::MAX)],
+            data: &bytes[..usize::try_from(self.footer.data_size).unwrap_or(usize::MAX)],
             pos: 0,
             done: false,
         }
@@ -616,8 +758,9 @@ impl SSTableReader {
         let start_offset = usize::try_from(start_offset).unwrap_or(usize::MAX);
         let data_end =
             usize::try_from(self.footer.data_size).unwrap_or(usize::MAX);
+        let bytes = self.backing.as_bytes();
         let mut iter = SSTableIter {
-            data: &self.mmap[..data_end],
+            data: &bytes[..data_end],
             pos: start_offset,
             done: false,
         };
@@ -1102,5 +1245,109 @@ mod tests {
         let dict_key = SSTableKey::for_record(&dict(1, ""));
         let tomb_key = SSTableKey::for_record(&tombstone(uuid::Uuid::nil(), 1));
         assert!(tomb_key < dict_key);
+    }
+
+    // ---------------------------------------------------------------------
+    // Encryption — write+read round-trip + wrong-key + plain-vs-encrypted.
+    // ---------------------------------------------------------------------
+
+    fn test_cipher() -> Cipher {
+        Cipher::from_raw_key(&[0x77u8; 32]).unwrap()
+    }
+
+    fn enc_records() -> Vec<Record> {
+        vec![
+            entity(EntityId::now_v7(), 10, 1),
+            entity(EntityId::now_v7(), 20, 2),
+            entity(EntityId::now_v7(), 30, 3),
+        ]
+    }
+
+    #[test]
+    fn encrypted_sstable_round_trip_iter() {
+        let dir = temp_dir("enc_sst_round_trip");
+        let path = dir.join("000001.ndb");
+        let mut records = enc_records();
+        records.sort_by(|a, b| SSTableKey::for_record(a).cmp(&SSTableKey::for_record(b)));
+
+        let mut w = SSTableWriter::create_with_cipher(&path, Some(test_cipher())).unwrap();
+        for r in &records {
+            w.append(r).unwrap();
+        }
+        let footer = w.finish().unwrap();
+        assert_eq!(footer.record_count, records.len() as u64);
+
+        let reader = SSTableReader::open_with_cipher(&path, Some(test_cipher())).unwrap();
+        assert_eq!(reader.footer().record_count, records.len() as u64);
+        let read_back: Vec<Record> = reader.iter().map(|r| r.unwrap().0).collect();
+        assert_eq!(read_back, records);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_sstable_find_uses_block_index() {
+        let dir = temp_dir("enc_sst_find");
+        let path = dir.join("000001.ndb");
+        let mut records: Vec<Record> = (0..32)
+            .map(|i| entity(EntityId::now_v7(), 100 + i, u64::from(i)))
+            .collect();
+        records.sort_by(|a, b| SSTableKey::for_record(a).cmp(&SSTableKey::for_record(b)));
+
+        let mut w = SSTableWriter::create_with_cipher(&path, Some(test_cipher())).unwrap();
+        for r in &records {
+            w.append(r).unwrap();
+        }
+        w.finish().unwrap();
+
+        let reader = SSTableReader::open_with_cipher(&path, Some(test_cipher())).unwrap();
+        assert!(reader.has_block_index(), "sidecar should still be written for encrypted SSTables");
+        // Spot-check find — encryption should be invisible at the API.
+        let mid_key = SSTableKey::for_record(&records[records.len() / 2]);
+        let found = reader.find(&mid_key).unwrap().unwrap();
+        assert_eq!(found, records[records.len() / 2]);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_sstable_wrong_key_fails_open() {
+        let dir = temp_dir("enc_sst_wrong_key");
+        let path = dir.join("000001.ndb");
+
+        let mut w = SSTableWriter::create_with_cipher(&path, Some(test_cipher())).unwrap();
+        for r in &enc_records() {
+            w.append(r).unwrap();
+        }
+        w.finish().unwrap();
+
+        let wrong = Cipher::from_raw_key(&[0x99u8; 32]).unwrap();
+        let result = SSTableReader::open_with_cipher(&path, Some(wrong));
+        assert!(result.is_err(), "wrong key must error at open time");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_sstable_plain_reader_rejects() {
+        // A plain SSTable reader should fail on an encrypted file —
+        // the on-disk magic is the EncryptedFile magic, not the SSTable
+        // footer magic, and the file isn't laid out as plaintext.
+        let dir = temp_dir("enc_sst_plain_reader");
+        let path = dir.join("000001.ndb");
+
+        let mut w = SSTableWriter::create_with_cipher(&path, Some(test_cipher())).unwrap();
+        for r in &enc_records() {
+            w.append(r).unwrap();
+        }
+        w.finish().unwrap();
+
+        let result = SSTableReader::open(&path);
+        assert!(
+            result.is_err(),
+            "plaintext reader must reject encrypted SSTable"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

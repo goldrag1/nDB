@@ -200,12 +200,16 @@ pub struct McpServer {
 impl McpServer {
     /// Open the database directory (creating it if missing) and prepare
     /// the server for a stdio loop.
+    ///
+    /// At-rest encryption is sourced from `NDB_ENC_KEY` — if set, the
+    /// engine encrypts new files (on create) or refuses to open unless
+    /// the marker fingerprint matches.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, McpError> {
         let path = path.as_ref();
         let engine = if path.exists() && path.join("CURRENT").exists() {
-            Engine::open(path)?
+            Engine::open_from_env(path)?
         } else {
-            Engine::create(path)?
+            Engine::create_from_env(path)?
         };
         Ok(Self {
             engine: Arc::new(Mutex::new(engine)),
