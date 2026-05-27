@@ -1,0 +1,22 @@
+[package]
+name         = "ndb-query"
+description  = "nDB query-language lexer + parser (text → name-based AST)"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+authors      = { workspace = true }
+repository   = { workspace = true }
+license      = { workspace = true }
+
+[lib]
+name = "ndb_query"
+path = "src/lib.rs"
+
+[dependencies]
+ndb-engine = { path = "../ndb-engine" }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+
+[lints]
+workspace = true

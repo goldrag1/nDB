@@ -10,6 +10,7 @@ members = [
     "crates/ndb-arrow",
     "crates/ndb-index-vector-hnsw",
     "crates/ndb-client-rust",
+    "crates/ndb-query",
 ]
 
 [workspace.package]
