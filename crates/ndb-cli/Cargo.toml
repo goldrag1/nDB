@@ -13,7 +13,10 @@ name = "ndb"
 path = "src/main.rs"
 
 [dependencies]
-serde_json = { workspace = true }
+ndb-client-rust = { path = "../ndb-client-rust" }
+ndb-engine      = { path = "../ndb-engine" }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
 
 [lints]
 workspace = true

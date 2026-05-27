@@ -585,7 +585,22 @@ dependencies = [
 name = "ndb-cli"
 version = "1.1.0"
 dependencies = [
+ "ndb-client-rust",
+ "ndb-engine",
+ "serde",
  "serde_json",
+]
+
+[[package]]
+name = "ndb-client-rust"
+version = "1.1.0"
+dependencies = [
+ "ndb-engine",
+ "ndb-server",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
 ]
 
 [[package]]

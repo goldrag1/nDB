@@ -9,6 +9,7 @@ members = [
     "crates/ndb-mcp-server",
     "crates/ndb-arrow",
     "crates/ndb-index-vector-hnsw",
+    "crates/ndb-client-rust",
 ]
 
 [workspace.package]

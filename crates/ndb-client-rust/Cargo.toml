@@ -1,0 +1,26 @@
+[package]
+name         = "ndb-client-rust"
+description  = "nDB Rust client — HTTP wire-protocol library for nDB applications (§17.1)"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+authors      = { workspace = true }
+repository   = { workspace = true }
+license      = { workspace = true }
+
+[lib]
+name = "ndb_client"
+path = "src/lib.rs"
+
+[dependencies]
+ndb-engine = { path = "../ndb-engine" }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+
+[dev-dependencies]
+ndb-server = { path = "../ndb-server" }
+uuid       = { workspace = true }
+
+[lints]
+workspace = true

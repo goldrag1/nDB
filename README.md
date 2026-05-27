@@ -15,7 +15,8 @@ for the byte-level details.
 |-----------------------------|--------------------------------------------------------------------------------------|
 | `ndb-engine`                | Storage core: records, WAL, SSTable, MANIFEST, memtable, MVCC, compaction, indexes, validation, AES-GCM-256 at-rest encryption primitives. Library only. |
 | `ndb-server`                | Hand-rolled HTTP/1.1 server exposing the engine over JSON. TLS via rustls; ReBAC capability gating; .audit.jsonl. Binary `ndb-server`. |
-| `ndb-cli`                   | Command-line client. Talks to `ndb-server` over HTTP. Binary `ndb`.                  |
+| `ndb-client-rust`           | Reusable Rust client library (`ndb_client::Client`) — typed against the engine's wire shapes. |
+| `ndb-cli`                   | Command-line client over `ndb-client-rust`. Binary `ndb`.                            |
 | `ndb-mcp-server`            | Model Context Protocol bridge — exposes the engine to AI agents via stdio JSON-RPC, with the same ReBAC + audit-log surface as `ndb-server`. Binary `ndb-mcp-server`. |
 | `ndb-slicer`                | CPU projection + aggregation over `Engine::snapshot_iter` output.                    |
 | `ndb-renderer`              | Text/TSV/CSV table output for `ndb-slicer` results.                                  |
