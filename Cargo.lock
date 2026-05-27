@@ -570,7 +570,7 @@ checksum = "6b947ae49db0d222b1dbc6b113ce7248a3fc3a6ca21b696717bfc000ba4484d8"
 
 [[package]]
 name = "ndb-arrow"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -583,14 +583,14 @@ dependencies = [
 
 [[package]]
 name = "ndb-cli"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "ndb-engine"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "aes-gcm",
  "base64",
@@ -604,7 +604,7 @@ dependencies = [
 
 [[package]]
 name = "ndb-index-vector-hnsw"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "instant-distance",
  "ndb-engine",
@@ -612,7 +612,7 @@ dependencies = [
 
 [[package]]
 name = "ndb-mcp-server"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "ndb-engine",
  "ndb-server",
@@ -624,7 +624,7 @@ dependencies = [
 
 [[package]]
 name = "ndb-renderer"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "ndb-engine",
  "ndb-slicer",
@@ -632,7 +632,7 @@ dependencies = [
 
 [[package]]
 name = "ndb-server"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "ndb-engine",
  "rcgen",
@@ -646,7 +646,7 @@ dependencies = [
 
 [[package]]
 name = "ndb-slicer"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "ndb-engine",
 ]
