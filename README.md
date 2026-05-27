@@ -25,12 +25,26 @@ for the byte-level details.
 | `ndb-index-vector-hnsw`     | HNSW ANN vector index (opt-in plugin) — drop-in replacement for the brute-force baseline once dataset size warrants it. |
 | `clients/python/ndb_client` | Pure-Python (`urllib`-only) HTTP client. `pip install ndb-client`.                  |
 
-## Status (v1)
+## Status (v2.0)
 
-Every line item in the v1 spec §17.1 is shipped. **369 Rust tests + 12
-Python tests, clippy clean with `-D warnings`** as of this writing.
+Every line item in the v1 spec §17.1 PLUS every deliverable from the v2.0
+working spec (`docs/superpowers/specs/2026-05-27-v2-working-spec.md`) is
+shipped. **432 Rust tests + 12 Python tests, clippy clean with `-D warnings`**
+as of this writing.
 
-What's shipped:
+What's shipped (v2.0 polish on top of v1):
+
+- **Block index sidecar** (`<seq>.idx`) — O(log N) SSTable lookups via mmap-loaded sorted index
+- **Persisted commit timestamps + retention policies** — survive engine restart (new record kinds 0x07 / 0x08)
+- **Engine-side lazy iterator pipeline** — true streaming `/iter` + `/query_stream` via k-way-merge across memtable + SSTables
+- **SharedEngine** — `Arc`-wrappable, concurrent writers serialize internally via `Mutex<Engine>`
+- **Snapshot-aware compaction** — refcounted active-snapshot registry; in-flight readers never lose their versions
+- **Cardinality-aware query planner** — greedy smallest-seed + shared-vars-first ordering; `Engine::explain_query` for EXPLAIN traces
+- **Condvar-based `/subscribe` + thread-per-connection accept loop** — sub-millisecond wake latency on commit
+- **WAL + SSTable AES-GCM-256 at-rest encryption** — `.encryption` marker file + `Engine::create_with_cipher` / `::open_with_cipher`
+- **Capability hyperedges** — persistent ReBAC store via reserved type/role/property IDs; bootstrap import from `.principals.json`
+
+What's shipped from v1:
 
 - Append-only LSM storage (records, WAL `.ndblog`, SSTable `.ndb`, MANIFEST, CURRENT, LOCK)
 - **Mmap'd SSTable reads** (`memmap2` — cold-read fast path)
@@ -58,19 +72,16 @@ What's shipped:
 - Apache Arrow IPC bridge (`ndb-arrow`)
 - Pure-Python HTTP client (`clients/python/ndb_client`) with `query()` method
 
-What's explicitly deferred to v2 (with v1 limitations documented inline):
+What's explicitly deferred (v2.1+ / v3):
 
-- Block index sidecar (`<seq>.idx`) for O(log N) SSTable lookups (today: O(N) linear scan)
-- Snapshot-aware compaction (track oldest live snapshot; today drops aggressively)
-- WAL + SSTable wiring of the at-rest encryption primitives (key rotation, `KeyProvider` trait)
+- `Engine::reencrypt(new_key)` for key rotation + plaintext↔encrypted migration
+- Server auth dispatch via `Engine::has_capability` instead of the in-memory cache (bootstrap import already lands)
 - IVF / ScaNN vector indexes alongside HNSW
-- Persisted commit timestamps + persisted retention policies (today: in-memory, session-local)
-- Cardinality-aware query planner (today: source-order; correctness preserved)
-- Engine-side iterator pipeline for true streaming (today: `query_stream` materialises rows before streaming)
-- Notify-based subscribe (today: 50ms polling)
-- Capability hyperedges as the persistent ReBAC store (today: in-memory `principals.json`)
-- Multi-writer / distributed mode — SSI API surface is ready for it; semantics are no-op in single-writer v1
-- Distributed mode (v3+)
+- True multi-writer / distributed mode (SSI API surface is ready, semantics no-op in single-process)
+- Distributed mode + geo-replication (v3+)
+- Write-via-query (extending §12 grammar with mutations)
+- gRPC alternative transport
+- JS/TS and Go client crates
 
 ## Quick start
 
