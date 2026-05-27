@@ -31,6 +31,7 @@ pub mod codec;
 pub mod error;
 pub mod id;
 pub mod record;
+pub mod sstable;
 pub mod value;
 pub mod wal;
 
@@ -40,6 +41,11 @@ pub use record::{
     ENVELOPE_OVERHEAD, EntityRecord, FORMAT_VERSION, FORMAT_VERSION_MAX_SUPPORTED, HyperEdgeRecord,
     PropertyKeyRecord, Record, RecordKind, RoleNameRecord, TombstoneRecord, TypeNameRecord,
     peek_record_kind, peek_record_size,
+};
+pub use sstable::{
+    SSTABLE_EXTENSION, SSTABLE_FOOTER_SIZE, SSTABLE_FORMAT_VERSION,
+    SSTABLE_FORMAT_VERSION_MAX_SUPPORTED, SSTABLE_MAGIC, SSTableError, SSTableFooter, SSTableIter,
+    SSTableKey, SSTableReader, SSTableWriter, read_footer,
 };
 pub use value::Value;
 pub use wal::{WAL_EXTENSION, WalReadError, WalReader, WalRecovery, WriteAheadLog};
