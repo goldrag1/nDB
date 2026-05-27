@@ -5,9 +5,10 @@
     clippy::cast_sign_loss,
 )]
 //!
-//! Seeds a richer biology dataset (proteins + genes + pathways +
-//! papers + authors with multi-arity hyperedges between them), then
-//! stands up two HTTP servers on localhost:
+//! Seeds a structural-biology dataset (proteins + their encoding
+//! genes + pathways + multi-subunit protein complexes + per-residue
+//! entities + structural-motif hyperedges), then stands up two HTTP
+//! servers on localhost:
 //!
 //! - `127.0.0.1:8742` — `ndb-server` (with CORS) speaking the v2.1
 //!   wire protocol. The SPA fetches `/iter` and posts to `/commit`.
@@ -40,28 +41,25 @@ mod residues;
 // Reserved demo IDs — kept in lockstep with the TYPES table in
 // docs/explorer/index.html. Changing one without the other will
 // detach the SPA's type-name labels from the engine's actual data.
+//
+// IDs 4 (paper), 5 (author), 102 (cites), 103 (authored) were used by
+// the v2.1 literature-graph showcase but are NOT seeded in v2.2 — the
+// project re-focused on structural biology. The IDs remain reserved
+// so any earlier database on disk still round-trips through `/iter`.
 const T_PROTEIN: u32 = 1;
 const T_GENE: u32 = 2;
 const T_PATHWAY: u32 = 3;
-const T_PAPER: u32 = 4;
-const T_AUTHOR: u32 = 5;
 const T_COMPLEX: u32 = 100;
 const T_ENCODES: u32 = 101;
-const T_CITES: u32 = 102;
-const T_AUTHORED: u32 = 103;
 
 const ROLE_MEMBER: u32 = 10;
 const ROLE_GENE: u32 = 11;
 const ROLE_PROTEIN: u32 = 12;
-const ROLE_PAPER: u32 = 13;
-const ROLE_AUTHOR: u32 = 14;
-const ROLE_ENTITY: u32 = 15;
 const ROLE_PATHWAY: u32 = 16;
 
 const PROP_NAME: u32 = 30;
 const PROP_FUNCTION: u32 = 31;
 const PROP_YEAR: u32 = 32;
-const PROP_TITLE: u32 = 33;
 const PROP_PATHWAY_NAME: u32 = 34;
 // AlphaFold-derived properties (v2.2 §A — confidence overlay).
 const PROP_PLDDT_MEAN: u32 = 36;
@@ -264,42 +262,6 @@ fn seed(engine: &mut Engine) {
         path_ids.push((eid, p));
     }
 
-    // Authors (6).
-    let authors = vec!["Vogelstein", "Hartwell", "Nurse", "Hunt", "Klionsky", "Levine"];
-    let mut a_ids: Vec<(EntityId, &str)> = Vec::new();
-    for a in &authors {
-        let eid = EntityId::now_v7();
-        commit_entity(
-            engine,
-            eid,
-            T_AUTHOR,
-            vec![(PROP_NAME, Value::String((*a).into()))],
-        );
-        a_ids.push((eid, a));
-    }
-
-    // Papers (4) — each linking N authors.
-    let papers: Vec<(&str, Vec<&str>)> = vec![
-        ("p53 surveillance", vec!["Vogelstein"]),
-        ("autophagy in cancer", vec!["Klionsky", "Levine"]),
-        ("cell-cycle Nobel", vec!["Hartwell", "Nurse", "Hunt"]),
-        ("BRCA1 DNA repair", vec!["Vogelstein"]),
-    ];
-    let mut paper_ids: Vec<(EntityId, &str, Vec<&str>)> = Vec::new();
-    for (title, authors_of) in &papers {
-        let eid = EntityId::now_v7();
-        commit_entity(
-            engine,
-            eid,
-            T_PAPER,
-            vec![
-                (PROP_TITLE, Value::String((*title).into())),
-                (PROP_NAME, Value::String((*title).into())),
-            ],
-        );
-        paper_ids.push((eid, title, authors_of.clone()));
-    }
-
     // ─── Hyperedges ───────────────────────────────────────────────
     let p_by_name = |n: &str| -> EntityId {
         p_ids.iter().find(|(_, name, _)| *name == n).map_or_else(
@@ -312,12 +274,6 @@ fn seed(engine: &mut Engine) {
             .iter()
             .find(|(_, name, _)| *name == n)
             .and_then(|(_, _, m)| *m)
-    };
-    let a_by_name = |n: &str| -> EntityId {
-        a_ids.iter().find(|(_, name)| *name == n).map_or_else(
-            || panic!("missing author {n}"),
-            |(eid, _)| *eid,
-        )
     };
 
     // 6 protein complexes (arity 2-4).
@@ -376,42 +332,6 @@ fn seed(engine: &mut Engine) {
             ],
             vec![],
         );
-    }
-
-    // 4 paper→author "authored" hyperedges (arity 2-4).
-    for (paper_eid, title, authors_of) in &paper_ids {
-        let mut roles: Vec<(RoleId, EntityId)> =
-            vec![(RoleId::new(ROLE_PAPER), *paper_eid)];
-        for a in authors_of {
-            roles.push((RoleId::new(ROLE_AUTHOR), a_by_name(a)));
-        }
-        commit_hyperedge(
-            engine,
-            T_AUTHORED,
-            roles,
-            vec![(PROP_TITLE, Value::String((*title).into()))],
-        );
-    }
-
-    // A few "cites" hyperedges linking papers to proteins they
-    // mention. Demonstrates cross-type N-ary edges.
-    let cites: Vec<(&str, Vec<&str>)> = vec![
-        ("p53 surveillance", vec!["P53", "MDM2", "ATM"]),
-        ("autophagy in cancer", vec!["LC3", "BECN1", "ATG7", "ULK1"]),
-        ("BRCA1 DNA repair", vec!["BRCA1", "BRCA2", "ATM"]),
-    ];
-    for (title, proteins_mentioned) in &cites {
-        let paper_eid = paper_ids
-            .iter()
-            .find(|(_, t, _)| t == title)
-            .map(|(e, _, _)| *e)
-            .expect("paper");
-        let mut roles: Vec<(RoleId, EntityId)> =
-            vec![(RoleId::new(ROLE_PAPER), paper_eid)];
-        for p in proteins_mentioned {
-            roles.push((RoleId::new(ROLE_ENTITY), p_by_name(p)));
-        }
-        commit_hyperedge(engine, T_CITES, roles, vec![]);
     }
 
     // ─── Residue-level dataset (v2.2 §C) ─────────────────────────
