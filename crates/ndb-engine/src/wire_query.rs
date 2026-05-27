@@ -189,21 +189,27 @@ pub struct RoleBinding {
     pub term: Term,
 }
 
-/// One property filter inside a pattern. RHS is always a literal at parse
-/// time (a variable binding to a property would be expressed by binding
-/// the property to a variable via a sub-clause, which v1 doesn't have —
-/// for now property filters in patterns are tight matches against literals).
+/// One property match inside a pattern. The RHS is a `Term`:
 ///
-/// More general property comparisons against variables live in the
-/// top-level `filter` (where-clause) tree, where both sides can be terms.
+/// - `term = Var { name }` + `op = Eq`: BIND — the variable is bound to
+///   the property value at match time. Used for `customer(name: ?n)`.
+/// - `term = Literal { value }` + `op = Eq`: equality FILTER. Used for
+///   `customer(region: "Vietnam")`.
+/// - `term = Literal { value }` + other `op`: ordered FILTER. The parser
+///   only emits `Eq` for v1; clients building the wire AST manually may
+///   emit other ops (e.g. for planner stress tests).
+/// - `term = Var { name }` + other `op`: ambiguous semantically; the
+///   executor treats it as `bind + comparison constraint`, but the
+///   parser doesn't produce this — variable-vs-variable / inequality
+///   filters go through the where-clause path per spec §5.7.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PropertyFilter {
     /// Property dictionary id (must be `≠ 0`).
     pub property_id: u32,
     /// Comparison operator.
     pub op: CmpOp,
-    /// Literal value to compare against.
-    pub value: JsonValue,
+    /// Right-hand side — variable (bind) or literal (filter).
+    pub term: Term,
 }
 
 /// Recursion modifier on a hyperedge pattern.
@@ -424,18 +430,34 @@ mod tests {
     }
 
     #[test]
-    fn property_filter_round_trips() {
+    fn property_filter_round_trips_literal_term() {
         let pf = PropertyFilter {
             property_id: 30,
             op: CmpOp::Eq,
-            value: lit_str("fever"),
+            term: lit_term(lit_str("fever")),
         };
         let s = serde_json::to_string(&pf).unwrap();
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();
         assert_eq!(v["property_id"], 30);
         assert_eq!(v["op"], "eq");
-        assert_eq!(v["value"]["tag"], "string");
-        assert_eq!(v["value"]["value"], "fever");
+        assert_eq!(v["term"]["kind"], "literal");
+        assert_eq!(v["term"]["value"]["tag"], "string");
+        assert_eq!(v["term"]["value"]["value"], "fever");
+        assert_eq!(round_trip(pf.clone()), pf);
+    }
+
+    #[test]
+    fn property_filter_round_trips_var_term() {
+        // `customer(name: ?n)` shape — bind variable to property value.
+        let pf = PropertyFilter {
+            property_id: 31,
+            op: CmpOp::Eq,
+            term: var("n"),
+        };
+        let s = serde_json::to_string(&pf).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["term"]["kind"], "var");
+        assert_eq!(v["term"]["name"], "n");
         assert_eq!(round_trip(pf.clone()), pf);
     }
 
@@ -461,7 +483,7 @@ mod tests {
             property_filters: vec![PropertyFilter {
                 property_id: 41,
                 op: CmpOp::Eq,
-                value: lit_str("Vietnam"),
+                term: lit_term(lit_str("Vietnam")),
             }],
         };
         let s = serde_json::to_string(&p).unwrap();

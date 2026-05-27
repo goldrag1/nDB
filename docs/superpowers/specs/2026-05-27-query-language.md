@@ -113,13 +113,15 @@ query           = [ "as" "of" snapshot_expr ]
 
 match_clause    = "match" pattern { pattern } ;
 
-pattern         = type_ref pattern_body [ self_bind ] ;
+pattern         = type_ref [ recursion_suffix ] pattern_body [ self_bind ] ;
 type_ref        = identifier ;
-pattern_body    = "(" [ binding_list ] ")" [ recursion_suffix ] ;
+pattern_body    = "(" [ binding_list ] ")" ;
 binding_list    = binding { "," binding } ;
 binding         = identifier ":" term ;
 self_bind       = "as" variable ;
 recursion_suffix= "*" | "+" | "?" | "{" integer "," integer "}" ;
+(* recursion_suffix comes BEFORE the pattern_body — matches §12.6 examples
+   like `contains*(parent: body_42, child: ?leaf)` *)
 
 where_clause    = "where" boolean_expr ;
 boolean_expr    = and_expr { "or" and_expr } ;
@@ -206,7 +208,10 @@ for clients that submit text.
       "type_id": 100,
       "self_var": "p",
       "property_filters": [
-        { "property_id": 30, "op": "eq", "value": {"tag":"string","value":"fever"} }
+        { "property_id": 30, "op": "eq",
+          "term": {"kind": "literal", "value": {"tag":"string","value":"fever"}} },
+        { "property_id": 31, "op": "eq",
+          "term": {"kind": "var", "name": "name"} }
       ]
     },
     {
@@ -257,7 +262,13 @@ for clients that submit text.
 - `self_var`: optional variable that binds the entity/hyperedge UUID.
 - `role_bindings`: hyperedges only; one per role with a term (var or literal).
 - `property_filters`: entities and hyperedges. `op` is one of
-  `eq` `ne` `lt` `le` `gt` `ge`.
+  `eq` `ne` `lt` `le` `gt` `ge`. The RHS is a `Term`:
+  - `term = Var { name }` + `op = Eq` → **bind**: variable receives the
+    property value at match time. Used for `customer(name: ?n)`.
+  - `term = Literal { value }` + `op = Eq` → equality **filter**. Used
+    for `customer(region: "Vietnam")`.
+  - `term = Literal { value }` + other op → ordered filter (clients
+    may emit; the parser only produces `Eq` in v1).
 - `recursion`: hyperedges only. `{"kind":"star"|"plus"|"optional"|"bounded",
   "min":N, "max":N, "max_depth":N}`. `max_depth` is the cycle-protection cap;
   defaults to 64; query may override via a future `max_depth N` clause (not in

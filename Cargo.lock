@@ -638,6 +638,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ndb-query"
+version = "1.2.0"
+dependencies = [
+ "ndb-engine",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "ndb-renderer"
 version = "1.2.0"
 dependencies = [
