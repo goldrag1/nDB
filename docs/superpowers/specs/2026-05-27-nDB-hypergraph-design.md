@@ -115,6 +115,8 @@ nDB ships as a small Rust engine plus a set of companion crates that compose int
 **Boundaries are strict.**
 
 - **The engine boundary is the wire protocol.** Apps in any language talk to the engine through it. The engine is shipped in Rust (for speed and memory safety) but the architecture is language-neutral.
+- **The engine exposes high-throughput primitives** (bulk batch reads, streaming cursors, change subscriptions, bulk write transactions) so that plugins — including future GPU plugins — can saturate hardware without per-record round trips. Concurrency: single-writer + batching + fully concurrent MVCC readers. See Section 13.3.
+- **Hardware-neutral plugins.** Engine compiles and runs without any GPU toolchain. GPU plugins (cuVS vector index, cuDF columnar aggregation, GPU slicers) ship as opt-in companion crates from v2 onward. See Section 16 roadmap.
 - **Primary storage** is the canonical record. It knows how to append assertions, retrieve them by ID, and compact per retention policies. It does not know about schema validation, indexes, slicers, or rendering as separate primitives — those are either built on top of it (schema, indexes) or downstream of it (slicers, renderers).
 - **Indexes are derived structures** consumed by the query planner. The engine ships a small mandatory set; additional indexes plug in via a stable `Index` trait (in-tree or out-of-tree). Schemas, slicers, and apps can all drive index creation.
 - **Schema is metadata hyperedges** stored alongside data. The engine's validation hooks read these and enforce per-type rules. Schema is not a separate primitive.
@@ -895,6 +897,46 @@ Typical record sizes: 5-arity approval hyperedge with 1 short string property �
 
 These belong in a focused Storage Implementation Spec rather than this architectural doc.
 
+### 11.5 On-disk file extensions and directory layout
+
+An nDB database is a **directory**, not a single file. SQLite's single-file model doesn't fit append-only LSM (compaction needs to atomically swap many files; tiering needs per-file granularity).
+
+| File / pattern | Extension | Purpose |
+|---|---|---|
+| `<seq>.ndb` | **`.ndb`** | SSTable — canonical record store (entities, hyperedges, metadata, tombstones, dictionaries) |
+| `<seq>.ndblog` | `.ndblog` | Write-ahead log (durability before SSTable flush) |
+| `MANIFEST-<seq>` | (none) | Current set of `.ndb` files at each LSM level (RocksDB convention) |
+| `CURRENT` | (none) | Pointer to active MANIFEST |
+| `LOCK` | (none) | File lock preventing concurrent process access |
+| `<seq>.bloom` | `.bloom` | Bloom filter for an `.ndb` file (optional) |
+| `<seq>.idx` | `.idx` | Block-level index within an `.ndb` file (optional) |
+
+Example layout:
+
+```
+mydb/
+├── CURRENT
+├── LOCK
+├── MANIFEST-000001
+├── 000001.ndb              # SSTable, level 0
+├── 000002.ndb              # SSTable, level 0
+├── 000003.ndb              # SSTable, level 1
+├── 000004.ndblog           # active WAL
+├── 000001.bloom
+└── 000003.idx
+```
+
+The `.ndb` extension is the brand-identifying mark for primary data files. Auxiliary files use conventional names. Wire protocol (JSON/JSONL) and disk storage (custom binary) are intentionally different — wire optimizes for interop and streaming; disk optimizes for density and access speed.
+
+Other file extensions used by nDB tooling:
+
+| Artifact | Extension |
+|---|---|
+| JSONL export / import | `.jsonl` |
+| Custom binary database dump | `.ndbdump` |
+| Parquet cold-tier archive (v2+) | `.parquet` |
+| nDB server / engine config | `.toml` or `.yaml` |
+
 ---
 
 ## 12. Query Language
@@ -1108,6 +1150,17 @@ trait Index {
 
 **Plugin-specific query APIs (aggregation pushdown).** Beyond the base `Index` trait, plugins may expose specialized query interfaces. Notably, the columnar index plugin may expose aggregation (`sum`, `count`, `avg`, `min`, `max`, `group_by`) as plugin-specific methods. The slicer crate detects when a query's aggregation can be served by a registered plugin and routes it there; otherwise falls back to streaming raw rows from the engine and aggregating in the slicer's memory. This preserves the "engine retrieves, slicer computes" principle (Section 7.6) while keeping aggregation-heavy workloads fast.
 
+**Hardware-neutral plugins.** The `Index` trait does not prescribe hardware. CPU, GPU, FPGA, or future accelerators can all back an index implementation. Different plugin crates target different stacks:
+
+- `nDB-index-vector-cpu` (CPU-only HNSW, no GPU dependency)
+- `nDB-index-vector-cuda` (NVIDIA GPU via cuVS / FAISS-GPU)
+- `nDB-index-vector-rocm` (AMD GPU via ROCm)
+- `nDB-index-vector-metal` (Apple Silicon)
+- `nDB-index-columnar-cpu` (CPU columnar aggregation via Arrow)
+- `nDB-index-columnar-cuda` (GPU aggregation via cuDF / RAPIDS)
+
+The engine compiles and runs without any GPU toolchain. GPU plugins are opt-in dependencies. Apps choose hardware-flavored plugin crates based on their deployment environment. The cost-estimate API (`cost_estimate`) lets the query planner pick whichever plugin reports lowest cost — GPU plugins will report low cost for large workloads, CPU plugins for small ones; planner dispatches automatically.
+
 **Open sub-questions** (deferred to focused index spec):
 
 - Exact plugin trait signature (parameters, lifecycle hooks, async vs sync)
@@ -1117,7 +1170,52 @@ trait Index {
 
 ### 13.3 Concurrency model
 
-Open: thread-per-connection, async runtime (Tokio), green threads, work-stealing. Default leaning is async + Tokio given Rust ecosystem maturity, but decision deferred until storage layout is settled (concurrency model is tightly coupled to lock granularity in the storage core).
+**Decided.** nDB uses **single-writer + batching** with **lock-free concurrent readers** for v1. Async runtime via **Tokio**.
+
+**Write path:**
+- One physical writer thread sequentializes all writes
+- Writes from many client threads queue and are batched into the memtable
+- Each batch becomes one transaction with sequential `tx_id_assert` assignment
+- WAL append + memtable insertion happen on this thread
+- Throughput: 10K+ writes/second per writer thread is the established RocksDB benchmark; nDB targets the same
+
+**Read path:**
+- Fully concurrent — no read locks block other reads
+- MVCC snapshot isolation: each reader holds an immutable snapshot ID, sees data as-of that point
+- Many threads can hold different snapshots simultaneously
+- SSTable files are mmap'd; multiple processes/threads can read them in parallel
+- Background compaction does not block reads (LSM property)
+
+**Why single-writer-with-batching for v1:**
+- Proven in production: RocksDB, LevelDB, Datomic all use this. Powers Facebook, LinkedIn, MyRocks, CockroachDB's storage layer.
+- Sequentializing writes eliminates write-conflict resolution at the LSM layer
+- Throughput is high anyway because of batching
+- Multi-writer requires distributed consensus or fine-grained locking — both belong in later versions
+
+**Multi-writer deferred to v3+** — revisit when distribution arrives (Section 16.3). Per-shard writers fit naturally with sharding.
+
+**High-throughput plugin primitives (engine exposes from v1):**
+
+```rust
+// Bulk batch read — for GPU plugins, columnar pipelines, AI ingest
+fn read_batch(&self, snapshot: SnapshotId, predicate: &Predicate,
+              batch_size: usize) -> impl Iterator<Item = Vec<Record>>;
+
+// Streaming query — for slicers consuming large result sets
+fn query_stream(&self, snapshot: SnapshotId, ast: &QueryAst)
+              -> impl Stream<Item = Record>;
+
+// Change subscription — for incremental consumers
+fn subscribe(&self, since_tx_id: u64) -> impl Stream<Item = Change>;
+
+// Bulk write transaction — for high-throughput ingest
+fn write_batch(&self, records: Vec<Record>) -> Result<TxId>;
+```
+
+These batch APIs are mandatory v1 engine primitives. Without them, high-throughput plugins (especially GPU) must do per-record round trips, which dominates PCIe / IPC latency.
+
+**Pinned memory hints (v2+, for GPU plugins):**
+The engine will expose an optional pinned (page-locked) memory pool API in v2. GPU plugins request pinned regions for fast CPU→GPU PCIe transfer. CPU plugins ignore the API. Hardware-neutral plugin design.
 
 ### 13.4 Error handling
 
@@ -1222,9 +1320,20 @@ Goal: usable single-node production engine for one workload (AI reasoning OR ERP
 - Layer 2 (type assertions, opt-in per type)
 - Strict-write and soft-read enforcement modes
 
+**Engine primitives that prepare for future high-throughput plugins (GPU, etc.):**
+- Bulk batch read API (`read_batch(snapshot, predicate, batch_size)`)
+- Streaming query cursors (`query_stream`)
+- Change subscription (`subscribe`)
+- Bulk write transactions (`write_batch`)
+- Mmap'd SSTable files (zero-copy possible)
+- Single-writer + batching; lock-free concurrent readers
+- Hardware-neutral `Index` trait (CPU now, GPU in v2)
+
+These primitives ship in v1 even though no GPU plugins exist yet. They are the foundation that makes v2 GPU plugins viable without engine changes.
+
 **Companion crates shipped alongside the engine:**
 
-- `nDB-slicer` v1 — projection API + common projections (filter, group-by, aggregate)
+- `nDB-slicer` v1 — projection API + common projections (filter, group-by, aggregate) — CPU only
 - `nDB-renderer` v1 — **2D dimension renderers**:
   - Table (rows + sortable/filterable columns)
   - 2D scatter (x, y position)
@@ -1238,16 +1347,25 @@ Goal: usable single-node production engine for one workload (AI reasoning OR ERP
 - One real-world pilot application running in production
 - Comparative benchmark vs Neo4j published
 - Documentation site live
+- Batch APIs validated by a high-throughput ingest benchmark (10K+ writes/sec, 100K+ reads/sec)
 
-### 16.2 v2.0 — Analytics + AI Workloads
+### 16.2 v2.0 — Analytics + AI Workloads + first GPU support
 
-Goal: viable for AI / GraphRAG workloads and slicer-heavy analytics.
+Goal: viable for AI / GraphRAG workloads and slicer-heavy analytics, with GPU acceleration available for vector and aggregation workloads.
 
-**Indexes added (in-tree plugins):**
-- Columnar per-role
+**Indexes added (CPU in-tree plugins):**
+- Columnar per-role (CPU; Apache Arrow-based)
 - Slicer materialized views (declarative, incremental update)
 - Full-text index (Tantivy wrapper, opt-in per type)
 - Vector index (HNSW or IVF — decision in dedicated v2 spec)
+
+**GPU support arrives (CUDA / NVIDIA first):**
+
+- `nDB-index-vector-cuda` — GPU vector index (cuVS or FAISS-GPU backend); 10-100× speedup for ANN search on large embedding sets
+- `nDB-index-columnar-cuda` — GPU columnar aggregation (cuDF / RAPIDS backend); 5-30× speedup for `sum`/`avg`/`group_by` over millions of rows
+- `nDB-slicer-cuda` — GPU-accelerated slicer compute crate (math expressions, broadcast ops, sort) on GPU buffers
+- Engine API additions: **pinned-memory pool** for fast CPU↔GPU PCIe transfer (opt-in; CPU plugins ignore it)
+- Engine API additions: **Arrow IPC buffer access** for zero-copy interop with cuDF / Polars / DuckDB
 
 **Schema:**
 - Layer 3 (constraints + validation per type)
@@ -1260,22 +1378,24 @@ Goal: viable for AI / GraphRAG workloads and slicer-heavy analytics.
   - Sankey (multi-stage flow)
   - Network / force-directed graph (renders the hyperedge structure directly)
   - Heatmap (categorical x, y + intensity)
-- `nDB-slicer` v2 — slicer presets per entity / hyperedge type
+- `nDB-slicer` v2 — slicer presets per entity / hyperedge type (CPU path)
 - `nDB-client-python`, `nDB-client-js` — wire-protocol clients for AI / web ecosystems
 
 **Operational:**
 - LLM integration patterns documented (GraphRAG, agent context)
 - Comparative benchmarks vs TypeDB + TerminusDB published
+- GPU plugin benchmarks vs CPU plugin paths published (so apps can decide)
 
 **Success criteria:**
 - 100M hyperedges, sub-second slicer aggregation
 - Two real-world pilot applications across different target domains
-- Vector index integration validated with at least one AI workload
+- Vector index integration validated with at least one AI workload (one CPU pilot + one GPU pilot)
 - Schema Layer 3 validated with an ERP pilot
+- GPU plugin path validated: at least one production user running `nDB-index-vector-cuda` with 10× speedup over CPU vector index for the same workload
 
-### 16.3 v3.0 — Distribution + Ecosystem
+### 16.3 v3.0 — Distribution + Ecosystem + cross-platform GPU
 
-Goal: differentiated from competitors, ready for broader adoption.
+Goal: differentiated from competitors, ready for broader adoption. GPU coverage extends beyond NVIDIA.
 
 **Schema:**
 - Layer 4 (ontology + inference)
@@ -1283,6 +1403,15 @@ Goal: differentiated from competitors, ready for broader adoption.
 **Distribution:**
 - Read replicas (eventually consistent reads)
 - Federation: linking multiple nDB instances via cross-reference resolution
+- Multi-writer evaluation (revisit single-writer + batching decision if benchmarks demand)
+
+**GPU coverage broadens:**
+
+- `nDB-index-vector-rocm` — AMD GPU (ROCm) vector index
+- `nDB-index-vector-metal` — Apple Silicon vector index
+- `nDB-index-vector-wgpu` — cross-platform GPU via WebGPU (best-effort, slower than vendor-native)
+- `nDB-index-columnar-rocm`, `nDB-index-columnar-metal` — corresponding columnar plugins
+- Performance parity-tested across NVIDIA / AMD / Apple
 
 **Companion crates added in v3:**
 
@@ -1303,6 +1432,7 @@ Goal: differentiated from competitors, ready for broader adoption.
 - At least one community-contributed plugin in production
 - Federation working across 2+ instances in a real deployment
 - Plugin API documentation site
+- GPU plugin parity validated across at least 2 GPU stacks (CUDA + ROCm OR CUDA + Metal)
 
 ### 16.4 v4.0+ — Distributed + High-Dimensional Renderers (future)
 
