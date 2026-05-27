@@ -1,3 +1,101 @@
+## Session 2026-05-27 (eighth turn) — v2.1.0 shipped + v2.2 interactive explorer preview
+
+After v2.0 closed, this turn:
+
+1. **Wrote the v2.1 working spec** (`2026-05-27-v2-1-working-spec.md`),
+   then expanded it with Sprint 4 (N-dim renderers) at user request.
+2. **Shipped all 12 v2.1 deliverables** end-to-end (§2.1–§2.12).
+   Tag `v2.1.0` pushed, GitHub release created at
+   `https://github.com/goldrag1/nDB/releases/tag/v2.1.0`.
+3. **Wrote `docs/v2.1-demo.html`** — single self-contained file
+   demoing pivot + parallel coords + hypergraph diagram + slicer
+   percentiles on a seeded biology dataset. Verified end-to-end via
+   headless Chromium.
+4. **Built the v2.2 explorer preview** — interactive 3D
+   force-directed hypergraph with drag/rotate/zoom, live editing via
+   `/commit`, signal-flow particle animation lit by node selection.
+   Required adding opt-in CORS to `ndb-server` (`with_cors_origin("*")`
+   + streaming `HeaderInjector`). Both servers spawn from one example
+   binary `crates/ndb-renderer/examples/v22_explorer.rs`.
+
+### Final commits this turn
+
+| SHA | Subject |
+|---|---|
+| `fe63273` | feat(engine): cardinality-aware query planner (v2.0 #22) |
+| `808afc4` | feat(engine): WAL + SSTable at-rest encryption (v2.0 #24) |
+| `b39e906` | feat(server): thread-per-connection accept loop (v2.1) |
+| `cb6760c` | feat(engine,server): capability hyperedges as persistent ReBAC (v2.0 #25) |
+| `ae85c93` | docs: README v2.0 status + session-last close |
+| `8b92922` | spec(v2.1): working spec — finish v2.0 + analytics polish |
+| `c6785cc` | spec(v2.1): fold Sprint 4 — N-dim renderers |
+| `d18bf8d` | feat(engine): Engine::reencrypt — key rotation (v2.1 §2.1) |
+| `1234371` | feat(server): auth dispatch via Engine::has_capability (v2.1 §2.2) |
+| `dde2a51` | feat(slicer): percentile aggregates with R-7 (v2.1 §2.3) |
+| `8b20df0` | feat(slicer): HAVING post-aggregate filter (v2.1 §2.4) |
+| `20cdfff` | feat(slicer): time-bucket binning (v2.1 §2.5) |
+| `ac71445` | feat(slicer): multi-column sort (v2.1 §2.6) |
+| `983c188` | feat(renderer): GFM Markdown table renderer (v2.1 §2.7) |
+| `21da368` | feat(renderer): JSON-lines renderer (v2.1 §2.8) |
+| `a2c7f6c` | feat(renderer): HTML table renderer (v2.1 §2.9) |
+| `d5c2fb4` | feat(renderer): pivot table renderer (v2.1 §2.10) |
+| `a4a1a42` | feat(renderer): parallel coordinates renderer (v2.1 §2.11) |
+| `3d78d57` | feat(renderer): hypergraph diagram + FR layout (v2.1 §2.12) |
+| `3d497c2` | docs: interactive v2.1 demo HTML |
+| `f545bbb` | feat(server): opt-in CORS for v2.2 explorer |
+| `c359a16` | feat(explorer): v2.2 3D interactive hypergraph SPA + signal-flow |
+
+### Tests
+
+432 → 484 → still 23 result-groups green at session close. Clippy
+clean throughout. v2.2 explorer adds no engine tests (the example
+is the integration test).
+
+### Bugs caught + fixed inline this turn
+
+1. **Cardinality-tied planner test was flaky** — added a real
+   differentiator (Vietnam customers count 1 vs 5 sales orders type
+   count) so the seed is unambiguous.
+2. **Engine encryption tests deadlocked under parallel runs** —
+   `Engine::create`/`open` originally consulted `NDB_ENC_KEY` env
+   directly, racing parallel non-encryption tests that also called
+   `create`. Refactored to take explicit `Option<&Cipher>`; env-aware
+   wrappers `create_from_env` / `open_from_env` cover the server
+   path. Tests use explicit ciphers and don't touch env.
+3. **`/iter` records use kind `hyper_edge` not `hyperedge`** —
+   discovered while wiring the explorer's `buildGraphFromRecords`
+   parser. snake_case rename of `HyperEdge`. Same fix in the
+   `addHyperedge` commit payload.
+4. **HeaderInjector double-ACAO bug** — OPTIONS preflight handler
+   emitted its own `Access-Control-Allow-Origin` AND the injector
+   added another → browser refused the `*, *` value. Injector now
+   skips when an ACAO header is already present in the buffered
+   header block.
+
+### Decision log (v2.2 explorer)
+
+| Concern | Decision |
+|---|---|
+| 3D library | `3d-force-graph@1.73.4` via unpkg CDN. Native drag/rotate/zoom, supports directional particles for signal-flow viz. |
+| Server architecture | One Rust binary spawning two threads: ndb-server on :8742, static HTTP server on :9876. No npm, no bundler. |
+| CORS strategy | Server `with_cors_origin("*")`; only for localhost-only explorer use. Production must terminate CORS at a reverse proxy. |
+| Hyperedge → graph reduction | Each hyperedge becomes a synthetic centroid node + N binary links to its role-fillers (bipartite reduction). 3d-force-graph handles native binary links; hyperedge nodes are visually grey to distinguish from entities. |
+| Signal flow scope | Click an entity → light up every link of every hyperedge it participates in (radiating signal). Click a hyperedge → just that edge's links. Background click clears. |
+
+### Next session
+
+See `.multi-session/next-session-alphafold.md` for the full prompt.
+Four deliverables:
+
+  A. Curated AlphaFold pLDDT confidence overlay (~½d)
+  B. Live AlphaFold-DB lookup via proxy (~1-2d)
+  C. Residue-level hypergraph for ~5 famous proteins (~2-3d)
+  D. 3D protein-folding renderer via NGL Viewer + nDB overlay (~3-5d)
+
+Tag `v2.2.0` after all four ship.
+
+---
+
 ## Session 2026-05-27 (seventh turn) — v2.0 COMPLETE: all 9 deliverables shipped
 
 Picked up the four remaining v2.0 items after the sixth turn closed
