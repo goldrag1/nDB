@@ -245,6 +245,27 @@ class Client:
         parsed = _json.loads(resp.body)
         return list(parsed.get("entity_ids", []))
 
+    def query(self, request: Mapping[str, Any]) -> dict:
+        """``POST /query`` — execute a structured wire-AST query.
+
+        The ``request`` argument is a ``QueryRequest`` shape per §4 of
+        the query-language working spec — id-based AST with ``patterns``,
+        optional ``filter`` / ``as_of`` / ``limit``, and a ``returns``
+        list of variable names.
+
+        Returns the parsed ``QueryResponse`` dict::
+
+            {"columns": ["c", "n"],
+             "rows": [[{"tag":"uuid","value":"..."}, {"tag":"string","value":"Alice"}], ...],
+             "truncated": False}
+
+        The resolver step (text → AST, name → id) lives in the
+        ``ndb-query`` Rust crate; Python clients construct the id-based
+        AST directly for v1.
+        """
+        resp = self._request("POST", "/query", body=dict(request))
+        return _json.loads(resp.body)  # type: ignore[no-any-return]
+
     def property_range(
         self,
         type_id: int,

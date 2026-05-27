@@ -47,8 +47,8 @@ use std::time::Duration;
 use ndb_engine::{
     CommitRequest, CommitResponse, ErrorResponse, JsonRecord, JsonValue, LookupRequest,
     LookupResponse, PropertyLookupRequest, PropertyLookupResponse, PropertyRangeRequest,
-    PropertyRangeResponse, ReadResponse, TraverseHop, TraverseRequest, TraverseResponse,
-    VectorHit, VectorMetric, VectorSearchRequest, VectorSearchResponse,
+    PropertyRangeResponse, QueryRequest, QueryResponse, ReadResponse, TraverseHop, TraverseRequest,
+    TraverseResponse, VectorHit, VectorMetric, VectorSearchRequest, VectorSearchResponse,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -297,6 +297,19 @@ impl Client {
         let (status, resp) = self.post("/traverse", &body)?;
         let parsed: TraverseResponse = parse_2xx(status, &resp)?;
         Ok(parsed.entity_ids)
+    }
+
+    /// `POST /query` — execute a structured wire-AST query.
+    ///
+    /// The request is a [`QueryRequest`] (id-based; the resolver step
+    /// converting names → ids lives in `ndb-query` and is the caller's
+    /// responsibility for v1). The response includes the projected
+    /// columns, one row per result tuple, and a `truncated` flag if
+    /// `limit` capped the result.
+    pub fn query(&self, req: &QueryRequest) -> Result<QueryResponse, ClientError> {
+        let body = serde_json::to_vec(req).map_err(|e| ClientError::Parse(e.to_string()))?;
+        let (status, resp) = self.post("/query", &body)?;
+        parse_2xx(status, &resp)
     }
 
     /// `POST /property_range` — range query on `(type, property)`.

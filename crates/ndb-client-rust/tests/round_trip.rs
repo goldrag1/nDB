@@ -301,6 +301,85 @@ fn flush_and_compact_round_trip() {
 }
 
 #[test]
+fn query_round_trip_entity_pattern() {
+    use ndb_engine::{Pattern, PropertyFilter, QueryRequest, Term};
+
+    const TYPE_CUSTOMER: u32 = 100;
+    const PROP_NAME: u32 = 30;
+    const PROP_REGION: u32 = 31;
+
+    let dir = temp_dir("query");
+    let server = Arc::new(Server::open(&dir).unwrap());
+    {
+        let e = server.engine();
+        let mut e = e.lock().unwrap();
+        for (name, region) in [
+            ("Alice", "Vietnam"),
+            ("Bob", "Singapore"),
+            ("Carol", "Vietnam"),
+        ] {
+            let mut txn = e.begin_write();
+            txn.put_entity(ndb_engine::EntityRecord {
+                entity_id: EntityId::now_v7(),
+                type_id: TypeId::new(TYPE_CUSTOMER),
+                tx_id_assert: ndb_engine::TxId::new(0),
+                tx_id_supersede: ndb_engine::TxId::ACTIVE,
+                properties: vec![
+                    (PropertyId::new(PROP_NAME), Value::String(name.into())),
+                    (PropertyId::new(PROP_REGION), Value::String(region.into())),
+                ],
+            });
+            txn.commit().unwrap();
+        }
+    }
+    let addr = spawn(&server, 2);
+    let cli = client(addr);
+
+    let req = QueryRequest {
+        as_of: None,
+        patterns: vec![Pattern::Entity {
+            type_id: TYPE_CUSTOMER,
+            self_var: Some("c".into()),
+            property_filters: vec![
+                PropertyFilter {
+                    property_id: PROP_REGION,
+                    op: ndb_engine::CmpOp::Eq,
+                    term: Term::Literal {
+                        value: JsonValue::String {
+                            value: "Vietnam".into(),
+                        },
+                    },
+                },
+                PropertyFilter {
+                    property_id: PROP_NAME,
+                    op: ndb_engine::CmpOp::Eq,
+                    term: Term::Var { name: "n".into() },
+                },
+            ],
+        }],
+        filter: None,
+        returns: vec!["c".into(), "n".into()],
+        limit: None,
+    };
+    let resp = cli.query(&req).unwrap();
+    assert_eq!(resp.columns, vec!["c", "n"]);
+    assert_eq!(resp.rows.len(), 2);
+    assert!(!resp.truncated);
+    let names: std::collections::HashSet<String> = resp
+        .rows
+        .iter()
+        .filter_map(|r| match &r[1] {
+            JsonValue::String { value } => Some(value.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(names.contains("Alice"));
+    assert!(names.contains("Carol"));
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn http_error_carries_status_and_detail() {
     let dir = temp_dir("http_err");
     let server = Arc::new(Server::open(&dir).unwrap());
