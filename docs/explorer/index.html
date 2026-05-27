@@ -223,7 +223,7 @@
       <div class="pipeline">
         <span class="step" id="pipe-fetch">fetch AF-DB</span><span class="arrow">→</span>
         <span class="step" id="pipe-commit">commit entity</span><span class="arrow">→</span>
-        <span class="step" id="pipe-cache">cache CIF</span><span class="arrow">→</span>
+        <span class="step" id="pipe-cache">commit atoms</span><span class="arrow">→</span>
         <span class="step" id="pipe-render">render</span>
       </div>
       <div class="hint" id="pipe-explainer">
@@ -1760,6 +1760,69 @@ function updateModelComparison(node) {
         </div>
       </div>
     </div>
+    <div style="margin-top:12px">
+      <div class="head" style="color:#888;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Operational KPIs · ${escapeHtml(name)}</div>
+      <table style="width:100%;border-collapse:collapse;font-size:11px;line-height:1.45">
+        <thead>
+          <tr style="color:#888;text-align:left">
+            <th style="padding:3px 6px;border-bottom:1px solid #2b2b36;font-weight:600">KPI</th>
+            <th style="padding:3px 6px;border-bottom:1px solid #2b2b36;color:#f5a623;font-weight:600">mmCIF / PDBx</th>
+            <th style="padding:3px 6px;border-bottom:1px solid #2b2b36;color:#65CBF3;font-weight:600">nDB</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:4px 6px;color:#cfcfd6">Storage (this protein)</td>
+            <td style="padding:4px 6px">${((atomRows * 120 + 8000) / 1024).toFixed(0)} KB <span style="color:#888">(.cif: atom_site rows + categories)</span></td>
+            <td style="padding:4px 6px">${((ndbTotalRecords * 200) / 1024).toFixed(0)} KB est. <span style="color:#888">(per-record envelope + B-tree)</span></td>
+          </tr>
+          <tr>
+            <td style="padding:4px 6px;color:#cfcfd6">Schema units</td>
+            <td style="padding:4px 6px">~70 categories <span style="color:#888">(mmcif_pdbx_v50.dic, ~16 MB)</span></td>
+            <td style="padding:4px 6px">2 record kinds <span style="color:#888">(entity + hyperedge)</span></td>
+          </tr>
+          <tr>
+            <td style="padding:4px 6px;color:#cfcfd6">Add new relation type</td>
+            <td style="padding:4px 6px">extend dictionary + DBA migration <span style="color:#888">(joins, FKs)</span></td>
+            <td style="padding:4px 6px">1 line: <code>const T_FOO: u32 = N</code> <span style="color:#888">(no migration)</span></td>
+          </tr>
+          <tr>
+            <td style="padding:4px 6px;color:#cfcfd6">Max arity per record</td>
+            <td style="padding:4px 6px">2 (binary join only) <span style="color:#888">— N-ary needs reified rows</span></td>
+            <td style="padding:4px 6px">2³² − 1 <span style="color:#888">(4.3 billion fillers)</span></td>
+          </tr>
+          <tr>
+            <td style="padding:4px 6px;color:#cfcfd6">Index types built-in</td>
+            <td style="padding:4px 6px">B-tree on each indexed column <span style="color:#888">(via host RDBMS)</span></td>
+            <td style="padding:4px 6px">B-tree (property), adjacency, type-cluster, vector (HNSW), lookup-key</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 6px;color:#cfcfd6">Query language</td>
+            <td style="padding:4px 6px">none in mmCIF; SQL via host RDBMS</td>
+            <td style="padding:4px 6px">nDB query §12 — n-ary pattern match, recursive paths, time travel</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 6px;color:#cfcfd6">Concurrency / history</td>
+            <td style="padding:4px 6px">.cif is immutable; PDBx in RDBMS</td>
+            <td style="padding:4px 6px">MVCC + SSI built-in; <code>?snapshot=</code> point-in-time</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 6px;color:#cfcfd6">Cross-protein vocabulary</td>
+            <td style="padding:4px 6px"><span style="color:#888">none — needs a separate database</span></td>
+            <td style="padding:4px 6px">first-class hyperedges in the same store</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 6px;color:#cfcfd6">Million-protein query speed</td>
+            <td colspan="2" style="padding:4px 6px;color:#888">
+              <i>not benchmarked here — neither side. nDB design:
+              O(log N) SSTable lookups via block-index sidecar +
+              lazy k-way-merge iterator. A real benchmark is the
+              right next step.</i>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
     <div class="hint" style="margin-top:10px">
       <b>The relationship IS the record.</b> A catalytic triad is
       intrinsically 3-ary; an α-helix groups 16 residues; a complex
@@ -1768,8 +1831,7 @@ function updateModelComparison(node) {
       (<code>_struct_site</code>, <code>_struct_conf</code>,
       <code>_atom_site</code>, …). In nDB they're one hyperedge each
       — same shape, any arity, no schema migration to add new
-      relationship types. Adding "domain", "homolog of", "interacts
-      with"? Each is one new type_id, zero tables.
+      relationship types.
     </div>
   `;
 }
