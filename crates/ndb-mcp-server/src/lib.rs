@@ -779,6 +779,7 @@ mod tests {
         let server = McpServer::open(&dir).unwrap().with_principal(Principal {
             name: "read-only-bot".into(),
             capabilities: BTreeSet::from([Capability::Read, Capability::Iter]),
+            entity_id: None,
         });
         let resp = call(
             &server,
@@ -801,6 +802,7 @@ mod tests {
         let server = McpServer::open(&dir).unwrap().with_principal(Principal {
             name: "root".into(),
             capabilities: BTreeSet::from([Capability::Admin]),
+            entity_id: None,
         });
         let resp = call(
             &server,

@@ -862,6 +862,7 @@ fn principals_403_when_token_lacks_capability() {
         Principal {
             name: "alice-readonly".into(),
             capabilities: BTreeSet::from([Capability::Read, Capability::Iter]),
+            entity_id: None,
         },
     );
     let server = Arc::new(Server::open(&dir).unwrap().with_principals(p));
@@ -892,6 +893,7 @@ fn principals_admin_capability_overrides_others() {
         Principal {
             name: "root".into(),
             capabilities: BTreeSet::from([Capability::Admin]),
+            entity_id: None,
         },
     );
     let server = Arc::new(Server::open(&dir).unwrap().with_principals(p));
@@ -926,6 +928,7 @@ fn principals_health_open_even_without_token() {
         Principal {
             name: "alice".into(),
             capabilities: BTreeSet::from([Capability::Read]),
+            entity_id: None,
         },
     );
     let server = Arc::new(Server::open(&dir).unwrap().with_principals(p));
@@ -1012,6 +1015,7 @@ fn principals_load_from_disk() {
             Principal {
                 name: "disk-user".into(),
                 capabilities: BTreeSet::from([Capability::Iter]),
+            entity_id: None,
             },
         )]),
     };
@@ -1152,5 +1156,86 @@ fn principals_bootstrap_no_file_is_empty_registry() {
     let p = server.principals_for_test();
     assert!(p.principals.is_empty());
     drop(server);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn engine_backed_dispatch_revokes_capability_without_restart() {
+    // v2.1 §2.2 — capability revoked via engine commit takes effect on
+    // the very next request. No server restart.
+    use ndb_engine::{
+        HyperedgeId, PROP_ACTION, Record, Resolved, ROLE_SUBJECT, TYPE_CAPABILITY, TxId,
+    };
+
+    let dir = temp_dir("auth-engine-dispatch");
+    std::fs::create_dir_all(&dir).unwrap();
+    let principals_json = serde_json::json!({
+        "principals": {
+            "alice-token": { "name": "Alice", "capabilities": ["iter"] }
+        }
+    });
+    std::fs::write(
+        dir.join(".principals.json"),
+        serde_json::to_string_pretty(&principals_json).unwrap(),
+    )
+    .unwrap();
+
+    let (server, n_imported) = Server::open(&dir)
+        .unwrap()
+        .with_principals_bootstrapped()
+        .unwrap();
+    assert_eq!(n_imported, 1);
+
+    // Sanity: cache carries an entity_id (engine-backed path).
+    let alice_eid = server
+        .principals_for_test()
+        .principals
+        .get("alice-token")
+        .and_then(|p| p.entity_id)
+        .expect("entity_id populated by bootstrap");
+
+    let server = Arc::new(server);
+    let addr = spawn_server(Arc::clone(&server), 2);
+
+    // First request — capability present.
+    let req_with_token = b"GET /iter HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer alice-token\r\nConnection: close\r\n\r\n";
+    let resp = raw_request(addr, req_with_token);
+    assert_eq!(resp.status, 200, "first /iter must succeed");
+
+    // Revoke alice's "iter" capability — find the hyperedge incident on
+    // alice with PROP_ACTION="iter" and commit a tombstone for it.
+    {
+        let eng_arc = server.engine();
+        let mut eng = eng_arc.lock().unwrap();
+        let snap = TxId::new(eng.manifest().last_tx_id);
+        let edges: Vec<HyperedgeId> = eng.hyperedges_for_entity(alice_eid);
+        let mut iter_hid: Option<HyperedgeId> = None;
+        for hid in &edges {
+            if let Ok(Resolved::Live(Record::HyperEdge(h))) =
+                eng.snapshot_read(&hid.into_uuid(), snap)
+                && h.type_id == TYPE_CAPABILITY
+                && h.roles.iter().any(|(r, e)| *r == ROLE_SUBJECT && *e == alice_eid)
+                && h.properties.iter().any(|(p, v)| {
+                    *p == PROP_ACTION
+                        && matches!(v, ndb_engine::Value::String(s) if s == "iter")
+                })
+            {
+                iter_hid = Some(*hid);
+                break;
+            }
+        }
+        let iter_hid = iter_hid.expect("alice has an iter capability hyperedge");
+        let mut txn = eng.begin_write();
+        txn.delete(iter_hid.into_uuid());
+        txn.commit().unwrap();
+    }
+
+    // Second request — must 403 without restart.
+    // (Re-bind a new bounded server because spawn_server's serve_n(2)
+    //  used up both connections already.)
+    let addr2 = spawn_server(Arc::clone(&server), 1);
+    let resp = raw_request(addr2, req_with_token);
+    assert_eq!(resp.status, 403, "post-revocation /iter must 403; got {}", resp.status);
+
     std::fs::remove_dir_all(&dir).unwrap();
 }

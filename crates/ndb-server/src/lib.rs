@@ -99,17 +99,36 @@ pub enum Capability {
 }
 
 /// One row in the principals table.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// v2.1: when `entity_id` is `Some(_)`, this principal lives in the
+/// engine as a `TYPE_PRINCIPAL` entity + N `TYPE_CAPABILITY` hyperedges;
+/// the dispatch path calls `Engine::has_capability` on every request,
+/// so capability revocations via `/commit` become effective without a
+/// server restart. When `entity_id` is `None` (legacy callers that built
+/// `Principal` directly via `with_principals`), the dispatch falls back
+/// to `Principal::allows` over the in-memory `capabilities` set.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Principal {
     /// Stable display name (used in audit logs and error messages).
     pub name: String,
-    /// Direct capability grants.
+    /// Direct capability grants. v2.1: snapshot only — the dispatch
+    /// path reads the engine when `entity_id` is set. Still populated
+    /// for diagnostics + the legacy fall-back path.
+    #[serde(default)]
     pub capabilities: BTreeSet<Capability>,
+    /// Engine-side entity id for this principal. `Some` when the
+    /// principal was loaded via `with_principals_bootstrapped`; `None`
+    /// for principals supplied directly via `with_principals(...)`.
+    /// In-memory only — never round-tripped through the JSON config.
+    #[serde(skip)]
+    pub entity_id: Option<ndb_engine::EntityId>,
 }
 
 impl Principal {
     /// True iff this principal can perform `cap` (either directly or via
-    /// the `Admin` wildcard).
+    /// the `Admin` wildcard). Used only as the fall-back when
+    /// `entity_id` is `None`; engine-backed principals go through
+    /// `Engine::has_capability` instead.
     #[must_use]
     pub fn allows(&self, cap: Capability) -> bool {
         self.capabilities.contains(&Capability::Admin) || self.capabilities.contains(&cap)
@@ -407,6 +426,7 @@ fn principals_from_engine(engine: &Arc<Mutex<Engine>>) -> Result<Principals, Ser
             Principal {
                 name,
                 capabilities: caps,
+                entity_id: Some(eid),
             },
         );
     }
@@ -503,6 +523,18 @@ impl Server {
             Some(p) => Ok((self.with_principals(p), true)),
             None => Ok((self, false)),
         }
+    }
+
+    /// v2.1 §2.2: rebuild the in-memory `token → principal` cache from
+    /// the engine. Operators can call this after committing new
+    /// principal/capability records to make the new tokens resolvable
+    /// without a server restart. Existing tokens whose capability
+    /// hyperedges changed don't need a refresh — the dispatch path
+    /// queries the engine on every request.
+    pub fn refresh_principals_cache(&mut self) -> Result<(), ServerError> {
+        let p = principals_from_engine(&self.engine)?;
+        self.principals = Some(p);
+        Ok(())
     }
 
     /// v2.0 #25 entry point: persist the principals set as capability
@@ -724,17 +756,46 @@ impl Server {
                     }
                     Some(p) => {
                         outcome.principal.clone_from(&p.name);
-                        if let Some(cap) = needed
-                            && !p.allows(cap)
-                        {
-                            outcome.status = 403;
-                            let detail = format!(
-                                "principal '{}' lacks capability '{}'",
-                                p.name,
-                                capability_str(cap),
-                            );
-                            outcome.failure = Some(detail.clone());
-                            return write_error(out, 403, "forbidden", &detail);
+                        if let Some(cap) = needed {
+                            // v2.1: engine-backed dispatch when the
+                            // principal carries an `entity_id` (set by
+                            // `with_principals_bootstrapped`). Revocations
+                            // via `/commit` become effective on the next
+                            // request — the engine query is authoritative.
+                            //
+                            // Legacy fallback (no entity_id): consult the
+                            // in-memory capability set — same behaviour as
+                            // v2.0.
+                            let allowed = if let Some(eid) = p.entity_id {
+                                let now_us =
+                                    i64::try_from(now_micros()).unwrap_or(i64::MAX);
+                                let mut eng = self.engine.lock().expect("engine mutex poisoned");
+                                match eng.has_capability(eid, cap.as_action(), "*", now_us) {
+                                    Ok(b) => b,
+                                    Err(e) => {
+                                        outcome.status = 500;
+                                        outcome.failure = Some(format!("auth lookup: {e}"));
+                                        return write_error(
+                                            out,
+                                            500,
+                                            "internal",
+                                            &format!("auth lookup failed: {e}"),
+                                        );
+                                    }
+                                }
+                            } else {
+                                p.allows(cap)
+                            };
+                            if !allowed {
+                                outcome.status = 403;
+                                let detail = format!(
+                                    "principal '{}' lacks capability '{}'",
+                                    p.name,
+                                    capability_str(cap),
+                                );
+                                outcome.failure = Some(detail.clone());
+                                return write_error(out, 403, "forbidden", &detail);
+                            }
                         }
                     }
                 }
