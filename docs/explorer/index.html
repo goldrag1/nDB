@@ -613,22 +613,21 @@ function applyHighlights() {
   const now = Date.now();
   const inPulse = now < pulseUntil;
   Graph
+    // Baseline = NO particles on unselected links. Particles only fire
+    // when the user explicitly selects something — otherwise the scene
+    // is a still graph instead of a constant fireworks display.
     .linkDirectionalParticles(link => {
-      if (highlightedLinks.has(link)) return inPulse ? 10 : 4;
-      return 1;
+      if (!highlightedLinks.has(link)) return 0;
+      return inPulse ? 10 : 4;
     })
     .linkDirectionalParticleSpeed(link => {
-      if (highlightedLinks.has(link)) return inPulse ? 0.012 : 0.006;
-      return 0.002;
+      if (!highlightedLinks.has(link)) return 0;
+      return inPulse ? 0.012 : 0.006;
     })
-    .linkDirectionalParticleWidth(link => {
-      if (highlightedLinks.has(link)) return inPulse ? 3.0 : 2.0;
-      return 0.6;
-    })
-    .linkDirectionalParticleColor(link => {
-      if (highlightedLinks.has(link)) return inPulse ? "#ffe066" : "#4a90e2";
-      return "rgba(255,255,255,0.35)";
-    })
+    .linkDirectionalParticleWidth(link => (highlightedLinks.has(link) ? (inPulse ? 3.0 : 2.0) : 0))
+    .linkDirectionalParticleColor(link => (
+      highlightedLinks.has(link) ? (inPulse ? "#ffe066" : "#4a90e2") : "rgba(0,0,0,0)"
+    ))
     .linkColor(link => highlightedLinks.has(link) ? "rgba(74,144,226,0.55)" : "rgba(255,255,255,0.12)")
     .linkWidth(link => highlightedLinks.has(link) ? 1.5 : 0.5);
   $clearHighlightsBtn.disabled = highlightedLinks.size === 0;
@@ -1384,6 +1383,11 @@ Graph = ForceGraph3D()(document.getElementById("graph-host"))
   .linkColor(() => "rgba(255,255,255,0.18)")
   .linkOpacity(0.5)
   .linkWidth(0.5)
+  // Force simulation cools after ~300 ticks instead of running forever
+  // — the layout settles in ~3 seconds then sits still. Without this
+  // the nodes wiggle indefinitely, which reads as "everything's moving".
+  .cooldownTicks(300)
+  .d3AlphaDecay(0.04)
   .onNodeClick(n => {
     setSelected(n);
     // Centre camera on the clicked node.
