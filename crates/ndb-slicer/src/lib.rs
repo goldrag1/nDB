@@ -269,6 +269,11 @@ pub struct AggSpec {
 pub struct Pipeline {
     columns: Vec<Column>,
     filter: Option<Box<dyn Fn(&Record) -> bool + Send + Sync>>,
+    /// v2.1 §2.4: post-aggregate filter. Receives the full row of the
+    /// aggregate output (group key columns + aggregate columns) and
+    /// drops the row if the predicate returns false. Applied between
+    /// aggregate fold and sort.
+    having: Option<Box<dyn Fn(&[Value]) -> bool + Send + Sync>>,
     group_by: Vec<usize>,
     aggregates: Vec<AggSpec>,
     sort_column: Option<usize>,
@@ -281,6 +286,7 @@ impl std::fmt::Debug for Pipeline {
         f.debug_struct("Pipeline")
             .field("columns", &self.columns)
             .field("filter", &self.filter.as_ref().map(|_| "<fn>"))
+            .field("having", &self.having.as_ref().map(|_| "<fn>"))
             .field("group_by", &self.group_by)
             .field("aggregates", &self.aggregates)
             .field("sort_column", &self.sort_column)
@@ -312,6 +318,25 @@ impl Pipeline {
         F: Fn(&Record) -> bool + Send + Sync + 'static,
     {
         self.filter = Some(Box::new(f));
+        self
+    }
+
+    /// v2.1 §2.4: post-aggregate filter. The predicate receives the full
+    /// aggregate-output row (group key columns followed by aggregate
+    /// columns, in the order they were added to the pipeline) and drops
+    /// the row if it returns false.
+    ///
+    /// Applied AFTER aggregate fold, BEFORE sort + limit. Composes with
+    /// the pre-aggregate `filter()`; both fire independently.
+    ///
+    /// Has no effect when no aggregates are configured (the pipeline
+    /// returns the projected rows verbatim).
+    #[must_use]
+    pub fn having<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&[Value]) -> bool + Send + Sync + 'static,
+    {
+        self.having = Some(Box::new(f));
         self
     }
 
@@ -383,6 +408,13 @@ impl Pipeline {
             let headers: Vec<String> = self.columns.iter().map(|c| c.header.clone()).collect();
             (headers, rows)
         };
+
+        // 2.5. Post-aggregate filter (HAVING — v2.1 §2.4). No-op when
+        // no aggregates are configured; the v2.0 pre-aggregate
+        // `filter()` is the supported tool for that case.
+        if let Some(having) = &self.having {
+            rows.retain(|r| having(r));
+        }
 
         // 3. Sort.
         if let Some(col) = self.sort_column {
@@ -1053,6 +1085,82 @@ mod tests {
             percentile_value(&rows, 0.95),
             Value::F64(v) if (v - 42.0).abs() < 1e-9
         ));
+    }
+
+    // ---------------------------------------------------------------------
+    // §2.4 HAVING — post-aggregate filter
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn having_drops_groups_by_aggregate_result() {
+        // Sum by group, drop sums ≤ 100.
+        let records = vec![
+            entity(EntityId::now_v7(), 1, vec![(10, Value::String("a".into())), (11, Value::I64(60))]),
+            entity(EntityId::now_v7(), 1, vec![(10, Value::String("a".into())), (11, Value::I64(50))]),  // a → 110
+            entity(EntityId::now_v7(), 1, vec![(10, Value::String("b".into())), (11, Value::I64(30))]),  // b → 30 (dropped)
+            entity(EntityId::now_v7(), 1, vec![(10, Value::String("c".into())), (11, Value::I64(200))]), // c → 200
+        ];
+        let p = Pipeline::new()
+            .select(Column::entity_property("region", PropertyId::new(10)))
+            .select(Column::entity_property("amount", PropertyId::new(11)))
+            .group_by([0])
+            .aggregate(AggSpec {
+                header: "total".into(),
+                column: 1,
+                agg: Aggregate::Sum,
+            })
+            .having(|row| match &row[1] {
+                Value::I64(n) => *n > 100,
+                _ => false,
+            });
+        let t = p.run(records);
+        // After HAVING: only a (110) and c (200) survive.
+        assert_eq!(t.rows.len(), 2);
+        let totals: Vec<i64> = t
+            .rows
+            .iter()
+            .filter_map(|r| if let Value::I64(n) = &r[1] { Some(*n) } else { None })
+            .collect();
+        assert!(totals.contains(&110));
+        assert!(totals.contains(&200));
+        assert!(!totals.contains(&30));
+    }
+
+    #[test]
+    fn having_composes_with_pre_aggregate_filter() {
+        // filter() drops records BEFORE aggregation; having() drops
+        // groups AFTER aggregation. Both fire independently.
+        let records = vec![
+            entity(EntityId::now_v7(), 1, vec![(10, Value::String("a".into())), (11, Value::I64(60))]),
+            entity(EntityId::now_v7(), 1, vec![(10, Value::String("a".into())), (11, Value::I64(50))]),
+            entity(EntityId::now_v7(), 1, vec![(10, Value::String("b".into())), (11, Value::I64(9999))]),
+        ];
+        let p = Pipeline::new()
+            .select(Column::entity_property("region", PropertyId::new(10)))
+            .select(Column::entity_property("amount", PropertyId::new(11)))
+            // Pre-aggregate filter: drop the 9999 outlier row.
+            .filter(|rec| {
+                if let Record::Entity(e) = rec
+                    && e.properties.iter().any(|(p, v)|
+                        p.get() == 11 && matches!(v, Value::I64(n) if *n > 1000))
+                {
+                    return false;
+                }
+                true
+            })
+            .group_by([0])
+            .aggregate(AggSpec {
+                header: "total".into(),
+                column: 1,
+                agg: Aggregate::Sum,
+            })
+            // Post-aggregate: drop groups with sum < 100.
+            .having(|row| matches!(&row[1], Value::I64(n) if *n >= 100));
+        let t = p.run(records);
+        // a survives (110 ≥ 100); b's only row was filtered pre-aggregate
+        // so b's group doesn't exist; nothing else.
+        assert_eq!(t.rows.len(), 1);
+        assert!(matches!(&t.rows[0][1], Value::I64(110)));
     }
 
     #[test]
