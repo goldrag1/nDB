@@ -1595,11 +1595,29 @@ These primitives ship in v1 even though no GPU plugins exist yet. They are the f
   - Streaming for large result sets
   - History (readline-style)
 - `nDB-mcp-server` v1 — **Model Context Protocol server** exposing nDB to AI agents (Claude, GPT, Llama, others):
-  - Tools: `query`, `write`, `subscribe`, `schema`, `traverse`, `time_travel`
+  - Tools: `query`, `write`, `subscribe`, `introspect_types`, `traverse`, `time_travel`
   - Tool definitions include the query DSL grammar so LLMs produce correct queries directly
   - Type-def introspection at runtime — the LLM sees available types and properties
   - Strategically critical for the AI primary-target application (Section 3.1) — no other hypergraph database has first-class MCP integration
-- Engine, slicer, renderer, CLI, and MCP server all ship as separate crates; apps depend on whichever they need
+- `nDB-client-python` v1 — wire-protocol Python client (AI ecosystem):
+  - Thin wrapper over HTTP + JSON + JSONL using `httpx`
+  - Async iterators for JSONL streams
+  - Pandas / Polars / DuckDB integration helpers via Arrow IPC
+- **Validation** v1 — constraint validation engine (was "Schema Layer 3"):
+  - Engine reads `constraint` metadata hyperedges and enforces them per the configured mode (strict-write rejects invalid; soft-read flags but returns; per-type)
+  - Supports cardinality rules, required roles, value-domain rules, regex patterns
+  - Validation failures emit `security_event`-style hyperedges (Section 13.5) for audit
+  - Enables ERP and biomedical use cases that require data integrity at write time
+- **Vector index (CPU)** v1 — `nDB-index-vector-cpu` plugin:
+  - HNSW algorithm via mature Rust crate (e.g. `hnsw_rs` or `instant-distance`)
+  - Implements the standard Index trait (Section 14.2)
+  - Opt-in per type; the engine doesn't require it for non-vector workloads
+  - Enables AI use cases (GraphRAG, semantic search) without waiting for GPU plugins
+- **Arrow IPC interop** v1 — engine API for reading/writing Apache Arrow Record Batches:
+  - Zero-copy interop with Python (Polars, pandas), DuckDB, and other Arrow-aware tools
+  - Built on the `arrow-rs` crate
+  - Makes the AI / data-science ecosystem first-class without serialization tax
+- Engine, slicer, renderer, CLI, MCP server, Python client, and other companions all ship as separate crates; apps depend on whichever they need
 
 **Success criteria:**
 - 1M hyperedges, sub-second traversal queries on commodity hardware
@@ -1609,16 +1627,19 @@ These primitives ship in v1 even though no GPU plugins exist yet. They are the f
 - Batch APIs validated by a high-throughput ingest benchmark (10K+ writes/sec, 100K+ reads/sec)
 - CLI tested in our own development workflow throughout the build
 - MCP server validated by an LLM agent driving nDB end-to-end (read + write + query) without custom integration glue
+- Validation engine rejects malformed writes under strict-mode tests; flags violations under soft-mode
+- CPU vector index validated by an AI workload (semantic search over at least 100K documents) with sub-second top-k retrieval
+- Python client validated by an end-to-end notebook workflow consuming nDB results via Arrow / Polars
 
-### 17.2 v2.0 — Analytics + AI Workloads + first GPU support
+### 17.2 v2.0 — Analytics + first GPU support
 
-Goal: viable for AI / GraphRAG workloads and slicer-heavy analytics, with GPU acceleration available for vector and aggregation workloads.
+Goal: scale slicer-heavy analytics and bring GPU acceleration to the workloads that benefit most. (Validation, CPU vector index, Python client, and Arrow IPC moved to v1.)
 
-**Indexes added (CPU in-tree plugins):**
-- Columnar per-role (CPU; Apache Arrow-based)
+**Indexes added (in-tree plugins):**
+- Columnar per-role (CPU; Apache Arrow-based) — for slicer aggregation
 - Slicer materialized views (declarative, incremental update)
 - Full-text index (Tantivy wrapper, opt-in per type)
-- Vector index (HNSW or IVF — decision in dedicated v2 spec)
+- Vector index improvements — additional ANN algorithms beyond HNSW (IVF, scalar quantization)
 
 **GPU support arrives (CUDA / NVIDIA first):**
 
@@ -1626,10 +1647,6 @@ Goal: viable for AI / GraphRAG workloads and slicer-heavy analytics, with GPU ac
 - `nDB-index-columnar-cuda` — GPU columnar aggregation (cuDF / RAPIDS backend); 5-30× speedup for `sum`/`avg`/`group_by` over millions of rows
 - `nDB-slicer-cuda` — GPU-accelerated slicer compute crate (math expressions, broadcast ops, sort) on GPU buffers
 - Engine API additions: **pinned-memory pool** for fast CPU↔GPU PCIe transfer (opt-in; CPU plugins ignore it)
-- Engine API additions: **Arrow IPC buffer access** for zero-copy interop with cuDF / Polars / DuckDB
-
-**Schema:**
-- Layer 3 (constraints + validation per type)
 
 **Companion crates added in v2:**
 
@@ -1640,7 +1657,7 @@ Goal: viable for AI / GraphRAG workloads and slicer-heavy analytics, with GPU ac
   - Network / force-directed graph (renders the hyperedge structure directly)
   - Heatmap (categorical x, y + intensity)
 - `nDB-slicer` v2 — slicer presets per entity / hyperedge type (CPU path)
-- `nDB-client-python`, `nDB-client-js` — wire-protocol clients for AI / web ecosystems
+- `nDB-client-js` — wire-protocol JavaScript / TypeScript client (web ecosystem)
 
 **Operational:**
 - LLM integration patterns documented (GraphRAG, agent context)
@@ -1648,18 +1665,20 @@ Goal: viable for AI / GraphRAG workloads and slicer-heavy analytics, with GPU ac
 - GPU plugin benchmarks vs CPU plugin paths published (so apps can decide)
 
 **Success criteria:**
-- 100M hyperedges, sub-second slicer aggregation
+- 100M hyperedges, sub-second slicer aggregation (with columnar plugin)
 - Two real-world pilot applications across different target domains
-- Vector index integration validated with at least one AI workload (one CPU pilot + one GPU pilot)
-- Schema Layer 3 validated with an ERP pilot
-- GPU plugin path validated: at least one production user running `nDB-index-vector-cuda` with 10× speedup over CPU vector index for the same workload
+- GPU vector index validated: at least one production user running `nDB-index-vector-cuda` with 10× speedup over the v1 CPU vector index for the same workload
+- Columnar index integration validated with an analytics workload (aggregation over 100M+ rows in under a second)
+- JavaScript / TypeScript client validated by an end-to-end browser-app demo
 
 ### 17.3 v3.0 — Distribution + Ecosystem + cross-platform GPU
 
-Goal: differentiated from competitors, ready for broader adoption. GPU coverage extends beyond NVIDIA.
+Goal: differentiated from competitors, ready for broader adoption. GPU coverage extends beyond NVIDIA. Inference-based reasoning arrives.
 
-**Schema:**
-- Layer 4 (ontology + inference)
+**Inference and ontology:**
+- Layer 4 — inference rules over hyperedges (Datalog-style derivation rules)
+- Enables ReBAC authorization via inference (Section 13.2)
+- Reasoning over ontological class hierarchies, equivalence, etc.
 
 **Distribution:**
 - Read replicas (eventually consistent reads)

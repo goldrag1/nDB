@@ -340,21 +340,37 @@ For nDB's target workloads (AI reasoning, ERP, scientific), the strong-performan
 
 ### v1.0 — Initial Production Release
 
-Goal: usable single-node engine for one workload (AI reasoning or ERP, decided closer to launch).
+Goal: usable single-node engine, genuinely buildable on by early adopters across AI and ERP workloads.
 
-Storage core, MVCC, retention policies, query language (retrieval-only), six mandatory indexes (entity-by-ID, hyperedge-by-ID, lookup-key reverse, adjacency list, hyperedge-type clustering, schema-driven property B-tree), companion crates for 2D rendering, wire-protocol Rust client, **interactive CLI** (`nDB-cli`) with REPL + admin commands, **MCP server** (`nDB-mcp-server`) for AI agent integration, security baseline (bearer tokens + TLS + ReBAC capabilities + free audit + filesystem encryption). One real-world pilot.
+**Engine and storage:** Custom binary storage core, MVCC (snapshot + serializable per transaction), append-only with per-type retention policies, query language (pattern matching, retrieval-only), six mandatory built-in indexes (entity-by-ID, hyperedge-by-ID, lookup-key reverse, adjacency list, hyperedge-type clustering, schema-driven property B-tree).
 
-### v2.0 — AI + Analytics + First GPU Support
+**Validation:** Constraint validation engine — apps declare `constraint` hyperedges per type; engine enforces them at write-time (strict mode) or flags at read-time (soft mode). This is what ERP and biomedical workloads need to use nDB in production from day one.
 
-Goal: viable for AI / GraphRAG and slicer-heavy analytics, with GPU acceleration.
+**AI-ready primitives:**
+- **CPU Vector index** (`nDB-index-vector-cpu`) — HNSW similarity search built in. Semantic search and GraphRAG work out of the box without waiting for GPU plugins.
+- **MCP server** (`nDB-mcp-server`) — Model Context Protocol server exposing nDB to Claude / GPT / Llama and any MCP-aware agent. First-class AI integration, no other hypergraph database has this.
+- **Arrow IPC interop** — zero-copy interop with Polars / pandas / DuckDB via Apache Arrow.
 
-Vector index (CUDA), columnar aggregation (CUDA + CPU), slicer materialized views, full-text index, GPU slicer crate, pinned memory pool, Arrow IPC interop, 3D + 4D renderers, schema layer 3 (constraints), Python + JavaScript clients.
+**Client and tooling:**
+- **Rust client** (`nDB-client-rust`) and **Python client** (`nDB-client-python`) — the AI ecosystem speaks Python; v1 ships it.
+- **Interactive CLI** (`nDB-cli`) — REPL + admin commands (.backup, .restore, .compact, etc.).
+- **2D renderers** (table, scatter, pivot, bar/line/area) — built-in companion crate.
 
-### v3.0 — Distribution + Ecosystem + Cross-Platform GPU
+**Security baseline:** Bearer tokens + optional mTLS; TLS 1.3 in transit; ReBAC via capability hyperedges (direct, no inference yet); audit free via MVCC; GDPR forget-after.
+
+**Goal:** one real-world pilot in production.
+
+### v2.0 — Analytics + First GPU Support
+
+Goal: scale analytics workloads and bring GPU acceleration to the operations that benefit most.
+
+GPU vector index (CUDA — 10-100× faster ANN search than v1 CPU), GPU columnar aggregation (cuDF / RAPIDS), GPU slicer compute crate, pinned-memory pool API, CPU columnar index (slicer aggregation), slicer materialized views, full-text index (Tantivy wrapper), 3D + 4D renderers, JavaScript / TypeScript client (web ecosystem).
+
+### v3.0 — Distribution + Inference + Cross-Platform GPU
 
 Goal: differentiated from competitors, ready for broader adoption.
 
-Schema layer 4 (ontology + inference), read replicas, federation, cross-platform GPU plugins (ROCm + Metal + wgpu), 5D + 6D renderers, Go + Java clients, public plugin API, community-contributed plugins.
+Inference engine (Datalog-style derivation rules) enabling reasoning and inference-based ReBAC authorization, read replicas, federation across nDB instances, cross-platform GPU plugins (ROCm + Metal + wgpu), 5D + 6D renderers, Go + Java clients, public plugin API, community-contributed plugins.
 
 ### v4.0+ — Distributed and High-Dimensional
 
@@ -362,7 +378,7 @@ Goal: web-scale write workloads + saturating the visual variable hierarchy.
 
 Sharding, Raft-replicated state, multi-region, 7D + 8D renderers (approaching the cognitive ceiling), GPUDirect Storage paths considered.
 
-Sections 16 of the design spec details the per-version scope and success criteria.
+Section 17 of the design spec details the per-version scope and success criteria.
 
 ---
 
