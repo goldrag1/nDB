@@ -31,6 +31,8 @@ pub mod codec;
 pub mod db;
 pub mod error;
 pub mod id;
+pub mod memtable;
+pub mod mvcc;
 pub mod record;
 pub mod sstable;
 pub mod value;
@@ -43,6 +45,8 @@ pub use db::{
 };
 pub use error::{DecodeError, EncodeError};
 pub use id::{EntityId, HyperedgeId, PropertyId, RoleId, TX_ACTIVE, TYPE_UNTYPED, TxId, TypeId};
+pub use memtable::Memtable;
+pub use mvcc::{Resolved, effective_tx, resolve, resolve_owned, visible_at};
 pub use record::{
     ENVELOPE_OVERHEAD, EntityRecord, FORMAT_VERSION, FORMAT_VERSION_MAX_SUPPORTED, HyperEdgeRecord,
     PropertyKeyRecord, Record, RecordKind, RoleNameRecord, TombstoneRecord, TypeNameRecord,
