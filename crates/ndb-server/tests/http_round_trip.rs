@@ -579,7 +579,7 @@ fn query_route_executes_entity_pattern_via_tcp() {
     let resp = post(addr, "/query", "not json");
     assert_eq!(resp.status, 400);
 
-    // Recursion → 501 (not yet supported).
+    // Recursion with no endpoint roles → 400 recursion_config_invalid.
     let body = format!(
         r#"{{
             "patterns": [{{
@@ -591,7 +591,9 @@ fn query_route_executes_entity_pattern_via_tcp() {
         }}"#,
     );
     let resp = post(addr, "/query", &body);
-    assert_eq!(resp.status, 501);
+    assert_eq!(resp.status, 400);
+    let parsed: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    assert_eq!(parsed["error"], "recursion_config_invalid");
 
     std::fs::remove_dir_all(&dir).unwrap();
 }

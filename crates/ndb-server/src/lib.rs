@@ -937,7 +937,8 @@ fn query_error_to_http(
 ) -> Result<(), ServerError> {
     let (status, code) = match err {
         QueryError::Engine(_) => (500, "engine_error"),
-        QueryError::RecursionNotYetSupported => (501, "recursion_not_yet_supported"),
+        QueryError::RecursionConfigInvalid { .. } => (400, "recursion_config_invalid"),
+        QueryError::RecursionDepthExceeded { .. } => (400, "recursion_depth_exceeded"),
         QueryError::TimestampNotYetSupported => (501, "timestamp_not_yet_supported"),
         QueryError::SnapshotUnavailable { .. } => (410, "snapshot_unavailable"),
         QueryError::TypeNotIndexed { .. } => (400, "type_not_indexed"),
