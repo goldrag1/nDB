@@ -13,6 +13,7 @@ name = "ndb_renderer"
 path = "src/lib.rs"
 
 [dependencies]
+base64     = { workspace = true }
 ndb-engine = { path = "../ndb-engine" }
 ndb-slicer = { path = "../ndb-slicer" }
 

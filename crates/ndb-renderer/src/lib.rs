@@ -269,6 +269,112 @@ fn max_backtick_run(s: &str) -> usize {
     max
 }
 
+// ---------------------------------------------------------------------------
+// v2.1 §2.8 — JSON-lines renderer
+// ---------------------------------------------------------------------------
+
+/// JSON-lines (newline-delimited JSON) output — one JSON object per row.
+/// Header cell names become the object keys. Drop-in for streaming pipes
+/// into `jq`, DuckDB's `read_json`, Polars `scan_ndjson`, etc.
+///
+/// Value mapping:
+/// - `Null`               → `null`
+/// - `Bool(b)`            → JSON `true` / `false`
+/// - `I64(n)`             → JSON number (no exponent)
+/// - `F64(f)`             → JSON number; `NaN` / `±Inf` → `null` (not legal JSON)
+/// - `String(s)`          → JSON string (escaped)
+/// - `Bytes(b)`           → JSON string of base64
+/// - `Timestamp(t)`       → JSON number (microseconds since Unix epoch)
+/// - `EntityRef(u)`       → JSON string of the UUID
+/// - `Decimal { … }`      → JSON string in `mantissa.scale` form (avoid lossy f64)
+/// - `Vector(v)`          → JSON array of numbers
+/// - `Extension(b)`       → JSON string of base64 (forward-compat)
+#[must_use]
+pub fn render_jsonl(t: &Table) -> String {
+    let mut out = String::new();
+    for row in &t.rows {
+        out.push('{');
+        for (i, (header, cell)) in t.headers.iter().zip(row.iter()).enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            push_json_string(&mut out, header);
+            out.push(':');
+            push_json_value(&mut out, cell);
+        }
+        out.push_str("}\n");
+    }
+    out
+}
+
+fn push_json_string(out: &mut String, s: &str) {
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                use std::fmt::Write;
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+fn push_json_value(out: &mut String, v: &Value) {
+    use base64::Engine as _;
+    use std::fmt::Write as _;
+    match v {
+        Value::Null => out.push_str("null"),
+        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Value::I64(n) => {
+            let _ = write!(out, "{n}");
+        }
+        Value::F64(f) => {
+            if f.is_finite() {
+                let _ = write!(out, "{f}");
+            } else {
+                // NaN/±Inf aren't valid JSON — emit null. (Same call as
+                // serde_json's default behaviour.)
+                out.push_str("null");
+            }
+        }
+        Value::String(s) => push_json_string(out, s),
+        Value::Bytes(b) | Value::Extension(b) => {
+            push_json_string(out, &base64::engine::general_purpose::STANDARD.encode(b));
+        }
+        Value::Timestamp(t) => {
+            let _ = write!(out, "{t}");
+        }
+        Value::EntityRef(eid) => push_json_string(out, &eid.into_uuid().to_string()),
+        Value::Decimal { scale, mantissa } => {
+            // Emit as a JSON STRING in `mantissa_int.fraction` form to
+            // preserve every decimal digit (JSON numbers go through f64
+            // in most parsers — round-trip-lossy).
+            push_json_string(out, &format_decimal(*scale, *mantissa));
+        }
+        Value::Vector(v) => {
+            out.push('[');
+            for (i, x) in v.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                if x.is_finite() {
+                    let _ = write!(out, "{x}");
+                } else {
+                    out.push_str("null");
+                }
+            }
+            out.push(']');
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,6 +516,80 @@ mod tests {
         let s = render_markdown(&t);
         assert!(s.contains("`-leading`"));
         assert!(s.contains("`+leading`"));
+    }
+
+    // ---------------------------------------------------------------------
+    // v2.1 §2.8 — JSON-lines renderer
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn jsonl_one_object_per_row() {
+        let s = render_jsonl(&sample_table());
+        let lines: Vec<&str> = s.lines().collect();
+        assert_eq!(lines.len(), 2);
+        // Each line must be a JSON object with both header keys.
+        for line in &lines {
+            assert!(line.starts_with('{') && line.ends_with('}'), "line: {line}");
+            assert!(line.contains("\"color\":"));
+            assert!(line.contains("\"n\":"));
+        }
+        // Values present.
+        assert!(s.contains("\"red\""));
+        assert!(s.contains("\"blue\""));
+    }
+
+    #[test]
+    fn jsonl_escapes_special_chars_in_string_values() {
+        let t = Table {
+            headers: vec!["k".into()],
+            rows: vec![vec![Value::String("a\"b\\c\nd\te".into())]],
+        };
+        let s = render_jsonl(&t);
+        // Each problematic byte must be backslash-escaped per JSON spec.
+        let trimmed = s.trim();
+        assert!(trimmed.contains("\\\""), "missing escaped quote: {trimmed}");
+        assert!(trimmed.contains("\\\\"), "missing escaped backslash: {trimmed}");
+        assert!(trimmed.contains("\\n"), "missing escaped newline: {trimmed}");
+        assert!(trimmed.contains("\\t"), "missing escaped tab: {trimmed}");
+        // No raw control chars survived.
+        assert!(!trimmed.contains('\n') || trimmed.ends_with('\n'));
+    }
+
+    #[test]
+    fn jsonl_null_value_serializes_as_null() {
+        let t = Table {
+            headers: vec!["k".into()],
+            rows: vec![vec![Value::Null]],
+        };
+        let s = render_jsonl(&t);
+        assert_eq!(s.trim(), "{\"k\":null}");
+    }
+
+    #[test]
+    fn jsonl_bool_and_numbers_unquoted() {
+        let t = Table {
+            headers: vec!["b".into(), "n".into(), "f".into()],
+            rows: vec![vec![Value::Bool(true), Value::I64(42), Value::F64(1.5)]],
+        };
+        let s = render_jsonl(&t);
+        // Numbers + bools must not be quoted.
+        assert!(s.contains("\"b\":true"));
+        assert!(s.contains("\"n\":42"));
+        assert!(s.contains("\"f\":1.5"));
+    }
+
+    #[test]
+    fn jsonl_nan_and_infinity_serialize_as_null() {
+        let t = Table {
+            headers: vec!["x".into(), "y".into()],
+            rows: vec![vec![Value::F64(f64::NAN), Value::F64(f64::INFINITY)]],
+        };
+        let s = render_jsonl(&t);
+        // Both non-finite floats fall back to JSON null.
+        assert!(s.contains("\"x\":null"));
+        assert!(s.contains("\"y\":null"));
+        // And the line stays valid JSON shape.
+        assert!(s.trim().starts_with('{') && s.trim().ends_with('}'));
     }
 
     #[test]
