@@ -1179,17 +1179,27 @@ let results = db.query()
 
 Compiles to the same wire format.
 
-### 12.9 Open sub-questions
+### 12.9 Open sub-questions — CLOSED 2026-05-27
 
-Deferred to a focused query-language spec:
+Resolved in the focused query-language working spec:
+[`2026-05-27-query-language.md`](2026-05-27-query-language.md).
 
-- Full grammar specification (BNF / EBNF)
-- Operator precedence
-- Subquery / CTE syntax (read pipelines, not aggregation)
-- Recursive-query semantics under MVCC (snapshot for the closure: query-start or per-step?)
-- Recursive-query termination guarantees (cycle detection, depth caps)
-- Error message design
-- Index hints / planner directives
+| Sub-question | Resolution |
+|---|---|
+| Full grammar specification | EBNF in §3 of the query-language spec |
+| Operator precedence | `not` > comparisons > `and` > `or`; comparisons non-associative; no arithmetic in v1 |
+| Subquery / CTE syntax | Deferred to v2 (out of v1 scope) |
+| Recursive-query MVCC semantics | Query-start snapshot for the entire closure |
+| Recursive-query termination | Visited-set cycle protection + per-pattern `max_depth` cap (default 64); errors loudly on cap, never silently truncates |
+| Error message design | Three layers (lex / parse / semantic) with `{line, column, length}` spans; runtime errors with named codes |
+| Index hints / planner directives | Deferred to v2; v1 uses a greedy smallest-cardinality-first planner |
+
+Additional locks made in the working spec:
+
+- Surface syntax = SQL-ish pattern functions (`type(role: term, ...) as ?var`)
+- Self-binding via `as ?var` suffix; `id:` is NOT a reserved key
+- Engine grammar is the only input path (no in-engine NL-to-AST)
+- v1 query language is READ-ONLY; writes go through `/commit`
 
 ---
 
