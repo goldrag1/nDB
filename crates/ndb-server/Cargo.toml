@@ -1,0 +1,27 @@
+[package]
+name         = "ndb-server"
+description  = "nDB HTTP server — wire-protocol bridge to ndb-engine"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+authors      = { workspace = true }
+repository   = { workspace = true }
+license      = { workspace = true }
+
+[lib]
+name = "ndb_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ndb-server"
+path = "src/main.rs"
+
+[dependencies]
+ndb-engine = { path = "../ndb-engine" }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+uuid       = { workspace = true }
+
+[lints]
+workspace = true
