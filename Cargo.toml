@@ -1,6 +1,11 @@
 [workspace]
 resolver = "3"
-members = ["crates/ndb-engine", "crates/ndb-server", "crates/ndb-cli"]
+members = [
+    "crates/ndb-engine",
+    "crates/ndb-server",
+    "crates/ndb-cli",
+    "crates/ndb-slicer",
+]
 
 [workspace.package]
 edition      = "2024"

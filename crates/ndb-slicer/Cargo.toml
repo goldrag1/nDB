@@ -1,0 +1,19 @@
+[package]
+name         = "ndb-slicer"
+description  = "nDB CPU projection + aggregation slicer (§7, §17.1)"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+authors      = { workspace = true }
+repository   = { workspace = true }
+license      = { workspace = true }
+
+[lib]
+name = "ndb_slicer"
+path = "src/lib.rs"
+
+[dependencies]
+ndb-engine = { path = "../ndb-engine" }
+
+[lints]
+workspace = true
