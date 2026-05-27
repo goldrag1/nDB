@@ -178,6 +178,16 @@
       </div>
     </div>
 
+    <h2>Local coordinate cache</h2>
+    <div class="form">
+      <button class="btn secondary" id="warm-cache-btn">Warm coordinate cache</button>
+      <div id="warm-cache-status" class="hint" style="margin-top:4px">
+        Fetches the CIF for every protein once + persists it in nDB
+        so the database is self-contained. After warming, viewing any
+        protein works fully offline.
+      </div>
+    </div>
+
     <div class="hint" style="margin-top:18px">
       Local nDB: <code id="db-path">…</code><br>
       API: <code id="api-url">…</code>
@@ -257,6 +267,9 @@ const TYPES = {
 const MOTIF_TYPE_IDS = new Set([110, 111, 113, 114, 115]);
 const RESIDUE_OF_TYPE_ID = 116;
 const PROP_NAME              = 30;
+// AlphaFold-predicted atomic coordinates — stored in nDB as raw CIF
+// bytes once fetched. The wire encodes Bytes as base64.
+const PROP_CIF_BYTES         = 35;
 // AlphaFold confidence overlay (v2.2 §A).
 const PROP_PLDDT_MEAN        = 36;
 const PROP_PLDDT_BUCKET      = 37;
@@ -280,6 +293,7 @@ const PROP_LABEL = {
   31: "function",
   32: "year",
   34: "pathway",
+  35: "cif_bytes",
   36: "pLDDT_mean",
   37: "pLDDT_bucket",
   38: "complex_conf",
@@ -1042,6 +1056,57 @@ document.getElementById("show-residues-toggle").addEventListener("change", async
 document.getElementById("load-3d-btn").addEventListener("click", () => {
   if (selected) load3DStructureFor(selected);
 });
+// Warm the coordinate cache — fetch every uncached protein's CIF
+// and persist it to nDB so future opens are local-only.
+document.getElementById("warm-cache-btn").addEventListener("click", async () => {
+  const $btn = document.getElementById("warm-cache-btn");
+  const $st  = document.getElementById("warm-cache-status");
+  $btn.disabled = true;
+  const proteins = Array.from(entitiesById.values())
+    .filter(e => e.type_id === TYPES.protein.id);
+  let done = 0, fetched = 0, skipped = 0, totalKb = 0;
+  for (const p of proteins) {
+    const acc = extractProp(p, PROP_UNIPROT);
+    const already = extractProp(p, PROP_CIF_BYTES);
+    if (!acc) { skipped++; done++; continue; }
+    if (typeof already === "string" && already.length > 0) {
+      totalKb += (already.length * 0.75) / 1024;
+      skipped++; done++;
+      $st.textContent = `Cached ${done}/${proteins.length}: ${extractName(p)} already in nDB`;
+      continue;
+    }
+    $st.textContent = `Fetching ${done + 1}/${proteins.length}: ${extractName(p)} (${acc}) …`;
+    try {
+      const r = await fetch(cifUrlForUniprot(acc));
+      if (!r.ok) {
+        $st.textContent = `${extractName(p)} (${acc}) → ${r.status}; skipping`;
+        done++; continue;
+      }
+      const cifText = await r.text();
+      const proteinNode = graphData.nodes.find(n => n.nodeKind === "entity" && n.id === p.entity_id);
+      if (proteinNode) {
+        await commitCifBytesToNdb(proteinNode, cifText);
+        fetched++;
+        totalKb += cifText.length / 1024;
+      }
+    } catch (e) {
+      $st.textContent = `${extractName(p)}: ${e.message}; continuing`;
+    }
+    done++;
+  }
+  await reload();
+  // Right sidebar reflects the new cache state for the current protein.
+  if (currentProteinNode) {
+    const fresh = graphData.nodes.find(n => n.id === currentProteinNode.id);
+    if (fresh) {
+      currentProteinNode = fresh;
+      updateRightSidebar(fresh);
+    }
+  }
+  $btn.disabled = false;
+  $st.innerHTML = `<b>Done.</b> Fetched ${fetched}, already cached ${skipped - fetched}, total ${totalKb.toFixed(1)} KB now stored in nDB. The database is self-contained — disconnect from the network and the explorer keeps working.`;
+});
+
 // Protein dropdown → load that protein's structure in 3D.
 document.getElementById("protein-picker").addEventListener("change", (e) => {
   const id = e.target.value;
@@ -1138,6 +1203,57 @@ function cifUrlForUniprot(acc, fragment = 1, version = 6) {
   return `https://alphafold.ebi.ac.uk/files/AF-${acc}-F${fragment}-model_v${version}.cif`;
 }
 
+// ─── CIF storage: nDB-first, AF-DB fallback ─────────────────────
+// CIF (atomic coordinates) is the SCIENCE — without it AlphaFold is
+// just a number table. nDB owns it as a Bytes property on the protein
+// entity. First view fetches from AF-DB and commits back; subsequent
+// views read from nDB. After a protein has been viewed once the demo
+// works fully offline for that protein.
+
+// Decode a Bytes JSON value (base64) to a Uint8Array → string.
+function cifBytesToText(value) {
+  // The wire shape is {tag:"bytes", value:"<base64>"}; extractProp
+  // returned `value.value` which is the base64 string.
+  try {
+    const bin = atob(value);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder("utf-8").decode(bytes);
+  } catch (e) {
+    return null;
+  }
+}
+// Encode a UTF-8 string → base64 (for the Bytes wire value).
+function textToBase64(s) {
+  const bytes = new TextEncoder().encode(s);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
+// Commit a CIF blob back to nDB as a property on the protein entity.
+// nDB's wire protocol replaces the existing entity record on PUT, so
+// we have to re-include every existing property plus the new one.
+async function commitCifBytesToNdb(node, cifText) {
+  const r = node.record;
+  const propsCopy = (r.properties || []).filter(p => p.prop_id !== PROP_CIF_BYTES);
+  propsCopy.push({
+    prop_id: PROP_CIF_BYTES,
+    value: { tag: "bytes", value: textToBase64(cifText) },
+  });
+  await commit([{
+    kind: "entity",
+    entity_id: r.entity_id,
+    type_id: r.type_id,
+    tx_id_assert: 0,
+    tx_id_supersede: "active",
+    properties: propsCopy,
+  }]);
+  // Update the in-memory record so the right sidebar reflects the
+  // newly-cached blob immediately (no full reload needed).
+  r.properties = propsCopy;
+}
+
 async function load3DStructureFor(node) {
   if (!node || node.nodeKind !== "entity" || node.type_id !== TYPES.protein.id) {
     showStatus("Select a protein to load its 3D structure", true);
@@ -1150,25 +1266,56 @@ async function load3DStructureFor(node) {
   }
   const proteinName = extractName(node.record) || acc;
   openNgl3dPane();
-  document.getElementById("viewer-3d-info").innerHTML =
-    `<b>${proteinName}</b> (${acc}) — loading…`;
   if (nglComponent) nglStage.removeAllComponents();
   nglComponent = null;
   nglHighlightRepr = null;
   currentProteinNode = node;
+
+  // 1. Look for a cached CIF on the protein entity in nDB.
+  const cachedB64 = extractProp(node.record, PROP_CIF_BYTES);
+  let cifText = null;
+  let source = null;
+  let sizeBytes = 0;
+  if (typeof cachedB64 === "string" && cachedB64.length > 0) {
+    cifText = cifBytesToText(cachedB64);
+    if (cifText) {
+      source = "ndb";
+      sizeBytes = cifText.length;
+    }
+  }
+
+  // 2. Otherwise fetch from AF-DB and write back to nDB.
+  if (!cifText) {
+    document.getElementById("viewer-3d-info").innerHTML =
+      `<b>${proteinName}</b> (${acc}) — fetching CIF from AlphaFold-DB…`;
+    try {
+      const url = cifUrlForUniprot(acc);
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`AF-DB → ${r.status}`);
+      cifText = await r.text();
+      sizeBytes = cifText.length;
+      source = "afdb";
+      // Persist to nDB so the next view is offline-capable.
+      try {
+        await commitCifBytesToNdb(node, cifText);
+        source = "afdb→ndb";
+      } catch (e) {
+        console.warn("CIF commit failed; will re-fetch next time:", e);
+      }
+    } catch (e) {
+      document.getElementById("viewer-3d-info").innerHTML =
+        `<b>${proteinName}</b> (${acc}) — load failed: ${e.message}`;
+      return;
+    }
+  } else {
+    document.getElementById("viewer-3d-info").innerHTML =
+      `<b>${proteinName}</b> (${acc}) — reading CIF from local nDB…`;
+  }
+
+  // 3. Hand the CIF text to NGL.
   try {
-    const url = cifUrlForUniprot(acc);
-    nglComponent = await nglStage.loadFile(url, { ext: "cif" });
-    // Cartoon coloured by B-factor (which AF-DB stores as per-residue
-    // pLDDT). NGL's "bfactor" scheme runs blue→white→red across the
-    // residue range; for AF the natural reading is high=blue (high
-    // confidence). The output matches alphafold.ebi.ac.uk visually.
-    // NGL's "bfactor" scheme maps the B-factor range to red→white→blue
-    // by default — i.e. high B-factor (which AlphaFold uses to encode
-    // high pLDDT) renders BLUE. Don't reverse — that's already the
-    // AlphaFold convention. Pin the colour scale to the canonical
-    // pLDDT range so trypsin (mostly high) and BRCA1 (mostly low) look
-    // comparable in the same session.
+    const blob = new Blob([cifText], { type: "chemical/x-cif" });
+    nglComponent = await nglStage.loadFile(blob, { ext: "cif" });
     nglComponent.addRepresentation("cartoon", {
       colorScheme: "bfactor",
       colorScale: ["#FF7D45", "#FFDB13", "#65CBF3", "#0053D6"],
@@ -1177,22 +1324,25 @@ async function load3DStructureFor(node) {
     });
     nglComponent.autoView();
     const len = nglComponent.structure.residueStore.count;
+    const kb = (sizeBytes / 1024).toFixed(1);
+    const sourceLabel = source === "ndb"
+      ? `<span style="color:#7ed321">structure cached in local nDB · ${kb} KB</span>`
+      : source === "afdb→ndb"
+      ? `structure just fetched from <a href="${cifUrlForUniprot(acc)}" target="_blank" style="color:#65CBF3" rel="noreferrer">AF-DB</a> · <span style="color:#7ed321">committed to nDB · ${kb} KB</span>`
+      : `structure from <a href="${cifUrlForUniprot(acc)}" target="_blank" style="color:#65CBF3" rel="noreferrer">AF-DB</a> · ${kb} KB`;
     document.getElementById("viewer-3d-info").innerHTML =
-      `<b>${proteinName}</b> (${acc}) · ${len} residues · pLDDT colouring (AF palette · structure from <a href="https://alphafold.ebi.ac.uk/files/AF-${acc}-F1-model_v6.cif" target="_blank" style="color:#65CBF3" rel="noreferrer">AF-DB CIF</a>)`;
-    // Refresh the left + right sidebars for this protein.
+      `<b>${proteinName}</b> (${acc}) · ${len} residues · pLDDT (AF palette) · ${sourceLabel}`;
     renderProteinSummary(node);
     updateRightSidebar(node);
     document.getElementById("db-selected-residue").innerHTML =
       '<div class="empty">Click any atom in the 3D view to inspect that residue\'s nDB record.</div>';
-    // If the user selected a residue node first then hit "Load 3D",
-    // restore that highlight.
     if (selected && selected.nodeKind === "entity" && selected.type_id === TYPES.residue.id) {
       const pos = extractProp(selected.record, 50);
       if (typeof pos === "number") highlight3DResidues([pos], "single residue");
     }
   } catch (e) {
     document.getElementById("viewer-3d-info").innerHTML =
-      `<b>${proteinName}</b> (${acc}) — load failed: ${e.message}`;
+      `<b>${proteinName}</b> (${acc}) — render failed: ${e.message}`;
   }
 }
 
@@ -1299,25 +1449,51 @@ function updateRightSidebar(node) {
 
   // ── 1. The protein entity record ───────────────────────────────
   const r = node.record;
-  const propsList = (r.properties || []).map(p => {
-    const v = p.value && (p.value.value ?? p.value);
-    const label = PROP_LABEL[p.prop_id] || `p${p.prop_id}`;
-    return `<div class="db-row"><span class="k">${label}</span><span class="v">${escapeHtml(String(v))}</span></div>`;
-  }).join("");
+  const propsList = (r.properties || [])
+    // The CIF blob gets its own dedicated row below; don't print 50 KB
+    // of base64 in the friendly key/value list.
+    .filter(p => p.prop_id !== PROP_CIF_BYTES)
+    .map(p => {
+      const v = p.value && (p.value.value ?? p.value);
+      const label = PROP_LABEL[p.prop_id] || `p${p.prop_id}`;
+      return `<div class="db-row"><span class="k">${label}</span><span class="v">${escapeHtml(String(v))}</span></div>`;
+    }).join("");
+  // For the raw wire JSON expander, replace the CIF base64 with a stub
+  // marker so the expander stays readable; the real bytes are in nDB.
+  const propsForJson = (r.properties || []).map(p => {
+    if (p.prop_id === PROP_CIF_BYTES) {
+      const b64 = p.value?.value || "";
+      return {
+        prop_id: p.prop_id,
+        value: { tag: "bytes", value: `<base64 CIF, ${b64.length} chars / ${((b64.length * 0.75) / 1024).toFixed(1)} KB>` },
+      };
+    }
+    return p;
+  });
   const wireJson = JSON.stringify({
     kind: "entity",
     entity_id: r.entity_id,
     type_id: r.type_id,
-    properties: r.properties,
+    properties: propsForJson,
   }, null, 2);
+  // Surface whether the CIF coordinates are cached locally so the user
+  // knows whether they're depending on EBI right now.
+  const cifB64 = extractProp(r, PROP_CIF_BYTES);
+  const cifSizeKb = (typeof cifB64 === "string" && cifB64.length > 0)
+    ? ((cifB64.length * 0.75) / 1024).toFixed(1)
+    : null;
+  const cifBadge = cifSizeKb
+    ? `<span class="v" style="color:#7ed321">stored locally · ${cifSizeKb} KB</span>`
+    : `<span class="v" style="color:#888">not cached (will fetch from AF-DB)</span>`;
   $ent.innerHTML = `
     <h3>Protein entity</h3>
     <div class="db-row"><span class="k">kind</span><span class="v">entity</span></div>
     <div class="db-row"><span class="k">type_id</span><span class="v">${r.type_id} (protein)</span></div>
     <div class="db-row"><span class="k">entity_id</span><span class="v">${r.entity_id.slice(0, 8)}…</span></div>
     ${propsList}
+    <div class="db-row"><span class="k">cif_coords</span>${cifBadge}</div>
     <details style="margin-top:6px">
-      <summary>raw wire JSON</summary>
+      <summary>raw wire JSON (CIF bytes truncated)</summary>
       <pre>${escapeHtml(wireJson)}</pre>
     </details>
   `;

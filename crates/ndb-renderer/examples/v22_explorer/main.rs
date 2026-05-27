@@ -58,6 +58,13 @@ const PROP_NAME: u32 = 30;
 const PROP_FUNCTION: u32 = 31;
 const PROP_YEAR: u32 = 32;
 const PROP_PATHWAY_NAME: u32 = 34;
+// AlphaFold-predicted atomic coordinates — the actual fold. Stored as
+// the raw CIF text (UTF-8 bytes) in a Bytes property; lazy-fetched from
+// AlphaFold-DB on first view, then persisted so subsequent loads are
+// offline-capable. CIFs for proteins in AF_SEED range ~30-500 KB; well
+// within the engine's per-record budget.
+#[allow(dead_code)]
+const PROP_CIF_BYTES: u32 = 35;
 // AlphaFold-derived properties (v2.2 §A — confidence overlay).
 const PROP_PLDDT_MEAN: u32 = 36;
 const PROP_PLDDT_BUCKET: u32 = 37;
