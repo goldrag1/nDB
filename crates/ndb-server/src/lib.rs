@@ -2008,11 +2008,23 @@ impl<W: Write> Write for HeaderInjector<'_, W> {
             .windows(4)
             .position(|w| w == b"\r\n\r\n")
         {
-            // Insert injection between the last header line's CRLF and
-            // the empty CRLF that terminates the header block.
-            self.inner.write_all(&self.pending[..pos + 2])?;
-            self.inner.write_all(&self.inject)?;
-            self.inner.write_all(&self.pending[pos + 2..])?;
+            // Skip injection if the response already carries an
+            // Access-Control-Allow-Origin header — preflight responses
+            // emit their own ACAO inline; double-emitting it produces
+            // a `'*, *'` value the browser refuses.
+            let header_block = &self.pending[..pos];
+            let already_has_acao = header_block
+                .windows(b"access-control-allow-origin:".len())
+                .any(|w| w.eq_ignore_ascii_case(b"access-control-allow-origin:"));
+            if already_has_acao {
+                self.inner.write_all(&self.pending)?;
+            } else {
+                // Insert injection between the last header line's CRLF
+                // and the empty CRLF that terminates the header block.
+                self.inner.write_all(&self.pending[..pos + 2])?;
+                self.inner.write_all(&self.inject)?;
+                self.inner.write_all(&self.pending[pos + 2..])?;
+            }
             self.pending.clear();
             self.headers_done = true;
         }

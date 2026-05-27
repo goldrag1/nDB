@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>nDB Explorer — 3D hypergraph</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; font-family: system-ui, -apple-system, sans-serif; color: #e8e8ec; background: #14141a; }
+  #app { display: grid; grid-template-columns: 340px 1fr; height: 100vh; }
+  #sidebar { background: #1c1c24; border-right: 1px solid #2b2b36; padding: 16px; overflow-y: auto; }
+  #graph-host { position: relative; background: #0d0d12; }
+  h1 { font-size: 16px; margin: 0 0 4px; letter-spacing: 0.02em; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #888; margin: 18px 0 6px; }
+  .stat { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; color: #cfcfd6; }
+  .stat span:last-child { font-variant-numeric: tabular-nums; color: #fff; }
+  .type-row { display: flex; align-items: center; font-size: 13px; padding: 2px 0; gap: 8px; }
+  .type-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .form { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+  .form label { font-size: 11px; color: #999; text-transform: uppercase; letter-spacing: 0.05em; }
+  .form input, .form select, .form textarea {
+    background: #14141a; border: 1px solid #303040; border-radius: 4px; color: #fff;
+    padding: 6px 8px; font-family: inherit; font-size: 13px;
+  }
+  .form input:focus, .form select:focus, .form textarea:focus { outline: none; border-color: #4a90e2; }
+  .form textarea { resize: vertical; min-height: 50px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+  .btn {
+    background: #4a90e2; color: #fff; border: none; padding: 7px 12px; border-radius: 4px;
+    cursor: pointer; font-size: 13px; font-weight: 500;
+  }
+  .btn:hover { background: #5aa0f2; }
+  .btn.danger { background: #c0392b; }
+  .btn.danger:hover { background: #d0463a; }
+  .btn.secondary { background: #2d2d3a; color: #cfcfd6; }
+  .btn.secondary:hover { background: #38384a; }
+  .row { display: flex; gap: 6px; }
+  .row .btn { flex: 1; }
+  .checkbox-list { max-height: 140px; overflow-y: auto; border: 1px solid #303040; border-radius: 4px; padding: 4px 8px; }
+  .checkbox-list label { display: block; font-size: 12px; padding: 2px 0; color: #cfcfd6; cursor: pointer; }
+  .checkbox-list label input { margin-right: 6px; vertical-align: middle; }
+  #selected-card {
+    background: #14141a; border: 1px solid #303040; border-radius: 4px; padding: 10px;
+    font-size: 12px; line-height: 1.5; color: #cfcfd6; min-height: 60px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  #selected-card .label { color: #888; }
+  #status {
+    position: absolute; bottom: 12px; left: 12px; background: rgba(0,0,0,0.7);
+    color: #fff; padding: 6px 10px; border-radius: 4px; font-size: 12px;
+    pointer-events: none; opacity: 0; transition: opacity 0.3s;
+  }
+  #status.show { opacity: 1; }
+  #status.err { background: rgba(192,57,43,0.9); }
+  #hint-bar {
+    position: absolute; top: 12px; right: 12px; background: rgba(20,20,26,0.8);
+    color: #aaa; padding: 6px 10px; border-radius: 4px; font-size: 12px;
+    pointer-events: none;
+  }
+  #hint-bar b { color: #fff; }
+  .hint { font-size: 11px; color: #777; line-height: 1.5; }
+  details summary { cursor: pointer; font-size: 13px; color: #cfcfd6; padding: 6px 0; }
+  details[open] summary { color: #fff; }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <h1>nDB Explorer</h1>
+    <div class="hint">Drag the graph to rotate. Scroll to zoom. Drag any node to reposition. Click a node to inspect.</div>
+
+    <h2>Stats</h2>
+    <div id="stats"></div>
+
+    <h2>Types</h2>
+    <div id="type-legend"></div>
+
+    <h2>Add entity</h2>
+    <div class="form">
+      <label>Type</label>
+      <select id="add-ent-type"></select>
+      <label>Name</label>
+      <input id="add-ent-name" placeholder="e.g. KRAS" autocomplete="off">
+      <label>Properties (JSON)</label>
+      <textarea id="add-ent-props" placeholder='{"function":"GTPase"}'></textarea>
+      <button class="btn" id="add-ent-btn">Add entity</button>
+    </div>
+
+    <h2>Add hyperedge</h2>
+    <div class="form">
+      <label>Type</label>
+      <select id="add-hed-type"></select>
+      <label>Members (role-fillers)</label>
+      <div class="checkbox-list" id="add-hed-members"></div>
+      <label>Properties (JSON)</label>
+      <textarea id="add-hed-props" placeholder='{"pathway":"new_pathway"}'></textarea>
+      <button class="btn" id="add-hed-btn">Add hyperedge</button>
+    </div>
+
+    <h2>Selected</h2>
+    <div id="selected-card">Click a node or polygon centroid to inspect.</div>
+    <div class="row" style="margin-top:6px">
+      <button class="btn" id="pulse-btn" disabled>Pulse signal</button>
+      <button class="btn secondary" id="clear-highlights-btn" disabled>Clear glow</button>
+    </div>
+    <div class="hint" style="margin-top:4px">A pulse sends a burst of particles flowing out through every hyperedge the selected node participates in.</div>
+    <details style="margin-top:8px">
+      <summary>Delete selected</summary>
+      <div class="form" style="margin-top:6px">
+        <button class="btn danger" id="delete-btn" disabled>Delete</button>
+        <div class="hint">Commits a tombstone; the record becomes invisible at the next snapshot.</div>
+      </div>
+    </details>
+
+    <h2>Actions</h2>
+    <div class="row">
+      <button class="btn secondary" id="reload-btn">Reload graph</button>
+    </div>
+    <div class="hint" style="margin-top:14px">
+      Database: <code id="db-path">…</code><br>
+      API: <code id="api-url">…</code>
+    </div>
+  </aside>
+
+  <div id="graph-host">
+    <div id="hint-bar">drag to rotate · scroll to zoom · click a node to <b>highlight signal flow</b></div>
+    <div id="status"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/3d-force-graph@1.73.4/dist/3d-force-graph.min.js"></script>
+<script>
+// ─── Configuration ─────────────────────────────────────────────
+// The example seeds these so the page is self-describing.
+const API_URL = "http://127.0.0.1:8742";
+const DB_PATH = "/tmp/v22-explorer-ndb";
+
+// Reserved IDs from crates/ndb-renderer/examples/v22_explorer.rs.
+// Each is a (name → numeric id) mapping the example committed
+// dictionary records for, but the dictionary-resolve endpoint isn't
+// in v2.1 wire surface, so we mirror the constants here.
+const TYPES = {
+  protein:   { id: 1,   color: "#4a90e2", kind: "entity" },
+  gene:      { id: 2,   color: "#7ed321", kind: "entity" },
+  pathway:   { id: 3,   color: "#f5a623", kind: "entity" },
+  paper:     { id: 4,   color: "#bd10e0", kind: "entity" },
+  author:    { id: 5,   color: "#50e3c2", kind: "entity" },
+  complex:   { id: 100, color: "#cccccc", kind: "hyperedge" },
+  encodes:   { id: 101, color: "#cccccc", kind: "hyperedge" },
+  cites:     { id: 102, color: "#cccccc", kind: "hyperedge" },
+  authored:  { id: 103, color: "#cccccc", kind: "hyperedge" },
+};
+const PROP_NAME = 30;
+
+// Lookup helpers ───────────────────────────────────────────────
+const typeNameById = Object.fromEntries(
+  Object.entries(TYPES).map(([k, v]) => [v.id, k])
+);
+const colorForTypeId = (tid) => (TYPES[typeNameById[tid]]?.color || "#888");
+
+// ─── State ─────────────────────────────────────────────────────
+let graphData = { nodes: [], links: [] };
+let entitiesById = new Map();    // uuid → entity record
+let edgesById = new Map();       // uuid → hyperedge record (the synthetic centroid node)
+let selected = null;             // currently-selected node
+let highlightedLinks = new Set();// links lit up for signal-flow viz
+let pulseUntil = 0;              // timestamp until which the pulse burst is active
+let Graph = null;                // 3d-force-graph instance
+
+// ─── DOM refs ──────────────────────────────────────────────────
+const $stats = document.getElementById("stats");
+const $legend = document.getElementById("type-legend");
+const $selected = document.getElementById("selected-card");
+const $deleteBtn = document.getElementById("delete-btn");
+const $pulseBtn = document.getElementById("pulse-btn");
+const $clearHighlightsBtn = document.getElementById("clear-highlights-btn");
+const $entType = document.getElementById("add-ent-type");
+const $hedType = document.getElementById("add-hed-type");
+const $hedMembers = document.getElementById("add-hed-members");
+const $entName = document.getElementById("add-ent-name");
+const $entProps = document.getElementById("add-ent-props");
+const $hedProps = document.getElementById("add-hed-props");
+const $status = document.getElementById("status");
+document.getElementById("db-path").textContent = DB_PATH;
+document.getElementById("api-url").textContent = API_URL;
+
+// Populate type dropdowns once.
+for (const [name, def] of Object.entries(TYPES)) {
+  if (def.kind === "entity") {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    $entType.appendChild(opt);
+  } else {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    $hedType.appendChild(opt);
+  }
+}
+
+// ─── HTTP helpers ──────────────────────────────────────────────
+function showStatus(msg, err = false) {
+  $status.textContent = msg;
+  $status.classList.toggle("err", err);
+  $status.classList.add("show");
+  setTimeout(() => $status.classList.remove("show"), 2200);
+}
+
+async function api(path, opts = {}) {
+  const r = await fetch(API_URL + path, opts);
+  if (!r.ok) throw new Error(`${path} → ${r.status}`);
+  return r;
+}
+
+// /iter is JSONL — one record object per line.
+async function fetchAllRecords() {
+  const r = await api("/iter");
+  const text = await r.text();
+  const records = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      records.push(JSON.parse(line));
+    } catch (e) {
+      console.warn("skip bad line", e, line);
+    }
+  }
+  return records;
+}
+
+function uuidV7() {
+  // RFC 9562 v7 (millisecond timestamp + random). Browsers don't ship
+  // a built-in; this is good-enough for client-generated ids that
+  // the engine will accept.
+  const ts = BigInt(Date.now());
+  const high = (ts << 16n) | BigInt(Math.floor(Math.random() * 0x1000));
+  const lo = (BigInt(Math.floor(Math.random() * 0xffffffff)) << 32n)
+           | BigInt(Math.floor(Math.random() * 0xffffffff));
+  const hex = (high.toString(16).padStart(16, "0") + lo.toString(16).padStart(16, "0"));
+  // Set v7 + variant bits.
+  const b = hex.split("");
+  b[12] = "7";
+  b[16] = ["8", "9", "a", "b"][Math.floor(Math.random() * 4)];
+  return `${b.slice(0, 8).join("")}-${b.slice(8, 12).join("")}-${b.slice(12, 16).join("")}-${b.slice(16, 20).join("")}-${b.slice(20, 32).join("")}`;
+}
+
+async function commit(records) {
+  const body = JSON.stringify({ records });
+  const r = await fetch(API_URL + "/commit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(`/commit → ${r.status}: ${t}`);
+  }
+  return r.json();
+}
+
+// ─── Graph build ───────────────────────────────────────────────
+function buildGraphFromRecords(records) {
+  const nodes = [];
+  const links = [];
+  entitiesById = new Map();
+  edgesById = new Map();
+  // Entities first.
+  for (const rec of records) {
+    if (rec.kind === "entity") {
+      entitiesById.set(rec.entity_id, rec);
+      nodes.push({
+        id: rec.entity_id,
+        nodeKind: "entity",
+        type_id: rec.type_id,
+        label: extractName(rec),
+        record: rec,
+      });
+    }
+  }
+  // Hyperedges become a centroid node + spokes to each role-filler.
+  // For arity-2 edges that's effectively a single link; for arity 3+
+  // it's the canonical bipartite reduction (hyperedge = node).
+  for (const rec of records) {
+    if (rec.kind === "hyper_edge") {
+      edgesById.set(rec.hyperedge_id, rec);
+      // Skip the edge if any role-filler is missing from our entity
+      // set (orphan reference — shouldn't happen).
+      const memberIds = rec.roles.map(r => r.entity_id);
+      if (!memberIds.every(eid => entitiesById.has(eid))) continue;
+      nodes.push({
+        id: rec.hyperedge_id,
+        nodeKind: "hyperedge",
+        type_id: rec.type_id,
+        label: extractName(rec) || `${typeNameById[rec.type_id] || "edge"}(${memberIds.length})`,
+        record: rec,
+      });
+      for (const m of memberIds) {
+        links.push({
+          source: rec.hyperedge_id,
+          target: m,
+          edge_id: rec.hyperedge_id,
+        });
+      }
+    }
+  }
+  return { nodes, links };
+}
+
+function extractName(rec) {
+  const props = rec.properties || [];
+  for (const p of props) {
+    if (p.prop_id === PROP_NAME && p.value && p.value.value) return p.value.value;
+  }
+  // Fallback to the first string property.
+  for (const p of props) {
+    if (p.value && typeof p.value.value === "string") return p.value.value;
+  }
+  return null;
+}
+
+function shortId(uuid) {
+  return uuid ? uuid.slice(0, 8) : "?";
+}
+
+// ─── Render ────────────────────────────────────────────────────
+function updateStats() {
+  const nEntities = entitiesById.size;
+  const nEdges = edgesById.size;
+  $stats.innerHTML = `
+    <div class="stat"><span>Entities</span><span>${nEntities}</span></div>
+    <div class="stat"><span>Hyperedges</span><span>${nEdges}</span></div>
+    <div class="stat"><span>Links</span><span>${graphData.links.length}</span></div>
+  `;
+  // Type breakdown.
+  const counts = {};
+  for (const n of graphData.nodes) {
+    const tname = typeNameById[n.type_id] || `type ${n.type_id}`;
+    counts[tname] = (counts[tname] || 0) + 1;
+  }
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  $legend.innerHTML = sorted.map(([name, n]) => {
+    const c = TYPES[name]?.color || "#888";
+    return `<div class="type-row"><div class="type-dot" style="background:${c}"></div><span style="flex:1">${name}</span><span>${n}</span></div>`;
+  }).join("");
+}
+
+function refreshHedMemberList() {
+  const opts = Array.from(entitiesById.values())
+    .sort((a, b) => (extractName(a) || "").localeCompare(extractName(b) || ""))
+    .map(e => {
+      const tname = typeNameById[e.type_id] || `t${e.type_id}`;
+      return `<label><input type="checkbox" value="${e.entity_id}"> ${extractName(e) || shortId(e.entity_id)} <span style="color:#666">·${tname}</span></label>`;
+    });
+  $hedMembers.innerHTML = opts.join("") || '<span style="color:#666;font-size:12px">No entities yet.</span>';
+}
+
+// Compute the set of links that should "light up" given the selected
+// node. For an entity node: all links incident on the entity AND all
+// links incident on any hyperedge the entity participates in (so the
+// signal radiates out to every co-member). For a hyperedge node: just
+// the links of that one edge.
+function computeHighlightedLinks(node) {
+  const lit = new Set();
+  if (!node) return lit;
+  // Direct links touching the node (works for both entity and hyperedge centroids).
+  const incidentEdgeIds = new Set();
+  for (const link of graphData.links) {
+    const src = typeof link.source === "object" ? link.source.id : link.source;
+    const tgt = typeof link.target === "object" ? link.target.id : link.target;
+    if (src === node.id || tgt === node.id) {
+      lit.add(link);
+      incidentEdgeIds.add(link.edge_id);
+    }
+  }
+  // If we selected an ENTITY, also light up every other link of every
+  // hyperedge the entity is in — that's "signal flowing to the rest
+  // of the network".
+  if (node.nodeKind === "entity") {
+    for (const link of graphData.links) {
+      if (incidentEdgeIds.has(link.edge_id)) lit.add(link);
+    }
+  }
+  return lit;
+}
+
+function applyHighlights() {
+  const now = Date.now();
+  const inPulse = now < pulseUntil;
+  Graph
+    .linkDirectionalParticles(link => {
+      if (highlightedLinks.has(link)) return inPulse ? 10 : 4;
+      return 1;
+    })
+    .linkDirectionalParticleSpeed(link => {
+      if (highlightedLinks.has(link)) return inPulse ? 0.012 : 0.006;
+      return 0.002;
+    })
+    .linkDirectionalParticleWidth(link => {
+      if (highlightedLinks.has(link)) return inPulse ? 3.0 : 2.0;
+      return 0.6;
+    })
+    .linkDirectionalParticleColor(link => {
+      if (highlightedLinks.has(link)) return inPulse ? "#ffe066" : "#4a90e2";
+      return "rgba(255,255,255,0.35)";
+    })
+    .linkColor(link => highlightedLinks.has(link) ? "rgba(74,144,226,0.55)" : "rgba(255,255,255,0.12)")
+    .linkWidth(link => highlightedLinks.has(link) ? 1.5 : 0.5);
+  $clearHighlightsBtn.disabled = highlightedLinks.size === 0;
+}
+
+function setSelected(node) {
+  selected = node;
+  highlightedLinks = computeHighlightedLinks(node);
+  $pulseBtn.disabled = !node;
+  renderSelected();
+  applyHighlights();
+}
+
+function pulseSignal() {
+  if (!selected) return;
+  pulseUntil = Date.now() + 1500;
+  applyHighlights();
+  // After the burst window, drop back to the steady-state lit style.
+  setTimeout(() => {
+    if (Date.now() >= pulseUntil) applyHighlights();
+  }, 1600);
+}
+
+function clearHighlights() {
+  selected = null;
+  highlightedLinks = new Set();
+  pulseUntil = 0;
+  $pulseBtn.disabled = true;
+  renderSelected();
+  applyHighlights();
+}
+
+function renderSelected() {
+  if (!selected) {
+    $selected.textContent = "Click a node or polygon centroid to inspect.";
+    $deleteBtn.disabled = true;
+    return;
+  }
+  const r = selected.record;
+  const lines = [];
+  if (selected.nodeKind === "entity") {
+    lines.push(`<span class="label">entity</span> ${shortId(r.entity_id)}`);
+    lines.push(`<span class="label">type</span> ${typeNameById[r.type_id] || r.type_id}`);
+  } else {
+    lines.push(`<span class="label">hyperedge</span> ${shortId(r.hyperedge_id)}`);
+    lines.push(`<span class="label">type</span> ${typeNameById[r.type_id] || r.type_id}`);
+    lines.push(`<span class="label">arity</span> ${r.roles.length}`);
+    for (const role of r.roles) {
+      const ent = entitiesById.get(role.entity_id);
+      lines.push(`<span class="label">role ${role.role_id}</span> ${ent ? extractName(ent) : shortId(role.entity_id)}`);
+    }
+  }
+  for (const p of r.properties || []) {
+    const v = p.value && (p.value.value ?? p.value);
+    lines.push(`<span class="label">p${p.prop_id}</span> ${typeof v === "object" ? JSON.stringify(v) : String(v)}`);
+  }
+  $selected.innerHTML = lines.join("<br>");
+  $deleteBtn.disabled = false;
+}
+
+function applyGraph() {
+  Graph.graphData(graphData);
+  updateStats();
+  refreshHedMemberList();
+  // Recompute highlight set against the fresh link references (the
+  // library replaces the link objects on graphData() call).
+  if (selected) {
+    highlightedLinks = computeHighlightedLinks(selected);
+  }
+  applyHighlights();
+}
+
+// ─── Mutations ─────────────────────────────────────────────────
+function jsonValueFor(v) {
+  if (typeof v === "number" && Number.isInteger(v)) return { tag: "i64", value: v };
+  if (typeof v === "number") return { tag: "f64", value: v };
+  if (typeof v === "boolean") return { tag: "bool", value: v };
+  return { tag: "string", value: String(v) };
+}
+
+function parsePropsField(text) {
+  const t = (text || "").trim();
+  if (!t) return [];
+  const obj = JSON.parse(t);
+  return Object.entries(obj).map(([k, v]) => ({
+    prop_id: parseInt(k, 10) || hashPropKey(k),
+    value: jsonValueFor(v),
+  }));
+}
+
+// Hash a string key into a stable prop_id slot — picks the 1000+
+// reserved-but-unused range so it doesn't collide with the seed schema.
+function hashPropKey(k) {
+  let h = 5381;
+  for (const ch of k) h = ((h << 5) + h + ch.charCodeAt(0)) | 0;
+  return 1000 + Math.abs(h % 9999);
+}
+
+async function addEntity() {
+  try {
+    const type = $entType.value;
+    const def = TYPES[type];
+    if (!def) throw new Error("unknown type");
+    const name = $entName.value.trim();
+    if (!name) throw new Error("name required");
+    const userProps = parsePropsField($entProps.value);
+    const eid = uuidV7();
+    const properties = [
+      { prop_id: PROP_NAME, value: { tag: "string", value: name } },
+      ...userProps,
+    ];
+    await commit([{
+      kind: "entity",
+      entity_id: eid,
+      type_id: def.id,
+      tx_id_assert: 0,
+      tx_id_supersede: "active",
+      properties,
+    }]);
+    $entName.value = "";
+    $entProps.value = "";
+    showStatus(`Added ${type}: ${name}`);
+    await reload();
+  } catch (e) {
+    showStatus("Error: " + e.message, true);
+  }
+}
+
+async function addHyperedge() {
+  try {
+    const type = $hedType.value;
+    const def = TYPES[type];
+    if (!def) throw new Error("unknown type");
+    const members = Array.from($hedMembers.querySelectorAll("input:checked"))
+      .map(cb => cb.value);
+    if (members.length === 0) throw new Error("pick at least one member");
+    const userProps = parsePropsField($hedProps.value);
+    const hid = uuidV7();
+    await commit([{
+      kind: "hyper_edge",
+      hyperedge_id: hid,
+      type_id: def.id,
+      tx_id_assert: 0,
+      tx_id_supersede: "active",
+      roles: members.map((m, i) => ({ role_id: 10 + i, entity_id: m })),
+      properties: userProps,
+    }]);
+    $hedMembers.querySelectorAll("input").forEach(cb => cb.checked = false);
+    $hedProps.value = "";
+    showStatus(`Added ${type} with ${members.length} members`);
+    await reload();
+  } catch (e) {
+    showStatus("Error: " + e.message, true);
+  }
+}
+
+async function deleteSelected() {
+  if (!selected) return;
+  try {
+    const target = selected.nodeKind === "entity"
+      ? selected.record.entity_id
+      : selected.record.hyperedge_id;
+    // The tx_id_supersede field is required by the wire schema but
+    // the engine restamps it to the actual commit tx — any number is
+    // accepted; we send 0.
+    await commit([{
+      kind: "tombstone",
+      target_id: target,
+      tx_id_supersede: 0,
+    }]);
+    showStatus("Deleted record");
+    selected = null;
+    renderSelected();
+    await reload();
+  } catch (e) {
+    showStatus("Error: " + e.message, true);
+  }
+}
+
+async function reload() {
+  try {
+    const records = await fetchAllRecords();
+    graphData = buildGraphFromRecords(records);
+    applyGraph();
+  } catch (e) {
+    showStatus("Reload failed: " + e.message, true);
+  }
+}
+
+// ─── Wire UI ───────────────────────────────────────────────────
+document.getElementById("add-ent-btn").addEventListener("click", addEntity);
+document.getElementById("add-hed-btn").addEventListener("click", addHyperedge);
+document.getElementById("delete-btn").addEventListener("click", deleteSelected);
+document.getElementById("reload-btn").addEventListener("click", reload);
+$pulseBtn.addEventListener("click", pulseSignal);
+$clearHighlightsBtn.addEventListener("click", clearHighlights);
+
+// ─── Boot the 3D graph ─────────────────────────────────────────
+Graph = ForceGraph3D()(document.getElementById("graph-host"))
+  .backgroundColor("#0d0d12")
+  .nodeRelSize(5)
+  .nodeColor(n => colorForTypeId(n.type_id))
+  .nodeLabel(n => `${n.label || shortId(n.id)} (${typeNameById[n.type_id] || n.type_id})`)
+  .linkColor(() => "rgba(255,255,255,0.18)")
+  .linkOpacity(0.5)
+  .linkWidth(0.5)
+  .onNodeClick(n => {
+    setSelected(n);
+    // Centre camera on the clicked node.
+    const dist = 80;
+    const dr = dist / Math.hypot(n.x || 1, n.y || 1, n.z || 1);
+    Graph.cameraPosition(
+      { x: n.x * dr + n.x, y: n.y * dr + n.y, z: n.z * dr + n.z },
+      n,
+      900,
+    );
+  })
+  .onBackgroundClick(() => clearHighlights())
+  .onNodeDragEnd(n => {
+    // Pin nodes after drag so they don't drift back.
+    n.fx = n.x;
+    n.fy = n.y;
+    n.fz = n.z;
+  });
+
+// First load.
+reload();
+</script>
+</body>
+</html>

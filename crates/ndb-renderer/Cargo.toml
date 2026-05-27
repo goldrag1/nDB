@@ -17,5 +17,11 @@ base64     = { workspace = true }
 ndb-engine = { path = "../ndb-engine" }
 ndb-slicer = { path = "../ndb-slicer" }
 
+[dev-dependencies]
+# Only the v22_explorer example needs ndb-server; keeping it as a
+# dev-dep avoids forcing every consumer of ndb-renderer to link the
+# HTTP server.
+ndb-server = { path = "../ndb-server" }
+
 [lints]
 workspace = true
