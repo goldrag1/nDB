@@ -40,7 +40,8 @@ use crate::db::{Database, DatabaseError, Manifest, ManifestEntry};
 use crate::error::EncodeError;
 use crate::id::{EntityId, HyperedgeId, PropertyId, TX_ACTIVE, TxId, TypeId};
 use crate::index::{
-    AdjacencyIndex, Distance, HyperEdgeTypeIndex, Index, LookupKeyIndex, VectorIndex,
+    AdjacencyIndex, Distance, HyperEdgeTypeIndex, Index, LookupKeyIndex, PropertyBTreeIndex,
+    VectorIndex,
 };
 use crate::memtable::Memtable;
 use crate::mvcc::{Resolved, resolve_iter, visible_at};
@@ -132,6 +133,9 @@ pub struct Engine {
     type_cluster: HyperEdgeTypeIndex,
     /// Brute-force vector index for k-NN search over embedding props.
     vector: VectorIndex,
+    /// Property B-tree — `(type, prop, value) → entities` for exact +
+    /// range queries on registered columns.
+    property_btree: PropertyBTreeIndex,
     /// Constraint enforcement (required properties, value-tag checks).
     validation: ValidationEngine,
     /// Database directory handle (owns the LOCK + current MANIFEST).
@@ -156,6 +160,7 @@ impl Engine {
             adjacency: AdjacencyIndex::new(),
             type_cluster: HyperEdgeTypeIndex::new(),
             vector: VectorIndex::new(),
+            property_btree: PropertyBTreeIndex::new(),
             validation: ValidationEngine::new(),
             db,
         })
@@ -218,6 +223,7 @@ impl Engine {
             adjacency: AdjacencyIndex::new(),
             type_cluster: HyperEdgeTypeIndex::new(),
             vector: VectorIndex::new(),
+            property_btree: PropertyBTreeIndex::new(),
             validation: ValidationEngine::new(),
             db,
         };
@@ -242,6 +248,7 @@ impl Engine {
         self.adjacency.clear();
         self.type_cluster.clear();
         self.vector.clear();
+        self.property_btree.clear();
         // SSTables (sstables[0] is newest layer; iterate in declared order).
         for sst in &mut self.sstables {
             for item in sst.iter() {
@@ -256,6 +263,7 @@ impl Engine {
                 self.adjacency.apply(&rec, tx);
                 self.type_cluster.apply(&rec, tx);
                 self.vector.apply(&rec, tx);
+                self.property_btree.apply(&rec, tx);
             }
         }
         // Memtable.
@@ -270,6 +278,7 @@ impl Engine {
             self.adjacency.apply(rec, tx);
             self.type_cluster.apply(rec, tx);
             self.vector.apply(rec, tx);
+            self.property_btree.apply(rec, tx);
         }
         Ok(())
     }
@@ -329,6 +338,40 @@ impl Engine {
     /// registration if you need backfill.
     pub fn register_vector_property(&mut self, property_id: PropertyId) {
         self.vector.register_property(property_id);
+    }
+
+    /// Declare a `(type_id, property_id)` pair for B-tree indexing. Enables
+    /// `property_lookup` (exact) and `property_range` (sorted range) queries
+    /// scoped to that type/property combination.
+    pub fn register_property_btree(&mut self, type_id: TypeId, property_id: PropertyId) {
+        self.property_btree.register(type_id, property_id);
+    }
+
+    /// Exact-match lookup: every entity of `type_id` whose `property_id`
+    /// equals `value`. Empty if the pair isn't registered or no match.
+    #[must_use]
+    pub fn property_lookup(
+        &self,
+        type_id: TypeId,
+        property_id: PropertyId,
+        value: &Value,
+    ) -> Vec<EntityId> {
+        self.property_btree.find(type_id, property_id, value)
+    }
+
+    /// Range lookup: every entity of `type_id` whose `property_id` value
+    /// falls in `[low, high]` (inclusive on both sides; `None` =
+    /// unbounded). Useful for "all customers with age in 18..=65" style
+    /// queries.
+    #[must_use]
+    pub fn property_range(
+        &self,
+        type_id: TypeId,
+        property_id: PropertyId,
+        low: Option<&Value>,
+        high: Option<&Value>,
+    ) -> Vec<EntityId> {
+        self.property_btree.range(type_id, property_id, low, high)
     }
 
     /// k-nearest-neighbor search over a vector-indexed property. Returns
@@ -777,6 +820,7 @@ impl WriteTxn<'_> {
             self.engine.adjacency.apply(&r, self.tx_id);
             self.engine.type_cluster.apply(&r, self.tx_id);
             self.engine.vector.apply(&r, self.tx_id);
+            self.engine.property_btree.apply(&r, self.tx_id);
             self.engine.memtable.insert(r)?;
         }
         Ok(self.tx_id)
@@ -1309,6 +1353,52 @@ mod tests {
         hids.sort();
         assert_eq!(alice_hits, hids);
         assert_eq!(bob_hits, hids);
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn property_btree_exact_and_range_after_restart() {
+        let dir = temp_dir("propbtree");
+        let cust = TypeId::new(1);
+        let age = PropertyId::new(10);
+        let mut customers: Vec<(EntityId, i64)> = Vec::new();
+        {
+            let mut engine = Engine::create(&dir).unwrap();
+            engine.register_property_btree(cust, age);
+            for v in [18_i64, 25, 30, 30, 42, 65, 70] {
+                let id = EntityId::now_v7();
+                customers.push((id, v));
+                let mut txn = engine.begin_write();
+                txn.put_entity(EntityRecord {
+                    entity_id: id,
+                    type_id: cust,
+                    tx_id_assert: TxId::new(0),
+                    tx_id_supersede: TxId::ACTIVE,
+                    properties: vec![(age, Value::I64(v))],
+                });
+                txn.commit().unwrap();
+            }
+            // Exact match: two with age=30.
+            let at_30 = engine.property_lookup(cust, age, &Value::I64(30));
+            assert_eq!(at_30.len(), 2);
+            // Range [25, 42].
+            let in_range =
+                engine.property_range(cust, age, Some(&Value::I64(25)), Some(&Value::I64(42)));
+            // 25, 30, 30, 42 = 4 entities.
+            assert_eq!(in_range.len(), 4);
+            engine.flush().unwrap();
+            engine.close().unwrap();
+        }
+        // Reopen → registrations gone (in-memory in v1). Re-register +
+        // backfill via rebuild_indexes.
+        let mut engine = Engine::open(&dir).unwrap();
+        engine.register_property_btree(cust, age);
+        engine.rebuild_indexes().unwrap();
+        let in_range =
+            engine.property_range(cust, age, Some(&Value::I64(20)), Some(&Value::I64(70)));
+        // 25, 30, 30, 42, 65, 70 = 6.
+        assert_eq!(in_range.len(), 6);
         engine.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }

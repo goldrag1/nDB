@@ -201,7 +201,8 @@ fn auth_token_required_when_set() {
     assert_eq!(resp.status, 401);
 
     // Wrong token → 401.
-    let req = "GET /iter HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer wrong\r\nConnection: close\r\n\r\n";
+    let req =
+        "GET /iter HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer wrong\r\nConnection: close\r\n\r\n";
     let resp = raw_request(addr, req.as_bytes());
     assert_eq!(resp.status, 401);
 

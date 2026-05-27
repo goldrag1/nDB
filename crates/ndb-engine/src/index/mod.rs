@@ -45,6 +45,7 @@ use crate::record::Record;
 
 pub mod adjacency;
 pub mod lookup_key;
+pub mod property_btree;
 pub mod type_cluster;
 pub mod vector;
 
@@ -66,5 +67,6 @@ pub trait Index {
 
 pub use adjacency::AdjacencyIndex;
 pub use lookup_key::LookupKeyIndex;
+pub use property_btree::PropertyBTreeIndex;
 pub use type_cluster::HyperEdgeTypeIndex;
 pub use vector::{Distance, VectorIndex};
