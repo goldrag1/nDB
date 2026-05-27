@@ -9,7 +9,7 @@ fn usage() {
     eprintln!(
         "Usage: ndb-server --path <database-dir> [--bind 127.0.0.1:8742]\n\
          \n\
-         Routes:\n  GET  /health\n  POST /commit\n  GET  /read/:uuid\n  GET  /iter\n"
+         Routes:\n  GET  /health\n  POST /commit\n  GET  /read/:uuid\n  GET  /iter\n  POST /flush\n  POST /compact\n"
     );
 }
 

@@ -1,0 +1,19 @@
+[package]
+name         = "ndb-cli"
+description  = "nDB command-line client over the HTTP wire protocol"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+authors      = { workspace = true }
+repository   = { workspace = true }
+license      = { workspace = true }
+
+[[bin]]
+name = "ndb"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

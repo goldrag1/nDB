@@ -140,6 +140,8 @@ impl Server {
                 self.handle_read(uuid_str, out)
             }
             ("GET", "/iter") => self.handle_iter(out),
+            ("POST", "/flush") => self.handle_flush(out),
+            ("POST", "/compact") => self.handle_compact(out),
             _ => write_error(
                 out,
                 404,
@@ -147,6 +149,36 @@ impl Server {
                 &format!("no route for {} {}", req.method, req.path),
             ),
         }
+    }
+
+    fn handle_flush(&self, out: &mut TcpStream) -> Result<(), ServerError> {
+        let mut engine = self.engine.lock().expect("engine mutex poisoned");
+        engine.flush()?;
+        let (records, bytes) = engine.memtable_stats();
+        write_json(
+            out,
+            200,
+            &serde_json::json!({
+                "memtable_records": records,
+                "memtable_bytes": bytes,
+                "sstable_count": engine.sstable_count(),
+            }),
+        )
+    }
+
+    fn handle_compact(&self, out: &mut TcpStream) -> Result<(), ServerError> {
+        let mut engine = self.engine.lock().expect("engine mutex poisoned");
+        let stats = engine.compact()?;
+        write_json(
+            out,
+            200,
+            &serde_json::json!({
+                "records_in": stats.records_in,
+                "records_out": stats.records_out,
+                "sstables_in": stats.sstables_in,
+                "new_sstable_seq": stats.new_sstable_seq,
+            }),
+        )
     }
 
     fn handle_commit(&self, body: &[u8], out: &mut TcpStream) -> Result<(), ServerError> {
