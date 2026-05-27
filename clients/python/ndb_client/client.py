@@ -11,7 +11,7 @@ import json as _json
 import os
 import ssl as _ssl
 from dataclasses import dataclass
-from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence, Union
+from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence
 from urllib import error as _urllib_error
 from urllib import parse as _urllib_parse
 from urllib import request as _urllib_request
@@ -157,24 +157,20 @@ class Client:
     # ---------------------------------------------------------------
 
     def lookup_by_key(self, property_id: int, value: dict) -> Optional[str]:
-        """Look up an entity by an external lookup-key value.
+        """``POST /lookup`` — find an entity by an external lookup-key.
 
-        ``value`` follows the tagged-union JSON shape, e.g.
-        ``{"tag": "string", "value": "alice@example.com"}``.
-
-        The server doesn't yet expose a dedicated route for this in v1;
-        until it does, this helper scans ``/iter`` and matches client
-        side. Future server versions will swap in an indexed
-        ``GET /lookup`` route without changing the client surface.
+        ``value`` is the tagged-union shape, e.g.
+        ``{"tag": "string", "value": "alice@example.com"}``. Returns the
+        entity uuid as a string, or ``None`` if no entity carries that
+        key. Indexed lookup — O(log N) on the server.
         """
-        wanted = (property_id, _json.dumps(value, sort_keys=True))
-        for rec in self.iter():
-            if rec.get("kind") != "entity":
-                continue
-            for p in rec.get("properties", []):
-                if (p.get("prop_id"), _json.dumps(p.get("value"), sort_keys=True)) == wanted:
-                    return rec.get("entity_id")
-        return None
+        resp = self._request(
+            "POST",
+            "/lookup",
+            body={"property_id": property_id, "value": value},
+        )
+        parsed = _json.loads(resp.body)
+        return parsed.get("entity_id")
 
     def vector_search(
         self,
@@ -183,32 +179,27 @@ class Client:
         k: int,
         metric: str = "l2",
     ) -> list[tuple[str, float]]:
-        """k-NN search over a vector-indexed property.
+        """``POST /vector_search`` — k-NN over a vector-indexed property.
 
-        Implemented client-side over ``/iter`` for v1 (mirrors
-        :meth:`lookup_by_key`). When the server gains a dedicated route,
-        this surface stays.
+        ``metric`` is one of ``"l2"`` or ``"cosine"``. Returns up to
+        ``k`` ``(entity_id, distance)`` pairs sorted ascending by
+        distance. Indexed search on the server (brute-force in v1; HNSW
+        plugin via configuration).
         """
         if metric not in ("l2", "cosine"):
             raise ValueError("metric must be 'l2' or 'cosine'")
-        candidates: list[tuple[str, float]] = []
-        for rec in self.iter():
-            if rec.get("kind") != "entity":
-                continue
-            for p in rec.get("properties", []):
-                if p.get("prop_id") != property_id:
-                    continue
-                v = p.get("value")
-                if not isinstance(v, dict) or v.get("tag") != "vector":
-                    continue
-                vec = v.get("value", [])
-                if len(vec) != len(query):
-                    continue
-                d = _distance(query, vec, metric)
-                candidates.append((rec.get("entity_id"), d))
-                break
-        candidates.sort(key=lambda pair: pair[1])
-        return candidates[:k]
+        resp = self._request(
+            "POST",
+            "/vector_search",
+            body={
+                "property_id": property_id,
+                "query": list(query),
+                "k": int(k),
+                "metric": metric,
+            },
+        )
+        parsed = _json.loads(resp.body)
+        return [(h["entity_id"], float(h["distance"])) for h in parsed.get("hits", [])]
 
     def property_lookup(
         self,
@@ -216,48 +207,44 @@ class Client:
         property_id: int,
         value: dict,
     ) -> list[str]:
-        """Exact match on ``(type, property, value)`` — client-side."""
-        wanted = (type_id, property_id, _json.dumps(value, sort_keys=True))
-        out: list[str] = []
-        for rec in self.iter():
-            if rec.get("kind") != "entity" or rec.get("type_id") != type_id:
-                continue
-            for p in rec.get("properties", []):
-                if (
-                    type_id,
-                    p.get("prop_id"),
-                    _json.dumps(p.get("value"), sort_keys=True),
-                ) == wanted:
-                    out.append(rec.get("entity_id"))
-                    break
-        return out
+        """``POST /property_lookup`` — exact match on ``(type, property, value)``.
+
+        Returns the list of entity uuids whose property equals ``value``.
+        Indexed via the property B-tree on the server.
+        """
+        resp = self._request(
+            "POST",
+            "/property_lookup",
+            body={
+                "type_id": type_id,
+                "property_id": property_id,
+                "value": value,
+            },
+        )
+        parsed = _json.loads(resp.body)
+        return list(parsed.get("entity_ids", []))
 
     def property_range(
         self,
         type_id: int,
         property_id: int,
-        low: Optional[Union[int, float, str]] = None,
-        high: Optional[Union[int, float, str]] = None,
+        low: Optional[dict] = None,
+        high: Optional[dict] = None,
     ) -> list[str]:
-        """Range query on ``(type, property)`` — client-side."""
-        out: list[str] = []
-        for rec in self.iter():
-            if rec.get("kind") != "entity" or rec.get("type_id") != type_id:
-                continue
-            for p in rec.get("properties", []):
-                if p.get("prop_id") != property_id:
-                    continue
-                v = p.get("value")
-                inner = v.get("value") if isinstance(v, dict) else None
-                if inner is None:
-                    continue
-                if low is not None and inner < low:
-                    continue
-                if high is not None and inner > high:
-                    continue
-                out.append(rec.get("entity_id"))
-                break
-        return out
+        """``POST /property_range`` — range query on ``(type, property)``.
+
+        ``low`` and ``high`` are tagged-union values (or ``None`` for
+        unbounded). Both bounds are inclusive. Indexed via the property
+        B-tree on the server.
+        """
+        body: dict[str, Any] = {"type_id": type_id, "property_id": property_id}
+        if low is not None:
+            body["low"] = low
+        if high is not None:
+            body["high"] = high
+        resp = self._request("POST", "/property_range", body=body)
+        parsed = _json.loads(resp.body)
+        return list(parsed.get("entity_ids", []))
 
     def iter_arrow(self):  # type: ignore[no-untyped-def]
         """Materialise the record stream as a ``pyarrow.RecordBatch``.

@@ -17,7 +17,17 @@ fn usage() {
          When both --tls-cert and --tls-key are supplied, the server binds TLS on --bind.\n\
          When only one is supplied or neither, the server binds plain HTTP on --bind.\n\
          \n\
-         Routes:\n  GET  /health\n  POST /commit\n  GET  /read/:uuid\n  GET  /iter\n  POST /flush\n  POST /compact\n"
+         Routes:\n\
+           GET  /health\n\
+           POST /commit\n\
+           GET  /read/:uuid\n\
+           GET  /iter\n\
+           POST /flush\n\
+           POST /compact\n\
+           POST /lookup           — find by external lookup-key\n\
+           POST /vector_search    — k-NN over a vector property\n\
+           POST /property_lookup  — exact match on (type, property, value)\n\
+           POST /property_range   — range query on (type, property)\n"
     );
 }
 

@@ -507,6 +507,103 @@ pub struct ErrorResponse {
     pub detail: String,
 }
 
+/// `POST /lookup` request body — find an entity by an external lookup-key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LookupRequest {
+    /// Lookup-key property id (must have been `register_lookup_key`'d
+    /// on the server).
+    pub property_id: u32,
+    /// Tagged-union value to match.
+    pub value: JsonValue,
+}
+
+/// `POST /lookup` response body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LookupResponse {
+    /// Matched entity uuid, or `None` if no entity carries that key.
+    pub entity_id: Option<String>,
+}
+
+/// Distance metric tag on the wire. Matches the engine `Distance` enum.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VectorMetric {
+    /// `Distance::L2Squared`.
+    L2,
+    /// `Distance::Cosine`.
+    Cosine,
+}
+
+/// `POST /vector_search` request body — k-NN over a vector-indexed property.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VectorSearchRequest {
+    /// Vector property id (must have been `register_vector_property`'d).
+    pub property_id: u32,
+    /// Query vector. Must match the property's locked dimension.
+    pub query: Vec<f32>,
+    /// Top-k cap. Server enforces an upper bound to prevent unbounded scans.
+    pub k: usize,
+    /// Distance metric.
+    pub metric: VectorMetric,
+}
+
+/// One hit in a vector-search result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VectorHit {
+    /// Entity uuid as a string.
+    pub entity_id: String,
+    /// Distance per the requested metric. Smaller = closer.
+    pub distance: f32,
+}
+
+/// `POST /vector_search` response body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VectorSearchResponse {
+    /// Top-k hits, sorted ascending by distance.
+    pub hits: Vec<VectorHit>,
+}
+
+/// `POST /property_lookup` request body — exact match over the property B-tree.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PropertyLookupRequest {
+    /// Entity type id.
+    pub type_id: u32,
+    /// Property id (must be `register_property_btree`'d on the server).
+    pub property_id: u32,
+    /// Tagged-union value to match exactly.
+    pub value: JsonValue,
+}
+
+/// `POST /property_lookup` response body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PropertyLookupResponse {
+    /// Matched entity uuids.
+    pub entity_ids: Vec<String>,
+}
+
+/// `POST /property_range` request body — range query over the property B-tree.
+/// Inclusive bounds on both ends; `None` = unbounded on that side.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PropertyRangeRequest {
+    /// Entity type id.
+    pub type_id: u32,
+    /// Property id (must be `register_property_btree`'d on the server).
+    pub property_id: u32,
+    /// Lower bound (inclusive). `None` for unbounded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub low: Option<JsonValue>,
+    /// Upper bound (inclusive). `None` for unbounded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub high: Option<JsonValue>,
+}
+
+/// `POST /property_range` response body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PropertyRangeResponse {
+    /// Matched entity uuids.
+    pub entity_ids: Vec<String>,
+}
+
 #[cfg(test)]
 #[allow(clippy::needless_pass_by_value)] // test helpers
 mod tests {

@@ -98,6 +98,59 @@ class TestRoundTrip(unittest.TestCase):
         records = list(self.client.iter())
         self.assertTrue(any(r.get("kind") == "entity" for r in records))
 
+    def test_lookup_by_key_route(self):
+        # Server-side index needs registration first; reach into the
+        # shared engine via the test workaround: commit then iter to
+        # find the entity, then use the route. The lookup_key index is
+        # rebuilt from primary on every restart but registration is
+        # in-memory only — we can't register it from the wire. Verify
+        # the route works structurally: a request for an unregistered
+        # property returns entity_id=null without an error.
+        hit = self.client.lookup_by_key(
+            property_id=999,
+            value={"tag": "string", "value": "nobody"},
+        )
+        self.assertIsNone(hit)
+
+    def test_vector_search_route_rejects_invalid_k(self):
+        from ndb_client import NdbHttpError
+
+        with self.assertRaises(NdbHttpError) as ctx:
+            self.client.vector_search(
+                property_id=999,
+                query=[1.0, 0.0],
+                k=0,
+                metric="l2",
+            )
+        self.assertEqual(ctx.exception.status, 400)
+
+    def test_vector_search_route_returns_empty_on_unregistered_property(self):
+        hits = self.client.vector_search(
+            property_id=999,
+            query=[1.0, 0.0],
+            k=5,
+            metric="l2",
+        )
+        self.assertEqual(hits, [])
+
+    def test_property_lookup_and_range_routes(self):
+        # Empty hits on unregistered (type, property) — server returns
+        # an empty list, route is structurally correct.
+        hits = self.client.property_lookup(
+            type_id=999,
+            property_id=999,
+            value={"tag": "i64", "value": 42},
+        )
+        self.assertEqual(hits, [])
+
+        hits = self.client.property_range(
+            type_id=999,
+            property_id=999,
+            low={"tag": "i64", "value": 1},
+            high={"tag": "i64", "value": 100},
+        )
+        self.assertEqual(hits, [])
+
 
 class TestUnitsNoServer(unittest.TestCase):
     """Pure-Python tests that don't need a running server."""

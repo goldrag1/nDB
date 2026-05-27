@@ -44,14 +44,25 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ndb_engine::{
-    CommitRequest, CommitResponse, Engine, EngineError, ErrorResponse, JsonRecord, ReadResponse,
-    Record, Resolved, TxId, WireError, WriteTxn,
+    CommitRequest, CommitResponse, Engine, EngineError, ErrorResponse, JsonRecord, JsonValue,
+    LookupRequest, LookupResponse, PropertyLookupRequest, PropertyLookupResponse,
+    PropertyRangeRequest, PropertyRangeResponse, ReadResponse, Record, Resolved, TxId, VectorHit,
+    VectorMetric, VectorSearchRequest, VectorSearchResponse, WireError, WriteTxn,
 };
+use ndb_engine::id::{PropertyId, TypeId};
+use ndb_engine::index::Distance;
+use ndb_engine::value::Value;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Audit log filename, written under the database directory.
 pub const AUDIT_LOG_FILENAME: &str = ".audit.jsonl";
+
+/// Hard cap on `k` for `/vector_search` to prevent a single client from
+/// streaming an unbounded result set. 1000 is enough to support every
+/// reasonable RAG workload; callers that genuinely need more should
+/// paginate.
+pub const MAX_VECTOR_K: usize = 1000;
 
 /// Principals config filename, optionally placed under the database directory.
 pub const PRINCIPALS_FILENAME: &str = ".principals.json";
@@ -536,6 +547,10 @@ impl Server {
             ("GET", "/iter") => self.handle_iter(out, outcome),
             ("POST", "/flush") => self.handle_flush(out, outcome),
             ("POST", "/compact") => self.handle_compact(out, outcome),
+            ("POST", "/lookup") => self.handle_lookup(body, out, outcome),
+            ("POST", "/vector_search") => self.handle_vector_search(body, out, outcome),
+            ("POST", "/property_lookup") => self.handle_property_lookup(body, out, outcome),
+            ("POST", "/property_range") => self.handle_property_range(body, out, outcome),
             _ => {
                 outcome.status = 404;
                 let detail = format!("no route for {} {}", req.method, req.path);
@@ -683,6 +698,130 @@ impl Server {
         }
         outcome.status = 200;
         Ok(())
+    }
+
+    fn handle_lookup(
+        &self,
+        body: &[u8],
+        out: &mut dyn Write,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
+        let req: LookupRequest = match serde_json::from_slice(body) {
+            Ok(r) => r,
+            Err(e) => return bad_json(out, outcome, "lookup body", &e.to_string()),
+        };
+        let value: Value = match req.value.try_into() {
+            Ok(v) => v,
+            Err(e) => return bad_request(out, outcome, "bad_value", &e),
+        };
+        let engine = self.engine.lock().expect("engine mutex poisoned");
+        let hit = engine.lookup_by_external_key(PropertyId::new(req.property_id), &value);
+        outcome.status = 200;
+        write_json(
+            out,
+            200,
+            &LookupResponse {
+                entity_id: hit.map(|eid| eid.into_uuid().to_string()),
+            },
+        )
+    }
+
+    fn handle_vector_search(
+        &self,
+        body: &[u8],
+        out: &mut dyn Write,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
+        let req: VectorSearchRequest = match serde_json::from_slice(body) {
+            Ok(r) => r,
+            Err(e) => return bad_json(out, outcome, "vector_search body", &e.to_string()),
+        };
+        if req.k == 0 || req.k > MAX_VECTOR_K {
+            outcome.status = 400;
+            let detail = format!("k must be in 1..={MAX_VECTOR_K} (got {})", req.k);
+            outcome.failure = Some(detail.clone());
+            return write_error(out, 400, "bad_k", &detail);
+        }
+        let metric = match req.metric {
+            VectorMetric::L2 => Distance::L2Squared,
+            VectorMetric::Cosine => Distance::Cosine,
+        };
+        let engine = self.engine.lock().expect("engine mutex poisoned");
+        let hits = engine.vector_search(PropertyId::new(req.property_id), &req.query, req.k, metric);
+        let resp = VectorSearchResponse {
+            hits: hits
+                .into_iter()
+                .map(|(eid, d)| VectorHit {
+                    entity_id: eid.into_uuid().to_string(),
+                    distance: d,
+                })
+                .collect(),
+        };
+        outcome.status = 200;
+        write_json(out, 200, &resp)
+    }
+
+    fn handle_property_lookup(
+        &self,
+        body: &[u8],
+        out: &mut dyn Write,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
+        let req: PropertyLookupRequest = match serde_json::from_slice(body) {
+            Ok(r) => r,
+            Err(e) => return bad_json(out, outcome, "property_lookup body", &e.to_string()),
+        };
+        let value: Value = match req.value.try_into() {
+            Ok(v) => v,
+            Err(e) => return bad_request(out, outcome, "bad_value", &e),
+        };
+        let engine = self.engine.lock().expect("engine mutex poisoned");
+        let hits = engine.property_lookup(
+            TypeId::new(req.type_id),
+            PropertyId::new(req.property_id),
+            &value,
+        );
+        let resp = PropertyLookupResponse {
+            entity_ids: hits.into_iter().map(|eid| eid.into_uuid().to_string()).collect(),
+        };
+        outcome.status = 200;
+        write_json(out, 200, &resp)
+    }
+
+    fn handle_property_range(
+        &self,
+        body: &[u8],
+        out: &mut dyn Write,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
+        let req: PropertyRangeRequest = match serde_json::from_slice(body) {
+            Ok(r) => r,
+            Err(e) => return bad_json(out, outcome, "property_range body", &e.to_string()),
+        };
+        let low: Option<Value> = match req.low.map(JsonValue::try_into).transpose() {
+            Ok(v) => v,
+            Err(e) => {
+                return bad_request(out, outcome, "bad_low", &WireError::to_string(&e));
+            }
+        };
+        let high: Option<Value> = match req.high.map(JsonValue::try_into).transpose() {
+            Ok(v) => v,
+            Err(e) => {
+                return bad_request(out, outcome, "bad_high", &WireError::to_string(&e));
+            }
+        };
+        let engine = self.engine.lock().expect("engine mutex poisoned");
+        let hits = engine.property_range(
+            TypeId::new(req.type_id),
+            PropertyId::new(req.property_id),
+            low.as_ref(),
+            high.as_ref(),
+        );
+        let resp = PropertyRangeResponse {
+            entity_ids: hits.into_iter().map(|eid| eid.into_uuid().to_string()).collect(),
+        };
+        outcome.status = 200;
+        write_json(out, 200, &resp)
     }
 
     /// Borrow the shared engine for direct manipulation (tests).
@@ -957,8 +1096,36 @@ fn required_capability(method: &str, path: &str) -> Option<Capability> {
         ("GET", "/iter") => Some(Capability::Iter),
         ("POST", "/flush") => Some(Capability::Flush),
         ("POST", "/compact") => Some(Capability::Compact),
+        // Indexed query routes — all gated by Read.
+        ("POST", "/lookup" | "/vector_search" | "/property_lookup" | "/property_range") => {
+            Some(Capability::Read)
+        }
         _ => None,
     }
+}
+
+fn bad_json(
+    out: &mut dyn Write,
+    outcome: &mut DispatchOutcome,
+    context: &str,
+    detail: &str,
+) -> Result<(), ServerError> {
+    outcome.status = 400;
+    let combined = format!("{context}: {detail}");
+    outcome.failure = Some(combined.clone());
+    write_error(out, 400, "bad_json", &combined)
+}
+
+fn bad_request<E: std::fmt::Display>(
+    out: &mut dyn Write,
+    outcome: &mut DispatchOutcome,
+    code: &str,
+    err: &E,
+) -> Result<(), ServerError> {
+    let detail = err.to_string();
+    outcome.status = 400;
+    outcome.failure = Some(detail.clone());
+    write_error(out, 400, code, &detail)
 }
 
 fn capability_str(c: Capability) -> &'static str {

@@ -271,6 +271,155 @@ fn iter_streams_jsonl() {
 }
 
 #[test]
+fn lookup_route_finds_entity_by_external_key() {
+    let dir = temp_dir("lookup");
+    let server = Arc::new(Server::open(&dir).unwrap());
+
+    let alice = EntityId::now_v7();
+    {
+        let e = server.engine();
+        let mut e = e.lock().unwrap();
+        e.register_lookup_key(PropertyId::new(10));
+        let mut txn = e.begin_write();
+        txn.put_entity(ndb_engine::EntityRecord {
+            entity_id: alice,
+            type_id: TypeId::new(1),
+            tx_id_assert: ndb_engine::TxId::new(0),
+            tx_id_supersede: ndb_engine::TxId::ACTIVE,
+            properties: vec![(
+                PropertyId::new(10),
+                Value::String("alice@example.com".into()),
+            )],
+        });
+        txn.commit().unwrap();
+    }
+    let addr = spawn_server(Arc::clone(&server), 2);
+
+    let body = r#"{"property_id":10,"value":{"tag":"string","value":"alice@example.com"}}"#;
+    let resp = post(addr, "/lookup", body);
+    assert_eq!(resp.status, 200);
+    let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    assert_eq!(v["entity_id"], alice.into_uuid().to_string());
+
+    // Miss → entity_id null.
+    let body = r#"{"property_id":10,"value":{"tag":"string","value":"nobody@example.com"}}"#;
+    let resp = post(addr, "/lookup", body);
+    assert_eq!(resp.status, 200);
+    let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    assert!(v["entity_id"].is_null());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn vector_search_route_returns_sorted_hits() {
+    let dir = temp_dir("vec_search");
+    let server = Arc::new(Server::open(&dir).unwrap());
+
+    let a = EntityId::now_v7();
+    let b = EntityId::now_v7();
+    {
+        let e = server.engine();
+        let mut e = e.lock().unwrap();
+        e.register_vector_property(PropertyId::new(20));
+        for (eid, v) in [(a, vec![1.0f32, 0.0]), (b, vec![0.0f32, 1.0])] {
+            let mut txn = e.begin_write();
+            txn.put_entity(ndb_engine::EntityRecord {
+                entity_id: eid,
+                type_id: TypeId::new(1),
+                tx_id_assert: ndb_engine::TxId::new(0),
+                tx_id_supersede: ndb_engine::TxId::ACTIVE,
+                properties: vec![(PropertyId::new(20), Value::Vector(v))],
+            });
+            txn.commit().unwrap();
+        }
+    }
+    let addr = spawn_server(Arc::clone(&server), 2);
+
+    let body = r#"{"property_id":20,"query":[1.0,0.0],"k":2,"metric":"l2"}"#;
+    let resp = post(addr, "/vector_search", body);
+    assert_eq!(resp.status, 200);
+    let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    let hits = v["hits"].as_array().unwrap();
+    assert_eq!(hits.len(), 2);
+    // Exact match comes first.
+    assert_eq!(hits[0]["entity_id"], a.into_uuid().to_string());
+
+    // k=0 is rejected.
+    let resp = post(
+        addr,
+        "/vector_search",
+        r#"{"property_id":20,"query":[1.0,0.0],"k":0,"metric":"l2"}"#,
+    );
+    assert_eq!(resp.status, 400);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn property_lookup_and_range_routes() {
+    let dir = temp_dir("prop_btree");
+    let server = Arc::new(Server::open(&dir).unwrap());
+
+    let alice = EntityId::now_v7();
+    let bob = EntityId::now_v7();
+    let carol = EntityId::now_v7();
+    {
+        let e = server.engine();
+        let mut e = e.lock().unwrap();
+        e.register_property_btree(TypeId::new(1), PropertyId::new(30));
+        for (eid, age) in [(alice, 25i64), (bob, 35), (carol, 45)] {
+            let mut txn = e.begin_write();
+            txn.put_entity(ndb_engine::EntityRecord {
+                entity_id: eid,
+                type_id: TypeId::new(1),
+                tx_id_assert: ndb_engine::TxId::new(0),
+                tx_id_supersede: ndb_engine::TxId::ACTIVE,
+                properties: vec![(PropertyId::new(30), Value::I64(age))],
+            });
+            txn.commit().unwrap();
+        }
+    }
+    let addr = spawn_server(Arc::clone(&server), 3);
+
+    // Exact match.
+    let resp = post(
+        addr,
+        "/property_lookup",
+        r#"{"type_id":1,"property_id":30,"value":{"tag":"i64","value":35}}"#,
+    );
+    assert_eq!(resp.status, 200);
+    let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    let ids = v["entity_ids"].as_array().unwrap();
+    assert_eq!(ids.len(), 1);
+    assert_eq!(ids[0], bob.into_uuid().to_string());
+
+    // Range 30..=50.
+    let resp = post(
+        addr,
+        "/property_range",
+        r#"{"type_id":1,"property_id":30,"low":{"tag":"i64","value":30},"high":{"tag":"i64","value":50}}"#,
+    );
+    assert_eq!(resp.status, 200);
+    let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    let ids = v["entity_ids"].as_array().unwrap();
+    assert_eq!(ids.len(), 2); // bob + carol
+
+    // Unbounded low.
+    let resp = post(
+        addr,
+        "/property_range",
+        r#"{"type_id":1,"property_id":30,"high":{"tag":"i64","value":30}}"#,
+    );
+    assert_eq!(resp.status, 200);
+    let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    let ids = v["entity_ids"].as_array().unwrap();
+    assert_eq!(ids.len(), 1); // alice only
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn malformed_uuid_in_read_returns_400() {
     let dir = temp_dir("bad_uuid");
     let server = Arc::new(Server::open(&dir).unwrap());
