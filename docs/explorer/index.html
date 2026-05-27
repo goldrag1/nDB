@@ -201,7 +201,7 @@
     <input id="af-fetch-acc" placeholder="UniProt acc (e.g. P38398)" autocomplete="off" style="width:170px">
     <button class="btn" id="af-fetch-btn" style="padding:4px 10px;font-size:12px">Add</button>
     <div class="grow"></div>
-    <button class="btn secondary" id="warm-cache-btn" style="padding:4px 10px;font-size:12px" title="Fetch every CIF + persist in nDB so the database works offline">Warm cache</button>
+    <button class="btn secondary" id="warm-cache-btn" style="padding:4px 10px;font-size:12px" title="Fetch + decompose every protein's structure into nDB atom entities for offline use">Warm atoms</button>
     <label style="font-size:11px;color:#cfcfd6;display:flex;align-items:center;gap:5px;cursor:pointer">
       <input type="checkbox" id="show-residues-toggle"> residue+motif data
     </label>
@@ -338,9 +338,8 @@ const MOTIF_TYPE_IDS = new Set([110, 111, 113, 114, 115]);
 // r2, …, rN). Replaces the previous N binary residue_of edges.
 const PROTEIN_RESIDUES_TYPE_ID = 116;
 const PROP_NAME              = 30;
-// AlphaFold-predicted atomic coordinates — stored in nDB as raw CIF
-// bytes once fetched. The wire encodes Bytes as base64.
-const PROP_CIF_BYTES         = 35;
+// (Was PROP_CIF_BYTES = 35 — removed. The CIF text is no longer
+// persisted; per-atom entities are the canonical store.)
 // Per-atom entity (type 7) — committed by the SPA after a CIF loads.
 // One nDB entity per atom unlocks atom-level queries (range on
 // B-factor, lookup by serial/atomname) without re-parsing the CIF.
@@ -381,7 +380,6 @@ const PROP_LABEL = {
   31: "function",
   32: "year",
   34: "pathway",
-  35: "cif_bytes",
   36: "pLDDT_mean",
   37: "pLDDT_bucket",
   38: "complex_conf",
@@ -1146,53 +1144,49 @@ document.getElementById("load-3d-btn").addEventListener("click", () => {
 });
 // Warm the coordinate cache — fetch every uncached protein's CIF
 // and persist it to nDB so future opens are local-only.
+// Warm the atom cache: for every protein that doesn't yet have its
+// atom entities in nDB, fetch its CIF, decompose, commit. The CIF
+// text itself is NOT persisted; only the atom records are.
 document.getElementById("warm-cache-btn").addEventListener("click", async () => {
   const $btn = document.getElementById("warm-cache-btn");
   const $st  = document.getElementById("warm-cache-status");
   $btn.disabled = true;
   const proteins = Array.from(entitiesById.values())
     .filter(e => e.type_id === TYPES.protein.id);
-  let done = 0, fetched = 0, skipped = 0, totalKb = 0;
+  let done = 0, decomposed = 0, alreadyDone = 0;
   for (const p of proteins) {
     const acc = extractProp(p, PROP_UNIPROT);
-    const already = extractProp(p, PROP_CIF_BYTES);
-    if (!acc) { skipped++; done++; continue; }
-    if (typeof already === "string" && already.length > 0) {
-      totalKb += (already.length * 0.75) / 1024;
-      skipped++; done++;
-      $st.textContent = `Cached ${done}/${proteins.length}: ${extractName(p)} already in nDB`;
-      continue;
-    }
-    $st.textContent = `Fetching ${done + 1}/${proteins.length}: ${extractName(p)} (${acc}) …`;
+    if (!acc) { done++; continue; }
+    const node = graphData.nodes.find(n => n.nodeKind === "entity" && n.id === p.entity_id);
+    if (!node) { done++; continue; }
+    if (await proteinHasAtomEntities(p)) { alreadyDone++; done++; continue; }
+    $st.textContent = `Fetching + decomposing ${done + 1}/${proteins.length}: ${extractName(p)} (${acc}) …`;
     try {
       const r = await fetch(cifUrlForUniprot(acc));
-      if (!r.ok) {
-        $st.textContent = `${extractName(p)} (${acc}) → ${r.status}; skipping`;
-        done++; continue;
-      }
+      if (!r.ok) { done++; continue; }
       const cifText = await r.text();
-      const proteinNode = graphData.nodes.find(n => n.nodeKind === "entity" && n.id === p.entity_id);
-      if (proteinNode) {
-        await commitCifBytesToNdb(proteinNode, cifText);
-        fetched++;
-        totalKb += cifText.length / 1024;
-      }
+      const blob = new Blob([cifText], { type: "chemical/x-cif" });
+      // Load into a throwaway component so decomposeCifIntoAtomEntities
+      // can walk eachAtom; remove right after.
+      const comp = await nglStage.loadFile(blob, { ext: "cif" });
+      const prev = nglComponent;
+      nglComponent = comp;
+      const res = await decomposeCifIntoAtomEntities(node);
+      nglComponent = prev;
+      nglStage.removeComponent(comp);
+      if (res.committed > 0) decomposed++;
     } catch (e) {
-      $st.textContent = `${extractName(p)}: ${e.message}; continuing`;
+      // Swallow per-protein errors; report at end.
     }
     done++;
   }
   await reload();
-  // Right sidebar reflects the new cache state for the current protein.
   if (currentProteinNode) {
     const fresh = graphData.nodes.find(n => n.id === currentProteinNode.id);
-    if (fresh) {
-      currentProteinNode = fresh;
-      updateRightSidebar(fresh);
-    }
+    if (fresh) { currentProteinNode = fresh; updateRightSidebar(fresh); }
   }
   $btn.disabled = false;
-  $st.innerHTML = `<b>Done.</b> Fetched ${fetched}, already cached ${skipped - fetched}, total ${totalKb.toFixed(1)} KB now stored in nDB. The database is self-contained — disconnect from the network and the explorer keeps working.`;
+  $st.innerHTML = `<b>Done.</b> Decomposed ${decomposed} new proteins (${alreadyDone} already in nDB). All atomic data is in nDB now — disconnect from the network and the explorer keeps rendering.`;
 });
 
 // Protein dropdown → load that protein's structure in 3D.
@@ -1375,54 +1369,88 @@ async function decomposeCifIntoAtomEntities(proteinNode) {
 }
 
 // ─── CIF storage: nDB-first, AF-DB fallback ─────────────────────
-// CIF (atomic coordinates) is the SCIENCE — without it AlphaFold is
-// just a number table. nDB owns it as a Bytes property on the protein
-// entity. First view fetches from AF-DB and commits back; subsequent
-// views read from nDB. After a protein has been viewed once the demo
-// works fully offline for that protein.
+// Atom coordinates ARE the science. Each atom is a first-class nDB
+// entity (committed by decomposeCifIntoAtomEntities on first view).
+// The CIF blob is NOT stored — when nDB already has atoms for a
+// protein, we reconstruct a minimal CIF in memory from the atom
+// entities and feed that to NGL. Single source of truth: the atom
+// entities.
 
-// Decode a Bytes JSON value (base64) to a Uint8Array → string.
-function cifBytesToText(value) {
-  // The wire shape is {tag:"bytes", value:"<base64>"}; extractProp
-  // returned `value.value` which is the base64 string.
-  try {
-    const bin = atob(value);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return new TextDecoder("utf-8").decode(bytes);
-  } catch (e) {
-    return null;
+// Reconstruct a PDB-format text from atom entities in nDB. NGL parses
+// PDB natively, and PDB's fixed-column format is easier to emit
+// reliably than mmCIF's whitespace-sensitive loop syntax. NGL
+// re-derives secondary structure from coordinates (DSSP-like) so
+// nothing visually is lost. Returns null if no atoms are stored.
+function pdbTextFromAtomEntities(protein) {
+  const proteinId = protein.entity_id;
+  let atomIds = [];
+  for (const e of edgesById.values()) {
+    if (e.type_id !== T_PROTEIN_ATOMS) continue;
+    if (!e.roles.some(r => r.entity_id === proteinId)) continue;
+    atomIds = e.roles
+      .filter(r => r.role_id === ROLE_ATOM)
+      .map(r => r.entity_id);
+    break;
   }
-}
-// Encode a UTF-8 string → base64 (for the Bytes wire value).
-function textToBase64(s) {
-  const bytes = new TextEncoder().encode(s);
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin);
-}
+  if (atomIds.length === 0) return null;
+  const atoms = atomIds.map(id => entitiesById.get(id)).filter(Boolean);
+  if (atoms.length === 0) return null;
+  atoms.sort((a, b) => (extractProp(a, PROP_ATOM_SERIAL) ?? 0)
+                    - (extractProp(b, PROP_ATOM_SERIAL) ?? 0));
 
-// Commit a CIF blob back to nDB as a property on the protein entity.
-// nDB's wire protocol replaces the existing entity record on PUT, so
-// we have to re-include every existing property plus the new one.
-async function commitCifBytesToNdb(node, cifText) {
-  const r = node.record;
-  const propsCopy = (r.properties || []).filter(p => p.prop_id !== PROP_CIF_BYTES);
-  propsCopy.push({
-    prop_id: PROP_CIF_BYTES,
-    value: { tag: "bytes", value: textToBase64(cifText) },
+  // PDB ATOM record (PDB v3.3 spec, columns 1-80):
+  //   1- 6  "ATOM  "
+  //   7-11  serial
+  //  13-16  atom name (right-justified into cols 14-16 normally)
+  //  17     altLoc (space)
+  //  18-20  residue name
+  //  22     chain ID
+  //  23-26  residue seq
+  //  27     iCode (space)
+  //  31-38  x (8.3f)
+  //  39-46  y (8.3f)
+  //  47-54  z (8.3f)
+  //  55-60  occupancy (6.2f)
+  //  61-66  B-factor (6.2f)
+  //  77-78  element (right-justified)
+  const pad = (s, n) => String(s).padStart(n);
+  const padLeft = (s, n) => String(s).padEnd(n);
+  const fmtF = (v, w, d) => v.toFixed(d).padStart(w);
+  const fmtAtomName = (name) => {
+    // 4-char field; element-letter atoms left-pad with space (" CA "),
+    // two-letter-element atoms fill all four ("FE  ").
+    if (name.length >= 4) return name.slice(0, 4);
+    if (name.length === 3) return " " + name;
+    if (name.length === 2) return " " + name + " ";
+    return " " + name + "  ";
+  };
+
+  const lines = atoms.map(a => {
+    const serial   = extractProp(a, PROP_ATOM_SERIAL) ?? 0;
+    const atomname = extractProp(a, PROP_ATOM_NAME) || "X";
+    const resname  = extractProp(a, PROP_ATOM_RES_NAME) || "UNK";
+    const chain    = (extractProp(a, PROP_ATOM_CHAIN) || "A").charAt(0);
+    const resno    = extractProp(a, PROP_ATOM_RES_POS) ?? 1;
+    const x        = extractProp(a, PROP_ATOM_X) ?? 0;
+    const y        = extractProp(a, PROP_ATOM_Y) ?? 0;
+    const z        = extractProp(a, PROP_ATOM_Z) ?? 0;
+    const b        = extractProp(a, PROP_ATOM_BFACTOR) ?? 0;
+    const element  = (extractProp(a, PROP_ATOM_ELEMENT) || "C").slice(0, 2);
+    return (
+      "ATOM  " +
+      pad(serial, 5) + " " +
+      fmtAtomName(atomname) + " " +     // atomname + altLoc space
+      padLeft(resname, 3).slice(0, 3) +
+      " " + chain +
+      pad(resno, 4) + "    " +          // iCode + 3 spaces
+      fmtF(x, 8, 3) + fmtF(y, 8, 3) + fmtF(z, 8, 3) +
+      fmtF(1.0, 6, 2) +                 // occupancy
+      fmtF(b, 6, 2) +
+      "          " +                    // 10-space gap to element field
+      pad(element, 2)
+    );
   });
-  await commit([{
-    kind: "entity",
-    entity_id: r.entity_id,
-    type_id: r.type_id,
-    tx_id_assert: 0,
-    tx_id_supersede: "active",
-    properties: propsCopy,
-  }]);
-  // Update the in-memory record so the right sidebar reflects the
-  // newly-cached blob immediately (no full reload needed).
-  r.properties = propsCopy;
+  return lines.join("\n") + "\nEND\n";
 }
 
 async function load3DStructureFor(node) {
@@ -1432,7 +1460,7 @@ async function load3DStructureFor(node) {
   }
   const acc = extractUniprot(node.record);
   if (!acc) {
-    showStatus("This protein has no UniProt accession — can't fetch CIF", true);
+    showStatus("This protein has no UniProt accession — can't fetch structure", true);
     return;
   }
   const proteinName = extractName(node.record) || acc;
@@ -1442,51 +1470,41 @@ async function load3DStructureFor(node) {
   nglHighlightRepr = null;
   currentProteinNode = node;
 
-  // 1. Look for a cached CIF on the protein entity in nDB.
-  const cachedB64 = extractProp(node.record, PROP_CIF_BYTES);
-  let cifText = null;
+  // 1. nDB-first: if atom entities already exist, rebuild as PDB
+  // from them — zero network, zero duplication.
+  let structText = pdbTextFromAtomEntities(node.record);
+  let structExt = "pdb";
   let source = null;
   let sizeBytes = 0;
-  if (typeof cachedB64 === "string" && cachedB64.length > 0) {
-    cifText = cifBytesToText(cachedB64);
-    if (cifText) {
-      source = "ndb";
-      sizeBytes = cifText.length;
-    }
-  }
-
-  // 2. Otherwise fetch from AF-DB and write back to nDB.
-  if (!cifText) {
+  if (structText) {
+    source = "ndb";
+    sizeBytes = structText.length;
     document.getElementById("viewer-3d-info").innerHTML =
-      `<b>${proteinName}</b> (${acc}) — fetching CIF from AlphaFold-DB…`;
+      `<b>${proteinName}</b> (${acc}) — rebuilding structure from nDB atom entities…`;
+  } else {
+    // 2. First view: fetch CIF from AF-DB (handed to NGL directly).
+    document.getElementById("viewer-3d-info").innerHTML =
+      `<b>${proteinName}</b> (${acc}) — fetching CIF from AlphaFold-DB (first view)…`;
     try {
-      const url = cifUrlForUniprot(acc);
-      const r = await fetch(url);
+      const r = await fetch(cifUrlForUniprot(acc));
       if (!r.ok) throw new Error(`AF-DB → ${r.status}`);
-      cifText = await r.text();
-      sizeBytes = cifText.length;
+      structText = await r.text();
+      structExt = "cif";
+      sizeBytes = structText.length;
       source = "afdb";
-      // Persist to nDB so the next view is offline-capable.
-      try {
-        await commitCifBytesToNdb(node, cifText);
-        source = "afdb→ndb";
-      } catch (e) {
-        console.warn("CIF commit failed; will re-fetch next time:", e);
-      }
     } catch (e) {
       document.getElementById("viewer-3d-info").innerHTML =
         `<b>${proteinName}</b> (${acc}) — load failed: ${e.message}`;
       return;
     }
-  } else {
-    document.getElementById("viewer-3d-info").innerHTML =
-      `<b>${proteinName}</b> (${acc}) — reading CIF from local nDB…`;
   }
 
   // 3. Hand the CIF text to NGL.
   try {
-    const blob = new Blob([cifText], { type: "chemical/x-cif" });
-    nglComponent = await nglStage.loadFile(blob, { ext: "cif" });
+    const blob = new Blob([structText], {
+      type: structExt === "pdb" ? "chemical/x-pdb" : "chemical/x-cif"
+    });
+    nglComponent = await nglStage.loadFile(blob, { ext: structExt });
     nglComponent.addRepresentation("cartoon", {
       colorScheme: "bfactor",
       colorScale: ["#FF7D45", "#FFDB13", "#65CBF3", "#0053D6"],
@@ -1495,12 +1513,9 @@ async function load3DStructureFor(node) {
     });
     nglComponent.autoView();
     const len = nglComponent.structure.residueStore.count;
-    const kb = (sizeBytes / 1024).toFixed(1);
     const sourceLabel = source === "ndb"
-      ? `<span style="color:#7ed321">structure cached in local nDB · ${kb} KB</span>`
-      : source === "afdb→ndb"
-      ? `structure just fetched from <a href="${cifUrlForUniprot(acc)}" target="_blank" style="color:#65CBF3" rel="noreferrer">AF-DB</a> · <span style="color:#7ed321">committed to nDB · ${kb} KB</span>`
-      : `structure from <a href="${cifUrlForUniprot(acc)}" target="_blank" style="color:#65CBF3" rel="noreferrer">AF-DB</a> · ${kb} KB`;
+      ? `<span style="color:#7ed321">rebuilt from nDB atom entities · no network hop</span>`
+      : `fetched from <a href="${cifUrlForUniprot(acc)}" target="_blank" style="color:#65CBF3" rel="noreferrer">AF-DB</a> · atoms being committed to nDB…`;
     document.getElementById("viewer-3d-info").innerHTML =
       `<b>${proteinName}</b> (${acc}) · ${len} residues · pLDDT (AF palette) · ${sourceLabel}`;
     renderProteinSummary(node);
@@ -1694,8 +1709,8 @@ function updateModelComparison(node) {
   const atomsCommittedToNdb = ndbAtoms > 0;
   $el.innerHTML = `
     <div class="hint" style="margin-bottom:6px">
-      Same protein, same biology — two storage layouts. Counts below
-      are <b>live</b> for <b>${escapeHtml(name)}</b> (${acc}).
+      Same protein, same biology — two storage layouts.
+      Counts below are <b>live</b> for <b>${escapeHtml(name)}</b> (${acc}).
     </div>
     <div class="compare">
       <div class="pdbx">
@@ -1715,58 +1730,48 @@ function updateModelComparison(node) {
         </ul>
         <div class="total">
           ~15 categories · <b>${pdbxRows}</b> rows total.
-          PDBx wins per-atom queries via indexed columns. Cross-protein
-          relations (this protein is in a complex with X) live in a
-          separate database entirely.
+          Shipped as a single .cif file. To express
+          "protein X is in a complex with proteins Y and Z" you'd
+          need a different relational store altogether — mmCIF has
+          no cross-protein vocabulary.
         </div>
       </div>
       <div class="ndb">
         <div class="head">nDB</div>
         <ul>
-          <li>1 protein entity (type 1)</li>
-          <li>+ CIF blob property (${cifSizeKb(r) || "—"} KB) — preserves every byte of the mmCIF</li>
+          <li>1 protein entity (type 1) — UniProt, gene, pLDDT mean, organism, …</li>
           ${atomsCommittedToNdb
-            ? `<li><b>${ndbAtoms}</b> atom entities (type 7) — same data, now per-atom indexed</li>
-               <li>1 protein_atoms hyperedge · arity ${ndbAtoms + 1} (1 protein + ${ndbAtoms} atom fillers)</li>`
-            : `<li><i style="color:#888">no per-atom entities yet — decomposing in background…</i></li>`}
-          ${ndbResidues > 0 ? `<li>${ndbResidues} residue entities (type 6)</li>` : ""}
+            ? `<li><b>${ndbAtoms}</b> atom entities (type 7) — x, y, z, B-factor, residue position; the structure</li>
+               <li>1 protein_atoms hyperedge · arity <b>${ndbAtoms + 1}</b> — one record IS the whole containment</li>`
+            : `<li><i style="color:#888">atoms decomposing in background…</i></li>`}
+          ${ndbResidues > 0 ? `<li>${ndbResidues} residue entities (type 6) — with secondary structure, pLDDT, motif memberships</li>` : ""}
           ${ndbProteinResidues > 0 ? `<li>1 protein_residues hyperedge · arity ${ndbResidues + 1}</li>` : ""}
-          ${ndbMotifs > 0 ? `<li>${ndbMotifs} motif hyperedges (arity 3-20)</li>` : ""}
-          ${ndbComplex > 0 ? `<li>${ndbComplex} complex hyperedge${ndbComplex === 1 ? "" : "s"} (arity 3-5)</li>` : ""}
-          ${ndbEncodes > 0 ? `<li>${ndbEncodes} encodes hyperedge (arity 2)</li>` : ""}
+          ${ndbMotifs > 0 ? `<li>${ndbMotifs} motif hyperedges — catalytic_triad (3), zinc_finger (4), helix (16), sheet (20)…</li>` : ""}
+          ${ndbComplex > 0 ? `<li>${ndbComplex} complex hyperedge${ndbComplex === 1 ? "" : "s"} (arity 3-5) — cross-protein</li>` : ""}
+          ${ndbEncodes > 0 ? `<li>${ndbEncodes} encodes hyperedge (arity 2) — gene ↔ protein</li>` : ""}
         </ul>
         <div class="total">
           2 record kinds (entity + hyperedge) ·
-          <b>${ndbTotalRecords}</b> records for this protein.
-          ${atomsCommittedToNdb
-            ? `Atom-level queries (range on B-factor, lookup by serial)
-               hit the property B-tree directly — no CIF re-parse.`
-            : `Atom-level queries currently require parsing the CIF
-               blob. After decomposition completes those queries become
-               indexed.`}
+          <b>${ndbTotalRecords}</b> records, <b>no opaque blobs</b>.
+          Atom queries (range on B-factor, lookup by serial, filter
+          by element) hit the property B-tree directly. Cross-protein
+          relationships are first-class hyperedges in the same
+          database — no separate schema needed.
         </div>
       </div>
     </div>
-    <div class="hint" style="margin-top:8px">
-      <b>Where nDB wins:</b> the relationship IS the record. A
-      catalytic triad is intrinsically 3-ary; in PDBx it lives as
-      joins between <code>_struct_site</code> +
-      <code>_struct_site_gen</code> + <code>_atom_site</code>. In
-      nDB it lives as one hyperedge.
-      <br><br>
-      <b>Where PDBx wins today:</b> ${atomRows}-row <code>_atom_site</code> is a
-      single column-indexed table — range queries on B-factor,
-      coordinate filters, sequence-position lookups all hit one
-      index. nDB matches that capability after the per-atom
-      decomposition above lands, since each atom becomes a queryable
-      entity with B-tree-indexed properties.
+    <div class="hint" style="margin-top:10px">
+      <b>The relationship IS the record.</b> A catalytic triad is
+      intrinsically 3-ary; an α-helix groups 16 residues; a complex
+      ties N proteins together. In mmCIF + PDBx every one of these
+      becomes a reified join across multiple tables
+      (<code>_struct_site</code>, <code>_struct_conf</code>,
+      <code>_atom_site</code>, …). In nDB they're one hyperedge each
+      — same shape, any arity, no schema migration to add new
+      relationship types. Adding "domain", "homolog of", "interacts
+      with"? Each is one new type_id, zero tables.
     </div>
   `;
-}
-function cifSizeKb(r) {
-  const b64 = extractProp(r, PROP_CIF_BYTES);
-  if (typeof b64 !== "string" || b64.length === 0) return null;
-  return ((b64.length * 0.75) / 1024).toFixed(1);
 }
 
 // ─── Role-id lookup table ──────────────────────────────────────
@@ -1830,7 +1835,6 @@ function computeStructureSummary() {
 // stage the loaded protein is currently in.
 function updatePipeline(node, source) {
   const $ex = document.getElementById("pipe-explainer");
-  // Reset all to inactive.
   for (const id of ["pipe-fetch", "pipe-commit", "pipe-cache", "pipe-render"]) {
     document.getElementById(id)?.classList.remove("active");
   }
@@ -1839,11 +1843,18 @@ function updatePipeline(node, source) {
     return;
   }
   const acc = extractUniprot(node.record);
-  const cached = !!extractProp(node.record, PROP_CIF_BYTES);
-  // Mark the steps based on current state.
+  // Atoms are the canonical store now — pipe-cache lights when the
+  // protein has its per-atom entities in nDB.
+  let hasAtoms = false;
+  for (const e of edgesById.values()) {
+    if (e.type_id === T_PROTEIN_ATOMS &&
+        e.roles.some(r => r.entity_id === node.record.entity_id)) {
+      hasAtoms = true; break;
+    }
+  }
   if (acc) document.getElementById("pipe-fetch").classList.add("active");
-  document.getElementById("pipe-commit").classList.add("active"); // by definition: we have the entity in nDB
-  if (cached) document.getElementById("pipe-cache").classList.add("active");
+  document.getElementById("pipe-commit").classList.add("active");
+  if (hasAtoms) document.getElementById("pipe-cache").classList.add("active");
   if (nglComponent && currentProteinNode && currentProteinNode.id === node.id) {
     document.getElementById("pipe-render").classList.add("active");
   }
@@ -1851,22 +1862,20 @@ function updatePipeline(node, source) {
     const name = extractName(node.record) || acc || "?";
     if (source === "ndb") {
       $ex.innerHTML = `
-        ${escapeHtml(name)} was previously fetched from AlphaFold-DB and
-        persisted to nDB as a <code>Value::Bytes</code> property on the
-        protein entity. The viewer just loaded the CIF from local nDB
-        and rendered it — <b>no network hop</b>.`;
-    } else if (source === "afdb→ndb") {
-      $ex.innerHTML = `
-        Just fetched ${escapeHtml(name)}'s CIF from
-        <a href="https://alphafold.ebi.ac.uk/" target="_blank" rel="noreferrer">AlphaFold-DB</a>
-        and committed the bytes to nDB. Subsequent loads will read from
-        local nDB — refresh the page to see.`;
+        ${escapeHtml(name)}'s atomic structure was rebuilt from
+        <b>${hasAtoms ? "atom entities in local nDB" : "in-memory state"}</b>
+        — no network hop, no CIF blob duplication. Every atom is its
+        own indexed record; the structure is the join.`;
     } else if (source === "afdb") {
-      $ex.innerHTML = `${escapeHtml(name)} is rendering from a fresh
-        AF-DB fetch (cache write failed — next time will refetch).`;
+      $ex.innerHTML = `
+        First view: fetched ${escapeHtml(name)}'s structure from
+        <a href="https://alphafold.ebi.ac.uk/" target="_blank" rel="noreferrer">AlphaFold-DB</a>,
+        and decomposing the CIF into atom entities right now. The CIF
+        text itself is <b>not</b> persisted — the atom records ARE the
+        structure. Refresh to verify the second load is local-only.`;
     } else {
       $ex.innerHTML = `${escapeHtml(name)} entity is in nDB. Click load
-        to fetch + cache its CIF.`;
+        to fetch its structure.`;
     }
   }
 }
@@ -1898,45 +1907,25 @@ function updateRightSidebar(node) {
 
   // ── 1. The protein entity record ────────────────────────────────
   const r = node.record;
-  const propsList = (r.properties || [])
-    .filter(p => p.prop_id !== PROP_CIF_BYTES)
-    .map(p => {
-      const v = p.value && (p.value.value ?? p.value);
-      const label = PROP_LABEL[p.prop_id] || `p${p.prop_id}`;
-      return `<div class="db-row"><span class="k">${label}</span><span class="v">${escapeHtml(String(v))}</span></div>`;
-    }).join("");
-  const propsForJson = (r.properties || []).map(p => {
-    if (p.prop_id === PROP_CIF_BYTES) {
-      const b64 = p.value?.value || "";
-      return {
-        prop_id: p.prop_id,
-        value: { tag: "bytes", value: `<base64 CIF, ${b64.length} chars / ${((b64.length * 0.75) / 1024).toFixed(1)} KB>` },
-      };
-    }
-    return p;
-  });
+  const propsList = (r.properties || []).map(p => {
+    const v = p.value && (p.value.value ?? p.value);
+    const label = PROP_LABEL[p.prop_id] || `p${p.prop_id}`;
+    return `<div class="db-row"><span class="k">${label}</span><span class="v">${escapeHtml(String(v))}</span></div>`;
+  }).join("");
   const wireJson = JSON.stringify({
     kind: "entity",
     entity_id: r.entity_id,
     type_id: r.type_id,
-    properties: propsForJson,
+    properties: r.properties,
   }, null, 2);
-  const cifB64 = extractProp(r, PROP_CIF_BYTES);
-  const cifSizeKb = (typeof cifB64 === "string" && cifB64.length > 0)
-    ? ((cifB64.length * 0.75) / 1024).toFixed(1)
-    : null;
-  const cifBadge = cifSizeKb
-    ? `<span class="v" style="color:#7ed321">stored locally · ${cifSizeKb} KB</span>`
-    : `<span class="v" style="color:#888">not cached (will fetch from AF-DB)</span>`;
   $ent.innerHTML = `
     <h3>Protein entity (Record::Entity)</h3>
     <div class="db-row"><span class="k">kind</span><span class="v">entity</span></div>
     <div class="db-row"><span class="k">type_id</span><span class="v">${r.type_id} (protein)</span></div>
     <div class="db-row"><span class="k">entity_id</span><span class="v">${r.entity_id.slice(0, 8)}…</span></div>
     ${propsList}
-    <div class="db-row"><span class="k">cif_coords</span>${cifBadge}</div>
     <details style="margin-top:6px">
-      <summary>raw wire JSON (CIF bytes truncated)</summary>
+      <summary>raw wire JSON</summary>
       <pre>${escapeHtml(wireJson)}</pre>
     </details>
   `;
@@ -1949,8 +1938,9 @@ function updateRightSidebar(node) {
     } else {
       $sum.innerHTML = `
         <div class="hint" style="margin-bottom:6px">
-          Computed from the CIF stored in nDB. Rolling these up at
-          query time avoids duplicating them as properties.
+          Computed by NGL from the atom entities in nDB. Roll-ups
+          are derived at render time — never duplicated as protein
+          properties.
         </div>
         <div class="db-row"><span class="k">atoms</span><span class="v">${s.atomCount}</span></div>
         <div class="db-row"><span class="k">residues</span><span class="v">${s.residueCount}</span></div>
