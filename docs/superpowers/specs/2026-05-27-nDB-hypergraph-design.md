@@ -891,26 +891,26 @@ Six record kinds in primary storage:
 | 0x01 | EntityRecord | entity assertion (id + properties + MVCC) |
 | 0x02 | HyperEdgeRecord | hyperedge assertion (id + type + roles + properties + MVCC) |
 | 0x03 | TombstoneRecord | explicit deletion marker |
-| 0x04 | TypeDefRecord | type-name dictionary entry |
-| 0x05 | RoleDefRecord | role-name dictionary entry |
-| 0x06 | PropertyDefRecord | property-key dictionary entry |
+| 0x04 | TypeNameRecord | type-name dictionary entry (string ↔ `u32` interning, no schema) |
+| 0x05 | RoleNameRecord | role-name dictionary entry (string ↔ `u32` interning) |
+| 0x06 | PropertyKeyRecord | property-key dictionary entry (string ↔ `u32` interning) |
 
-Dictionaries are themselves stored as records — no special file format or out-of-band metadata.
+Dictionaries are themselves stored as records — no special file format or out-of-band metadata. The three dictionary kinds carry *only* the string ↔ `u32` mapping; they do **not** define structure, required fields, or constraints. Schema (which types require which properties, which value tags are accepted, etc.) lives in metadata hyperedges (§6.4), not in these records.
 
 **HyperEdgeRecord:**
 
 ```
-record_size: u32                                  (4 bytes)
+record_size: u32                                  (4 bytes)  // includes these 4 bytes and the trailing CRC
 record_kind: u8 = 0x02                            (1 byte)
-version: u8                                       (1 byte)
+format_version: u8                                (1 byte)   // on-disk layout version, NOT an MVCC version
 hyperedge_id: UUID v7                             (16 bytes)
-type_id: u32 (dictionary reference)               (4 bytes)
+type_id: u32 (TypeName id; must be ≠ 0)           (4 bytes)
 tx_id_assert: u64                                 (8 bytes)
-tx_id_supersede: u64 (= u64::MAX when active)     (8 bytes)
-arity: u8                                         (1 byte)
-roles: [(role_id: u32, entity_id: UUID)] * arity  (20 bytes each)
+tx_id_supersede: u64 (TX_ACTIVE = u64::MAX)       (8 bytes)
+arity: u8 (≥ 1; a 0-arity hyperedge is an entity) (1 byte)
+roles: [(role_id: u32, entity_id: UUID)] * arity  (20 bytes each; role_id ≠ 0)
 property_count: u16                               (2 bytes)
-properties: [(prop_id: u32, value: Value)] * cnt  (variable)
+properties: [(prop_id: u32, value: Value)] * cnt  (variable; prop_id ≠ 0)
 crc32: u32                                        (4 bytes)
 ```
 
@@ -919,15 +919,15 @@ Fixed overhead 49 bytes. Per role 20 bytes. Per property 4 + `value_size` bytes.
 **EntityRecord:**
 
 ```
-record_size: u32                                  (4)
+record_size: u32                                  (4)   // includes these 4 bytes and the trailing CRC
 record_kind: u8 = 0x01                            (1)
-version: u8                                       (1)
+format_version: u8                                (1)   // on-disk layout version
 entity_id: UUID v7                                (16)
-type_id: u32 (0 = untyped)                        (4)
+type_id: u32 (TypeName id; TYPE_UNTYPED = 0)      (4)
 tx_id_assert: u64                                 (8)
-tx_id_supersede: u64                              (8)
+tx_id_supersede: u64 (TX_ACTIVE = u64::MAX)       (8)
 property_count: u16                               (2)
-properties: [(prop_id: u32, value: Value)] * cnt  (variable)
+properties: [(prop_id: u32, value: Value)] * cnt  (variable; prop_id ≠ 0)
 crc32: u32                                        (4)
 ```
 
@@ -936,11 +936,25 @@ Fixed overhead 48 bytes.
 **TombstoneRecord:**
 
 ```
-record_size: u32, record_kind: u8 = 0x03, version: u8,
+record_size: u32, record_kind: u8 = 0x03, format_version: u8,
 target_id: UUID v7, tx_id_supersede: u64, crc32: u32
 ```
 
-Total 34 bytes.
+Total 34 bytes. `record_size` includes itself and the trailing CRC.
+
+**TypeNameRecord / RoleNameRecord / PropertyKeyRecord (identical layout, differ only by `record_kind`):**
+
+```
+record_size: u32                                  (4)   // includes these 4 bytes and the trailing CRC
+record_kind: u8 ∈ {0x04, 0x05, 0x06}              (1)
+format_version: u8                                (1)
+dictionary_id: u32 (must be ≠ 0)                  (4)   // the interned u32 referenced by other records
+name_length: u32                                  (4)   // bytes, not chars
+name: UTF-8 bytes                                 (variable)
+crc32: u32                                        (4)
+```
+
+Fixed overhead 18 bytes + UTF-8 payload. These records carry the dictionary mapping only — no type tag, no validation rule, no required-property list. Anything richer is a metadata hyperedge.
 
 **Value (tagged union for property values):**
 
@@ -962,14 +976,18 @@ tag  payload
 
 ### 11.3 Design decisions baked in
 
-- **Dictionary encoding** for `type` / `role_name` / `property_key`. Each unique name gets a u32 ID via a `*DefRecord`. Saves ~10-25 bytes per occurrence vs inline strings; makes index comparisons faster.
-- **`u64::MAX` sentinel** for active supersession (instead of `Option<u64>`). Saves 1 byte per record × billions of records. Same trick PostgreSQL uses for `xmax = 0`.
+- **Dictionary encoding** for type names, role names, and property keys. Each unique name gets a `u32` ID via a `TypeNameRecord` / `RoleNameRecord` / `PropertyKeyRecord`. Saves ~10–25 bytes per occurrence vs inline strings; makes index comparisons faster. The three dictionaries are independent namespaces — the same string can exist as both a type name and a property key without collision.
+- **`u64::MAX` sentinel** for active supersession (instead of `Option<u64>`). Saves 1 byte per record × billions of records. Same trick PostgreSQL uses for `xmax = 0`. Named `TX_ACTIVE` in code.
+- **`u32` 0 sentinel** for the type slot only. `TYPE_UNTYPED = 0` means "no declared type" (legal on entities, illegal on hyperedges). `role_id = 0` and `prop_id = 0` are reserved and illegal everywhere — the validator MUST reject any record carrying them.
 - **Self-describing values** (tagged union). Fits schemaless storage core (Section 6 Layer 1). Schema can be added/changed without rewriting records. Same property can hold different types in different records.
-- **CRC32 per record** for corruption detection. Covers everything from `record_size` through last payload byte.
-- **`record_size` first** so corrupted records can be skipped during scan recovery.
+- **CRC32 per record** for corruption detection. Covers everything from the first byte of `record_size` through the last byte of the final payload field (i.e. all bytes of the record except the CRC field itself).
+- **`record_size` first AND self-inclusive** — the value of `record_size` is the total on-disk byte count of the record, including its own 4 bytes and the trailing 4-byte CRC. Lets a scanner skip a corrupted record by seeking `record_size` bytes forward from the start of the size field without ambiguity.
+- **`arity` bounds** — a `HyperEdgeRecord` MUST have `arity ≥ 1`. A zero-role hyperedge is semantically an entity and SHOULD be written as an `EntityRecord` instead. Validators reject `arity = 0` on hyperedges.
 - **Six explicit record kinds** instead of one polymorphic format — keeps parser simple and lets compaction handle each kind correctly.
 
 Typical record sizes: 5-arity approval hyperedge with 1 short string property ≈ 180 bytes uncompressed. 100M hyperedges/year ≈ 18 GB raw, ~4-6 GB after Zstd block compression.
+
+**Vocabulary note.** "Fact" and "assertion" are used interchangeably in narrative prose but have distinct technical roles in this spec: a **fact** is the conceptual unit ("Bob approved Alice's loan"), an **assertion** is the on-disk record that durably stores one fact at one point in time. One fact can be represented by many assertions over its lifetime (initial assertion + tombstone or superseding assertion). "Schema" is shorthand for "the set of metadata hyperedges describing structural expectations" — it is never a separate engine primitive (see §6.1, §6.7).
 
 ### 11.4 Open sub-questions
 
@@ -1325,7 +1343,7 @@ These remain genuinely open. Each warrants its own focused spec.
 Candidates:
 - **Single-node first** — start here, no distribution complexity
 - **Read replicas** — cheap scaling, eventually consistent reads
-- **Sharded by entity/edge** — hard, traversal queries become distributed
+- **Sharded by entity/hyperedge** — hard, traversal queries become distributed
 - **Replicated state machine** (Raft) — full distributed ACID, multi-year effort
 
 Single-node for the first 2 years of work. Distribution is a separate architectural epoch.
@@ -1727,7 +1745,7 @@ Goal: web-scale write workloads + saturating the visual variable hierarchy.
 
 **Distribution scope (separate architectural epoch):**
 
-- Sharding by entity / edge with cross-shard traversal
+- Sharding by entity / hyperedge with cross-shard traversal
 - Raft-replicated state machine for distributed ACID
 - Multi-region deployment
 
