@@ -116,6 +116,43 @@ impl Principal {
     }
 }
 
+impl Capability {
+    /// Canonical string used as the `action` property on the matching
+    /// capability hyperedge in the engine. Stable contract — engine
+    /// records persisted under these names; renames would silently
+    /// invalidate every imported capability.
+    #[must_use]
+    pub fn as_action(self) -> &'static str {
+        match self {
+            Self::Health => "health",
+            Self::Read => "read",
+            Self::Iter => "iter",
+            Self::Commit => "commit",
+            Self::Flush => "flush",
+            Self::Compact => "compact",
+            Self::Admin => ndb_engine::WILDCARD,
+        }
+    }
+
+    /// Parse an engine-stored action string back into the enum. Returns
+    /// `None` for unknown actions (forward-compat — a v3 capability
+    /// stored in the database that this binary doesn't recognise
+    /// shouldn't blow up the auth flow).
+    #[must_use]
+    pub fn from_action(s: &str) -> Option<Self> {
+        match s {
+            "health" => Some(Self::Health),
+            "read" => Some(Self::Read),
+            "iter" => Some(Self::Iter),
+            "commit" => Some(Self::Commit),
+            "flush" => Some(Self::Flush),
+            "compact" => Some(Self::Compact),
+            s if s == ndb_engine::WILDCARD => Some(Self::Admin),
+            _ => None,
+        }
+    }
+}
+
 /// Principal registry — token → principal mapping.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Principals {
@@ -258,6 +295,126 @@ pub struct AuditEntry<'a> {
     pub failure: Option<&'a str>,
 }
 
+/// Commit every principal in `p` to the engine as one principal entity
+/// plus one capability hyperedge per granted capability. Returns the
+/// number of capability hyperedges committed.
+fn commit_principals_to_engine(
+    engine: &mut Engine,
+    p: &Principals,
+) -> Result<usize, ServerError> {
+    use ndb_engine::{
+        EntityRecord, HyperEdgeRecord, PROP_ACTION, PROP_EXPIRES_AT, PROP_GRANTED_AT,
+        PROP_PRINCIPAL_NAME, PROP_PRINCIPAL_TOKEN, PROP_TARGET, ROLE_SUBJECT, TYPE_CAPABILITY,
+        TYPE_PRINCIPAL, Value, WILDCARD,
+    };
+    let now_us = i64::try_from(now_micros()).unwrap_or(0);
+    let mut n_caps = 0usize;
+    for (token, principal) in &p.principals {
+        let mut txn = engine.begin_write();
+        let principal_eid = ndb_engine::EntityId::now_v7();
+        let tx_id = txn.tx_id();
+        txn.put_entity(EntityRecord {
+            entity_id: principal_eid,
+            type_id: TYPE_PRINCIPAL,
+            tx_id_assert: tx_id,
+            tx_id_supersede: TxId::ACTIVE,
+            properties: vec![
+                (PROP_PRINCIPAL_NAME, Value::String(principal.name.clone())),
+                (PROP_PRINCIPAL_TOKEN, Value::String(token.clone())),
+            ],
+        });
+        for cap in &principal.capabilities {
+            txn.put_hyperedge(HyperEdgeRecord {
+                hyperedge_id: ndb_engine::HyperedgeId::now_v7(),
+                type_id: TYPE_CAPABILITY,
+                tx_id_assert: tx_id,
+                tx_id_supersede: TxId::ACTIVE,
+                roles: vec![(ROLE_SUBJECT, principal_eid)],
+                properties: vec![
+                    (PROP_ACTION, Value::String(cap.as_action().into())),
+                    (PROP_TARGET, Value::String(WILDCARD.into())),
+                    (PROP_GRANTED_AT, Value::Timestamp(now_us)),
+                    (PROP_EXPIRES_AT, Value::Timestamp(0)),
+                ],
+            });
+            n_caps += 1;
+        }
+        txn.commit()?;
+    }
+    Ok(n_caps)
+}
+
+/// Rebuild the in-memory `Principals` cache from capability hyperedges
+/// in the engine. Token → Principal mapping is reconstructed by joining
+/// each principal entity's `PROP_PRINCIPAL_TOKEN` against the set of
+/// capability hyperedges incident on that entity.
+fn principals_from_engine(engine: &Arc<Mutex<Engine>>) -> Result<Principals, ServerError> {
+    use ndb_engine::{
+        PROP_ACTION, PROP_PRINCIPAL_NAME, PROP_PRINCIPAL_TOKEN, ROLE_SUBJECT, Record, TYPE_CAPABILITY,
+        TYPE_PRINCIPAL, Value,
+    };
+    let mut eng = engine.lock().expect("engine mutex poisoned");
+    let snapshot = TxId::new(eng.manifest().last_tx_id);
+    // Step 1: gather principal entities — id, name, token.
+    let mut principals_by_eid: HashMap<ndb_engine::EntityId, (String, String)> = HashMap::new();
+    for rec in eng.snapshot_iter_streaming(snapshot) {
+        let rec = rec?;
+        if let Record::Entity(e) = rec
+            && e.type_id == TYPE_PRINCIPAL
+        {
+            let mut name = None;
+            let mut token = None;
+            for (pid, val) in &e.properties {
+                if *pid == PROP_PRINCIPAL_NAME
+                    && let Value::String(s) = val
+                {
+                    name = Some(s.clone());
+                }
+                if *pid == PROP_PRINCIPAL_TOKEN
+                    && let Value::String(s) = val
+                {
+                    token = Some(s.clone());
+                }
+            }
+            if let (Some(n), Some(t)) = (name, token) {
+                principals_by_eid.insert(e.entity_id, (n, t));
+            }
+        }
+    }
+    // Step 2: walk capability hyperedges, fold their actions into the
+    // matching principal's BTreeSet.
+    let mut by_token: HashMap<String, Principal> = HashMap::new();
+    for (eid, (name, token)) in principals_by_eid {
+        let mut caps: BTreeSet<Capability> = BTreeSet::new();
+        for hid in eng.hyperedges_for_entity(eid) {
+            let resolved = eng.snapshot_read(&hid.into_uuid(), snapshot)?;
+            if let Resolved::Live(Record::HyperEdge(h)) = resolved
+                && h.type_id == TYPE_CAPABILITY
+                && h.roles.iter().any(|(rid, e)| *rid == ROLE_SUBJECT && *e == eid)
+            {
+                for (pid, val) in &h.properties {
+                    if *pid == PROP_ACTION
+                        && let Value::String(s) = val
+                        && let Some(c) = Capability::from_action(s)
+                    {
+                        caps.insert(c);
+                    }
+                }
+            }
+        }
+        by_token.insert(
+            token,
+            Principal {
+                name,
+                capabilities: caps,
+            },
+        );
+    }
+    Ok(Principals {
+        principals: by_token,
+    })
+}
+
 fn now_micros() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -323,6 +480,15 @@ impl Server {
         self
     }
 
+    /// Read-only access to the installed principals registry. Returns
+    /// an empty registry when none was installed. Intended for tests
+    /// and operator inspection; production auth flows go through
+    /// [`dispatch`](Self::dispatch).
+    #[must_use]
+    pub fn principals_for_test(&self) -> Principals {
+        self.principals.clone().unwrap_or_default()
+    }
+
     /// Convenience: look for `<db>/.principals.json` and install it if
     /// present. Returns `Ok(self, true)` if a file was loaded; `Ok(self,
     /// false)` if the file was absent (no change to the server); error on
@@ -337,6 +503,45 @@ impl Server {
             Some(p) => Ok((self.with_principals(p), true)),
             None => Ok((self, false)),
         }
+    }
+
+    /// v2.0 #25 entry point: persist the principals set as capability
+    /// hyperedges in the engine, and serve auth from the engine on
+    /// subsequent opens.
+    ///
+    /// Behaviour:
+    /// - If the engine already has any capability hyperedge or principal
+    ///   entity, do nothing on disk — just rebuild the in-memory cache
+    ///   from engine queries.
+    /// - Otherwise, if `<db>/.principals.json` exists, parse it +
+    ///   commit one principal entity per token + one capability
+    ///   hyperedge per (principal, capability) pair, then load the
+    ///   cache from engine.
+    /// - Otherwise, install an empty principals registry (= no auth
+    ///   gating; same as the bare `with_principals_from_db` path).
+    ///
+    /// Returns `(self, n_imported)` — `n_imported` is the number of
+    /// capability hyperedges committed during this call. Zero on a
+    /// second open (engine already populated).
+    pub fn with_principals_bootstrapped(self) -> Result<(Self, usize), ServerError> {
+        let dir = {
+            let eng = self.engine.lock().expect("engine mutex poisoned");
+            eng.path().to_path_buf()
+        };
+        let mut n_imported = 0;
+        // Inside one engine lock so the populate-then-read window can't
+        // race a concurrent writer.
+        {
+            let mut eng = self.engine.lock().expect("engine mutex poisoned");
+            if !eng.has_any_capability_or_principal()? {
+                let path = dir.join(PRINCIPALS_FILENAME);
+                if let Some(p) = Principals::load(&path)? {
+                    n_imported = commit_principals_to_engine(&mut eng, &p)?;
+                }
+            }
+        }
+        let cache = principals_from_engine(&self.engine)?;
+        Ok((self.with_principals(cache), n_imported))
     }
 
     /// Install a pre-built rustls `ServerConfig`. Once present, the

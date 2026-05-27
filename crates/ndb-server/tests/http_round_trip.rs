@@ -1064,3 +1064,93 @@ fn audit_log_records_principal_when_token_set() {
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// v2.0 #25: capability hyperedges as persistent ReBAC store
+// ---------------------------------------------------------------------------
+
+#[test]
+fn principals_bootstrap_imports_json_into_engine_capability_hyperedges() {
+    // Goal: prove the bootstrap flow round-trips. First open with
+    // .principals.json present + no capability hyperedges in the engine
+    // ⇒ imports. Second open with the file deleted ⇒ rebuilds the
+    // Principals cache from engine queries; auth still works.
+    use std::collections::BTreeSet;
+
+    let dir = temp_dir("principals-bootstrap");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // Write a principals.json with two principals.
+    let principals_json = serde_json::json!({
+        "principals": {
+            "alice-token": {
+                "name": "Alice",
+                "capabilities": ["read", "iter"]
+            },
+            "bob-token": {
+                "name": "Bob",
+                "capabilities": ["admin"]
+            }
+        }
+    });
+    std::fs::write(
+        dir.join(".principals.json"),
+        serde_json::to_string_pretty(&principals_json).unwrap(),
+    )
+    .unwrap();
+
+    // First open — bootstrap should import 3 capability hyperedges
+    // (2 for alice, 1 for bob).
+    let (server, n_imported) = Server::open(&dir)
+        .unwrap()
+        .with_principals_bootstrapped()
+        .unwrap();
+    assert_eq!(n_imported, 3, "expected 3 capability hyperedges imported");
+
+    // Confirm the principals cache reflects the imported set.
+    let p = server.principals_for_test();
+    assert_eq!(p.principals.len(), 2);
+    let alice = p.principals.get("alice-token").unwrap();
+    assert_eq!(alice.name, "Alice");
+    let expected_alice: BTreeSet<Capability> =
+        [Capability::Read, Capability::Iter].into_iter().collect();
+    assert_eq!(alice.capabilities, expected_alice);
+
+    let bob = p.principals.get("bob-token").unwrap();
+    assert!(bob.capabilities.contains(&Capability::Admin));
+    drop(server);
+
+    // Second open — delete the file. with_principals_bootstrapped should
+    // be a no-op import (engine already populated) but still rebuild the
+    // cache from engine.
+    std::fs::remove_file(dir.join(".principals.json")).unwrap();
+    let (server2, n_imported2) = Server::open(&dir)
+        .unwrap()
+        .with_principals_bootstrapped()
+        .unwrap();
+    assert_eq!(n_imported2, 0, "engine already populated — no re-import");
+    let p2 = server2.principals_for_test();
+    assert_eq!(p2.principals.len(), 2);
+    assert!(p2.principals.contains_key("alice-token"));
+    assert!(p2.principals.contains_key("bob-token"));
+
+    drop(server2);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn principals_bootstrap_no_file_is_empty_registry() {
+    // Bootstrap on an engine with no .principals.json + no engine state
+    // should install an empty registry (= no auth gating).
+    let dir = temp_dir("principals-bootstrap-empty");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (server, n_imported) = Server::open(&dir)
+        .unwrap()
+        .with_principals_bootstrapped()
+        .unwrap();
+    assert_eq!(n_imported, 0);
+    let p = server.principals_for_test();
+    assert!(p.principals.is_empty());
+    drop(server);
+    std::fs::remove_dir_all(&dir).unwrap();
+}

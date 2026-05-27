@@ -28,6 +28,7 @@
 #![warn(missing_docs)]
 
 pub mod block_index;
+pub mod capability;
 pub mod codec;
 pub mod db;
 pub mod encryption;
@@ -67,6 +68,10 @@ pub use id::{EntityId, HyperedgeId, PropertyId, RoleId, TX_ACTIVE, TYPE_UNTYPED,
 pub use index::{
     AdjacencyIndex, Distance, HyperEdgeTypeIndex, Index, LookupKeyIndex, PropertyBTreeIndex,
     VectorIndex,
+};
+pub use capability::{
+    PROP_ACTION, PROP_EXPIRES_AT, PROP_GRANTED_AT, PROP_PRINCIPAL_NAME, PROP_PRINCIPAL_TOKEN,
+    PROP_TARGET, ROLE_SUBJECT, TYPE_CAPABILITY, TYPE_PRINCIPAL, WILDCARD,
 };
 pub use memtable::Memtable;
 pub use mvcc::{Resolved, effective_tx, resolve, resolve_owned, visible_at};
