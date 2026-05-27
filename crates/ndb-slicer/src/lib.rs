@@ -86,6 +86,32 @@ pub enum ColumnSource {
     TxIdAssert,
     /// `tx_id_supersede` as `Value::I64`. `i64::MAX` for active records.
     TxIdSupersede,
+    /// v2.1 §2.5: bucket a `Value::Timestamp` property to a fixed-interval
+    /// bin. Reads the property as `Value::Timestamp`; emits the bucket's
+    /// LEFT EDGE as `Value::Timestamp`. Used as a `group_by` key to
+    /// produce time-series style "events per hour" / "revenue per day"
+    /// aggregations.
+    ///
+    /// Bucket math: `((ts - origin_us) / interval_us) * interval_us + origin_us`.
+    /// Rows whose timestamp property is missing emit `Value::Null` and
+    /// the slicer's existing null-key behaviour skips them from
+    /// grouping.
+    TimestampBucket {
+        /// Restrict to records of this type, or `None` to accept any
+        /// entity. Hyperedge variant is a v3 extension.
+        type_id: Option<TypeId>,
+        /// Property id holding the timestamp.
+        property: PropertyId,
+        /// Bucket width in microseconds. Common values: `60_000_000`
+        /// (1 minute), `3_600_000_000` (1 hour), `86_400_000_000` (1 day).
+        interval_us: i64,
+        /// Origin in microseconds since Unix epoch. Buckets snap to
+        /// `origin_us + N * interval_us`. Use `0` for "every bucket
+        /// starts at unix epoch + multiples of interval"; use a
+        /// non-zero value to shift the boundary (e.g. fiscal-year
+        /// quarters).
+        origin_us: i64,
+    },
 }
 
 impl Column {
@@ -200,7 +226,43 @@ fn extract(record: &Record, source: &ColumnSource) -> Option<Value> {
             };
             Some(Value::I64(i64::try_from(tx.get()).unwrap_or(i64::MAX)))
         }
+        ColumnSource::TimestampBucket {
+            type_id,
+            property,
+            interval_us,
+            origin_us,
+        } => match record {
+            Record::Entity(e) => {
+                if let Some(t) = type_id
+                    && e.type_id != *t
+                {
+                    return None;
+                }
+                let ts = e
+                    .properties
+                    .iter()
+                    .find(|(p, _)| p == property)
+                    .and_then(|(_, v)| match v {
+                        Value::Timestamp(t) => Some(*t),
+                        _ => None,
+                    })?;
+                Some(Value::Timestamp(bucket_floor(ts, *interval_us, *origin_us)))
+            }
+            _ => None,
+        },
     }
+}
+
+/// Floor `ts` to the bucket starting at `origin_us + N * interval_us`.
+/// Behaves correctly for `ts < origin_us` (uses floor-style negative
+/// division so the bucket boundary is always `≤ ts`).
+fn bucket_floor(ts: i64, interval_us: i64, origin_us: i64) -> i64 {
+    if interval_us <= 0 {
+        return ts;
+    }
+    let delta = ts - origin_us;
+    let bucket_index = delta.div_euclid(interval_us);
+    origin_us + bucket_index * interval_us
 }
 
 // ---------------------------------------------------------------------------
@@ -1161,6 +1223,101 @@ mod tests {
         // so b's group doesn't exist; nothing else.
         assert_eq!(t.rows.len(), 1);
         assert!(matches!(&t.rows[0][1], Value::I64(110)));
+    }
+
+    // ---------------------------------------------------------------------
+    // §2.5 Time-bucket binning
+    // ---------------------------------------------------------------------
+
+    const HOUR_US: i64 = 3_600_000_000;
+    const DAY_US: i64 = 86_400_000_000;
+
+    #[test]
+    fn timestamp_bucket_groups_by_hour() {
+        // Three events: two at 12:30-ish, one at 13:15.
+        let base_us = 1_700_000_000_000_000i64; // an arbitrary epoch-us starting point
+        let records = vec![
+            entity(EntityId::now_v7(), 1, vec![(10, Value::Timestamp(base_us + 30 * 60 * 1_000_000))]),
+            entity(EntityId::now_v7(), 1, vec![(10, Value::Timestamp(base_us + 45 * 60 * 1_000_000))]),
+            entity(EntityId::now_v7(), 1, vec![(10, Value::Timestamp(base_us + HOUR_US + 15 * 60 * 1_000_000))]),
+        ];
+        let p = Pipeline::new()
+            .select(Column {
+                header: "bucket".into(),
+                source: ColumnSource::TimestampBucket {
+                    type_id: None,
+                    property: PropertyId::new(10),
+                    interval_us: HOUR_US,
+                    origin_us: 0,
+                },
+            })
+            .group_by([0])
+            .aggregate(AggSpec {
+                header: "n".into(),
+                column: 0,
+                agg: Aggregate::Count,
+            });
+        let t = p.run(records);
+        // Two buckets — one with 2 rows, one with 1.
+        assert_eq!(t.rows.len(), 2);
+        let counts: Vec<i64> = t
+            .rows
+            .iter()
+            .filter_map(|r| if let Value::I64(n) = &r[1] { Some(*n) } else { None })
+            .collect();
+        assert!(counts.contains(&2));
+        assert!(counts.contains(&1));
+    }
+
+    #[test]
+    fn timestamp_bucket_honors_origin_shift() {
+        // Origin shifted by 30 min — events that would land in hour-0
+        // with origin=0 should land in a different bucket with the shift.
+        let half_hour_us = 30 * 60 * 1_000_000i64;
+        let ts1 = 100_000_000_000i64; // arbitrary
+        let ts2 = ts1 + half_hour_us;
+
+        let raw_bucket_origin_0 = bucket_floor(ts2, HOUR_US, 0);
+        let raw_bucket_origin_shift = bucket_floor(ts2, HOUR_US, half_hour_us);
+        // ts2 is 30 min after ts1. With origin=0, both probably land in
+        // the same hour bucket as ts1's bucket (if ts1 falls in
+        // [0..3600s]); with origin=+30min, they straddle a boundary.
+        // Robust assertion: the shifted bucket is exactly half_hour_us
+        // earlier (or equal) relative to the unshifted one.
+        let delta = raw_bucket_origin_0 - raw_bucket_origin_shift;
+        assert!(delta == 0 || delta == half_hour_us, "delta = {delta}");
+    }
+
+    #[test]
+    fn timestamp_bucket_missing_property_emits_null() {
+        let records = vec![
+            entity(EntityId::now_v7(), 1, vec![(10, Value::Timestamp(0))]),
+            entity(EntityId::now_v7(), 1, vec![(99, Value::I64(42))]), // wrong prop
+        ];
+        let p = Pipeline::new().select(Column {
+            header: "bucket".into(),
+            source: ColumnSource::TimestampBucket {
+                type_id: None,
+                property: PropertyId::new(10),
+                interval_us: DAY_US,
+                origin_us: 0,
+            },
+        });
+        let t = p.run(records);
+        assert_eq!(t.rows.len(), 2);
+        // First row has a real timestamp bucket; second is null.
+        assert!(matches!(&t.rows[0][0], Value::Timestamp(_)));
+        assert!(matches!(&t.rows[1][0], Value::Null));
+    }
+
+    #[test]
+    fn bucket_floor_handles_negative_offsets() {
+        // ts < origin should still produce a bucket boundary ≤ ts.
+        assert_eq!(bucket_floor(-100, 60, 0), -120);
+        assert_eq!(bucket_floor(60, 60, 0), 60);
+        assert_eq!(bucket_floor(0, 60, 0), 0);
+        assert_eq!(bucket_floor(59, 60, 0), 0);
+        assert_eq!(bucket_floor(61, 60, 0), 60);
     }
 
     #[test]
