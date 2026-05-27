@@ -39,6 +39,7 @@ pub mod memtable;
 pub mod mvcc;
 pub mod query;
 pub mod record;
+pub mod shared;
 pub mod sstable;
 pub mod validation;
 pub mod value;
@@ -58,6 +59,7 @@ pub use db::{
 pub use engine::{
     CompactionStats, Engine, EngineError, IsolationLevel, RetentionPolicy, WriteTxn,
 };
+pub use shared::SharedEngine;
 pub use error::{DecodeError, EncodeError};
 pub use id::{EntityId, HyperedgeId, PropertyId, RoleId, TX_ACTIVE, TYPE_UNTYPED, TxId, TypeId};
 pub use index::{
