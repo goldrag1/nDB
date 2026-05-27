@@ -1,0 +1,20 @@
+[package]
+name         = "ndb-renderer"
+description  = "nDB text/CSV/TSV renderer for slicer tables (§17.1, 2D outputs)"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+authors      = { workspace = true }
+repository   = { workspace = true }
+license      = { workspace = true }
+
+[lib]
+name = "ndb_renderer"
+path = "src/lib.rs"
+
+[dependencies]
+ndb-engine = { path = "../ndb-engine" }
+ndb-slicer = { path = "../ndb-slicer" }
+
+[lints]
+workspace = true

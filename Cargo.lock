@@ -191,6 +191,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ndb-renderer"
+version = "0.1.0"
+dependencies = [
+ "ndb-engine",
+ "ndb-slicer",
+]
+
+[[package]]
 name = "ndb-server"
 version = "0.1.0"
 dependencies = [
