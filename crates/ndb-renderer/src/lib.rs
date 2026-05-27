@@ -408,7 +408,7 @@ pub fn render_html(t: &Table) -> String {
     out
 }
 
-fn push_html_escaped(out: &mut String, s: &str) {
+pub(crate) fn push_html_escaped(out: &mut String, s: &str) {
     for ch in s.chars() {
         match ch {
             '&' => out.push_str("&amp;"),
@@ -420,6 +420,10 @@ fn push_html_escaped(out: &mut String, s: &str) {
         }
     }
 }
+
+/// v2.1 visualization renderers — self-contained HTML+SVG outputs that
+/// demonstrate nDB's N-dimensional data without a frontend project.
+pub mod viz;
 
 #[cfg(test)]
 mod tests {
