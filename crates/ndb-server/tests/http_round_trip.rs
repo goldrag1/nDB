@@ -14,7 +14,7 @@ use std::thread;
 use std::time::Duration;
 
 use ndb_engine::{EntityId, PropertyId, TypeId, Value, value::TAG_STRING};
-use ndb_server::Server;
+use ndb_server::{Capability, Principal, Principals, Server};
 
 fn temp_dir(name: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
@@ -303,6 +303,128 @@ fn audit_log_records_each_request() {
     assert_eq!(row2["path"], "/nonexistent");
     assert_eq!(row2["status"], 404);
     assert!(row2["failure"].is_string());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn principals_403_when_token_lacks_capability() {
+    use std::collections::BTreeSet;
+    let dir = temp_dir("rebac_403");
+    let mut p = Principals::default();
+    p.principals.insert(
+        "reader-token".into(),
+        Principal {
+            name: "alice-readonly".into(),
+            capabilities: BTreeSet::from([Capability::Read, Capability::Iter]),
+        },
+    );
+    let server = Arc::new(Server::open(&dir).unwrap().with_principals(p));
+    let addr = spawn_server(Arc::clone(&server), 2);
+
+    // /iter is allowed.
+    let req = b"GET /iter HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer reader-token\r\nConnection: close\r\n\r\n";
+    let resp = raw_request(addr, req);
+    assert_eq!(resp.status, 200);
+
+    // /flush is admin-tier; expect 403.
+    let req = b"POST /flush HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer reader-token\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    let resp = raw_request(addr, req);
+    assert_eq!(resp.status, 403);
+    let body: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    assert!(body["detail"].as_str().unwrap().contains("alice-readonly"));
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn principals_admin_capability_overrides_others() {
+    use std::collections::BTreeSet;
+    let dir = temp_dir("rebac_admin");
+    let mut p = Principals::default();
+    p.principals.insert(
+        "root-token".into(),
+        Principal {
+            name: "root".into(),
+            capabilities: BTreeSet::from([Capability::Admin]),
+        },
+    );
+    let server = Arc::new(Server::open(&dir).unwrap().with_principals(p));
+    let addr = spawn_server(Arc::clone(&server), 1);
+
+    let req = b"POST /flush HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer root-token\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    let resp = raw_request(addr, req);
+    assert_eq!(resp.status, 200);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn principals_unknown_token_401() {
+    let dir = temp_dir("rebac_unknown");
+    let p = Principals::default();
+    let server = Arc::new(Server::open(&dir).unwrap().with_principals(p));
+    let addr = spawn_server(Arc::clone(&server), 1);
+    let req = b"GET /iter HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer not-a-real-token\r\nConnection: close\r\n\r\n";
+    let resp = raw_request(addr, req);
+    assert_eq!(resp.status, 401);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn principals_health_open_even_without_token() {
+    use std::collections::BTreeSet;
+    let dir = temp_dir("rebac_health");
+    let mut p = Principals::default();
+    p.principals.insert(
+        "tok".into(),
+        Principal {
+            name: "alice".into(),
+            capabilities: BTreeSet::from([Capability::Read]),
+        },
+    );
+    let server = Arc::new(Server::open(&dir).unwrap().with_principals(p));
+    let addr = spawn_server(Arc::clone(&server), 1);
+    let resp = get(addr, "/health");
+    assert_eq!(resp.status, 200);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn principals_load_from_disk() {
+    use std::collections::BTreeSet;
+    let dir = temp_dir("rebac_disk");
+    let server = Server::open(&dir).unwrap();
+    // Drop the engine borrow before writing the file.
+    drop(server);
+
+    let principals = Principals {
+        principals: std::collections::HashMap::from([(
+            "from-disk-token".to_string(),
+            Principal {
+                name: "disk-user".into(),
+                capabilities: BTreeSet::from([Capability::Iter]),
+            },
+        )]),
+    };
+    let principals_path = dir.join(".principals.json");
+    std::fs::write(
+        &principals_path,
+        serde_json::to_vec_pretty(&principals).unwrap(),
+    )
+    .unwrap();
+
+    let (server, loaded) = Server::open(&dir)
+        .unwrap()
+        .with_principals_from_db()
+        .unwrap();
+    assert!(loaded, "expected principals file to be loaded");
+    let server = Arc::new(server);
+    let addr = spawn_server(Arc::clone(&server), 1);
+
+    let req = b"GET /iter HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer from-disk-token\r\nConnection: close\r\n\r\n";
+    let resp = raw_request(addr, req);
+    assert_eq!(resp.status, 200);
 
     std::fs::remove_dir_all(&dir).unwrap();
 }

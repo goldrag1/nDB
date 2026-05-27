@@ -71,6 +71,18 @@ fn main() -> ExitCode {
         );
         server = server.with_auth_token(token);
     }
+    // Principals registry from <db>/.principals.json, if present.
+    match server.with_principals_from_db() {
+        Ok((s, true)) => {
+            eprintln!("ndb-server: principals registry loaded from .principals.json");
+            server = s;
+        }
+        Ok((s, false)) => server = s,
+        Err(e) => {
+            eprintln!("failed to load .principals.json: {e}");
+            return ExitCode::from(1);
+        }
+    }
     let audit_on =
         args.audit || std::env::var("NDB_AUDIT").is_ok_and(|v| v == "1");
     if audit_on {

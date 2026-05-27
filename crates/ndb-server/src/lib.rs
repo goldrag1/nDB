@@ -35,6 +35,7 @@
 //! cargo run -p ndb-server -- --path /tmp/mydb --bind 127.0.0.1:8742
 //! ```
 
+use std::collections::{BTreeSet, HashMap};
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
@@ -46,11 +47,104 @@ use ndb_engine::{
     CommitRequest, CommitResponse, Engine, EngineError, ErrorResponse, JsonRecord, ReadResponse,
     Record, Resolved, TxId, WireError, WriteTxn,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Audit log filename, written under the database directory.
 pub const AUDIT_LOG_FILENAME: &str = ".audit.jsonl";
+
+/// Principals config filename, optionally placed under the database directory.
+pub const PRINCIPALS_FILENAME: &str = ".principals.json";
+
+// ---------------------------------------------------------------------------
+// ReBAC capability model
+// ---------------------------------------------------------------------------
+
+/// Coarse-grained capability tokens used by the server to gate routes (and
+/// by the MCP server to gate tools).
+///
+/// v1 captures direct capabilities only — no inference, no transitive reach
+/// (§13.2). The mapping principal → capability set is shipped as a small
+/// in-memory table loaded from `<db>/.principals.json` on `with_principals_*`.
+/// v2 will migrate this to capability hyperedges stored in the engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Capability {
+    /// `GET /health` — always allowed, listed for completeness.
+    Health,
+    /// `GET /read/:uuid`.
+    Read,
+    /// `GET /iter`.
+    Iter,
+    /// `POST /commit`.
+    Commit,
+    /// `POST /flush`.
+    Flush,
+    /// `POST /compact`.
+    Compact,
+    /// Wildcard — implies every other capability. Use sparingly.
+    Admin,
+}
+
+/// One row in the principals table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Principal {
+    /// Stable display name (used in audit logs and error messages).
+    pub name: String,
+    /// Direct capability grants.
+    pub capabilities: BTreeSet<Capability>,
+}
+
+impl Principal {
+    /// True iff this principal can perform `cap` (either directly or via
+    /// the `Admin` wildcard).
+    #[must_use]
+    pub fn allows(&self, cap: Capability) -> bool {
+        self.capabilities.contains(&Capability::Admin) || self.capabilities.contains(&cap)
+    }
+}
+
+/// Principal registry — token → principal mapping.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Principals {
+    /// Map from bearer token to principal record. Tokens are opaque; their
+    /// only structural requirement is being non-empty.
+    pub principals: HashMap<String, Principal>,
+}
+
+impl Principals {
+    /// Load a principals file from disk. Returns `Ok(None)` if the file
+    /// doesn't exist (caller decides whether that's fatal).
+    pub fn load(path: &Path) -> std::io::Result<Option<Self>> {
+        match std::fs::read(path) {
+            Ok(bytes) => {
+                let p: Self = serde_json::from_slice(&bytes).map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+                })?;
+                Ok(Some(p))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Look up a principal by raw bearer token (constant-time over the set
+    /// — but indexed: each hit takes O(token-len) to compare, the HashMap
+    /// scan is unavoidable for the constant-time-equality guarantee).
+    #[must_use]
+    pub fn resolve(&self, token: &str) -> Option<&Principal> {
+        // Walk every entry so a token that's a prefix of another doesn't
+        // short-circuit. Constant-time-compare each candidate.
+        let mut found: Option<&Principal> = None;
+        let tok = token.as_bytes();
+        for (k, p) in &self.principals {
+            if constant_time_eq(k.as_bytes(), tok) {
+                found = Some(p);
+            }
+        }
+        found
+    }
+}
 
 /// Errors raised by the server.
 #[derive(Debug, Error)]
@@ -75,12 +169,15 @@ pub enum ServerError {
 /// Server handle wrapping a shared engine.
 pub struct Server {
     engine: Arc<Mutex<Engine>>,
-    /// Optional bearer token. If `Some`, every request must carry
-    /// `Authorization: Bearer <token>` (constant-time-compared); else
-    /// 401. v1 ships a single static token; v2 will move to a token
-    /// registry (one per principal) backed by capability hyperedges
-    /// (§13.2).
+    /// Optional bearer token. If `Some` AND `principals` is `None`, every
+    /// request must carry `Authorization: Bearer <token>` else 401. v1
+    /// keeps this single-token path for backward compatibility with the
+    /// initial wire-protocol release.
     auth_token: Option<String>,
+    /// Optional principals registry. When present, overrides the single
+    /// `auth_token` path: each request must carry a recognised bearer
+    /// token AND the resolved principal must hold the route's capability.
+    principals: Option<Principals>,
     /// Append-only `.audit.jsonl` under the database directory. Every
     /// dispatched request gets one line. None when auditing is disabled.
     audit: Option<Arc<Mutex<AuditLog>>>,
@@ -159,6 +256,7 @@ impl Server {
         Ok(Self {
             engine: Arc::new(Mutex::new(engine)),
             auth_token: None,
+            principals: None,
             audit: None,
         })
     }
@@ -169,6 +267,7 @@ impl Server {
         Self {
             engine: Arc::new(Mutex::new(engine)),
             auth_token: None,
+            principals: None,
             audit: None,
         }
     }
@@ -180,6 +279,32 @@ impl Server {
         let t: String = token.into();
         self.auth_token = if t.is_empty() { None } else { Some(t) };
         self
+    }
+
+    /// Install a principals registry. Overrides any prior bearer-token
+    /// configuration. Once installed, every route except `/health`
+    /// requires a recognised bearer token AND the matching principal must
+    /// hold the route's capability.
+    #[must_use]
+    pub fn with_principals(mut self, p: Principals) -> Self {
+        self.principals = Some(p);
+        self
+    }
+
+    /// Convenience: look for `<db>/.principals.json` and install it if
+    /// present. Returns `Ok(self, true)` if a file was loaded; `Ok(self,
+    /// false)` if the file was absent (no change to the server); error on
+    /// any other I/O or parse failure.
+    pub fn with_principals_from_db(self) -> Result<(Self, bool), ServerError> {
+        let dir = {
+            let eng = self.engine.lock().expect("engine mutex poisoned");
+            eng.path().to_path_buf()
+        };
+        let path = dir.join(PRINCIPALS_FILENAME);
+        match Principals::load(&path)? {
+            Some(p) => Ok((self.with_principals(p), true)),
+            None => Ok((self, false)),
+        }
     }
 
     /// Enable audit logging. Every dispatched request appends one line
@@ -287,23 +412,59 @@ impl Server {
         out: &mut TcpStream,
         outcome: &mut DispatchOutcome,
     ) -> Result<(), ServerError> {
-        // Auth check first — applies to every route except /health, which
-        // is intentionally open so liveness probes don't need a secret.
-        if let Some(expected) = &self.auth_token
-            && req.path_no_query() != "/health"
-            && !constant_time_eq(expected.as_bytes(), req.bearer.as_bytes())
-        {
-            outcome.status = 401;
-            outcome.failure = Some("missing or invalid bearer token".into());
-            return write_error(out, 401, "unauthorized", "missing or invalid bearer token");
+        let path_no_q = req.path_no_query();
+        let needed = required_capability(&req.method, path_no_q);
+
+        // /health and unmatched paths bypass auth — let dispatch route them
+        // to a 200 or 404 respectively.
+        let needs_auth = needed.is_some() && needed != Some(Capability::Health);
+
+        if needs_auth {
+            // Principals-mode takes precedence over single-token-mode.
+            if let Some(reg) = &self.principals {
+                if req.bearer.is_empty() {
+                    outcome.status = 401;
+                    outcome.failure = Some("missing bearer token".into());
+                    return write_error(out, 401, "unauthorized", "missing bearer token");
+                }
+                match reg.resolve(&req.bearer) {
+                    None => {
+                        outcome.status = 401;
+                        outcome.failure = Some("unknown bearer token".into());
+                        return write_error(out, 401, "unauthorized", "unknown bearer token");
+                    }
+                    Some(p) => {
+                        outcome.principal.clone_from(&p.name);
+                        if let Some(cap) = needed
+                            && !p.allows(cap)
+                        {
+                            outcome.status = 403;
+                            let detail = format!(
+                                "principal '{}' lacks capability '{}'",
+                                p.name,
+                                capability_str(cap),
+                            );
+                            outcome.failure = Some(detail.clone());
+                            return write_error(out, 403, "forbidden", &detail);
+                        }
+                    }
+                }
+            } else if let Some(expected) = &self.auth_token {
+                if !constant_time_eq(expected.as_bytes(), req.bearer.as_bytes()) {
+                    outcome.status = 401;
+                    outcome.failure = Some("missing or invalid bearer token".into());
+                    return write_error(
+                        out,
+                        401,
+                        "unauthorized",
+                        "missing or invalid bearer token",
+                    );
+                }
+                outcome.principal = principal_for_token(&req.bearer);
+            }
         }
-        // Token recognised → principal is the token holder. v1 records the
-        // first 8 chars of the token hash as the principal identifier; v2
-        // moves to a token registry.
-        if self.auth_token.is_some() && !req.bearer.is_empty() {
-            outcome.principal = principal_for_token(&req.bearer);
-        }
-        match (req.method.as_str(), req.path_no_query()) {
+
+        match (req.method.as_str(), path_no_q) {
             ("GET", "/health") => {
                 outcome.status = 200;
                 write_json(out, 200, &serde_json::json!({"status": "ok"}))
@@ -601,6 +762,33 @@ struct DispatchOutcome {
     principal: String,
     tx_id: Option<u64>,
     failure: Option<String>,
+}
+
+/// Map a `(method, path)` to the capability required to invoke it. Returns
+/// `None` for routes the server doesn't recognise — those land in the 404
+/// branch which is intentionally open.
+fn required_capability(method: &str, path: &str) -> Option<Capability> {
+    match (method, path) {
+        ("GET", "/health") => Some(Capability::Health),
+        ("POST", "/commit") => Some(Capability::Commit),
+        ("GET", p) if p.starts_with("/read/") => Some(Capability::Read),
+        ("GET", "/iter") => Some(Capability::Iter),
+        ("POST", "/flush") => Some(Capability::Flush),
+        ("POST", "/compact") => Some(Capability::Compact),
+        _ => None,
+    }
+}
+
+fn capability_str(c: Capability) -> &'static str {
+    match c {
+        Capability::Health => "health",
+        Capability::Read => "read",
+        Capability::Iter => "iter",
+        Capability::Commit => "commit",
+        Capability::Flush => "flush",
+        Capability::Compact => "compact",
+        Capability::Admin => "admin",
+    }
 }
 
 /// Stable, short identifier for a bearer token. v1 uses an 8-char prefix
