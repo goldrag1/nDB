@@ -1,0 +1,20 @@
+[package]
+name         = "ndb-index-vector-hnsw"
+description  = "nDB HNSW (Hierarchical Navigable Small World) vector index — opt-in ANN replacement for the brute-force baseline (§14.2)"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+authors      = { workspace = true }
+repository   = { workspace = true }
+license      = { workspace = true }
+
+[lib]
+name = "ndb_index_vector_hnsw"
+path = "src/lib.rs"
+
+[dependencies]
+ndb-engine       = { path = "../ndb-engine" }
+instant-distance = "0.6"
+
+[lints]
+workspace = true

@@ -1421,7 +1421,8 @@ trait Index {
 
 **Hardware-neutral plugins.** The `Index` trait does not prescribe hardware. CPU, GPU, FPGA, or future accelerators can all back an index implementation. Different plugin crates target different stacks:
 
-- `nDB-index-vector-cpu` (CPU-only HNSW, no GPU dependency)
+- `nDB-index-vector-cpu` — the brute-force CPU baseline (shipped in v1 as `ndb_engine::VectorIndex`)
+- `nDB-index-vector-hnsw` — pure-Rust HNSW via the `instant-distance` crate (shipped in v1; HNSW chosen over IVF / ScaNN for maturity, no-training-step ergonomics, and zero-unsafe dep tree)
 - `nDB-index-vector-cuda` (NVIDIA GPU via cuVS / FAISS-GPU)
 - `nDB-index-vector-rocm` (AMD GPU via ROCm)
 - `nDB-index-vector-metal` (Apple Silicon)
