@@ -1,0 +1,27 @@
+[package]
+name         = "ndb-arrow"
+description  = "Apache Arrow IPC interop for nDB — bridges snapshot_iter to RecordBatch + IPC bytes (§17.1)"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+authors      = { workspace = true }
+repository   = { workspace = true }
+license      = { workspace = true }
+
+[lib]
+name = "ndb_arrow"
+path = "src/lib.rs"
+
+[dependencies]
+ndb-engine  = { path = "../ndb-engine" }
+thiserror   = { workspace = true }
+arrow-array  = "55"
+arrow-buffer = "55"
+arrow-schema = "55"
+arrow-ipc    = "55"
+
+[dev-dependencies]
+uuid = { workspace = true }
+
+[lints]
+workspace = true
