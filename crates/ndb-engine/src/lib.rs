@@ -51,8 +51,8 @@ pub mod wire_query;
 pub use encryption::{
     Cipher, DEFAULT_CHUNK_SIZE, ENCRYPTED_FILE_FORMAT_VERSION, ENCRYPTED_FILE_MAGIC,
     ENCRYPTION_ALGO_AES_GCM_256, ENCRYPTION_MARKER_FILENAME, ENCRYPTION_MARKER_FORMAT_VERSION,
-    ENCRYPTION_MARKER_MAGIC, EncryptedFile, EncryptionError, EncryptionMarker,
-    FINGERPRINT_LEN, KEY_LEN, NONCE_LEN, TAG_LEN,
+    ENCRYPTION_MARKER_MAGIC, ENCRYPTION_MIGRATION_FILENAME, EncryptedFile, EncryptionError,
+    EncryptionMarker, FINGERPRINT_LEN, KEY_LEN, NONCE_LEN, TAG_LEN,
 };
 pub use db::{
     CURRENT_FILE, Database, DatabaseError, LOCK_FILE, MANIFEST_FORMAT_VERSION,
@@ -60,7 +60,8 @@ pub use db::{
     Manifest, ManifestEntry, manifest_filename, parse_manifest_filename,
 };
 pub use engine::{
-    CompactionStats, Engine, EngineError, IsolationLevel, RetentionPolicy, WriteTxn,
+    CompactionStats, Engine, EngineError, IsolationLevel, MigrationStats, RetentionPolicy,
+    WriteTxn,
 };
 pub use shared::SharedEngine;
 pub use error::{DecodeError, EncodeError};

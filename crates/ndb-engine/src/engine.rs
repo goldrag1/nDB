@@ -38,7 +38,8 @@ use thiserror::Error;
 
 use crate::db::{Database, DatabaseError, Manifest, ManifestEntry};
 use crate::encryption::{
-    Cipher, DEFAULT_CHUNK_SIZE, ENCRYPTION_MARKER_FILENAME, EncryptionError, EncryptionMarker,
+    Cipher, DEFAULT_CHUNK_SIZE, ENCRYPTION_MARKER_FILENAME, ENCRYPTION_MIGRATION_FILENAME,
+    EncryptionError, EncryptionMarker,
 };
 use crate::error::EncodeError;
 use crate::id::{EntityId, HyperedgeId, PropertyId, TX_ACTIVE, TxId, TypeId};
@@ -138,7 +139,7 @@ pub enum EngineError {
     ///     plaintext would silently corrupt it).
     ///   - Env set, marker absent (database is plaintext; opening
     ///     encrypted would silently re-encrypt). Use
-    ///     `Engine::reencrypt` (v2) to migrate explicitly.
+    ///     `Engine::reencrypt` (v2.1) to migrate explicitly.
     #[error("encryption_key_mismatch: {detail}")]
     EncryptionKeyMismatch {
         /// Human-readable explanation, including which side carries
@@ -146,10 +147,36 @@ pub enum EngineError {
         detail: String,
     },
 
+    /// A prior `Engine::reencrypt` call did not run to completion —
+    /// the transient `.encryption.next` marker is still on disk. The
+    /// database may have a mix of files encrypted under the old vs
+    /// new keys; refusing to open is the safe default. Manual recovery
+    /// requires supplying both keys; the simple path is to restore
+    /// from backup.
+    #[error("encryption_migration_incomplete: {detail}")]
+    EncryptionMigrationIncomplete {
+        /// Human-readable detail.
+        detail: String,
+    },
+
     /// At-rest encryption primitive failed (marker decode, AEAD failure,
     /// invalid key length, hex decode).
     #[error(transparent)]
     Encryption(#[from] EncryptionError),
+}
+
+/// Stats returned by [`Engine::reencrypt`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MigrationStats {
+    /// Number of SSTable files rewritten under the new cipher.
+    pub sstables_rewritten: usize,
+    /// Number of WAL segments rewritten. Always 0 or 1 in v2.1 (single
+    /// active WAL).
+    pub wal_segments_rewritten: usize,
+    /// Total bytes of original file content that were rewritten.
+    /// Approximates I/O cost; not exact (post-rewrite size may differ
+    /// because per-chunk AEAD overhead differs between cipher states).
+    pub bytes_rewritten: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -1137,6 +1164,156 @@ impl Engine {
         })
     }
 
+    /// Migrate this database between encryption states.
+    ///
+    /// Covers the three transitions:
+    /// - **Plaintext → encrypted**: no marker on disk, `new_cipher = Some(_)`.
+    /// - **Encrypted → encrypted (new key)**: marker on disk, `new_cipher = Some(_)` with a different fingerprint.
+    /// - **Encrypted → plaintext**: marker on disk, `new_cipher = None`.
+    ///
+    /// Idempotent — calling with a cipher whose fingerprint matches the
+    /// current state returns `Ok(zero-stats)` and doesn't touch disk.
+    ///
+    /// ## Crash safety
+    ///
+    /// 1. Memtable is flushed to a new SSTable before the migration
+    ///    starts — every record now lives in an SSTable, so the WAL
+    ///    holds nothing except the rotation residue.
+    /// 2. A transient `.encryption.next` marker is written before any
+    ///    file rewrite begins. Its presence on next `Engine::open` is
+    ///    diagnosed as a crashed migration; the engine refuses to open
+    ///    silently rather than risk reading some files with the wrong
+    ///    cipher.
+    /// 3. Each SSTable + the new WAL use the existing
+    ///    write-temp-then-rename idiom, so any individual file is
+    ///    atomically either old-cipher or new-cipher; never half.
+    /// 4. The marker flip is the very last step.
+    ///
+    /// ## Holds an exclusive `&mut Engine`
+    ///
+    /// No concurrent reads or writes are possible during the migration.
+    /// `SharedEngine` callers are responsible for releasing any active
+    /// snapshots before invoking this method.
+    pub fn reencrypt(&mut self, new_cipher: Option<&Cipher>) -> Result<MigrationStats, EngineError> {
+        // Idempotent: same fingerprint = no-op.
+        let cur_fp = self.cipher.as_ref().map(Cipher::fingerprint);
+        let new_fp = new_cipher.map(Cipher::fingerprint);
+        if cur_fp == new_fp {
+            return Ok(MigrationStats::default());
+        }
+
+        let next_marker_path = self.db.path().join(ENCRYPTION_MIGRATION_FILENAME);
+        if next_marker_path.exists() {
+            return Err(EngineError::EncryptionMigrationIncomplete {
+                detail: "another migration is already pending — recover or remove the marker first"
+                    .into(),
+            });
+        }
+
+        // Step 1: flush memtable so all data is in SSTables.
+        self.flush()?;
+
+        // Step 2: write the transient marker. Contains the target
+        // marker bytes (or empty for plaintext target).
+        let next_bytes: Vec<u8> = new_cipher
+            .map(|c| EncryptionMarker::new(c, DEFAULT_CHUNK_SIZE).encode().to_vec())
+            .unwrap_or_default();
+        std::fs::write(&next_marker_path, &next_bytes)?;
+
+        // Step 3: rewrite each SSTable. Drop existing readers first so
+        // the temp-then-rename inside the writer can replace files.
+        self.sstables.clear();
+        let mut sstables_rewritten = 0usize;
+        let mut bytes_rewritten: u64 = 0;
+        let sst_seqs: Vec<u64> = self
+            .db
+            .manifest()
+            .sstables
+            .iter()
+            .map(|e| e.file_seq)
+            .collect();
+        let new_cipher_owned = new_cipher.cloned();
+        for seq in &sst_seqs {
+            let path = sstable_path(self.db.path(), *seq);
+            let original_len = std::fs::metadata(&path).map_or(0, |m| m.len());
+
+            // Read all records under the OLD cipher.
+            let reader = SSTableReader::open_with_cipher(&path, self.cipher.clone())?;
+            let count = usize::try_from(reader.footer().record_count).unwrap_or(usize::MAX);
+            let mut records: Vec<Record> = Vec::with_capacity(count);
+            for item in reader.iter() {
+                let (rec, _) = item?;
+                records.push(rec);
+            }
+            drop(reader);
+
+            // Write under the NEW cipher. SSTableWriter's
+            // write-temp-then-rename handles the atomic replace.
+            let mut writer =
+                SSTableWriter::create_with_cipher(&path, new_cipher_owned.clone())?;
+            for r in &records {
+                writer.append(r)?;
+            }
+            writer.finish()?;
+
+            bytes_rewritten += original_len;
+            sstables_rewritten += 1;
+        }
+
+        // Step 4: rewrite the WAL under the new cipher. The current
+        // WAL is empty (flush() just rotated to a fresh segment), but
+        // it was created under the OLD cipher; we need to swap it for
+        // one created under the NEW cipher. Allocate a new seq.
+        let old_wal_seq = self.db.manifest().active_wal_seq;
+        let old_wal_path = wal_path(self.db.path(), old_wal_seq);
+        let old_wal_len = std::fs::metadata(&old_wal_path).map_or(0, |m| m.len());
+        bytes_rewritten += old_wal_len;
+
+        // Drop the current WAL writer so we can delete the file.
+        if let Some(w) = self.wal.take() {
+            let _ = w.close();
+        }
+        let new_wal_seq = self.db.allocate_file_seq();
+        let new_wal_path = wal_path(self.db.path(), new_wal_seq);
+        let new_wal =
+            WriteAheadLog::create_with_cipher(&new_wal_path, new_cipher_owned.clone())?;
+        let mut manifest = self.db.manifest().clone();
+        manifest.active_wal_seq = new_wal_seq;
+        self.db.write_manifest(manifest)?;
+        let _ = std::fs::remove_file(&old_wal_path);
+        self.wal = Some(new_wal);
+
+        // Step 5: flip the marker. Write the new permanent marker (or
+        // delete the old one for plaintext target), then remove the
+        // transient `.encryption.next`.
+        match new_cipher {
+            Some(c) => {
+                let marker = EncryptionMarker::new(c, DEFAULT_CHUNK_SIZE);
+                write_encryption_marker(self.db.path(), &marker)?;
+            }
+            None => {
+                let _ = std::fs::remove_file(self.db.path().join(ENCRYPTION_MARKER_FILENAME));
+            }
+        }
+        std::fs::remove_file(&next_marker_path)?;
+
+        // Step 6: switch the in-memory cipher + reopen SSTable readers
+        // under the new cipher.
+        self.cipher = new_cipher_owned;
+        let entries = self.db.manifest().sstables.clone();
+        for entry in &entries {
+            let p = sstable_path(self.db.path(), entry.file_seq);
+            self.sstables
+                .push(SSTableReader::open_with_cipher(&p, self.cipher.clone())?);
+        }
+
+        Ok(MigrationStats {
+            sstables_rewritten,
+            wal_segments_rewritten: 1,
+            bytes_rewritten,
+        })
+    }
+
     /// `fsync` + release LOCK.
     pub fn close(mut self) -> Result<(), EngineError> {
         if let Some(wal) = self.wal.take() {
@@ -1668,6 +1845,18 @@ fn resolve_cipher_against_marker(
     db_dir: &Path,
     hint: Option<Cipher>,
 ) -> Result<Option<Cipher>, EngineError> {
+    // Pending migration marker → refuse to open. The database may be
+    // in a mixed-cipher state where some SSTables are under the old
+    // key and others under the new. Manual recovery is required.
+    if db_dir.join(ENCRYPTION_MIGRATION_FILENAME).exists() {
+        return Err(EngineError::EncryptionMigrationIncomplete {
+            detail: format!(
+                "found `{ENCRYPTION_MIGRATION_FILENAME}` — a prior `Engine::reencrypt` did not \
+                 finish. Restore from backup, or remove the marker manually if you can prove \
+                 all files use the same key."
+            ),
+        });
+    }
     let marker = read_encryption_marker(db_dir)?;
     match (hint, marker) {
         (None, None) => Ok(None),
@@ -3045,6 +3234,215 @@ mod tests {
         let snap = TxId::new(engine.manifest().last_tx_id);
         let resolved = engine.snapshot_read(&eid.into_uuid(), snap).unwrap();
         assert!(matches!(resolved, Resolved::Live(_)));
+        engine.close().unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // ---------------------------------------------------------------------
+    // §2.1 Engine::reencrypt — key rotation + plaintext↔encrypted migration
+    // ---------------------------------------------------------------------
+
+    fn seed_n_entities(engine: &mut Engine, n: usize) -> Vec<EntityId> {
+        let mut ids = Vec::with_capacity(n);
+        for i in 0..n {
+            let eid = EntityId::now_v7();
+            let mut txn = engine.begin_write();
+            txn.put_entity(EntityRecord {
+                entity_id: eid,
+                type_id: TypeId::new(42),
+                tx_id_assert: TxId::new(0),
+                tx_id_supersede: TxId::ACTIVE,
+                properties: vec![(PropertyId::new(1), Value::I64(i64::try_from(i).unwrap_or(0)))],
+            });
+            txn.commit().unwrap();
+            ids.push(eid);
+        }
+        ids
+    }
+
+    fn assert_visible(engine: &mut Engine, ids: &[EntityId]) {
+        let snap = TxId::new(engine.manifest().last_tx_id);
+        for eid in ids {
+            let resolved = engine.snapshot_read(&eid.into_uuid(), snap).unwrap();
+            assert!(
+                matches!(resolved, Resolved::Live(_)),
+                "entity {eid:?} not visible after reencrypt"
+            );
+        }
+    }
+
+    #[test]
+    fn reencrypt_plaintext_to_encrypted_round_trip() {
+        let dir = temp_dir("reencrypt_plain_to_enc");
+        let mut engine = Engine::create(&dir).unwrap();
+        let ids = seed_n_entities(&mut engine, 5);
+        engine.flush().unwrap();
+
+        let stats = engine.reencrypt(Some(&cipher_a())).unwrap();
+        assert!(stats.sstables_rewritten >= 1);
+        assert_eq!(stats.wal_segments_rewritten, 1);
+        assert!(stats.bytes_rewritten > 0);
+
+        // Marker now present.
+        assert!(dir.join(crate::encryption::ENCRYPTION_MARKER_FILENAME).exists());
+        // Transient marker gone.
+        assert!(!dir.join(crate::encryption::ENCRYPTION_MIGRATION_FILENAME).exists());
+
+        // Records still visible from the still-open Engine.
+        assert_visible(&mut engine, &ids);
+        engine.close().unwrap();
+
+        // Reopen with the new key — records still visible.
+        let mut engine = Engine::open_with_cipher(&dir, Some(cipher_a())).unwrap();
+        assert_visible(&mut engine, &ids);
+        // Reopen without a key → refused.
+        engine.close().unwrap();
+        let err = Engine::open(&dir).unwrap_err();
+        assert!(matches!(err, EngineError::EncryptionKeyMismatch { .. }));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn reencrypt_encrypted_to_encrypted_new_key() {
+        let dir = temp_dir("reencrypt_rotate");
+        let mut engine = Engine::create_with_cipher(&dir, Some(cipher_a())).unwrap();
+        let ids = seed_n_entities(&mut engine, 5);
+        engine.flush().unwrap();
+
+        let stats = engine.reencrypt(Some(&cipher_b())).unwrap();
+        assert_eq!(stats.wal_segments_rewritten, 1);
+        assert_visible(&mut engine, &ids);
+        engine.close().unwrap();
+
+        // Old key now refused; new key works.
+        let err = Engine::open_with_cipher(&dir, Some(cipher_a())).unwrap_err();
+        assert!(matches!(err, EngineError::EncryptionKeyMismatch { .. }));
+        let mut engine = Engine::open_with_cipher(&dir, Some(cipher_b())).unwrap();
+        assert_visible(&mut engine, &ids);
+        engine.close().unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn reencrypt_encrypted_to_plaintext() {
+        let dir = temp_dir("reencrypt_strip");
+        let mut engine = Engine::create_with_cipher(&dir, Some(cipher_a())).unwrap();
+        let ids = seed_n_entities(&mut engine, 3);
+        engine.flush().unwrap();
+
+        let stats = engine.reencrypt(None).unwrap();
+        assert!(stats.sstables_rewritten >= 1);
+        // Marker is gone after migration to plaintext.
+        assert!(!dir.join(crate::encryption::ENCRYPTION_MARKER_FILENAME).exists());
+        assert_visible(&mut engine, &ids);
+        engine.close().unwrap();
+
+        // Plaintext reopen now works without any key.
+        let mut engine = Engine::open(&dir).unwrap();
+        assert_visible(&mut engine, &ids);
+        engine.close().unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn reencrypt_same_state_is_idempotent_zero_stats() {
+        let dir = temp_dir("reencrypt_idempotent");
+        let mut engine = Engine::create_with_cipher(&dir, Some(cipher_a())).unwrap();
+        seed_n_entities(&mut engine, 2);
+        engine.flush().unwrap();
+
+        let stats = engine.reencrypt(Some(&cipher_a())).unwrap();
+        assert_eq!(stats, MigrationStats::default(), "no-op for matching cipher");
+        // Transient marker NOT created on a no-op.
+        assert!(!dir.join(crate::encryption::ENCRYPTION_MIGRATION_FILENAME).exists());
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn reencrypt_plaintext_to_plaintext_is_idempotent() {
+        let dir = temp_dir("reencrypt_plain_idempotent");
+        let mut engine = Engine::create(&dir).unwrap();
+        seed_n_entities(&mut engine, 2);
+        let stats = engine.reencrypt(None).unwrap();
+        assert_eq!(stats, MigrationStats::default());
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn open_refuses_when_encryption_next_marker_is_present() {
+        let dir = temp_dir("reencrypt_partial_crash");
+        let mut engine = Engine::create_with_cipher(&dir, Some(cipher_a())).unwrap();
+        seed_n_entities(&mut engine, 1);
+        engine.flush().unwrap();
+        engine.close().unwrap();
+
+        // Simulate a crashed reencrypt — manually drop the .encryption.next
+        // marker on disk WITHOUT actually rewriting any file.
+        std::fs::write(
+            dir.join(crate::encryption::ENCRYPTION_MIGRATION_FILENAME),
+            b"",
+        )
+        .unwrap();
+
+        let err = Engine::open_with_cipher(&dir, Some(cipher_a())).unwrap_err();
+        assert!(
+            matches!(err, EngineError::EncryptionMigrationIncomplete { .. }),
+            "expected EncryptionMigrationIncomplete, got {err:?}"
+        );
+
+        // Cleanup: remove the marker, open should succeed again.
+        std::fs::remove_file(dir.join(crate::encryption::ENCRYPTION_MIGRATION_FILENAME)).unwrap();
+        let engine = Engine::open_with_cipher(&dir, Some(cipher_a())).unwrap();
+        engine.close().unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn reencrypt_refuses_when_prior_migration_marker_exists() {
+        let dir = temp_dir("reencrypt_blocked");
+        let mut engine = Engine::create_with_cipher(&dir, Some(cipher_a())).unwrap();
+        seed_n_entities(&mut engine, 1);
+        engine.flush().unwrap();
+
+        // Plant a stale `.encryption.next` to simulate a prior crash.
+        std::fs::write(
+            dir.join(crate::encryption::ENCRYPTION_MIGRATION_FILENAME),
+            b"",
+        )
+        .unwrap();
+
+        let err = engine.reencrypt(Some(&cipher_b())).unwrap_err();
+        assert!(matches!(err, EngineError::EncryptionMigrationIncomplete { .. }));
+        engine.close().unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn reencrypt_round_trip_plain_to_enc_to_plain_preserves_records() {
+        let dir = temp_dir("reencrypt_full_round_trip");
+        let mut engine = Engine::create(&dir).unwrap();
+        let ids = seed_n_entities(&mut engine, 7);
+        engine.flush().unwrap();
+
+        engine.reencrypt(Some(&cipher_a())).unwrap();
+        assert_visible(&mut engine, &ids);
+        engine.reencrypt(Some(&cipher_b())).unwrap();
+        assert_visible(&mut engine, &ids);
+        engine.reencrypt(None).unwrap();
+        assert_visible(&mut engine, &ids);
+        engine.close().unwrap();
+
+        // Final state: plaintext. Re-open with no key works.
+        let mut engine = Engine::open(&dir).unwrap();
+        assert_visible(&mut engine, &ids);
         engine.close().unwrap();
 
         std::fs::remove_dir_all(&dir).unwrap();

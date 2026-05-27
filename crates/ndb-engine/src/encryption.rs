@@ -552,6 +552,12 @@ pub const ENCRYPTION_ALGO_AES_GCM_256: u32 = 1;
 /// Filename used inside the database directory.
 pub const ENCRYPTION_MARKER_FILENAME: &str = ".encryption";
 
+/// Transient marker written by `Engine::reencrypt` before the rewrite
+/// loop starts and removed once the migration completes. Its presence
+/// on `Engine::open` signals an interrupted migration; the engine
+/// refuses to open silently in that case.
+pub const ENCRYPTION_MIGRATION_FILENAME: &str = ".encryption.next";
+
 /// On-disk layout: `magic(4)` + `version(4)` + `algo(4)` + `chunk_size(4)`
 /// + `fingerprint(16)` + `reserved(32)` = 64 bytes.
 const MARKER_LEN: usize = 64;
