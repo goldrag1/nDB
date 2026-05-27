@@ -230,6 +230,7 @@ Concrete capabilities:
 - **Vector + structured queries together.** Vector index plugin (v2) sits alongside structured-pattern queries. "Find documents similar to this embedding AND mentioning entities of type Drug" is one query, one engine.
 - **Provenance baked in.** Every LLM-extracted fact carries who-extracted, when, from-what-source. Hallucination grounding becomes a query, not a custom audit system.
 - **Time-travel for retraining.** "What facts did the system believe before model v3 was deployed?" is `as of T match ...`. Useful for model auditing, A/B comparison, regression analysis.
+- **First-class MCP integration (v1).** nDB ships an `nDB-mcp-server` companion crate that exposes the engine as a Model Context Protocol server. Claude, GPT, Llama, and any MCP-aware agent can drive nDB out of the box — read, write, query, subscribe, traverse, time-travel — without custom integration glue. No other hypergraph database currently has this. Tool definitions include the query DSL grammar so LLMs produce correct queries directly.
 
 For domains like medical reasoning, scientific literature analysis, legal case analysis, and autonomous agent context management, nDB is built for the workload that AI is creating, not the workload SQL was designed for in 1974.
 
@@ -341,7 +342,7 @@ For nDB's target workloads (AI reasoning, ERP, scientific), the strong-performan
 
 Goal: usable single-node engine for one workload (AI reasoning or ERP, decided closer to launch).
 
-Storage core, MVCC, retention policies, query language (retrieval-only), six mandatory indexes (entity-by-ID, hyperedge-by-ID, lookup-key reverse, adjacency list, hyperedge-type clustering, schema-driven property B-tree), companion crates for 2D rendering, wire protocol clients in Rust. One real-world pilot.
+Storage core, MVCC, retention policies, query language (retrieval-only), six mandatory indexes (entity-by-ID, hyperedge-by-ID, lookup-key reverse, adjacency list, hyperedge-type clustering, schema-driven property B-tree), companion crates for 2D rendering, wire-protocol Rust client, **interactive CLI** (`nDB-cli`) with REPL + admin commands, **MCP server** (`nDB-mcp-server`) for AI agent integration, security baseline (bearer tokens + TLS + ReBAC capabilities + free audit + filesystem encryption). One real-world pilot.
 
 ### v2.0 — AI + Analytics + First GPU Support
 

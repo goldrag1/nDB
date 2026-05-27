@@ -1587,7 +1587,19 @@ These primitives ship in v1 even though no GPU plugins exist yet. They are the f
   - 2D pivot table (categorical x, y axes + value cell)
   - 2D bar / line / area charts (same encoding family)
 - `nDB-client-rust` v1 — wire-protocol client for Rust apps
-- Engine, slicer, and renderer ship as separate crates; apps depend on whichever they need
+- `nDB-cli` v1 — **interactive REPL + admin tooling**:
+  - Pattern-match query input (Section 12 surface syntax)
+  - Backslash-style commands (`.schema`, `.write`, `.as-of`, `.backup`, `.restore`, `.compact`, `.stats`, `.help`)
+  - Tab-completion against schema introspection
+  - Table / JSON / JSONL output modes
+  - Streaming for large result sets
+  - History (readline-style)
+- `nDB-mcp-server` v1 — **Model Context Protocol server** exposing nDB to AI agents (Claude, GPT, Llama, others):
+  - Tools: `query`, `write`, `subscribe`, `schema`, `traverse`, `time_travel`
+  - Tool definitions include the query DSL grammar so LLMs produce correct queries directly
+  - Type-def introspection at runtime — the LLM sees available types and properties
+  - Strategically critical for the AI primary-target application (Section 3.1) — no other hypergraph database has first-class MCP integration
+- Engine, slicer, renderer, CLI, and MCP server all ship as separate crates; apps depend on whichever they need
 
 **Success criteria:**
 - 1M hyperedges, sub-second traversal queries on commodity hardware
@@ -1595,6 +1607,8 @@ These primitives ship in v1 even though no GPU plugins exist yet. They are the f
 - Comparative benchmark vs Neo4j published
 - Documentation site live
 - Batch APIs validated by a high-throughput ingest benchmark (10K+ writes/sec, 100K+ reads/sec)
+- CLI tested in our own development workflow throughout the build
+- MCP server validated by an LLM agent driving nDB end-to-end (read + write + query) without custom integration glue
 
 ### 17.2 v2.0 — Analytics + AI Workloads + first GPU support
 
