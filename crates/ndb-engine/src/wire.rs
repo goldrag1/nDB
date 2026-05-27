@@ -72,7 +72,7 @@ pub enum WireError {
 
 /// JSON-friendly mirror of [`Value`]. Use [`JsonValue::from`] / [`Value::try_from`]
 /// to convert.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "tag", rename_all = "snake_case")]
 pub enum JsonValue {
     /// `{"tag": "null"}`

@@ -42,6 +42,7 @@ pub mod validation;
 pub mod value;
 pub mod wal;
 pub mod wire;
+pub mod wire_query;
 
 pub use encryption::{
     Cipher, DEFAULT_CHUNK_SIZE, ENCRYPTED_FILE_FORMAT_VERSION, ENCRYPTED_FILE_MAGIC, EncryptedFile,
@@ -80,4 +81,8 @@ pub use wire::{
     PropertyRangeRequest, PropertyRangeResponse, ReadResponse, TraverseHop, TraverseRequest,
     TraverseResponse, TxIdOrActive, VectorHit, VectorMetric, VectorSearchRequest,
     VectorSearchResponse, WireError,
+};
+pub use wire_query::{
+    AsOf, CmpOp, DEFAULT_MAX_RECURSION_DEPTH, Expr, Pattern, PropertyFilter, QueryRequest,
+    QueryResponse, Recursion, RoleBinding, Term,
 };
