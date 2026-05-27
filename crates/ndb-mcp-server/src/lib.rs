@@ -44,11 +44,13 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use ndb_engine::{
     Distance, Engine, EngineError, EntityId, EntityRecord, JsonRecord, JsonValue, PropertyId,
     Resolved, TxId, TypeId, Value,
 };
+use ndb_server::{AuditEntry, AuditLog, Capability, Principal};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -74,6 +76,47 @@ pub enum McpError {
     /// Underlying value/UUID conversion error.
     #[error("conversion: {0}")]
     Convert(String),
+    /// Configured principal lacks the capability required for this tool.
+    #[error("forbidden: principal '{principal}' lacks capability '{capability}'")]
+    Forbidden {
+        /// Principal name.
+        principal: String,
+        /// Required capability name.
+        capability: &'static str,
+    },
+}
+
+fn now_micros() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_micros())
+}
+
+/// Map an MCP tool name to the [`Capability`] required to call it.
+fn tool_capability(tool: &str) -> Option<Capability> {
+    match tool {
+        "ndb.health" => Some(Capability::Health),
+        "ndb.read"
+        | "ndb.lookup_by_key"
+        | "ndb.vector_search"
+        | "ndb.property_lookup"
+        | "ndb.property_range" => Some(Capability::Read),
+        "ndb.iter" => Some(Capability::Iter),
+        "ndb.commit_entity" => Some(Capability::Commit),
+        _ => None,
+    }
+}
+
+fn capability_str(c: Capability) -> &'static str {
+    match c {
+        Capability::Health => "health",
+        Capability::Read => "read",
+        Capability::Iter => "iter",
+        Capability::Commit => "commit",
+        Capability::Flush => "flush",
+        Capability::Compact => "compact",
+        Capability::Admin => "admin",
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +188,13 @@ impl JsonRpcResponse {
 /// MCP server handle. Owns a shared engine.
 pub struct McpServer {
     engine: Arc<Mutex<Engine>>,
+    /// Optional principal. When set, every tool call is checked against
+    /// the principal's capabilities. When unset, every tool is allowed
+    /// (the legacy stdio behaviour — appropriate for a single-tenant
+    /// local launch).
+    principal: Option<Principal>,
+    /// Optional audit log. Each tool call emits a row.
+    audit: Option<Arc<Mutex<AuditLog>>>,
 }
 
 impl McpServer {
@@ -159,6 +209,8 @@ impl McpServer {
         };
         Ok(Self {
             engine: Arc::new(Mutex::new(engine)),
+            principal: None,
+            audit: None,
         })
     }
 
@@ -167,6 +219,61 @@ impl McpServer {
     pub fn from_engine(engine: Engine) -> Self {
         Self {
             engine: Arc::new(Mutex::new(engine)),
+            principal: None,
+            audit: None,
+        }
+    }
+
+    /// Install a principal. Every subsequent tool call is gated by the
+    /// principal's capability set (the same enum used by ndb-server).
+    /// Without a principal, the legacy unrestricted behaviour applies.
+    #[must_use]
+    pub fn with_principal(mut self, p: Principal) -> Self {
+        self.principal = Some(p);
+        self
+    }
+
+    /// Enable audit logging into `<db>/.audit.jsonl`. The MCP server
+    /// shares the audit-file format with ndb-server so a single SIEM
+    /// pipeline ingests both surfaces.
+    pub fn with_audit_log(mut self) -> Result<Self, McpError> {
+        let dir = {
+            let eng = self.engine.lock().expect("engine mutex poisoned");
+            eng.path().to_path_buf()
+        };
+        let log = AuditLog::open(&dir)?;
+        self.audit = Some(Arc::new(Mutex::new(log)));
+        Ok(self)
+    }
+
+    /// Audit-log path, if enabled.
+    #[must_use]
+    pub fn audit_log_path(&self) -> Option<std::path::PathBuf> {
+        self.audit
+            .as_ref()
+            .map(|a| a.lock().expect("audit mutex poisoned").path().to_path_buf())
+    }
+
+    fn record_audit(
+        &self,
+        principal: &str,
+        tool: &str,
+        status: u16,
+        failure: Option<&str>,
+    ) {
+        if let Some(log) = &self.audit {
+            let entry = AuditEntry {
+                ts_us: now_micros(),
+                principal,
+                method: "mcp.tools/call",
+                path: tool,
+                status,
+                tx_id: None,
+                failure,
+            };
+            if let Err(e) = log.lock().expect("audit mutex poisoned").append(&entry) {
+                eprintln!("audit log write failed: {e}");
+            }
         }
     }
 
@@ -235,7 +342,28 @@ impl McpServer {
             .ok_or_else(|| McpError::BadArgs("tools/call missing 'name'".into()))?;
         let empty = serde_json::Value::Object(serde_json::Map::new());
         let args = params.get("arguments").unwrap_or(&empty);
-        match name {
+
+        // ReBAC gating: when a principal is installed, every recognised
+        // tool must have a capability the principal holds. Unknown tools
+        // are rejected the same way they were before — capability check
+        // is purely additive.
+        let principal_name: String = self
+            .principal
+            .as_ref()
+            .map_or_else(|| "anonymous".into(), |p| p.name.clone());
+        if let Some(p) = &self.principal
+            && let Some(needed) = tool_capability(name)
+            && !p.allows(needed)
+        {
+            let err = McpError::Forbidden {
+                principal: p.name.clone(),
+                capability: capability_str(needed),
+            };
+            self.record_audit(&principal_name, name, 403, Some(&err.to_string()));
+            return Err(err);
+        }
+
+        let result = match name {
             "ndb.health" => Ok(serde_json::json!({"status": "ok"})),
             "ndb.read" => self.tool_read(args),
             "ndb.commit_entity" => self.tool_commit_entity(args),
@@ -245,7 +373,13 @@ impl McpServer {
             "ndb.property_lookup" => self.tool_property_lookup(args),
             "ndb.property_range" => self.tool_property_range(args),
             other => Err(McpError::UnknownTool(other.into())),
-        }
+        };
+        let (status, failure_owned) = match &result {
+            Ok(_) => (200, None),
+            Err(e) => (500, Some(e.to_string())),
+        };
+        self.record_audit(&principal_name, name, status, failure_owned.as_deref());
+        result
     }
 
     fn tool_read(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
@@ -621,6 +755,76 @@ mod tests {
         let server = McpServer::open(&dir).unwrap();
         let resp = call(&server, "not valid json {{{");
         assert_eq!(resp["error"]["code"].as_i64().unwrap(), -32700);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn principal_without_capability_is_forbidden() {
+        use std::collections::BTreeSet;
+        let dir = temp_dir("mcp_rebac");
+        let server = McpServer::open(&dir).unwrap().with_principal(Principal {
+            name: "read-only-bot".into(),
+            capabilities: BTreeSet::from([Capability::Read, Capability::Iter]),
+        });
+        let resp = call(
+            &server,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                "name":"ndb.commit_entity",
+                "arguments":{"type_id":1,"properties":[]}
+            }}"#,
+        );
+        assert!(resp["error"].is_object(), "got: {resp:?}");
+        let msg = resp["error"]["message"].as_str().unwrap();
+        assert!(msg.contains("read-only-bot"));
+        assert!(msg.contains("commit"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn principal_with_admin_can_call_everything() {
+        use std::collections::BTreeSet;
+        let dir = temp_dir("mcp_admin");
+        let server = McpServer::open(&dir).unwrap().with_principal(Principal {
+            name: "root".into(),
+            capabilities: BTreeSet::from([Capability::Admin]),
+        });
+        let resp = call(
+            &server,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+                "name":"ndb.commit_entity",
+                "arguments":{
+                    "type_id":1,
+                    "properties":[{"prop_id":10,"value":{"tag":"string","value":"x"}}]
+                }
+            }}"#,
+        );
+        assert!(resp["result"]["tx_id"].as_u64().unwrap() > 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn audit_log_records_tool_calls() {
+        let dir = temp_dir("mcp_audit");
+        let server = McpServer::open(&dir).unwrap().with_audit_log().unwrap();
+        let _ = call(
+            &server,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ndb.health"}}"#,
+        );
+        let _ = call(
+            &server,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"nope.no"}}"#,
+        );
+        let path = server.audit_log_path().unwrap();
+        let s = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = s.lines().collect();
+        assert_eq!(lines.len(), 2, "got: {s:?}");
+        let row1: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(row1["method"], "mcp.tools/call");
+        assert_eq!(row1["path"], "ndb.health");
+        assert_eq!(row1["status"], 200);
+        let row2: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(row2["path"], "nope.no");
+        assert_eq!(row2["status"], 500);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

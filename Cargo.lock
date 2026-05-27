@@ -548,6 +548,7 @@ name = "ndb-mcp-server"
 version = "1.0.0"
 dependencies = [
  "ndb-engine",
+ "ndb-server",
  "serde",
  "serde_json",
  "thiserror",
