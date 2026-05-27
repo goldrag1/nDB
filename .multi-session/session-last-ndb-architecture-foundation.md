@@ -1,3 +1,141 @@
+## Session 2026-05-27 (fourth turn) — query language scaffolding: spec → wire AST → parser → resolver
+
+Started from v1.2.0 (262 Rust + 12 Python = 274 tests) toward the §17.1
+query-language deliverable — the dominant remaining piece. This session
+landed the first four of the eight steps needed (spec, wire AST, parser,
+resolver). The planner / executor / `/query` route / client surfaces
+remain for the next session.
+
+**7 new commits**, **+80 tests** (262 → 342 Rust). Workspace clippy clean
+with `-D warnings`. Branch `main` ready to push.
+
+### What landed this turn
+
+| SHA       | Subject |
+|-----------|---------|
+| `ae0fe30` | spec(query-language): close §12.9 open sub-questions; lock v1 grammar + AST + semantics |
+| `010c652` | fix(test): hoist const decls to top of traverse_route_walks_2_hops (clippy 1.95 regression on main) |
+| `f972ba8` | feat(engine): wire_query — QueryRequest/Response AST + 16 round-trip tests |
+| `efc1285` | spec(query-language): lock hyperedge semantics — partial match, role-vs-property (Option A) |
+| `6008d77` | feat(query): ndb-query crate — lexer + recursive-descent parser (TDD) |
+| `3ebd77e` | feat(query): resolver — NameQuery → wire QueryRequest via dictionaries |
+
+The query-language working spec lives at
+`docs/superpowers/specs/2026-05-27-query-language.md`.
+
+### Locked design decisions for query language (in addition to §12 of the parent spec)
+
+| Concern | Decision | Source |
+|---|---|---|
+| Surface syntax | SQL-ish pattern functions, `type(role: term, ...) as ?var`. Chosen over TypeQL `$x isa`, bracket-record, YAML-block — scales cleanly at high arity via role labels. | working spec §2.1, user A/A/A |
+| Self-bind | `as ?var` suffix; `id:` is NOT a reserved key. Replaces §12.6 examples that used `id:` magically. | spec §2.3, §2.4 |
+| Operator precedence | `not` > comparisons > `and` > `or`. Comparisons non-associative (`a < b < c` → ChainedComparison error). No arithmetic in v1 — push math into slicer. | spec §3.1 |
+| Recursion suffix position | BEFORE `(` (per §12.6 examples like `contains*(...)`). Parent-spec EBNF placed it after `)`; corrected inline. | spec §3 |
+| Recursion semantics | Single query-start snapshot for the entire closure. Visited-set cycle protection. Default max_depth=64. Loud error on cap (never silent truncate). | spec §5.3 |
+| Partial role match | Unnamed roles are wildcards. `_` placeholder for fresh anonymous variable in patterns; disallowed in `where`. | spec §5.7 |
+| Same-variable unification | Repeated variable in a single pattern unifies — no join needed. | spec §5.7 |
+| Role-vs-property name resolution | Option A (overload by name). Resolver decides per dictionary; same name as both → ambiguous_name error. Preserves §12.6 syntax verbatim. | spec §5.7 |
+| PropertyFilter RHS | `term: Term` (var OR literal), not literal-only — needed for `customer(name: ?n)` bind-to-variable shape. | spec §4, amended this session |
+| Wire AST id-based | Type/role/property as u32 dictionary slots. Resolver maps names → ids by walking a Dictionaries snapshot of `Engine::snapshot_iter`. | spec §2.2, §4 |
+| v1 is READ-ONLY | Writes through `/commit`. Writing through query syntax adds read-set tracking + conflict detection to executor; deferred to v2. | spec §1, §9 |
+| NL-to-AST | Engine grammar is the only input path. NL wrappers are a client/SDK concern. Engine stays deterministic + offline-capable. | spec §2.5 |
+| Tagged-union conventions | `#[serde(tag = "kind", rename_all = "snake_case")]` for Pattern / Term / Expr / Recursion. `AsOf` is untagged — field name IS the discriminator. Matches existing `JsonRecord`. | spec §4.2 |
+| Anonymous in pattern | Each `_` becomes a fresh `__anon_N` variable (thread-local counter) so multiple `_`s in the same pattern don't unify. | resolver |
+
+### Workspace shape after this session
+
+```
+crates/
+├── ndb-engine             # +wire_query module (~700 LOC, 17 tests)
+├── ndb-server             # +clippy hoist fix
+├── ndb-cli                # unchanged
+├── ndb-mcp-server         # unchanged
+├── ndb-slicer             # unchanged
+├── ndb-renderer           # unchanged
+├── ndb-arrow              # unchanged
+├── ndb-index-vector-hnsw  # unchanged
+├── ndb-client-rust        # unchanged
+└── ndb-query              # NEW — lexer + parser + resolver
+                           # ~2000 LOC, 76 tests + 1 doctest
+```
+
+### Bugs caught + fixed inline this turn
+
+1. **Clippy 1.95 `items_after_statements` lint** broke the existing `traverse_route_walks_2_hops` test on main. Pre-existing regression — v1.2.0 shipped clippy-clean, but a newer Rust/clippy version made `const TYPE_X: u32 = ...;` interleaved with `let` lines a hard error. Fixed by hoisting consts to the top of the test function in commit `010c652`. Worth a watch on the next bench/server change — this lint may fire elsewhere.
+2. **Parent-spec EBNF placed recursion suffix AFTER `)`** but every §12.6 example uses suffix AFTER type-name + BEFORE `(` (`contains*(parent: ..., child: ...)`). Corrected inline in the working spec; parser implements the example-correct form.
+3. **PropertyFilter.value (JsonValue, literal-only)** couldn't express `customer(name: ?n)` — variable bind to property value. Amended the wire AST in the same commit before any wire consumers existed (resolver was the first consumer; tests updated together). No external clients affected.
+4. **Awk RSTART/RLENGTH ordering bug in my own test-count script** — the second `match()` overwrote RSTART before the first `substr()` ran, so the script reported `passed=341 failed=1` when actually `passed=342 failed=0`. Pure tooling bug, no code impact, fixed by using awk's array-capture form `match($0, /(...)/ , arr)`.
+
+### §17.1 status after this session
+
+**Shipped this session:**
+- Query language §12 working spec (closes §12.9 open sub-questions) ✅
+- Query language wire AST (`QueryRequest` / `QueryResponse` in `ndb-engine::wire_query`) ✅
+- Query language parser (`ndb-query` crate — lexer, AST, recursive-descent parser, span-based errors) ✅
+- Query language resolver (`ndb-query::resolve` — Dictionaries snapshot + name→id mapping + entity-vs-hyperedge classification) ✅
+
+**Still to land before query language is end-to-end usable:**
+- Planner: smallest-cardinality-first join order. Output: executable plan tree. Picks per-atom primitive from `lookup_by_external_key` / `property_lookup` / `property_range` / `hyperedges_by_type` / `hyperedges_for_entity`. ~2-3 days of work.
+- Executor: walks plan tree, threads variable bindings, materialises rows. Includes recursive-pattern BFS with visited-set + depth cap. ~3-5 days.
+- `/query` route in `ndb-server`: same auth + audit + ReBAC as existing routes; `Capability::Read`; round-trip test via TCP loopback. ~1 day.
+- Client surfaces: `.query(req)` on `ndb-client-rust` + Python `client.query` + CLI `ndb query` subcommand reading from stdin. ~1 day.
+
+After those four steps, the query language is usable end-to-end and the
+biology bench dashboard can exercise it as a fifth tab.
+
+### Other §17.1 deliverables not started this turn (parked)
+
+- Per-type retention policies (Audited / Versioned / LatestOnly) — task #8
+- Serializable Snapshot Isolation — task #9
+- Time-travel `as of T` via wire — task #10 (engine supports internally; route param + AST field already in this session's wire AST as `as_of`)
+- Streaming query cursors `/iter_stream` / `/query_stream` — task #11
+- Change subscription `/subscribe` — task #12
+- Mmap'd SSTable read paths — task #13
+- Validation driven by metadata hyperedges — task #14
+- Real-world pilot + Neo4j comparison + docs site — adoption work, parked
+
+### Next session entry point
+
+The natural next step is the planner. It targets the wire `QueryRequest`
+(which is what the resolver produces) and outputs a `Plan` tree whose
+nodes are engine-primitive calls. Algorithm locked in working spec §7:
+
+1. Per-atom cardinality estimate using available indexes.
+2. Seed with the smallest-cardinality atom; pick the matching engine
+   primitive (`property_lookup` if B-tree exists, else `hyperedges_by_type`,
+   etc.).
+3. Greedy join order — pick the next atom by max-shared-vars,
+   ties broken by cardinality.
+4. Push down single-atom `where` predicates to scan time; cross-atom
+   ones run at join time.
+5. `limit` push-down where the join is on a unique constraint.
+
+The planner can live in `ndb-engine::query_plan` (it needs engine
+primitives + index stats) or in a new `ndb-engine` sub-module. Suggest
+`crates/ndb-engine/src/query_plan.rs` since it bridges wire AST →
+plan tree, and the plan tree's nodes are engine-primitive calls.
+
+After the planner, the executor walks plan tree → result rows. The
+recursive-path executor needs special handling (BFS with visited set
++ depth cap); start with non-recursive plans first to land a v0
+end-to-end, then add recursion.
+
+`Engine::snapshot_iter` is what callers feed `Dictionaries::from_records`
+to get a snapshot dictionary. v2 will cache Dictionaries on the engine
+so this isn't an O(N) walk per query.
+
+### Evolution score this turn
+
+- 7 new commits in nDB repo
+- 1 new crate (`ndb-query`)
+- 1 wire module added (`ndb-engine::wire_query`)
+- 1 spec amendment (parent §12.9 closure + new working spec)
+- +80 tests (262 → 342 Rust)
+- 0 cross-project rules promoted (everything here is project-specific
+  to the query-language design)
+
+---
+
 ## Session 2026-05-27 (third turn) — v1.2.0 — multi-hop traversal + indexed routes + biology bench dashboard
 
 Built on top of v1.1.0 to make nDB usable from real applications without N+1
