@@ -106,6 +106,52 @@ pub enum EngineError {
     /// wrong value tag, etc.).
     #[error(transparent)]
     Validation(#[from] ValidationError),
+
+    /// Serializable transaction aborted at commit because a key in its
+    /// read-set was modified by a later-committed transaction.
+    ///
+    /// v1 single-writer engine cannot produce this error in practice;
+    /// the variant exists for the v2 multi-writer / distributed
+    /// surface. See [`IsolationLevel::Serializable`].
+    #[error(
+        "serialization_failure: read key {key:?} modified at tx {modified_at} after snapshot tx {read_at}"
+    )]
+    SerializationFailure {
+        /// UUID of the read-set key whose state changed.
+        key: uuid::Uuid,
+        /// Snapshot tx_id when the key was read.
+        read_at: u64,
+        /// Tx_id at which the key was modified after the read.
+        modified_at: u64,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// Isolation levels (§10.2)
+// ---------------------------------------------------------------------------
+
+/// Per-transaction isolation level. Caller specifies via
+/// [`WriteTxn::with_isolation`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IsolationLevel {
+    /// Snapshot Isolation — default. Each transaction sees its consistent
+    /// snapshot. Write-skew anomalies are possible if the application has
+    /// invariants that span multiple keys. Highest throughput.
+    #[default]
+    SnapshotIsolation,
+    /// Serializable Snapshot Isolation. SI + conflict detection at commit
+    /// time. The engine tracks the read-set (per call to
+    /// [`WriteTxn::read`]) and aborts the commit if any of those keys
+    /// was modified by a later-committed transaction since the read.
+    ///
+    /// v1 reality check: the engine is single-writer (`begin_write` takes
+    /// `&mut Engine`), so concurrent writes don't exist and the conflict
+    /// detection is structurally trivial — it never aborts in a
+    /// single-process v1 workload. The API surface lands here so callers
+    /// can opt into the stronger guarantee, and the conflict-check code
+    /// path is ready for v2 multi-writer / distributed mode without
+    /// changing client code.
+    Serializable,
 }
 
 // ---------------------------------------------------------------------------
@@ -469,11 +515,15 @@ impl Engine {
     /// exclusive `&mut Engine` borrow — no other writes can happen until
     /// the transaction is committed or dropped.
     pub fn begin_write(&mut self) -> WriteTxn<'_> {
+        let begin_snapshot = TxId::new(self.db.manifest().last_tx_id);
         let tx_id = TxId::new(self.db.allocate_tx_id());
         WriteTxn {
             engine: self,
             tx_id,
             pending: Vec::new(),
+            isolation: IsolationLevel::default(),
+            begin_snapshot,
+            read_set: Vec::new(),
         }
     }
 
@@ -857,6 +907,14 @@ pub struct WriteTxn<'a> {
     engine: &'a mut Engine,
     tx_id: TxId,
     pending: Vec<Record>,
+    isolation: IsolationLevel,
+    /// Snapshot tx_id this transaction sees. Defaults to
+    /// `engine.manifest().last_tx_id` at begin_write time.
+    begin_snapshot: TxId,
+    /// Reads performed via [`WriteTxn::read`] for serializable-level
+    /// conflict detection. Empty for `SnapshotIsolation`. Each entry is
+    /// `(key, snapshot_at_read)`.
+    read_set: Vec<(uuid::Uuid, TxId)>,
 }
 
 impl WriteTxn<'_> {
@@ -864,6 +922,37 @@ impl WriteTxn<'_> {
     #[must_use]
     pub fn tx_id(&self) -> TxId {
         self.tx_id
+    }
+
+    /// Snapshot tx_id this transaction sees. Reads via [`Self::read`]
+    /// resolve at this snapshot.
+    #[must_use]
+    pub fn snapshot(&self) -> TxId {
+        self.begin_snapshot
+    }
+
+    /// Switch to a different isolation level. Default is
+    /// `SnapshotIsolation`. For multi-key invariants pass
+    /// `IsolationLevel::Serializable` — the engine tracks reads done
+    /// via [`Self::read`] and aborts the commit if a later transaction
+    /// modified any of those keys (the check is structurally trivial in
+    /// v1 single-writer mode; see [`IsolationLevel::Serializable`] docs).
+    #[must_use]
+    pub fn with_isolation(mut self, level: IsolationLevel) -> Self {
+        self.isolation = level;
+        self
+    }
+
+    /// Snapshot read at the transaction's begin snapshot. Used by
+    /// serializable transactions to track the read set; for snapshot
+    /// isolation the call is equivalent to
+    /// `engine.snapshot_read(uuid, txn.snapshot())` without the bookkeeping.
+    pub fn read(&mut self, uuid: &uuid::Uuid) -> Result<Resolved<Record>, EngineError> {
+        let result = self.engine.snapshot_read(uuid, self.begin_snapshot)?;
+        if matches!(self.isolation, IsolationLevel::Serializable) {
+            self.read_set.push((*uuid, self.begin_snapshot));
+        }
+        Ok(result)
     }
 
     /// Push an entity record. The transaction stamps `tx_id_assert` for
@@ -901,9 +990,34 @@ impl WriteTxn<'_> {
     /// effectively rolled back (nothing durable was written). On error
     /// after fsync, the WAL has the records but the memtable doesn't —
     /// recovery on the next open will replay them.
-    pub fn commit(self) -> Result<TxId, EngineError> {
+    pub fn commit(mut self) -> Result<TxId, EngineError> {
         if self.pending.is_empty() {
             return Ok(self.tx_id);
+        }
+        // Serializable Snapshot Isolation conflict check: for each key
+        // the txn read, verify no later-committed tx has modified it.
+        // In v1's single-writer model this is structurally trivial — no
+        // other writer could have committed during this txn's lifetime
+        // (`&mut Engine` guarantees serial writes). The check is
+        // shipped here so the API contract holds for v2 multi-writer.
+        if matches!(self.isolation, IsolationLevel::Serializable) {
+            let read_set = std::mem::take(&mut self.read_set);
+            for (key, snap) in read_set {
+                if let Resolved::Live(r) = self.engine.snapshot_read(&key, TxId::ACTIVE)? {
+                    let modified_tx = match &r {
+                        Record::Entity(e) => e.tx_id_assert.get(),
+                        Record::HyperEdge(h) => h.tx_id_assert.get(),
+                        _ => 0,
+                    };
+                    if modified_tx > snap.get() {
+                        return Err(EngineError::SerializationFailure {
+                            key,
+                            read_at: snap.get(),
+                            modified_at: modified_tx,
+                        });
+                    }
+                }
+            }
         }
         // Validate every record FIRST. Validation failure aborts the
         // transaction cleanly — nothing reaches the WAL, no partial
@@ -1828,6 +1942,74 @@ mod tests {
             Resolved::Deleted { deleted_at } => assert_eq!(deleted_at, snap_deleted),
             other => panic!("expected Deleted, got {other:?}"),
         }
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn serializable_txn_with_no_conflicting_writes_commits() {
+        let dir = temp_dir("ssi-happy");
+        let mut engine = Engine::create(&dir).unwrap();
+        let eid = EntityId::now_v7();
+        {
+            let mut txn = engine.begin_write();
+            txn.put_entity(make_entity(eid, "v1"));
+            txn.commit().unwrap();
+        }
+        // Serializable txn that reads `eid`, then writes a new entity.
+        // No concurrent writer in v1 — should commit cleanly.
+        {
+            let mut txn = engine
+                .begin_write()
+                .with_isolation(IsolationLevel::Serializable);
+            let r = txn.read(&eid.into_uuid()).unwrap();
+            assert!(matches!(r, Resolved::Live(_)));
+            txn.put_entity(make_entity(EntityId::now_v7(), "child"));
+            txn.commit().unwrap();
+        }
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn serializable_detects_synthetic_read_then_writer_modify() {
+        // Construct a synthetic conflict by manually adjusting the
+        // tracked read_set's snapshot to a value BEFORE the read key's
+        // current tx_id_assert. This exercises the conflict-detection
+        // code path even though v1's single-writer model can't naturally
+        // produce it.
+        let dir = temp_dir("ssi-conflict");
+        let mut engine = Engine::create(&dir).unwrap();
+        let eid = EntityId::now_v7();
+        let first_tx = {
+            let mut txn = engine.begin_write();
+            let tx = txn.tx_id();
+            txn.put_entity(make_entity(eid, "v1"));
+            txn.commit().unwrap();
+            tx
+        };
+        let second_tx = {
+            let mut txn = engine.begin_write();
+            let tx = txn.tx_id();
+            txn.put_entity(make_entity(eid, "v2"));
+            txn.commit().unwrap();
+            tx
+        };
+        assert!(second_tx > first_tx);
+
+        // Now open a Serializable txn and inject a "stale" read at
+        // first_tx (the pre-modification snapshot). The commit-time
+        // check will see the entity has been modified at second_tx
+        // since first_tx and abort.
+        let mut txn = engine
+            .begin_write()
+            .with_isolation(IsolationLevel::Serializable);
+        // Direct injection — emulates what a multi-writer engine would
+        // do via Self::read at a prior snapshot.
+        txn.read_set.push((eid.into_uuid(), first_tx));
+        txn.put_entity(make_entity(EntityId::now_v7(), "derived"));
+        let err = txn.commit().unwrap_err();
+        assert!(matches!(err, EngineError::SerializationFailure { .. }));
         engine.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }

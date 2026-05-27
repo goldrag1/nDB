@@ -54,7 +54,9 @@ pub use db::{
     MANIFEST_FORMAT_VERSION_MAX_SUPPORTED, MANIFEST_MAGIC, MANIFEST_PREFIX, MAX_LSM_LEVEL,
     Manifest, ManifestEntry, manifest_filename, parse_manifest_filename,
 };
-pub use engine::{CompactionStats, Engine, EngineError, RetentionPolicy, WriteTxn};
+pub use engine::{
+    CompactionStats, Engine, EngineError, IsolationLevel, RetentionPolicy, WriteTxn,
+};
 pub use error::{DecodeError, EncodeError};
 pub use id::{EntityId, HyperedgeId, PropertyId, RoleId, TX_ACTIVE, TYPE_UNTYPED, TxId, TypeId};
 pub use index::{
