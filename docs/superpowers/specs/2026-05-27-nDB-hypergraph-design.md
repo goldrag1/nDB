@@ -79,47 +79,48 @@ Concrete reasoning domains where n-ary facts are the norm:
 
 ## 4. Architecture Overview
 
-Five layers. Each layer has a single responsibility. Layers communicate through narrow, well-defined interfaces.
+nDB ships as a small Rust engine plus a set of companion crates that compose into whatever the application needs. The engine is what's strictly mandatory; everything else is opt-in.
 
 ```
 +------------------------------------------------+
-| Renderer layer (out of engine scope)           |
-| - Tables, pivots, 3D scenes, animations        |
-| - Pluggable; engine provides projected data    |
+| Application (any language via wire protocol)   |
++================================================+ <-- wire protocol boundary
+| nDB Engine (Rust crate, mandatory)             |
+| - Primary storage (append-only hyperedge log + |
+|   entity store; UUID v7; MVCC; retention)      |
+| - Query parser / planner / executor            |
+| - Index framework + mandatory built-in indexes |
+| - Schema validation hooks (data-driven from    |
+|   metadata hyperedges)                         |
+| - Compaction                                   |
 +------------------------------------------------+
-| Slicer layer                                   |
-| - Declarative projection: n-D graph -> k-D     |
-| - First-class engine API                       |
-| - Maps graph dimensions to visual variables    |
+| Companion crates (ship with nDB, opt-in)       |
+| - nDB-slicer       (projection API +           |
+|                     built-in projections)      |
+| - nDB-renderer     (table, 2D, 3D, ...         |
+|                     dimensional visualizers)   |
+| - nDB-index-*      (columnar, vector, fulltext |
+|                     — opt-in index plugins)    |
+| - nDB-client-*     (Rust, Python, JS, Go, Java |
+|                     wire-protocol clients)     |
 +------------------------------------------------+
-| Schema layer (optional, app-configured)        |
-| - Type assertions, constraints, ontology       |
-| - Layered: schemaless to strict                |
-| - Schema is itself stored as hyperedges        |
-+------------------------------------------------+
-| Index layer (framework + pluggable indexes)    |
-| - Stable Index trait; in-tree built-ins +      |
-|   out-of-tree plugins                          |
-| - Schema / slicer / apps can drive indexing    |
-| - Rebuildable from primary at any time         |
-+------------------------------------------------+
-| Primary storage core                           |
-| - Append-only hyperedge log + entity store     |
-| - Canonical, single source of truth            |
-| - Opaque internal IDs (UUID v7)                |
-| - MVCC + retention-policy-driven compaction    |
+| Out-of-tree extensions (app or third-party)    |
+| - Custom slicers (domain-specific projections) |
+| - Custom renderers (specialized visualizations)|
+| - Custom indexes (spatial, similarity, etc.)   |
+| - Custom clients (any language with HTTP/gRPC) |
 +------------------------------------------------+
 ```
 
-**Layer boundaries are strict.**
+**Boundaries are strict.**
 
-- **Primary storage** is the canonical record. It does not know about indexes, schema, slicers, or rendering. It only knows how to append assertions, retrieve them by ID, and compact according to retention policies.
-- **Index layer** is a framework with pluggable index implementations. The engine ships a small set of built-in indexes; additional indexes (columnar, vector, full-text, materialized views, domain-specific) plug in via a stable `Index` trait. Indexes are derived from primary storage and rebuildable; a crashed index is repaired by re-scanning primary. Multiple indexes coexist over the same data, each optimized for a different access pattern. Schema declarations, slicer materialized views, and application plugins can all drive index creation.
-- **Schema layer** sits above indexes because schema validation runs against indexed data. Schema itself is stored AS hyperedges in primary storage (self-describing) but is logically a separate concern.
-- **Slicer layer** consumes indexes (via a query planner that chooses which index serves a given projection). It does not know about primary storage directly.
-- **Renderer** is out of engine scope.
+- **The engine boundary is the wire protocol.** Apps in any language talk to the engine through it. The engine is shipped in Rust (for speed and memory safety) but the architecture is language-neutral.
+- **Primary storage** is the canonical record. It knows how to append assertions, retrieve them by ID, and compact per retention policies. It does not know about schema validation, indexes, slicers, or rendering as separate primitives — those are either built on top of it (schema, indexes) or downstream of it (slicers, renderers).
+- **Indexes are derived structures** consumed by the query planner. The engine ships a small mandatory set; additional indexes plug in via a stable `Index` trait (in-tree or out-of-tree). Schemas, slicers, and apps can all drive index creation.
+- **Schema is metadata hyperedges** stored alongside data. The engine's validation hooks read these and enforce per-type rules. Schema is not a separate primitive.
+- **Slicers and renderers are companion crates**, not engine layers. The engine doesn't know they exist. Apps compose them above the wire-protocol boundary.
 
-This layering is what makes the same primary storage usable across AI / ERP / provenance workloads without forking the architecture: different apps configure different schemas, request different indexes, and run different slicer projections — all over one canonical data store.
+This layering is what lets the same engine serve AI / ERP / provenance / scientific workloads without forking: different apps configure different schemas, register different indexes, compose different slicers and renderers — all over one canonical engine.
 
 ---
 
@@ -472,7 +473,9 @@ The common thread: traditional schema is a SEPARATE primitive with its own machi
 
 ### 7.1 The slicer concept
 
-A slicer is a **declarative projection** from the n-dimensional hyperedge graph onto a k-dimensional visual space. It is a first-class engine API, not a UI concern.
+A slicer is a **declarative projection** from the n-dimensional hyperedge graph onto a k-dimensional visual space. Slicers live in a **separate companion crate** (`nDB-slicer`), not in the engine. The engine knows nothing about slicers — it only provides the query execution machinery that slicers build on top of.
+
+This means apps can use the built-in slicer crate, ship their own custom slicer crate, or skip slicers entirely if they only need raw query access.
 
 ```
 slicer = Projection {
@@ -1146,10 +1149,16 @@ Goal: usable single-node production engine for one workload (AI reasoning OR ERP
 - Layer 2 (type assertions, opt-in per type)
 - Strict-write and soft-read enforcement modes
 
-**Slicer:**
-- First-class projection API (Section 7)
-- Built-in renderers in a separate crate: table, 2D scatter
-- Renderer-out-of-engine pattern established
+**Companion crates shipped alongside the engine:**
+
+- `nDB-slicer` v1 — projection API + common projections (filter, group-by, aggregate)
+- `nDB-renderer` v1 — **2D dimension renderers**:
+  - Table (rows + sortable/filterable columns)
+  - 2D scatter (x, y position)
+  - 2D pivot table (categorical x, y axes + value cell)
+  - 2D bar / line / area charts (same encoding family)
+- `nDB-client-rust` v1 — wire-protocol client for Rust apps
+- Engine, slicer, and renderer ship as separate crates; apps depend on whichever they need
 
 **Success criteria:**
 - 1M hyperedges, sub-second traversal queries on commodity hardware
@@ -1170,9 +1179,16 @@ Goal: viable for AI / GraphRAG workloads and slicer-heavy analytics.
 **Schema:**
 - Layer 3 (constraints + validation per type)
 
-**Slicer:**
-- Additional renderers: pivot, sankey, 3D scatter
-- Slicer presets per entity / hyperedge type
+**Companion crates added in v2:**
+
+- `nDB-renderer` v2 — **3D and 4D dimension renderers**:
+  - 3D scatter (x, y, z position)
+  - 4D scatter (3D + color hue)
+  - Sankey (multi-stage flow)
+  - Network / force-directed graph (renders the hyperedge structure directly)
+  - Heatmap (categorical x, y + intensity)
+- `nDB-slicer` v2 — slicer presets per entity / hyperedge type
+- `nDB-client-python`, `nDB-client-js` — wire-protocol clients for AI / web ecosystems
 
 **Operational:**
 - LLM integration patterns documented (GraphRAG, agent context)
@@ -1195,10 +1211,19 @@ Goal: differentiated from competitors, ready for broader adoption.
 - Read replicas (eventually consistent reads)
 - Federation: linking multiple nDB instances via cross-reference resolution
 
+**Companion crates added in v3:**
+
+- `nDB-renderer` v3 — **5D and 6D dimension renderers**:
+  - 5D scatter (3D + color + size)
+  - 6D scatter (3D + color + size + shape)
+  - Choropleth / point map (geographic encoding when applicable)
+  - Treemap / sunburst (hierarchical)
+- `nDB-client-go`, `nDB-client-java` — additional wire-protocol clients
+
 **Ecosystem:**
 - Public plugin API documented and stable
 - Community-contributed index plugins (spatial, temporal-specific, domain-specific)
-- Community slicer renderers
+- Community slicer / renderer crates
 - Provenance / lineage as queryable first-class feature
 
 **Success criteria:**
@@ -1206,16 +1231,24 @@ Goal: differentiated from competitors, ready for broader adoption.
 - Federation working across 2+ instances in a real deployment
 - Plugin API documentation site
 
-### 16.4 v4.0+ — Distributed (future, out of current architectural scope)
+### 16.4 v4.0+ — Distributed + High-Dimensional Renderers (future)
 
-Goal: web-scale write workloads.
+Goal: web-scale write workloads + saturating the visual variable hierarchy.
 
-Anticipated scope:
+**Companion crates added in v4+:**
+
+- `nDB-renderer` v4 — **7D and 8D dimension renderers** (approaching the cognitive ceiling):
+  - 7D scatter (3D + color + size + shape + motion / animation over time)
+  - 8D scatter (7D + opacity)
+- Beyond 8D, visualizations exceed the documented cognitive ceiling (Section 7.3). Higher-arity hyperedges should be projected via multiple complementary slicers (small multiples) rather than packed into a single visualization.
+
+**Distribution scope (separate architectural epoch):**
+
 - Sharding by entity / edge with cross-shard traversal
 - Raft-replicated state machine for distributed ACID
 - Multi-region deployment
 
-This is its own architectural epoch and will require a fresh design doc when approached.
+The distribution portion will require a fresh design doc when approached. The high-dimensional renderers can be built on top of the existing engine + slicer crates without distribution.
 
 ---
 
