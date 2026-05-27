@@ -46,8 +46,17 @@ mod residues;
 const T_PROTEIN: u32 = 1;
 const T_GENE: u32 = 2;
 const T_PATHWAY: u32 = 3;
+// Reserved for per-atom entities written by the SPA after a CIF loads.
+// nDB doesn't seed atoms — the SPA decomposes the CIF (which lives in
+// the protein entity's PROP_CIF_BYTES) into one entity per atom on
+// first view, so atom-level queries can be served from indexed nDB
+// records instead of re-parsing the CIF every call.
+#[allow(dead_code)]
+const T_ATOM: u32 = 7;
 const T_COMPLEX: u32 = 100;
 const T_ENCODES: u32 = 101;
+#[allow(dead_code)]
+const T_ATOM_OF: u32 = 117; // binary hyperedge: atom → protein
 
 const ROLE_MEMBER: u32 = 10;
 const ROLE_GENE: u32 = 11;
@@ -82,15 +91,31 @@ const API_PORT: u16 = 8742;
 const STATIC_PORT: u16 = 9876;
 
 fn main() {
-    // ─── Fresh database ────────────────────────────────────────────
+    // ─── Persistent database ───────────────────────────────────────
+    // Data committed on previous runs stays on disk — including any
+    // CIFs cached by "Warm cache", any atom entities the SPA wrote
+    // back, and any proteins added via the Fetch form. We only run
+    // the curated seed when the engine has zero protein records.
     let db_dir = Path::new(DB_PATH);
-    if db_dir.exists() {
-        std::fs::remove_dir_all(db_dir).expect("clean prior db");
+    if !db_dir.exists() {
+        std::fs::create_dir_all(db_dir).expect("mkdir db");
     }
-    std::fs::create_dir_all(db_dir).expect("mkdir db");
-    let mut engine = Engine::create(db_dir).expect("create engine");
-    seed(&mut engine);
-    engine.flush().expect("flush");
+    let mut engine = if Engine::open(db_dir).is_ok() {
+        Engine::open(db_dir).expect("open engine")
+    } else {
+        Engine::create(db_dir).expect("create engine")
+    };
+    let existing_proteins = count_entities_of_type(&engine, T_PROTEIN);
+    if existing_proteins == 0 {
+        eprintln!("first run — seeding 20 proteins + structural motifs");
+        seed(&mut engine);
+        engine.flush().expect("flush");
+    } else {
+        eprintln!(
+            "reusing existing nDB at {} ({} proteins already stored; CIFs + atoms preserved)",
+            db_dir.display(), existing_proteins
+        );
+    }
     drop(engine);
 
     // ─── ndb-server with CORS ─────────────────────────────────────
@@ -148,6 +173,21 @@ fn main() {
     loop {
         std::thread::park();
     }
+}
+
+/// Count entities of a given type currently visible in the engine.
+/// Used at boot to decide whether to seed: zero protein entities →
+/// fresh DB, run the seed; otherwise reuse the existing state.
+fn count_entities_of_type(engine: &Engine, type_id: u32) -> usize {
+    let mut n = 0_usize;
+    for r in engine.snapshot_iter_streaming(TxId::ACTIVE).flatten() {
+        if let ndb_engine::record::Record::Entity(e) = r
+            && e.type_id == TypeId::new(type_id)
+        {
+            n += 1;
+        }
+    }
+    n
 }
 
 /// Bucket per AlphaFold-DB published thresholds.

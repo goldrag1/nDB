@@ -338,6 +338,23 @@ const PROP_NAME              = 30;
 // AlphaFold-predicted atomic coordinates — stored in nDB as raw CIF
 // bytes once fetched. The wire encodes Bytes as base64.
 const PROP_CIF_BYTES         = 35;
+// Per-atom entity (type 7) — committed by the SPA after a CIF loads.
+// One nDB entity per atom unlocks atom-level queries (range on
+// B-factor, lookup by serial/atomname) without re-parsing the CIF.
+const T_ATOM                 = 7;
+const T_ATOM_OF              = 117;            // atom → protein, arity 2
+const ROLE_ATOM              = 22;
+const ROLE_OWNER             = 23;
+const PROP_ATOM_NAME         = 60;
+const PROP_ATOM_ELEMENT      = 61;
+const PROP_ATOM_SERIAL       = 62;
+const PROP_ATOM_X            = 63;
+const PROP_ATOM_Y            = 64;
+const PROP_ATOM_Z            = 65;
+const PROP_ATOM_BFACTOR      = 66;
+const PROP_ATOM_CHAIN        = 67;
+const PROP_ATOM_RES_POS      = 68;
+const PROP_ATOM_RES_NAME     = 69;
 // AlphaFold confidence overlay (v2.2 §A).
 const PROP_PLDDT_MEAN        = 36;
 const PROP_PLDDT_BUCKET      = 37;
@@ -1267,6 +1284,84 @@ function cifUrlForUniprot(acc, fragment = 1, version = 6) {
   return `https://alphafold.ebi.ac.uk/files/AF-${acc}-F${fragment}-model_v${version}.cif`;
 }
 
+// ─── Atom-level decomposition: write nDB entities for every atom ──
+// The CIF blob lives in nDB but its rows aren't indexed. Decomposing
+// it into one entity per atom unlocks per-atom queries (range on
+// B-factor, lookup by serial). We mark a protein as "decomposed" via
+// a magic property (PROP_ATOM_NAME on the PROTEIN entity holding a
+// digest tag) so subsequent loads skip the work.
+const ATOM_DECOMPOSED_TAG = "decomposed_v1";
+
+// Have we already committed atom entities for this protein?
+async function proteinHasAtomEntities(protein) {
+  // Look for at least one atom_of hyperedge with this protein as the OWNER.
+  // Cheap probe: search edgesById for any matching entry.
+  for (const e of edgesById.values()) {
+    if (e.type_id !== T_ATOM_OF) continue;
+    if (e.roles.some(r => r.entity_id === protein.entity_id)) return true;
+  }
+  return false;
+}
+
+// Walk every atom in the currently-loaded NGL structure and commit
+// them to nDB as a single batch transaction. Quiet on the wire — no
+// progress bar; should finish in ~1 second for ~1500 atoms.
+async function decomposeCifIntoAtomEntities(proteinNode) {
+  if (!nglComponent || !proteinNode) return { committed: 0 };
+  const r = proteinNode.record;
+  if (await proteinHasAtomEntities(r)) return { committed: 0, skipped: true };
+
+  const records = [];
+  const proteinId = r.entity_id;
+  nglComponent.structure.eachAtom((a) => {
+    const aid = uuidV7();
+    records.push({
+      kind: "entity",
+      entity_id: aid,
+      type_id: T_ATOM,
+      tx_id_assert: 0,
+      tx_id_supersede: "active",
+      properties: [
+        { prop_id: PROP_ATOM_NAME,     value: { tag: "string", value: a.atomname } },
+        { prop_id: PROP_ATOM_ELEMENT,  value: { tag: "string", value: a.element } },
+        { prop_id: PROP_ATOM_SERIAL,   value: { tag: "i64",    value: a.serial } },
+        { prop_id: PROP_ATOM_X,        value: { tag: "f64",    value: a.x } },
+        { prop_id: PROP_ATOM_Y,        value: { tag: "f64",    value: a.y } },
+        { prop_id: PROP_ATOM_Z,        value: { tag: "f64",    value: a.z } },
+        { prop_id: PROP_ATOM_BFACTOR,  value: { tag: "f64",    value: a.bfactor } },
+        { prop_id: PROP_ATOM_CHAIN,    value: { tag: "string", value: a.chainname || "A" } },
+        { prop_id: PROP_ATOM_RES_POS,  value: { tag: "i64",    value: a.resno } },
+        { prop_id: PROP_ATOM_RES_NAME, value: { tag: "string", value: a.resname } },
+      ],
+    });
+    records.push({
+      kind: "hyper_edge",
+      hyperedge_id: uuidV7(),
+      type_id: T_ATOM_OF,
+      tx_id_assert: 0,
+      tx_id_supersede: "active",
+      roles: [
+        { role_id: ROLE_ATOM,  entity_id: aid },
+        { role_id: ROLE_OWNER, entity_id: proteinId },
+      ],
+      properties: [],
+    });
+  });
+  if (records.length === 0) return { committed: 0 };
+
+  // Wire-size safety: ~1500 atoms × 2 records × ~400 B = ~1.2 MB. Fine.
+  // Split into chunks of 1000 records to keep individual /commit calls
+  // reasonable for very large proteins (BRCA1 ~14k atoms = 28k records).
+  let committed = 0;
+  const CHUNK = 1000;
+  for (let i = 0; i < records.length; i += CHUNK) {
+    const slice = records.slice(i, i + CHUNK);
+    await commit(slice);
+    committed += slice.length;
+  }
+  return { committed };
+}
+
 // ─── CIF storage: nDB-first, AF-DB fallback ─────────────────────
 // CIF (atomic coordinates) is the SCIENCE — without it AlphaFold is
 // just a number table. nDB owns it as a Bytes property on the protein
@@ -1401,6 +1496,22 @@ async function load3DStructureFor(node) {
     updatePipeline(node, source);
     document.getElementById("db-selected-residue").innerHTML =
       '<div class="empty">Click any atom in the 3D view to inspect that residue\'s nDB record.</div>';
+    // Decompose CIF → atom entities on first view. Skips fast on
+    // subsequent loads. Runs in the background — sidebar updates
+    // once it finishes so the comparison numbers reflect reality.
+    (async () => {
+      const result = await decomposeCifIntoAtomEntities(node);
+      if (result.committed > 0) {
+        showStatus(`Committed ${result.committed} atom records to nDB`);
+        await reload();
+        // Right-sidebar comparison should now include atom entities.
+        const fresh = graphData.nodes.find(n => n.id === node.id);
+        if (fresh) {
+          currentProteinNode = fresh;
+          updateRightSidebar(fresh);
+        }
+      }
+    })();
     if (selected && selected.nodeKind === "entity" && selected.type_id === TYPES.residue.id) {
       const pos = extractProp(selected.record, 50);
       if (typeof pos === "number") highlight3DResidues([pos], "single residue");
@@ -1517,6 +1628,7 @@ function updateModelComparison(node) {
   let ndbResidueOf = 0;
   let ndbComplex = 0;
   let ndbEncodes = 0;
+  let ndbAtomOf = 0;          // arity-2 atom → protein hyperedges
   const residueIdsForProtein = new Set();
   for (const e of edgesById.values()) {
     if (e.type_id === RESIDUE_OF_TYPE_ID) {
@@ -1525,6 +1637,10 @@ function updateModelComparison(node) {
         ndbResidueOf++;
         for (const id of fillers) if (id !== r.entity_id) residueIdsForProtein.add(id);
       }
+    }
+    if (e.type_id === T_ATOM_OF) {
+      const fillers = e.roles.map(rr => rr.entity_id);
+      if (fillers.includes(r.entity_id)) ndbAtomOf++;
     }
   }
   ndbResidues = residueIdsForProtein.size;
@@ -1536,7 +1652,12 @@ function updateModelComparison(node) {
     if (e.type_id === 100 && includesProtein) ndbComplex++;
     if (e.type_id === 101 && includesProtein) ndbEncodes++;
   }
-  const ndbTotalRecords = 1 /* protein entity */
+  // Atoms = the count of atom_of hyperedges for this protein (one
+  // hyperedge per atom).
+  const ndbAtoms = ndbAtomOf;
+  const ndbTotalRecords = 1                /* protein entity itself */
+                        + ndbAtoms         /* per-atom entities */
+                        + ndbAtomOf
                         + ndbResidues
                         + ndbResidueOf
                         + ndbMotifs
@@ -1555,10 +1676,12 @@ function updateModelComparison(node) {
   // Counts in the typical AF-DB CIF for a single-chain protein.
   const helixSheetRows = (s?.helix ?? 0) + (s?.sheet ?? 0);
 
+  const pdbxRows = atomRows + residueRows + helixSheetRows + 20;
+  const atomsCommittedToNdb = ndbAtoms > 0;
   $el.innerHTML = `
     <div class="hint" style="margin-bottom:6px">
       Same protein, same biology — two storage layouts. Counts below
-      are live for <b>${escapeHtml(name)}</b> (${acc}).
+      are <b>live</b> for <b>${escapeHtml(name)}</b> (${acc}).
     </div>
     <div class="compare">
       <div class="pdbx">
@@ -1577,21 +1700,21 @@ function updateModelComparison(node) {
           <li>+ ~6 more <code>_ma_*</code> categories</li>
         </ul>
         <div class="total">
-          ~15 categories ·
-          <b>${atomRows + residueRows + helixSheetRows + 20}</b> rows total
-          across them. Catalytic triad / disulfide bond / zinc finger
-          need extra rows in <code>_struct_site</code> +
-          <code>_struct_site_gen</code> + <code>_struct_conn</code>
-          joined by <code>entity_id</code>/<code>asym_id</code>/
-          <code>seq_id</code>. Cross-protein relations (this protein
-          is in a complex with X) live in a separate database entirely.
+          ~15 categories · <b>${pdbxRows}</b> rows total.
+          PDBx wins per-atom queries via indexed columns. Cross-protein
+          relations (this protein is in a complex with X) live in a
+          separate database entirely.
         </div>
       </div>
       <div class="ndb">
         <div class="head">nDB</div>
         <ul>
-          <li>1 entity (type 1, protein)</li>
-          <li>+ CIF bytes as a property on it</li>
+          <li>1 protein entity (type 1)</li>
+          <li>+ CIF blob property (${cifSizeKb(r) || "—"} KB) — preserves every byte of the mmCIF</li>
+          ${atomsCommittedToNdb
+            ? `<li><b>${ndbAtoms}</b> atom entities (type 7) — same data, now per-atom indexed</li>
+               <li>${ndbAtomOf} atom_of hyperedges (arity 2)</li>`
+            : `<li><i style="color:#888">no per-atom entities yet — decomposing in background…</i></li>`}
           ${ndbResidues > 0 ? `<li>${ndbResidues} residue entities (type 6)</li>` : ""}
           ${ndbResidueOf > 0 ? `<li>${ndbResidueOf} residue_of hyperedges (arity 2)</li>` : ""}
           ${ndbMotifs > 0 ? `<li>${ndbMotifs} motif hyperedges (arity 3-20)</li>` : ""}
@@ -1599,24 +1722,37 @@ function updateModelComparison(node) {
           ${ndbEncodes > 0 ? `<li>${ndbEncodes} encodes hyperedge (arity 2)</li>` : ""}
         </ul>
         <div class="total">
-          1 record kind (entity) + 1 record kind (hyperedge) ·
-          <b>${ndbTotalRecords}</b> records total for this protein.
-          A catalytic triad IS one record — arity 3, role-fillers
-          [Ser195, His57, Asp102]. Same shape for residues, motifs,
-          complexes, encodes; same shape if you tomorrow add gene
-          ontology, structural homology, or anything else.
+          2 record kinds (entity + hyperedge) ·
+          <b>${ndbTotalRecords}</b> records for this protein.
+          ${atomsCommittedToNdb
+            ? `Atom-level queries (range on B-factor, lookup by serial)
+               hit the property B-tree directly — no CIF re-parse.`
+            : `Atom-level queries currently require parsing the CIF
+               blob. After decomposition completes those queries become
+               indexed.`}
         </div>
       </div>
     </div>
     <div class="hint" style="margin-top:8px">
-      The point isn't that PDBx is bad — it's that a relational schema
-      hard-codes the relationships it can express. A catalytic triad
-      is intrinsically 3-ary; in PDBx it lives as joins between
-      <code>_struct_site</code> + <code>_struct_site_gen</code> +
-      <code>_atom_site</code>. In nDB it lives as one hyperedge.
-      Same machinery works for any arity, any new relation type.
+      <b>Where nDB wins:</b> the relationship IS the record. A
+      catalytic triad is intrinsically 3-ary; in PDBx it lives as
+      joins between <code>_struct_site</code> +
+      <code>_struct_site_gen</code> + <code>_atom_site</code>. In
+      nDB it lives as one hyperedge.
+      <br><br>
+      <b>Where PDBx wins today:</b> ${atomRows}-row <code>_atom_site</code> is a
+      single column-indexed table — range queries on B-factor,
+      coordinate filters, sequence-position lookups all hit one
+      index. nDB matches that capability after the per-atom
+      decomposition above lands, since each atom becomes a queryable
+      entity with B-tree-indexed properties.
     </div>
   `;
+}
+function cifSizeKb(r) {
+  const b64 = extractProp(r, PROP_CIF_BYTES);
+  if (typeof b64 !== "string" || b64.length === 0) return null;
+  return ((b64.length * 0.75) / 1024).toFixed(1);
 }
 
 // ─── Role-id lookup table ──────────────────────────────────────
