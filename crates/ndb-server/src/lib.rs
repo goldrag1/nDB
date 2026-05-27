@@ -70,11 +70,18 @@ pub enum ServerError {
 /// Server handle wrapping a shared engine.
 pub struct Server {
     engine: Arc<Mutex<Engine>>,
+    /// Optional bearer token. If `Some`, every request must carry
+    /// `Authorization: Bearer <token>` (constant-time-compared); else
+    /// 401. v1 ships a single static token; v2 will move to a token
+    /// registry (one per principal) backed by capability hyperedges
+    /// (§13.2).
+    auth_token: Option<String>,
 }
 
 impl Server {
     /// Open an existing database (or create one if missing) and prepare
-    /// the server for `run` / handle_connection.
+    /// the server for `run` / handle_connection. Authentication is off
+    /// by default; call [`with_auth_token`](Self::with_auth_token).
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, ServerError> {
         let path = path.as_ref();
         let engine = if path.exists() && path.join("CURRENT").exists() {
@@ -84,6 +91,7 @@ impl Server {
         };
         Ok(Self {
             engine: Arc::new(Mutex::new(engine)),
+            auth_token: None,
         })
     }
 
@@ -92,7 +100,17 @@ impl Server {
     pub fn from_engine(engine: Engine) -> Self {
         Self {
             engine: Arc::new(Mutex::new(engine)),
+            auth_token: None,
         }
+    }
+
+    /// Require an `Authorization: Bearer <token>` header on every
+    /// request. Empty `token` removes the requirement.
+    #[must_use]
+    pub fn with_auth_token(mut self, token: impl Into<String>) -> Self {
+        let t: String = token.into();
+        self.auth_token = if t.is_empty() { None } else { Some(t) };
+        self
     }
 
     /// Block forever accepting connections on `addr`.
@@ -132,6 +150,14 @@ impl Server {
     }
 
     fn dispatch(&self, req: &Request, body: &[u8], out: &mut TcpStream) -> Result<(), ServerError> {
+        // Auth check first — applies to every route except /health, which
+        // is intentionally open so liveness probes don't need a secret.
+        if let Some(expected) = &self.auth_token
+            && req.path_no_query() != "/health"
+            && !constant_time_eq(expected.as_bytes(), req.bearer.as_bytes())
+        {
+            return write_error(out, 401, "unauthorized", "missing or invalid bearer token");
+        }
         match (req.method.as_str(), req.path_no_query()) {
             ("GET", "/health") => write_json(out, 200, &serde_json::json!({"status": "ok"})),
             ("POST", "/commit") => self.handle_commit(body, out),
@@ -312,6 +338,9 @@ struct Request {
     method: String,
     /// Includes the query string, if any.
     path: String,
+    /// Raw `Authorization` header value (without the `Bearer ` prefix),
+    /// or empty.
+    bearer: String,
 }
 
 impl Request {
@@ -339,6 +368,7 @@ fn parse_request(stream: &mut TcpStream) -> Result<(Request, Vec<u8>), ServerErr
 
     // Read headers until blank line.
     let mut content_length: usize = 0;
+    let mut bearer = String::new();
     loop {
         let mut line = String::new();
         if reader.read_line(&mut line)? == 0 {
@@ -347,17 +377,49 @@ fn parse_request(stream: &mut TcpStream) -> Result<(Request, Vec<u8>), ServerErr
         if line == "\r\n" || line == "\n" {
             break;
         }
-        if let Some((k, v)) = line.split_once(':')
-            && k.trim().eq_ignore_ascii_case("content-length")
-        {
-            content_length = v.trim().parse().unwrap_or(0);
+        if let Some((k, v)) = line.split_once(':') {
+            let key = k.trim();
+            let val = v.trim();
+            if key.eq_ignore_ascii_case("content-length") {
+                content_length = val.parse().unwrap_or(0);
+            } else if key.eq_ignore_ascii_case("authorization") {
+                // Strip optional "Bearer " (case-insensitive) prefix;
+                // anything else stays as-is so future schemes can be
+                // added without re-parsing.
+                let token = val
+                    .strip_prefix("Bearer ")
+                    .or_else(|| val.strip_prefix("bearer "))
+                    .unwrap_or(val);
+                bearer.clear();
+                bearer.push_str(token);
+            }
         }
     }
     let mut body = vec![0u8; content_length];
     if content_length > 0 {
         reader.read_exact(&mut body)?;
     }
-    Ok((Request { method, path }, body))
+    Ok((
+        Request {
+            method,
+            path,
+            bearer,
+        },
+        body,
+    ))
+}
+
+/// Constant-time string compare so a malicious caller can't time-side-channel
+/// the token byte-by-byte.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for i in 0..a.len() {
+        diff |= a[i] ^ b[i];
+    }
+    diff == 0
 }
 
 fn status_text(code: u16) -> &'static str {

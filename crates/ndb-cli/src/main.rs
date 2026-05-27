@@ -155,15 +155,32 @@ fn issue(host_port: &str, request: &[u8]) -> Result<(u16, Vec<u8>), String> {
     Ok((status, buf[header_end + 4..].to_vec()))
 }
 
+fn auth_header() -> String {
+    std::env::var("NDB_TOKEN").map_or_else(
+        |_| String::new(),
+        |t| {
+            if t.is_empty() {
+                String::new()
+            } else {
+                format!("Authorization: Bearer {t}\r\n")
+            }
+        },
+    )
+}
+
 fn do_get(host_port: &str, path: &str) -> Result<(), String> {
-    let req = format!("GET {path} HTTP/1.1\r\nHost: {host_port}\r\nConnection: close\r\n\r\n");
+    let req = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host_port}\r\n{}Connection: close\r\n\r\n",
+        auth_header()
+    );
     let (status, body) = issue(host_port, req.as_bytes())?;
     emit_response(status, &body)
 }
 
 fn do_post(host_port: &str, path: &str, body: &str) -> Result<(), String> {
     let req = format!(
-        "POST {path} HTTP/1.1\r\nHost: {host_port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        "POST {path} HTTP/1.1\r\nHost: {host_port}\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        auth_header(),
         body.len(),
         body,
     );
@@ -184,7 +201,10 @@ fn do_commit(host_port: &str) -> Result<(), String> {
 }
 
 fn do_iter(host_port: &str) -> Result<(), String> {
-    let req = format!("GET /iter HTTP/1.1\r\nHost: {host_port}\r\nConnection: close\r\n\r\n");
+    let req = format!(
+        "GET /iter HTTP/1.1\r\nHost: {host_port}\r\n{}Connection: close\r\n\r\n",
+        auth_header()
+    );
     let (status, body) = issue(host_port, req.as_bytes())?;
     if status != 200 {
         return emit_response(status, &body);

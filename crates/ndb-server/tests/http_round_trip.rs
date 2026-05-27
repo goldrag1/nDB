@@ -186,6 +186,44 @@ fn validation_failure_returns_422() {
 }
 
 #[test]
+fn auth_token_required_when_set() {
+    let dir = temp_dir("auth_required");
+    let server = Arc::new(
+        Server::open(&dir)
+            .unwrap()
+            .with_auth_token("s3cr3t-token-x"),
+    );
+    let addr = spawn_server(Arc::clone(&server), 3);
+
+    // No Authorization header → 401.
+    let req = "GET /iter HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
+    let resp = raw_request(addr, req.as_bytes());
+    assert_eq!(resp.status, 401);
+
+    // Wrong token → 401.
+    let req = "GET /iter HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer wrong\r\nConnection: close\r\n\r\n";
+    let resp = raw_request(addr, req.as_bytes());
+    assert_eq!(resp.status, 401);
+
+    // Right token → 200.
+    let req = "GET /iter HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer s3cr3t-token-x\r\nConnection: close\r\n\r\n";
+    let resp = raw_request(addr, req.as_bytes());
+    assert_eq!(resp.status, 200);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn health_open_even_with_auth_token() {
+    let dir = temp_dir("auth_health");
+    let server = Arc::new(Server::open(&dir).unwrap().with_auth_token("super-secret"));
+    let addr = spawn_server(Arc::clone(&server), 1);
+    // No Authorization, but /health is intentionally open.
+    let resp = get(addr, "/health");
+    assert_eq!(resp.status, 200);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn missing_route_returns_404() {
     let dir = temp_dir("404");
     let server = Arc::new(Server::open(&dir).unwrap());

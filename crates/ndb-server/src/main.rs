@@ -39,13 +39,22 @@ fn main() -> ExitCode {
     let Some((path, bind)) = parse_args() else {
         return ExitCode::from(2);
     };
-    let server = match Server::open(&path) {
+    let mut server = match Server::open(&path) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("failed to open database at {path}: {e}");
             return ExitCode::from(1);
         }
     };
+    if let Ok(token) = std::env::var("NDB_TOKEN")
+        && !token.is_empty()
+    {
+        eprintln!(
+            "ndb-server: bearer-token auth enabled (token len {})",
+            token.len()
+        );
+        server = server.with_auth_token(token);
+    }
     if let Err(e) = server.run(&bind) {
         eprintln!("server error: {e}");
         return ExitCode::from(1);
