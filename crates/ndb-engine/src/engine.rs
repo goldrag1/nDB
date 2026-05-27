@@ -31,6 +31,7 @@
 //! structures do not embed locks.
 
 use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -48,6 +49,21 @@ use crate::wal::{WalReadError, WalReader, WriteAheadLog, truncate_to};
 
 const WAL_FILENAME_SUFFIX: &str = ".ndblog";
 const SSTABLE_FILENAME_SUFFIX: &str = ".ndb";
+
+/// Statistics returned by [`Engine::compact`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CompactionStats {
+    /// Records read across all input SSTables.
+    pub records_in: u64,
+    /// Records written to the new SSTable (after dropping superseded
+    /// versions + tombstoned records).
+    pub records_out: u64,
+    /// Number of input SSTables consumed.
+    pub sstables_in: usize,
+    /// `file_seq` of the new SSTable. `None` if compaction was a no-op
+    /// (zero input SSTables).
+    pub new_sstable_seq: Option<u64>,
+}
 
 /// Errors raised by the engine layer.
 #[derive(Debug, Error)]
@@ -373,7 +389,6 @@ impl Engine {
     pub fn snapshot_iter(&mut self, snapshot: TxId) -> Result<Vec<Record>, EngineError> {
         // Collect all records across layers, group by SSTableKey, run
         // resolver per group.
-        use std::collections::BTreeMap;
         let mut by_key: BTreeMap<SSTableKey, Vec<Record>> = BTreeMap::new();
         for (k, r) in self.memtable.iter() {
             by_key.entry(k.clone()).or_default().push(r.clone());
@@ -454,6 +469,156 @@ impl Engine {
         }
 
         Ok(())
+    }
+
+    /// Full compaction — merge every open SSTable into one new SSTable at
+    /// level 1. Drops records whose later version supersedes them, and
+    /// drops the tombstone marker once it has done its job (i.e. when
+    /// the latest visible "event" for that key is the tombstone).
+    ///
+    /// v1 simplifications:
+    ///
+    /// - **Full compaction only**, not tiered (no L0/L1/L2 levels yet —
+    ///   the new SSTable lands at level 1; future tiered compaction will
+    ///   rewrite this).
+    /// - **No snapshot tracking.** Any in-flight read at a snapshot older
+    ///   than the current MANIFEST `last_tx_id` may return Missing for
+    ///   keys that previously resolved Live. Acceptable for v1 because
+    ///   the engine is single-process and the caller can hold off
+    ///   compaction during long reads. v2 will track the oldest live
+    ///   snapshot and only drop versions older than it.
+    /// - **Memtable is NOT flushed first.** Compaction operates only on
+    ///   on-disk SSTables; the memtable continues to serve writes during
+    ///   compaction. (Compaction is short relative to memtable lifetime
+    ///   in practice.)
+    ///
+    /// Steps:
+    /// 1. If <2 SSTables, no-op.
+    /// 2. Stream every record from every input SSTable into a single
+    ///    `BTreeMap<SSTableKey, Vec<Record>>`.
+    /// 3. For each key, run `resolve_iter(_, TxId::ACTIVE)` to find the
+    ///    visible winner. If `Live`, emit it. If `Deleted`, drop the
+    ///    whole key (and its tombstone).
+    /// 4. Stream survivors into a new SSTable via `SSTableWriter`. Finish
+    ///    publishes atomically.
+    /// 5. Update MANIFEST: replace `sstables` with `[new_entry]`, leave
+    ///    `active_wal_seq` and `last_tx_id` alone.
+    /// 6. Open the new SSTable reader and replace `self.sstables`.
+    /// 7. Delete the old SSTable files (best-effort).
+    pub fn compact(&mut self) -> Result<CompactionStats, EngineError> {
+        if self.sstables.len() < 2 {
+            // Single (or zero) SSTable: no merge to perform. We could
+            // still drop tombstones, but for v1 the cost is not worth
+            // the complexity — wait for a real flush to accumulate
+            // multiple SSTables.
+            return Ok(CompactionStats {
+                records_in: 0,
+                records_out: 0,
+                sstables_in: self.sstables.len(),
+                new_sstable_seq: None,
+            });
+        }
+
+        // Step 2: collect by key + build the cross-bucket "killed" map.
+        //
+        // Entities and tombstones for the same UUID sort to different
+        // SSTableKey buckets (kind byte differs). To drop a tombstoned
+        // entity AND its tombstone, we need to consult tombstone
+        // information across buckets. Build a `killed: uuid → max
+        // tombstone tx_id_supersede` map during the first pass; emit
+        // phase consults it.
+        let mut by_key: BTreeMap<SSTableKey, Vec<Record>> = BTreeMap::new();
+        let mut killed: HashMap<uuid::Uuid, TxId> = HashMap::new();
+        let mut records_in: u64 = 0;
+        for sst in &mut self.sstables {
+            for item in sst.iter() {
+                let (rec, _) = item?;
+                records_in += 1;
+                if let Record::Tombstone(t) = &rec {
+                    let entry = killed.entry(t.target_id).or_insert(t.tx_id_supersede);
+                    if t.tx_id_supersede > *entry {
+                        *entry = t.tx_id_supersede;
+                    }
+                }
+                let k = SSTableKey::for_record(&rec);
+                by_key.entry(k).or_default().push(rec);
+            }
+        }
+
+        // Step 3 + 4: resolve per-key, drop tombstoned entities and the
+        // tombstones themselves (v1: no snapshot tracking), write
+        // survivors.
+        let new_seq = self.db.allocate_file_seq();
+        let new_path = sstable_path(self.db.path(), new_seq);
+        let mut writer = SSTableWriter::create(&new_path)?;
+        let mut records_out: u64 = 0;
+        for (_k, versions) in by_key {
+            match crate::mvcc::resolve_iter(versions.iter(), TxId::ACTIVE) {
+                crate::mvcc::Resolved::Missing | crate::mvcc::Resolved::Deleted { .. } => {
+                    // Either no versions visible (shouldn't happen — we
+                    // only collected real records) or the local-bucket
+                    // winner is a tombstone. v1 drops both the tombstone
+                    // and the entity (no snapshot tracking).
+                }
+                crate::mvcc::Resolved::Live(winner) => {
+                    // Cross-bucket tombstone check: is there a tombstone
+                    // for this UUID with tx_id_supersede ≥ this record's
+                    // tx_id_assert? If so, drop the record.
+                    let (uuid, winner_tx) = match winner {
+                        Record::Entity(e) => (Some(e.entity_id.into_uuid()), e.tx_id_assert),
+                        Record::HyperEdge(h) => (Some(h.hyperedge_id.into_uuid()), h.tx_id_assert),
+                        // Dictionary records: not subject to tombstones.
+                        _ => (None, TxId::new(0)),
+                    };
+                    if let Some(u) = uuid
+                        && let Some(killed_at) = killed.get(&u)
+                        && killed_at.get() >= winner_tx.get()
+                    {
+                        continue;
+                    }
+                    writer.append(winner)?;
+                    records_out += 1;
+                }
+            }
+        }
+        let _footer = writer.finish()?;
+
+        // Step 5: MANIFEST update — replace sstables entirely.
+        let old_sstable_seqs: Vec<u64> = self
+            .db
+            .manifest()
+            .sstables
+            .iter()
+            .map(|e| e.file_seq)
+            .collect();
+        let sstables_in = old_sstable_seqs.len();
+        let mut manifest = self.db.manifest().clone();
+        manifest.sstables = vec![ManifestEntry {
+            file_seq: new_seq,
+            level: 1,
+        }];
+        self.db.write_manifest(manifest)?;
+
+        // Step 6: re-open SSTable readers from the (now single) new entry.
+        let reader = SSTableReader::open(&new_path)?;
+        self.sstables.clear();
+        self.sstables.push(reader);
+
+        // Step 7: remove old files (best-effort).
+        for old_seq in old_sstable_seqs {
+            let p = sstable_path(self.db.path(), old_seq);
+            let _ = std::fs::remove_file(&p);
+        }
+
+        // Rebuild indexes since we dropped tombstoned records.
+        self.rebuild_indexes()?;
+
+        Ok(CompactionStats {
+            records_in,
+            records_out,
+            sstables_in,
+            new_sstable_seq: Some(new_seq),
+        })
     }
 
     /// `fsync` + release LOCK.
@@ -784,6 +949,122 @@ mod tests {
             Resolved::Live(Record::Entity(e)) => assert_eq!(e.entity_id, eid),
             other => panic!("post-restart read: {other:?}"),
         }
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn compaction_merges_sstables_into_one() {
+        let dir = temp_dir("compact_merge");
+        let mut engine = Engine::create(&dir).unwrap();
+        // Three flushes → three SSTables at level 0.
+        for batch in 0..3 {
+            for _ in 0..5 {
+                let mut txn = engine.begin_write();
+                txn.put_entity(make_entity(EntityId::now_v7(), &format!("b{batch}")));
+                txn.commit().unwrap();
+            }
+            engine.flush().unwrap();
+        }
+        assert_eq!(engine.sstable_count(), 3);
+        let stats = engine.compact().unwrap();
+        assert_eq!(stats.sstables_in, 3);
+        assert!(stats.new_sstable_seq.is_some());
+        assert_eq!(stats.records_in, 15);
+        assert_eq!(stats.records_out, 15);
+        assert_eq!(engine.sstable_count(), 1);
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn compaction_drops_superseded_versions() {
+        let dir = temp_dir("compact_supersede");
+        let mut engine = Engine::create(&dir).unwrap();
+        let eid = EntityId::now_v7();
+        // 5 versions of the same entity across 2 flushes.
+        for i in 0..3 {
+            let mut txn = engine.begin_write();
+            txn.put_entity(make_entity(eid, &format!("v{i}")));
+            txn.commit().unwrap();
+        }
+        engine.flush().unwrap();
+        for i in 3..5 {
+            let mut txn = engine.begin_write();
+            txn.put_entity(make_entity(eid, &format!("v{i}")));
+            txn.commit().unwrap();
+        }
+        engine.flush().unwrap();
+        assert_eq!(engine.sstable_count(), 2);
+        let stats = engine.compact().unwrap();
+        // 5 records in, exactly 1 record out (the latest version).
+        assert_eq!(stats.records_in, 5);
+        assert_eq!(stats.records_out, 1);
+        // Latest version still readable.
+        let snap = TxId::new(engine.manifest().last_tx_id);
+        match engine.snapshot_read(&eid.into_uuid(), snap).unwrap() {
+            Resolved::Live(Record::Entity(e)) => {
+                if let Value::String(s) = &e.properties[0].1 {
+                    assert_eq!(s, "v4");
+                } else {
+                    panic!("wrong property type");
+                }
+            }
+            other => panic!("post-compact read: {other:?}"),
+        }
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn compaction_drops_tombstoned_entities() {
+        let dir = temp_dir("compact_tomb");
+        let mut engine = Engine::create(&dir).unwrap();
+        let eid = EntityId::now_v7();
+        let alive_id = EntityId::now_v7();
+        // Flush 1: entity + tombstone for it, plus a live unrelated entity.
+        let mut txn = engine.begin_write();
+        txn.put_entity(make_entity(eid, "doomed"));
+        txn.commit().unwrap();
+        engine.flush().unwrap();
+        let mut txn = engine.begin_write();
+        txn.delete(eid.into_uuid());
+        txn.put_entity(make_entity(alive_id, "survivor"));
+        txn.commit().unwrap();
+        engine.flush().unwrap();
+        assert_eq!(engine.sstable_count(), 2);
+        let stats = engine.compact().unwrap();
+        // 1 entity + 1 tombstone + 1 entity = 3 records in;
+        // 1 surviving entity out.
+        assert_eq!(stats.records_in, 3);
+        assert_eq!(stats.records_out, 1);
+        // Tombstoned entity gone after compaction.
+        let snap = TxId::new(engine.manifest().last_tx_id);
+        assert!(matches!(
+            engine.snapshot_read(&eid.into_uuid(), snap).unwrap(),
+            Resolved::Missing
+        ));
+        // Survivor still here.
+        assert!(matches!(
+            engine.snapshot_read(&alive_id.into_uuid(), snap).unwrap(),
+            Resolved::Live(_)
+        ));
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn compaction_noop_when_single_sstable() {
+        let dir = temp_dir("compact_noop");
+        let mut engine = Engine::create(&dir).unwrap();
+        let mut txn = engine.begin_write();
+        txn.put_entity(make_entity(EntityId::now_v7(), "x"));
+        txn.commit().unwrap();
+        engine.flush().unwrap();
+        let stats = engine.compact().unwrap();
+        assert!(stats.new_sstable_seq.is_none());
+        assert_eq!(stats.records_in, 0);
+        assert_eq!(engine.sstable_count(), 1);
         engine.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
