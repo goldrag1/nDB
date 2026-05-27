@@ -109,6 +109,32 @@ pub enum EngineError {
 }
 
 // ---------------------------------------------------------------------------
+// Per-type retention policies (§17.1)
+// ---------------------------------------------------------------------------
+
+/// How many versions of a key the compactor should retain for a given
+/// type. Applied per `(type_id, key)` group at compaction time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RetentionPolicy {
+    /// Keep only the snapshot-visible version, drop all superseded
+    /// versions and tombstones once they've done their job. Default.
+    /// Lowest storage; fastest reads; no version history.
+    #[default]
+    LatestOnly,
+    /// Keep the latest N versions (visible winner + up to N-1 older
+    /// superseded versions). `N = 0` is equivalent to `LatestOnly`;
+    /// `N = 1` keeps only the live one + one tombstone if present.
+    Versioned {
+        /// Number of versions to keep (≥ 1; effective minimum 1).
+        keep_last_n: u32,
+    },
+    /// Keep every version forever. Highest storage; full audit trail.
+    /// Tombstones are also retained — readers always see the complete
+    /// version chain.
+    Audited,
+}
+
+// ---------------------------------------------------------------------------
 // Engine
 // ---------------------------------------------------------------------------
 
@@ -147,6 +173,11 @@ pub struct Engine {
     /// tx_ids return `TimestampUnavailable`. v2 will persist via a new
     /// `TxTimestampRecord` kind or the MANIFEST.
     commit_timestamps: std::collections::BTreeMap<TxId, i64>,
+    /// Per-type retention policy. Compactor consults this when deciding
+    /// how many superseded versions to retain for each `(type, key)`
+    /// group. Types not present default to `LatestOnly`. Same in-memory
+    /// caveat as `commit_timestamps` — v1 session-local; v2 persists.
+    retention: HashMap<TypeId, RetentionPolicy>,
 }
 
 impl Engine {
@@ -171,6 +202,7 @@ impl Engine {
             validation: ValidationEngine::new(),
             db,
             commit_timestamps: std::collections::BTreeMap::new(),
+            retention: HashMap::new(),
         })
     }
 
@@ -235,6 +267,7 @@ impl Engine {
             validation: ValidationEngine::new(),
             db,
             commit_timestamps: std::collections::BTreeMap::new(),
+            retention: HashMap::new(),
         };
         // Indexes are in-memory in v1 — rebuild them from the primary
         // store (SSTables in newest-first order) and the memtable
@@ -525,6 +558,24 @@ impl Engine {
         self.commit_timestamps.get(&tx_id).copied()
     }
 
+    /// Configure the retention policy for a type. Future compactions will
+    /// honour this when deciding how many superseded versions to keep.
+    /// Records committed BEFORE this call are also subject to the new
+    /// policy at the next compaction.
+    pub fn set_retention_policy(&mut self, type_id: TypeId, policy: RetentionPolicy) {
+        self.retention.insert(type_id, policy);
+    }
+
+    /// Look up the retention policy for a type. Returns `LatestOnly`
+    /// (the default) if no policy is set.
+    #[must_use]
+    pub fn retention_policy(&self, type_id: TypeId) -> RetentionPolicy {
+        self.retention
+            .get(&type_id)
+            .copied()
+            .unwrap_or(RetentionPolicy::LatestOnly)
+    }
+
     /// Iterate every record visible at `snapshot`, in (kind, primary)
     /// order, deduplicating across memtable + SSTables. Useful for scans.
     /// O(N) — v1 has no block index.
@@ -695,31 +746,35 @@ impl Engine {
         let mut writer = SSTableWriter::create(&new_path)?;
         let mut records_out: u64 = 0;
         for (_k, versions) in by_key {
-            match crate::mvcc::resolve_iter(versions.iter(), TxId::ACTIVE) {
-                crate::mvcc::Resolved::Missing | crate::mvcc::Resolved::Deleted { .. } => {
-                    // Either no versions visible (shouldn't happen — we
-                    // only collected real records) or the local-bucket
-                    // winner is a tombstone. v1 drops both the tombstone
-                    // and the entity (no snapshot tracking).
+            // Per-type retention policy decides how many versions to
+            // keep. Default LatestOnly preserves the historical v1
+            // behaviour for types with no explicit policy.
+            let type_id = versions.iter().find_map(|r| match r {
+                Record::Entity(e) => Some(e.type_id),
+                Record::HyperEdge(h) => Some(h.type_id),
+                _ => None,
+            });
+            let policy = type_id
+                .map(|t| self.retention_policy(t))
+                .unwrap_or_default();
+            match policy {
+                RetentionPolicy::LatestOnly => {
+                    emit_latest_only(&mut writer, &versions, &killed, &mut records_out)?;
                 }
-                crate::mvcc::Resolved::Live(winner) => {
-                    // Cross-bucket tombstone check: is there a tombstone
-                    // for this UUID with tx_id_supersede ≥ this record's
-                    // tx_id_assert? If so, drop the record.
-                    let (uuid, winner_tx) = match winner {
-                        Record::Entity(e) => (Some(e.entity_id.into_uuid()), e.tx_id_assert),
-                        Record::HyperEdge(h) => (Some(h.hyperedge_id.into_uuid()), h.tx_id_assert),
-                        // Dictionary records: not subject to tombstones.
-                        _ => (None, TxId::new(0)),
-                    };
-                    if let Some(u) = uuid
-                        && let Some(killed_at) = killed.get(&u)
-                        && killed_at.get() >= winner_tx.get()
-                    {
-                        continue;
+                RetentionPolicy::Audited => {
+                    // Preserve every record (including tombstones) — full audit trail.
+                    for r in &versions {
+                        writer.append(r)?;
+                        records_out += 1;
                     }
-                    writer.append(winner)?;
-                    records_out += 1;
+                }
+                RetentionPolicy::Versioned { keep_last_n } => {
+                    emit_versioned(
+                        &mut writer,
+                        versions,
+                        keep_last_n.max(1) as usize,
+                        &mut records_out,
+                    )?;
                 }
             }
         }
@@ -882,6 +937,60 @@ impl WriteTxn<'_> {
 // ---------------------------------------------------------------------------
 // Path helpers + recovery
 // ---------------------------------------------------------------------------
+
+/// Emit just the snapshot-visible winner (current LatestOnly behaviour).
+/// Drops the whole key if a tombstone in `killed` supersedes it.
+fn emit_latest_only(
+    writer: &mut SSTableWriter,
+    versions: &[Record],
+    killed: &HashMap<uuid::Uuid, TxId>,
+    records_out: &mut u64,
+) -> Result<(), EngineError> {
+    match crate::mvcc::resolve_iter(versions.iter(), TxId::ACTIVE) {
+        crate::mvcc::Resolved::Missing | crate::mvcc::Resolved::Deleted { .. } => Ok(()),
+        crate::mvcc::Resolved::Live(winner) => {
+            let (uuid, winner_tx) = match winner {
+                Record::Entity(e) => (Some(e.entity_id.into_uuid()), e.tx_id_assert),
+                Record::HyperEdge(h) => (Some(h.hyperedge_id.into_uuid()), h.tx_id_assert),
+                _ => (None, TxId::new(0)),
+            };
+            if let Some(u) = uuid
+                && let Some(killed_at) = killed.get(&u)
+                && killed_at.get() >= winner_tx.get()
+            {
+                return Ok(());
+            }
+            writer.append(winner)?;
+            *records_out += 1;
+            Ok(())
+        }
+    }
+}
+
+/// Emit the N most-recent versions for a `Versioned { keep_last_n }`
+/// policy. Sort by `tx_id_assert` descending; take the first N. Tombstones
+/// stack alongside the version chain — they may be retained too if they
+/// fall in the N latest by tx_id_supersede.
+fn emit_versioned(
+    writer: &mut SSTableWriter,
+    mut versions: Vec<Record>,
+    n: usize,
+    records_out: &mut u64,
+) -> Result<(), EngineError> {
+    versions.sort_by_key(|r| {
+        std::cmp::Reverse(match r {
+            Record::Entity(e) => e.tx_id_assert.get(),
+            Record::HyperEdge(h) => h.tx_id_assert.get(),
+            Record::Tombstone(t) => t.tx_id_supersede.get(),
+            _ => 0,
+        })
+    });
+    for r in versions.iter().take(n) {
+        writer.append(r)?;
+        *records_out += 1;
+    }
+    Ok(())
+}
 
 fn wal_path(dir: &Path, seq: u64) -> PathBuf {
     dir.join(format!("{seq:06}{WAL_FILENAME_SUFFIX}"))
@@ -1703,6 +1812,92 @@ mod tests {
             Resolved::Deleted { deleted_at } => assert_eq!(deleted_at, snap_deleted),
             other => panic!("expected Deleted, got {other:?}"),
         }
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn retention_policy_audited_preserves_every_version() {
+        let dir = temp_dir("retention-audit");
+        let mut engine = Engine::create(&dir).unwrap();
+        let type_id = TypeId::new(7);
+        engine.set_retention_policy(type_id, RetentionPolicy::Audited);
+        let eid = EntityId::now_v7();
+
+        // Three versions of the same entity, three commits + flushes so
+        // they land in distinct SSTables.
+        for v in 1..=3 {
+            let mut txn = engine.begin_write();
+            txn.put_entity(EntityRecord {
+                entity_id: eid,
+                type_id,
+                tx_id_assert: TxId::new(0),
+                tx_id_supersede: TxId::ACTIVE,
+                properties: vec![(PropertyId::new(1), Value::I64(v))],
+            });
+            txn.commit().unwrap();
+            engine.flush().unwrap();
+        }
+        let stats = engine.compact().unwrap();
+        assert_eq!(stats.sstables_in, 3);
+        // Audited keeps all 3 versions of this entity.
+        assert_eq!(stats.records_out, 3);
+
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn retention_policy_versioned_keeps_last_n() {
+        let dir = temp_dir("retention-versioned");
+        let mut engine = Engine::create(&dir).unwrap();
+        let type_id = TypeId::new(8);
+        engine.set_retention_policy(type_id, RetentionPolicy::Versioned { keep_last_n: 2 });
+        let eid = EntityId::now_v7();
+
+        // Five versions across five SSTables.
+        for v in 1..=5 {
+            let mut txn = engine.begin_write();
+            txn.put_entity(EntityRecord {
+                entity_id: eid,
+                type_id,
+                tx_id_assert: TxId::new(0),
+                tx_id_supersede: TxId::ACTIVE,
+                properties: vec![(PropertyId::new(1), Value::I64(v))],
+            });
+            txn.commit().unwrap();
+            engine.flush().unwrap();
+        }
+        let stats = engine.compact().unwrap();
+        assert_eq!(stats.sstables_in, 5);
+        // Versioned { keep_last_n: 2 } → 2 versions retained.
+        assert_eq!(stats.records_out, 2);
+
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn retention_policy_default_latest_only_unchanged() {
+        let dir = temp_dir("retention-default");
+        let mut engine = Engine::create(&dir).unwrap();
+        let eid = EntityId::now_v7();
+        for v in 1..=3 {
+            let mut txn = engine.begin_write();
+            txn.put_entity(EntityRecord {
+                entity_id: eid,
+                type_id: TypeId::new(9),
+                tx_id_assert: TxId::new(0),
+                tx_id_supersede: TxId::ACTIVE,
+                properties: vec![(PropertyId::new(1), Value::I64(v))],
+            });
+            txn.commit().unwrap();
+            engine.flush().unwrap();
+        }
+        let stats = engine.compact().unwrap();
+        assert_eq!(stats.sstables_in, 3);
+        // No policy set → LatestOnly → 1 record retained.
+        assert_eq!(stats.records_out, 1);
         engine.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
