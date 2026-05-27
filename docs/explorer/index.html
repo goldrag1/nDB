@@ -333,7 +333,10 @@ const TYPES = {
 // Type IDs that count as a "structural motif" — used by the residue-
 // filter toggle and the signal-flow code.
 const MOTIF_TYPE_IDS = new Set([110, 111, 113, 114, 115]);
-const RESIDUE_OF_TYPE_ID = 116;
+// Renamed from RESIDUE_OF — same type id (116), new semantics:
+// ONE arity-(N+1) edge per protein with role-fillers (protein, r1,
+// r2, …, rN). Replaces the previous N binary residue_of edges.
+const PROTEIN_RESIDUES_TYPE_ID = 116;
 const PROP_NAME              = 30;
 // AlphaFold-predicted atomic coordinates — stored in nDB as raw CIF
 // bytes once fetched. The wire encodes Bytes as base64.
@@ -342,9 +345,9 @@ const PROP_CIF_BYTES         = 35;
 // One nDB entity per atom unlocks atom-level queries (range on
 // B-factor, lookup by serial/atomname) without re-parsing the CIF.
 const T_ATOM                 = 7;
-const T_ATOM_OF              = 117;            // atom → protein, arity 2
+const T_PROTEIN_ATOMS        = 117;            // ONE arity-(N+1) edge per protein
 const ROLE_ATOM              = 22;
-const ROLE_OWNER             = 23;
+// ROLE_PROTEIN = 12 (defined in left-sidebar role labels)
 const PROP_ATOM_NAME         = 60;
 const PROP_ATOM_ELEMENT      = 61;
 const PROP_ATOM_SERIAL       = 62;
@@ -521,7 +524,7 @@ function buildGraphFromRecords(records) {
     if (showResidues) return false;
     if (rec.kind === "entity" && rec.type_id === residueTypeId) return true;
     if (rec.kind === "hyper_edge" && (
-      MOTIF_TYPE_IDS.has(rec.type_id) || rec.type_id === RESIDUE_OF_TYPE_ID
+      MOTIF_TYPE_IDS.has(rec.type_id) || rec.type_id === PROTEIN_RESIDUES_TYPE_ID
     )) return true;
     return false;
   };
@@ -1287,35 +1290,38 @@ function cifUrlForUniprot(acc, fragment = 1, version = 6) {
 // ─── Atom-level decomposition: write nDB entities for every atom ──
 // The CIF blob lives in nDB but its rows aren't indexed. Decomposing
 // it into one entity per atom unlocks per-atom queries (range on
-// B-factor, lookup by serial). We mark a protein as "decomposed" via
-// a magic property (PROP_ATOM_NAME on the PROTEIN entity holding a
-// digest tag) so subsequent loads skip the work.
-const ATOM_DECOMPOSED_TAG = "decomposed_v1";
+// B-factor, lookup by serial). Crucially we use ONE arity-(N+1)
+// "protein contains its atoms" hyperedge instead of N binary
+// atom_of edges — N reified binary edges to represent a 1-to-N
+// containment is exactly the anti-pattern nDB's N-ary hyperedges
+// avoid. Same shape as the protein_residues hyperedge on the engine
+// seed side.
 
 // Have we already committed atom entities for this protein?
 async function proteinHasAtomEntities(protein) {
-  // Look for at least one atom_of hyperedge with this protein as the OWNER.
-  // Cheap probe: search edgesById for any matching entry.
+  // Cheap probe: look for the ONE protein_atoms hyperedge of arity > 2.
   for (const e of edgesById.values()) {
-    if (e.type_id !== T_ATOM_OF) continue;
+    if (e.type_id !== T_PROTEIN_ATOMS) continue;
     if (e.roles.some(r => r.entity_id === protein.entity_id)) return true;
   }
   return false;
 }
 
 // Walk every atom in the currently-loaded NGL structure and commit
-// them to nDB as a single batch transaction. Quiet on the wire — no
-// progress bar; should finish in ~1 second for ~1500 atoms.
+// N atom entities + ONE arity-(N+1) protein_atoms hyperedge.
+// Quiet on the wire; should finish in ~1 second for ~1500 atoms.
 async function decomposeCifIntoAtomEntities(proteinNode) {
   if (!nglComponent || !proteinNode) return { committed: 0 };
   const r = proteinNode.record;
   if (await proteinHasAtomEntities(r)) return { committed: 0, skipped: true };
 
-  const records = [];
   const proteinId = r.entity_id;
+  const atomEntities = [];
+  const atomIds = [];
   nglComponent.structure.eachAtom((a) => {
     const aid = uuidV7();
-    records.push({
+    atomIds.push(aid);
+    atomEntities.push({
       kind: "entity",
       entity_id: aid,
       type_id: T_ATOM,
@@ -1334,32 +1340,38 @@ async function decomposeCifIntoAtomEntities(proteinNode) {
         { prop_id: PROP_ATOM_RES_NAME, value: { tag: "string", value: a.resname } },
       ],
     });
-    records.push({
-      kind: "hyper_edge",
-      hyperedge_id: uuidV7(),
-      type_id: T_ATOM_OF,
-      tx_id_assert: 0,
-      tx_id_supersede: "active",
-      roles: [
-        { role_id: ROLE_ATOM,  entity_id: aid },
-        { role_id: ROLE_OWNER, entity_id: proteinId },
-      ],
-      properties: [],
-    });
   });
-  if (records.length === 0) return { committed: 0 };
+  if (atomIds.length === 0) return { committed: 0 };
 
-  // Wire-size safety: ~1500 atoms × 2 records × ~400 B = ~1.2 MB. Fine.
-  // Split into chunks of 1000 records to keep individual /commit calls
-  // reasonable for very large proteins (BRCA1 ~14k atoms = 28k records).
+  // Commit atom entities in 1000-row chunks (BRCA1 has ~14k atoms).
   let committed = 0;
   const CHUNK = 1000;
-  for (let i = 0; i < records.length; i += CHUNK) {
-    const slice = records.slice(i, i + CHUNK);
+  for (let i = 0; i < atomEntities.length; i += CHUNK) {
+    const slice = atomEntities.slice(i, i + CHUNK);
     await commit(slice);
     committed += slice.length;
   }
-  return { committed };
+
+  // ONE N-ary "protein contains its atoms" hyperedge — arity 1 + N
+  // (one ROLE_PROTEIN filler, one ROLE_ATOM filler per atom). This is
+  // a single nDB record carrying the entire containment relationship.
+  const roles = [
+    { role_id: 12, entity_id: proteinId },                   // ROLE_PROTEIN
+    ...atomIds.map(id => ({ role_id: ROLE_ATOM, entity_id: id })),
+  ];
+  await commit([{
+    kind: "hyper_edge",
+    hyperedge_id: uuidV7(),
+    type_id: T_PROTEIN_ATOMS,
+    tx_id_assert: 0,
+    tx_id_supersede: "active",
+    roles,
+    properties: [
+      { prop_id: PROP_NAME, value: { tag: "string", value: `${extractName(r)} contains atoms` } },
+    ],
+  }]);
+  committed += 1;
+  return { committed, atomCount: atomIds.length };
 }
 
 // ─── CIF storage: nDB-first, AF-DB fallback ─────────────────────
@@ -1588,7 +1600,7 @@ function onNgl3DResidueClick(resno) {
     const linksRes = graphData.links.some(L => {
       const eid = L.edge_id;
       const edge = edgesById.get(eid);
-      if (!edge || edge.type_id !== RESIDUE_OF_TYPE_ID) return false;
+      if (!edge || edge.type_id !== PROTEIN_RESIDUES_TYPE_ID) return false;
       const fillers = edge.roles.map(r => r.entity_id);
       return fillers.includes(node.id) && fillers.includes(proteinId);
     });
@@ -1625,22 +1637,27 @@ function updateModelComparison(node) {
   // Live nDB-side counts for THIS protein.
   let ndbResidues = 0;
   let ndbMotifs = 0;
-  let ndbResidueOf = 0;
   let ndbComplex = 0;
   let ndbEncodes = 0;
-  let ndbAtomOf = 0;          // arity-2 atom → protein hyperedges
+  // N-ary "contains" hyperedges: 0 or 1 each for this protein.
+  let ndbProteinResidues = 0;
+  let ndbProteinAtoms = 0;
+  let ndbAtoms = 0;
   const residueIdsForProtein = new Set();
   for (const e of edgesById.values()) {
-    if (e.type_id === RESIDUE_OF_TYPE_ID) {
+    if (e.type_id === PROTEIN_RESIDUES_TYPE_ID) {
       const fillers = e.roles.map(rr => rr.entity_id);
       if (fillers.includes(r.entity_id)) {
-        ndbResidueOf++;
+        ndbProteinResidues++;
         for (const id of fillers) if (id !== r.entity_id) residueIdsForProtein.add(id);
       }
     }
-    if (e.type_id === T_ATOM_OF) {
+    if (e.type_id === T_PROTEIN_ATOMS) {
       const fillers = e.roles.map(rr => rr.entity_id);
-      if (fillers.includes(r.entity_id)) ndbAtomOf++;
+      if (fillers.includes(r.entity_id)) {
+        ndbProteinAtoms++;
+        ndbAtoms = fillers.length - 1; // total atom fillers (minus protein)
+      }
     }
   }
   ndbResidues = residueIdsForProtein.size;
@@ -1652,14 +1669,11 @@ function updateModelComparison(node) {
     if (e.type_id === 100 && includesProtein) ndbComplex++;
     if (e.type_id === 101 && includesProtein) ndbEncodes++;
   }
-  // Atoms = the count of atom_of hyperedges for this protein (one
-  // hyperedge per atom).
-  const ndbAtoms = ndbAtomOf;
-  const ndbTotalRecords = 1                /* protein entity itself */
-                        + ndbAtoms         /* per-atom entities */
-                        + ndbAtomOf
+  const ndbTotalRecords = 1                  /* protein entity itself */
+                        + ndbAtoms           /* per-atom entities */
+                        + ndbProteinAtoms    /* 1 N-ary contains edge */
                         + ndbResidues
-                        + ndbResidueOf
+                        + ndbProteinResidues /* 1 N-ary contains edge */
                         + ndbMotifs
                         + ndbComplex
                         + ndbEncodes;
@@ -1713,10 +1727,10 @@ function updateModelComparison(node) {
           <li>+ CIF blob property (${cifSizeKb(r) || "—"} KB) — preserves every byte of the mmCIF</li>
           ${atomsCommittedToNdb
             ? `<li><b>${ndbAtoms}</b> atom entities (type 7) — same data, now per-atom indexed</li>
-               <li>${ndbAtomOf} atom_of hyperedges (arity 2)</li>`
+               <li>1 protein_atoms hyperedge · arity ${ndbAtoms + 1} (1 protein + ${ndbAtoms} atom fillers)</li>`
             : `<li><i style="color:#888">no per-atom entities yet — decomposing in background…</i></li>`}
           ${ndbResidues > 0 ? `<li>${ndbResidues} residue entities (type 6)</li>` : ""}
-          ${ndbResidueOf > 0 ? `<li>${ndbResidueOf} residue_of hyperedges (arity 2)</li>` : ""}
+          ${ndbProteinResidues > 0 ? `<li>1 protein_residues hyperedge · arity ${ndbResidues + 1}</li>` : ""}
           ${ndbMotifs > 0 ? `<li>${ndbMotifs} motif hyperedges (arity 3-20)</li>` : ""}
           ${ndbComplex > 0 ? `<li>${ndbComplex} complex hyperedge${ndbComplex === 1 ? "" : "s"} (arity 3-5)</li>` : ""}
           ${ndbEncodes > 0 ? `<li>${ndbEncodes} encodes hyperedge (arity 2)</li>` : ""}
@@ -1958,7 +1972,7 @@ function updateRightSidebar(node) {
   // a motif "involves" the protein if it touches any of its residues.
   const proteinResIds = new Set();
   for (const e of edgesById.values()) {
-    if (e.type_id !== RESIDUE_OF_TYPE_ID) continue;
+    if (e.type_id !== PROTEIN_RESIDUES_TYPE_ID) continue;
     const fillers = e.roles.map(rr => rr.entity_id);
     if (fillers.includes(r.entity_id)) {
       for (const id of fillers) if (id !== r.entity_id) proteinResIds.add(id);
@@ -2035,14 +2049,15 @@ function updateRightSidebar(node) {
   } else {
     // Don't list each residue_of edge — collapse to a single summary.
     $hed.innerHTML = rows
-      .filter(e => e.type_id !== RESIDUE_OF_TYPE_ID)
+      .filter(e => e.type_id !== PROTEIN_RESIDUES_TYPE_ID)
       .map(renderHyperedge).join("");
-    const nResidueOf = rows.filter(e => e.type_id === RESIDUE_OF_TYPE_ID).length;
-    if (nResidueOf > 0) {
+    const proteinResEdges = rows.filter(e => e.type_id === PROTEIN_RESIDUES_TYPE_ID);
+    for (const pr of proteinResEdges) {
+      const n = pr.roles.length - 1;
       $hed.innerHTML += `
         <div class="hed-row">
-          <div><span class="pill">residue_of</span> · arity 2 · ×${nResidueOf}</div>
-          <div class="members">One per residue — binds each amino acid to this protein. Modelled as a hyperedge so every relationship in nDB has the same shape.</div>
+          <div><span class="pill">protein_residues</span> · arity ${pr.roles.length} (1 protein + ${n} residues)</div>
+          <div class="members">ONE N-ary hyperedge — not ${n} reified binary edges. The whole 1-to-${n} containment lives in a single record.</div>
         </div>
       `;
     }
@@ -2161,7 +2176,7 @@ function updateRightSelectedResidue(atomProxy) {
     if (extractProp(node.record, 50) !== resno) continue;
     const linked = graphData.links.some(L => {
       const edge = edgesById.get(L.edge_id);
-      if (!edge || edge.type_id !== RESIDUE_OF_TYPE_ID) return false;
+      if (!edge || edge.type_id !== PROTEIN_RESIDUES_TYPE_ID) return false;
       const fillers = edge.roles.map(rr => rr.entity_id);
       return fillers.includes(node.id) && fillers.includes(proteinId);
     });
@@ -2277,7 +2292,7 @@ function updateNdbModelPane(node) {
   const residueIds = new Set();
   // Residue_of edges pointing at the protein.
   for (const edge of edgesById.values()) {
-    if (edge.type_id === RESIDUE_OF_TYPE_ID) {
+    if (edge.type_id === PROTEIN_RESIDUES_TYPE_ID) {
       const fillers = edge.roles.map(r => r.entity_id);
       if (fillers.includes(node.id)) {
         residueOfEdges.push(edge);
@@ -2307,7 +2322,7 @@ function updateNdbModelPane(node) {
   // Protein-level edges (complex, encodes).
   for (const edge of edgesById.values()) {
     if (MOTIF_TYPE_IDS.has(edge.type_id)) continue;
-    if (edge.type_id === RESIDUE_OF_TYPE_ID) continue;
+    if (edge.type_id === PROTEIN_RESIDUES_TYPE_ID) continue;
     const fillers = edge.roles.map(r => r.entity_id);
     if (fillers.includes(node.id)) proteinLevelEdges.push(edge);
   }

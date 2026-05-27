@@ -41,7 +41,7 @@ use ndb_engine::value::Value;
 
 // ─── nDB model constants (must stay in lockstep with the SPA's TYPES) ─
 pub const T_RESIDUE: u32 = 6;
-pub const ROLE_RESIDUE_OF: u32 = 20;
+pub const ROLE_PROTEIN: u32 = 12;  // the parent in protein_residues / protein_atoms
 pub const ROLE_RESIDUE: u32 = 21;
 
 pub const T_CATALYTIC_TRIAD: u32 = 110;
@@ -49,7 +49,12 @@ pub const T_DISULFIDE_BOND: u32 = 111;
 pub const T_ZINC_FINGER: u32 = 113;
 pub const T_ALPHA_HELIX: u32 = 114;
 pub const T_BETA_SHEET_PAIR: u32 = 115;
-pub const T_RESIDUE_OF: u32 = 116;
+/// One N-ary hyperedge per protein. Roles: ROLE_PROTEIN (1 filler) +
+/// ROLE_RESIDUE (N fillers). Replaces the previous 78 binary
+/// residue_of edges with 5 N-ary "protein contains its residues"
+/// hyperedges — natively expressing the 1-to-N "contains" shape
+/// nDB was built for.
+pub const T_PROTEIN_RESIDUES: u32 = 116;
 
 pub const PROP_NAME: u32 = 30;
 pub const PROP_RESIDUE_POSITION: u32 = 50;
@@ -269,20 +274,24 @@ fn seed_one(
         );
         residue_by_pos.insert(*pos, rid);
         stats.residues += 1;
+    }
 
-        // Bind each residue to its parent protein with a "residue_of"
-        // arity-2 hyperedge. Modelling this as a hyperedge — rather
-        // than a parent-pointer property on the residue — keeps the
-        // database shape uniform: EVERY relationship is a hyperedge.
-        commit_hyperedge(
-            engine,
-            T_RESIDUE_OF,
-            vec![
-                (RoleId::new(ROLE_RESIDUE), rid),
-                (RoleId::new(ROLE_RESIDUE_OF), parent),
-            ],
-            vec![(PROP_RESIDUE_POSITION, Value::I64(*pos))],
-        );
+    // ONE N-ary "protein contains its residues" hyperedge instead of
+    // N binary residue_of edges. Roles: protein (1) + residue (N).
+    // Reified-edge anti-pattern avoided: a single record IS the
+    // 1-to-N containment relationship, which is exactly the shape
+    // nDB's hyperedges natively express.
+    if !residue_by_pos.is_empty() {
+        let mut roles: Vec<(RoleId, EntityId)> =
+            vec![(RoleId::new(ROLE_PROTEIN), parent)];
+        // Stable order — sort by position so the wire shape is
+        // deterministic across seed runs.
+        let mut positions: Vec<&i64> = residue_by_pos.keys().collect();
+        positions.sort();
+        for pos in positions {
+            roles.push((RoleId::new(ROLE_RESIDUE), residue_by_pos[pos]));
+        }
+        commit_hyperedge(engine, T_PROTEIN_RESIDUES, roles, vec![]);
     }
 
     for m in ds.motifs {

@@ -27,12 +27,15 @@ use crate::value::Value;
 // ---------------------------------------------------------------------------
 
 /// Current on-disk record-layout version this build emits.
-pub const FORMAT_VERSION: u8 = 1;
+/// v2 bumps `HyperEdgeRecord` arity from `u8` to `u32`. Required for
+/// any genuinely N-dimensional usage (a protein with ~1500 atoms blew
+/// past `u8::MAX` in v1 — see `crates/ndb-renderer/examples/v22_explorer/`).
+pub const FORMAT_VERSION: u8 = 2;
 
 /// Highest `format_version` this build can decode. Bumped when older readers
 /// can still parse newer-version records (forward-compat); equal to
 /// `FORMAT_VERSION` otherwise.
-pub const FORMAT_VERSION_MAX_SUPPORTED: u8 = 1;
+pub const FORMAT_VERSION_MAX_SUPPORTED: u8 = 2;
 
 const SIZE_FIELD_LEN: usize = 4;
 const KIND_FIELD_LEN: usize = 1;
@@ -529,7 +532,13 @@ impl HyperEdgeRecord {
         if self.type_id.get() == TYPE_UNTYPED {
             return Err(EncodeError::ZeroHyperEdgeTypeId);
         }
-        let arity = u8::try_from(self.roles.len())
+        // Arity is encoded as u32 — protein structures can have
+        // thousands of role-fillers in a single "contains" hyperedge
+        // (a 200-residue protein has ~1500 atoms). u8::MAX would cap
+        // the n-dimensional pitch at 255, which contradicts the whole
+        // point of nDB. 4 bytes of header is a fine cost for arities
+        // up to 4 billion.
+        let arity = u32::try_from(self.roles.len())
             .map_err(|_| EncodeError::ArityOverflow(self.roles.len()))?;
 
         let start = begin_record(out, RecordKind::HyperEdge);
@@ -537,7 +546,7 @@ impl HyperEdgeRecord {
         write_u32(out, self.type_id.get());
         write_u64(out, self.tx_id_assert.get());
         write_u64(out, self.tx_id_supersede.get());
-        write_u8(out, arity);
+        write_u32(out, arity);
         for (rid, entity) in &self.roles {
             if rid.get() == 0 {
                 return Err(EncodeError::ZeroRoleId);
@@ -563,7 +572,7 @@ impl HyperEdgeRecord {
         let type_id = TypeId::new(type_id_raw);
         let tx_id_assert = TxId::new(c.read_u64()?);
         let tx_id_supersede = TxId::new(c.read_u64()?);
-        let arity = c.read_u8()? as usize;
+        let arity = c.read_u32()? as usize;
         if arity == 0 {
             return Err(DecodeError::InvalidSentinel("hyperedge arity must be ≥ 1"));
         }

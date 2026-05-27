@@ -681,7 +681,8 @@ mod tests {
         let mut zinc_finger_count = 0_usize;
         let mut alpha_helix_count = 0_usize;
         let mut beta_sheet_pair_count = 0_usize;
-        let mut residue_of_count = 0_usize;
+        let mut protein_residues_count = 0_usize;
+        let mut protein_residues_total_arity = 0_usize;
         for r in &records {
             match r {
                 Record::Entity(e) if e.type_id == TypeId::new(residues::T_RESIDUE) => {
@@ -694,7 +695,10 @@ mod tests {
                     if t == residues::T_ZINC_FINGER         { zinc_finger_count += 1; }
                     if t == residues::T_ALPHA_HELIX         { alpha_helix_count += 1; }
                     if t == residues::T_BETA_SHEET_PAIR     { beta_sheet_pair_count += 1; }
-                    if t == residues::T_RESIDUE_OF          { residue_of_count += 1; }
+                    if t == residues::T_PROTEIN_RESIDUES {
+                        protein_residues_count += 1;
+                        protein_residues_total_arity += h.roles.len();
+                    }
                 }
                 _ => {}
             }
@@ -705,11 +709,14 @@ mod tests {
         //   Insulin    6  (six cysteines that form the 3 S-S bonds)
         //   Myoglobin 16  (F-helix residues 80-95)
         //   GFP       43  (β1 + β2 + β3 + β6 strands + chromophore tripeptide)
-        // = 78 residues total.
+        // = 78 residues total across 5 showcase proteins.
         assert_eq!(residue_count, 78);
-        // residue_of edges == residue count (each residue has exactly
-        // one binding hyperedge back to its parent protein).
-        assert_eq!(residue_of_count, 78);
+        // ONE N-ary protein_residues hyperedge per showcase protein
+        // (5 total), with total arity = 5 protein-fillers + 78
+        // residue-fillers = 83. This is the N-ary "contains" pattern
+        // — one record per parent, not one per child.
+        assert_eq!(protein_residues_count, 5);
+        assert_eq!(protein_residues_total_arity, 5 + 78);
         // 1 trypsin triad + 3 insulin disulfides + 1 TFIIIA finger +
         // 1 myoglobin helix + 2 GFP sheet pairs = 8 motif hyperedges.
         assert_eq!(triad_count, 1);
