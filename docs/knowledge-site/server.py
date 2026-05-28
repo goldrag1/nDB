@@ -76,6 +76,9 @@ DEMOS = [
     {"prefix": "/seismic_ndb",    "static": "http://127.0.0.1:9878", "api": "http://127.0.0.1:8746",
      "html_api_rewrite_from": b'',
      "html_api_rewrite_to":   b''},
+    {"prefix": "/chemistry_ndb",  "static": "http://127.0.0.1:9879", "api": "http://127.0.0.1:8747",
+     "html_api_rewrite_from": b'',
+     "html_api_rewrite_to":   b''},
 ]
 
 # Back-compat for the old single-demo constants (unused now but kept so

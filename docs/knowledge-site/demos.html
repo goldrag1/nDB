@@ -87,6 +87,30 @@
       </p>
     </div>
 
+    <div class="card">
+      <a href="/demos-chemistry_ndb.html" class="card-title">chemistry_ndb — reactions + living data</a>
+      <p>
+        ~43 curated reactions across organic synthesis, inorganic chemistry,
+        and two full metabolic pathways (glycolysis 10-step linear, Krebs
+        cycle 8-step). Each reaction is one arity-N hyperedge; stoichiometry
+        is encoded as repeated role-fillers (six CO₂ molecules → six
+        <code>ROLE_REACTANT</code> slots). Polyethylene polymerisation tops
+        the arity charts at <strong>1,003</strong> (1,000 ethylene + 1
+        polymer + catalyst + solvent in one record).
+        <br><br>
+        <strong>Living data:</strong> middle pane splits into editor + live
+        mirror. Edit a reaction's temperature on the LEFT → ΔG and K_eq
+        recompute → commit to nDB → RIGHT pane sees the change arrive via
+        the engine's <code>/subscribe</code> long-poll and pulses every
+        related reaction.
+      </p>
+      <p style="margin-top: 10px;">
+        <a href="/demos-chemistry_ndb.html" class="btn secondary">Read about it</a>
+        &nbsp;
+        <a href="/chemistry_ndb/" class="btn">Launch live</a>
+      </p>
+    </div>
+
   </div>
 
   <h2>Naming convention</h2>

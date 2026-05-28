@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chemistry_ndb · Demo · nDB</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">nDB <span class="sub">N-dimensional database</span></div>
+  <nav>
+    <a href="/">Home</a>
+    <a href="/whitepaper.html">Whitepaper</a>
+    <a href="/discussion.html">Discussion</a>
+    <a href="/demos.html" class="active">Demos</a>
+    <a href="/repo.html">Repo</a>
+  </nav>
+  <div class="right">v2.3.0 · 488 tests</div>
+</header>
+
+<main class="page">
+
+  <h1>chemistry_ndb</h1>
+  <p class="lede">
+    Chemical reactions as N-ary hyperedges — the example the whitepaper
+    opens with, now actually built. ~43 curated reactions across organic
+    synthesis, industrial inorganic chemistry, and two full metabolic
+    pathways. <em>And</em> a demonstration of "living data": the middle
+    pane splits into editor + live mirror, with propagation through
+    nDB's <code>/subscribe</code> long-poll.
+  </p>
+
+  <div class="btn-row">
+    <a href="/chemistry_ndb/" class="btn">Launch live demo →</a>
+    <a href="https://pubchem.ncbi.nlm.nih.gov/" class="btn secondary" target="_blank" rel="noreferrer">PubChem (compound source)</a>
+  </div>
+
+  <h2>What this is</h2>
+
+  <ul>
+    <li><strong>~43 reactions</strong> spanning Haber-Bosch, methane combustion, the Wacker process, Diels-Alder, Suzuki coupling, Wittig olefination, photosynthesis, cellular respiration, glycolysis (10-step), Krebs cycle (8-step), polyethylene + nylon-6,6 polymerisation, and the Belousov-Zhabotinsky oscillator.</li>
+    <li><strong>96 compound entities, 28 catalyst entities, 5 solvent entities</strong>. Compound SMILES + InChIKey + molecular formula are resolved from PubChem at seed-build time; results are cached.</li>
+    <li><strong>One arity-N hyperedge per reaction</strong>, where N is the total of all reactant + product + catalyst + solvent role-fillers. Stoichiometry is encoded as <em>repeated role-fillers</em> — six CO₂ molecules in photosynthesis become six <code>ROLE_REACTANT</code> slots all pointing at the same CO₂ entity. No separate stoichiometry table, no junction rows.</li>
+    <li><strong>Polyethylene polymerisation</strong> tops the arity at <strong>1,003</strong> (1,000 ethylene + 1 polymer + 1 catalyst + 1 solvent in one record).</li>
+    <li><strong>2 pathway entities</strong> with an ordered list of constituent reaction names, encoding the linear glycolysis chain and the cyclic Krebs loop.</li>
+  </ul>
+
+  <h2>The "living data" angle</h2>
+
+  <p>You asked: <em>does nDB support reactive data — edit a property, watch dependents update in real-time?</em></p>
+
+  <p>The honest answer: <strong>yes, via <code>POST /subscribe</code> long-polling + application-layer propagation</strong>. The engine itself doesn't have triggers or computed columns — that's by design (a database shouldn't conflate storage and compute). What nDB does provide:</p>
+
+  <table>
+    <thead><tr><th>Primitive</th><th>How it works</th></tr></thead>
+    <tbody>
+      <tr><td>Append-only MVCC</td><td>Every write yields a new tx_id; prior versions stay in the log for audit + time-travel.</td></tr>
+      <tr><td><code>POST /subscribe</code></td><td>Long-poll with <code>since_tx_id</code>; the server blocks on a condvar until any <code>/commit</code> lands a newer transaction. 30s default timeout, 60s max.</td></tr>
+      <tr><td>Manifest-based wake</td><td>Cheap pre-check before blocking — if commits already landed past your cursor, return immediately.</td></tr>
+    </tbody>
+  </table>
+
+  <p>The demo wires this end-to-end:</p>
+
+  <ol>
+    <li>The center pane splits 50/50: <strong>LEFT</strong> = editor (drag sliders, see local recompute), <strong>RIGHT</strong> = live mirror.</li>
+    <li>Adjust the temperature slider on the LEFT. The SPA recomputes ΔG' = ΔG · (T₀/T) and K_eq' = exp(−ΔG'/RT) locally for instant visual feedback.</li>
+    <li>Click <strong>Commit changes to nDB</strong>. The SPA POSTs a re-asserted REACTION hyperedge to <code>/commit</code> — same id, new property values. The engine assigns a new tx_id and notifies subscribers.</li>
+    <li>The RIGHT pane has been hanging on a <code>/subscribe</code> call with <code>since_tx_id = previous tx</code>. The notification fires, the SPA re-fetches state, and every record in the RIGHT pane that shares any compound with the edited reaction flashes yellow.</li>
+    <li>Watch the top-bar SUBSCRIBE pill — it's pulsing yellow and shows the current tx counter.</li>
+  </ol>
+
+  <p>That's the same wire mechanism that would power multi-tab sync, multi-process pipelines, or downstream consumers in any reactive system. The application defines what "propagation" means; the engine delivers the change feed.</p>
+
+  <h2>What this is not</h2>
+
+  <ul>
+    <li><strong>Not chemically accurate for non-equilibrium conditions.</strong> The Van 't Hoff recompute uses ΔG' ≈ ΔG · (T₀/T) which assumes constant ΔH and zero ΔS — a deliberate simplification so the demo logic stays in ~5 LOC. Real chemists would want full thermodynamic tables and activity coefficients.</li>
+    <li><strong>Not retrosynthesis.</strong> The pathway view is forward-only — glycolysis renders as 10 ordered steps, Krebs as 8-step cycle, but there's no "how do I make X" engine. (Considered for v2.)</li>
+    <li><strong>Not a full reaction database.</strong> ~43 reactions are a curated story-telling sample; the Open Reaction Database has ~2M reactions and would be a target if we ever scale this up.</li>
+    <li><strong>Not an engine-level "trigger" demo.</strong> nDB has no triggers — the recompute is JS. The demo proves the <em>change-feed</em> primitive that triggers would build on top of.</li>
+  </ul>
+
+  <h2>Schema</h2>
+
+  <h3>Entity types</h3>
+  <ul>
+    <li><code>T_COMPOUND = 1</code> — 96 compound entities with SMILES + formula + InChIKey</li>
+    <li><code>T_CATALYST = 2</code> — 28 catalysts (enzymes for biochem, transition metals for organic)</li>
+    <li><code>T_SOLVENT = 3</code> — 5 solvents (water, THF, DCM, hexane, diethyl ether)</li>
+    <li><code>T_PATHWAY = 4</code> — 2 pathway entities (Glycolysis, Krebs cycle) with an ordered list property of constituent reaction names</li>
+  </ul>
+
+  <h3>Hyperedge types</h3>
+  <ul>
+    <li><code>T_REACTION = 100</code> — arity 2–1003. Roles: <code>ROLE_REACTANT</code> (repeated per stoichiometric unit), <code>ROLE_PRODUCT</code> (same), <code>ROLE_CATALYST</code>, <code>ROLE_SOLVENT</code>.</li>
+  </ul>
+
+  <h3>Why pathways are entities not hyperedges</h3>
+
+  <p>An obvious design would be <code>T_PATHWAY</code> as a hyperedge whose roles are the constituent reaction hyperedges in order. nDB doesn't support that today — hyperedge role-fillers must be <em>entity</em> ids (see <code>JsonRole</code> in <code>crates/ndb-engine/src/wire.rs</code>). So pathways are entities carrying a JSON-encoded ordered list of reaction names. Less "true N-ary" but pragmatic. Adding hyperedge-of-hyperedges to the engine is a future possibility — pathways would migrate naturally if it arrived.</p>
+
+  <h2>Across the four demos</h2>
+
+  <table>
+    <thead><tr><th>Demo</th><th>Max arity</th><th>What that arity holds</th></tr></thead>
+    <tbody>
+      <tr><td><a href="/alphafold_ndb/">alphafold_ndb</a></td><td>1518</td><td>KRAS protein-atoms</td></tr>
+      <tr><td><a href="/exoplanet_ndb/">exoplanet_ndb</a></td><td>9</td><td>Kepler-90 system (1 star + 8 planets)</td></tr>
+      <tr><td><a href="/seismic_ndb/">seismic_ndb</a></td><td>1000</td><td>Maule 2010 aftershock sequence</td></tr>
+      <tr><td><a href="/chemistry_ndb/"><strong>chemistry_ndb</strong></a></td><td><strong>1003</strong></td><td>Polyethylene polymerisation (1000 ethylene + polymer + catalyst + solvent)</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Where the code lives</h2>
+
+  <table>
+    <thead><tr><th>Component</th><th>Path</th></tr></thead>
+    <tbody>
+      <tr><td>Rust binary (engine + ndb-server :8747 + static :9879)</td><td><code>crates/ndb-renderer/examples/chemistry_explorer/main.rs</code></td></tr>
+      <tr><td>Curated seed (JSON, ~43 KB)</td><td><code>crates/ndb-renderer/examples/chemistry_explorer/seed.json</code></td></tr>
+      <tr><td>Reaction list (Python source-of-truth)</td><td><code>tools/chemistry/reactions.py</code></td></tr>
+      <tr><td>Seed builder (PubChem name → SMILES + cache)</td><td><code>tools/chemistry/build_seed.py</code></td></tr>
+      <tr><td>SPA (split-pane editor + live mirror)</td><td><code>docs/chemistry/index.html</code></td></tr>
+    </tbody>
+  </table>
+
+  <h2>Run it yourself</h2>
+
+<pre><code>git clone https://github.com/goldrag1/nDB
+cd nDB
+
+# Regenerate the seed (re-resolves any new compounds from PubChem):
+python3 tools/chemistry/build_seed.py
+
+# Launch:
+cargo run -p ndb-renderer --example chemistry_explorer
+# then open http://127.0.0.1:9879/
+</code></pre>
+
+  <div class="btn-row" style="margin-top: 36px;">
+    <a href="/chemistry_ndb/" class="btn">Launch live demo →</a>
+    <a href="/demos.html" class="btn secondary">Other demos</a>
+  </div>
+
+</main>
+
+<footer class="site-foot">
+  <p>nDB is open-source under MIT. <a href="https://github.com/goldrag1/nDB" target="_blank" rel="noreferrer">github.com/goldrag1/nDB</a></p>
+</footer>
+
+</body>
+</html>

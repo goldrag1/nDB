@@ -1,0 +1,938 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chemistry_ndb — reactions as N-ary hyperedges, with living data</title>
+<style>
+:root {
+  --bg:           #14141a;
+  --surface:      #1c1c24;
+  --surface-2:    #0a0a10;
+  --border:       #2b2b36;
+  --border-soft:  #2d2d3a;
+  --text:         #e8e8ec;
+  --text-strong:  #ffffff;
+  --text-muted:   #888;
+  --accent:       #4a90e2;
+  --reactant:     #65CBF3;
+  --product:      #7ed321;
+  --catalyst:     #f5a623;
+  --solvent:      #b388ff;
+  --pathway:      #ff5e8a;
+  --live:         #ffd84a;
+  --font-ui:   system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; font-family: var(--font-ui); color: var(--text); background: var(--bg); font-size: 14px; }
+
+#app {
+  display: grid;
+  grid-template-rows: 56px 1fr;
+  grid-template-columns: 280px 1fr 360px;
+  grid-template-areas: "top top top" "left centre right";
+  height: 100vh;
+}
+
+#topbar { grid-area: top; background: var(--surface); border-bottom: 1px solid var(--border);
+          display: flex; align-items: center; gap: 12px; padding: 0 18px; }
+#topbar h1 { font-size: 14px; margin: 0; font-weight: 600; color: #fff; white-space: nowrap; }
+#topbar h1 .sub { color: var(--text-muted); font-weight: 400; margin-left: 6px; font-size: 12px; }
+#topbar .sep { width: 1px; height: 24px; background: var(--border); }
+#topbar select { background: var(--bg); border: 1px solid #303040; border-radius: 4px;
+                 color: #fff; padding: 5px 8px; font-family: inherit; font-size: 12px; max-width: 320px; }
+#topbar .chip { background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+                padding: 4px 9px; font-size: 11.5px; color: #cfcfd6; font-family: var(--font-mono); white-space: nowrap; }
+#topbar .grow { flex: 1; }
+#topbar a { color: var(--accent); font-size: 12px; text-decoration: none; }
+#topbar a:hover { color: #5aa0f2; text-decoration: underline; }
+
+/* Subscribe-feed pill in the topbar */
+.live-pill { display: inline-flex; align-items: center; gap: 6px;
+             background: rgba(255,216,74,0.10); border: 1px solid rgba(255,216,74,0.42);
+             border-radius: 999px; padding: 3px 10px; color: #ffe48a;
+             font-family: var(--font-mono); font-size: 11px; cursor: pointer; user-select: none; }
+.live-pill.paused { background: var(--surface-2); border-color: var(--border); color: var(--text-muted); }
+.live-pill.paused .live-dot { background: var(--text-muted); animation: none; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--live);
+            box-shadow: 0 0 6px var(--live); animation: livepulse 1.4s ease-in-out infinite; }
+@keyframes livepulse { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:0.35; transform:scale(0.7); } }
+.live-counter { color: var(--text-muted); font-size: 10.5px; padding-left: 4px; }
+
+#sidebar    { grid-area: left;  background: var(--surface); border-right: 1px solid var(--border);
+              padding: 14px 14px 20px; overflow-y: auto; }
+#right-pane { grid-area: right; background: var(--surface); border-left: 1px solid var(--border);
+              padding: 14px 14px 20px; overflow-y: auto; }
+#centre     { grid-area: centre; background: var(--surface-2); display: grid;
+              grid-template-columns: 1fr 1fr;   /* split: editor | mirror */
+              grid-template-rows: 1fr;
+              gap: 1px; overflow: hidden; }
+#centre > .pane { background: var(--surface-2); overflow-y: auto; padding: 14px 18px; position: relative; }
+#centre > #pane-editor { border-right: 1px solid var(--border); }
+.pane-header { display: flex; align-items: center; gap: 8px; padding-bottom: 8px;
+               border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.pane-header h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+                  color: var(--text-muted); margin: 0; font-weight: 600; }
+.pane-header .badge { font-family: var(--font-mono); font-size: 10.5px;
+                      padding: 1px 8px; border-radius: 999px;
+                      background: var(--border-soft); color: var(--text); }
+.pane-header .badge.editor { background: rgba(74,144,226,0.18); color: #93b8ff; }
+.pane-header .badge.mirror { background: rgba(255,216,74,0.16); color: var(--live); }
+.pane-header .grow { flex: 1; }
+.pane-header .sub-status { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); }
+.pane-header .pulse { animation: rightpulse 1.2s ease-out 1; }
+@keyframes rightpulse { 0% { color: var(--live); } 100% { color: var(--text-muted); } }
+
+h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); margin: 16px 0 6px; font-weight: 600; }
+h2:first-child { margin-top: 0; }
+
+.stat { display: flex; justify-content: space-between; font-size: 13px; padding: 2px 0; color: #cfcfd6; }
+.stat span:last-child { color: #fff; font-family: var(--font-mono); font-size: 12.5px; }
+.type-row { display: flex; align-items: center; font-size: 12.5px; padding: 2px 0; gap: 8px; cursor: pointer; user-select: none; }
+.type-row.muted { opacity: 0.35; }
+.type-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; border: 1px solid rgba(255,255,255,0.18); }
+.type-row .count { margin-left: auto; font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); }
+
+.hint { font-size: 11.5px; color: var(--text-muted); line-height: 1.55; margin: 6px 0; }
+.hint code { color: var(--reactant); font-family: var(--font-mono); font-size: 11px; background: var(--surface-2); padding: 1px 5px; border-radius: 3px; }
+.hint b { color: #fff; }
+
+/* ── Reaction equation rendering ────────────────────────────── */
+.rxn-equation { display: flex; align-items: center; flex-wrap: wrap; gap: 14px;
+                margin: 10px 0; font-size: 14px; color: var(--text-strong); }
+.rxn-side { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 12px; }
+.rxn-mol { display: flex; flex-direction: column; align-items: center; min-width: 90px; }
+.rxn-mol .mol-canvas { width: 110px; height: 80px; background: var(--bg);
+                       border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+.rxn-mol .mol-name { font-size: 11px; color: var(--text); margin-top: 4px; text-align: center;
+                     font-family: var(--font-mono); max-width: 120px; }
+.rxn-mol .mol-stoich { font-size: 10px; color: var(--text-muted); margin-top: 1px; font-family: var(--font-mono); }
+.rxn-arrow { color: var(--catalyst); font-size: 22px; font-weight: 600; padding: 0 4px; }
+.rxn-plus { color: var(--text-muted); font-size: 18px; }
+.rxn-overarrow { font-size: 10.5px; color: var(--catalyst); font-family: var(--font-mono);
+                 text-align: center; padding: 0 4px; }
+
+/* ── Condition sliders + readouts ───────────────────────────── */
+.conditions {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 10px 18px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 14px 16px; margin: 14px 0;
+}
+.cond { display: flex; flex-direction: column; gap: 4px; }
+.cond label { font-size: 11px; color: var(--text-muted); text-transform: uppercase;
+              letter-spacing: 0.05em; display: flex; justify-content: space-between; }
+.cond label .value { font-family: var(--font-mono); color: var(--text-strong); }
+.cond input[type="range"] { width: 100%; accent-color: var(--accent); }
+.cond input[type="number"] { width: 100%; background: var(--surface-2); border: 1px solid #303040;
+                             border-radius: 4px; color: #fff; padding: 5px 8px;
+                             font-family: var(--font-mono); font-size: 13px; }
+.cond .derived { font-size: 11.5px; color: var(--catalyst); font-family: var(--font-mono); margin-top: 4px; }
+.btn { background: var(--accent); color: #fff; border: none; padding: 7px 12px; border-radius: 4px;
+       cursor: pointer; font-size: 13px; font-weight: 500; }
+.btn:hover { background: #5aa0f2; }
+.btn.secondary { background: var(--border-soft); color: var(--text); }
+.btn.secondary:hover { background: #38384a; }
+.btn:disabled { background: #2d4a6a; cursor: not-allowed; }
+.btn-row { display: flex; gap: 8px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
+.btn-row .info { color: var(--text-muted); font-size: 11px; font-family: var(--font-mono); }
+
+/* ── Mirror pane: list of dependent records ─────────────────── */
+.dep-card { background: var(--bg); border: 1px solid var(--border); border-radius: 5px;
+            padding: 10px 12px; margin-bottom: 8px; font-size: 12px; line-height: 1.5;
+            cursor: pointer; transition: border-color 0.12s, background 0.4s; }
+.dep-card:hover { border-color: var(--accent); }
+.dep-card .dep-title { font-weight: 600; color: var(--text-strong); margin-bottom: 4px; }
+.dep-card .dep-eq    { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+.dep-card .dep-eq .compound { color: var(--reactant); }
+.dep-card .dep-eq .compound.shared { color: var(--live); background: rgba(255,216,74,0.10); padding: 0 3px; border-radius: 2px; }
+.dep-card .dep-cond { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); margin-top: 4px; }
+.dep-card.refreshed { animation: refreshflash 1.4s ease-out 1; }
+@keyframes refreshflash {
+  0%   { background: rgba(255,216,74,0.20); border-color: var(--live); }
+  100% { background: var(--bg);             border-color: var(--border); }
+}
+
+/* ── Pathway diagram ─────────────────────────────────────── */
+.pathway-host { background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+                padding: 12px 16px; margin: 12px 0; }
+.pathway-host h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+                   color: var(--text-muted); margin: 0 0 8px; font-weight: 600; }
+.pathway-steps { display: flex; flex-direction: column; gap: 6px; }
+.pw-step { display: flex; align-items: center; gap: 8px; font-size: 12px;
+           padding: 4px 8px; border-radius: 4px; background: var(--surface-2);
+           border: 1px solid var(--border); cursor: pointer; transition: background 0.1s; }
+.pw-step:hover, .pw-step.selected { background: var(--border-soft); border-color: var(--accent); }
+.pw-step .pw-num { color: var(--text-muted); font-family: var(--font-mono); font-size: 11px;
+                   width: 22px; text-align: center; }
+.pw-step .pw-name { color: var(--text); flex: 1; font-size: 12.5px; }
+.pw-step .pw-arrow { color: var(--catalyst); font-family: var(--font-mono); font-size: 12px; }
+.pw-cycle-svg { width: 100%; height: 280px; display: block; }
+
+/* ── Right-pane nDB inspector ───────────────────────────── */
+.db-section { background: var(--bg); border: 1px solid var(--border); border-radius: 5px;
+              padding: 9px 11px; margin-bottom: 10px; font-size: 12px; line-height: 1.5; }
+.db-section h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+                 color: var(--text-muted); margin: 0 0 6px; font-weight: 600; }
+.db-row { display: flex; justify-content: space-between; gap: 8px; padding: 1px 0; }
+.db-row .k { color: #888; font-family: var(--font-mono); font-size: 11px; flex-shrink: 0; }
+.db-row .v { color: #fff; text-align: right; font-family: var(--font-mono); font-size: 11px; word-break: break-all; }
+.role-chip { display: inline-block; padding: 1px 6px; margin: 2px 4px 2px 0; border-radius: 3px;
+             background: var(--border-soft); font-size: 11px; font-family: var(--font-mono); cursor: pointer; }
+.role-chip.reactant { color: var(--reactant); }
+.role-chip.product  { color: var(--product); }
+.role-chip.catalyst { color: var(--catalyst); }
+.role-chip.solvent  { color: var(--solvent); }
+.role-label { color: #888; font-size: 10.5px; font-family: var(--font-mono); margin-right: 4px; display: inline-block; min-width: 64px; }
+.db-section pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: 3px;
+                  padding: 7px; margin: 5px 0 0; font-size: 10.5px; line-height: 1.4; overflow-x: auto;
+                  max-height: 200px; color: #cfcfd6; }
+.empty { background: var(--bg); border: 1px dashed var(--border-soft); border-radius: 5px;
+         padding: 24px; text-align: center; color: #666; font-size: 12.5px; font-style: italic; }
+.pill { display: inline-block; padding: 1px 6px; border-radius: 3px;
+        background: var(--border-soft); font-family: var(--font-mono); font-size: 11px; }
+a { color: var(--accent); }
+a:hover { color: #5aa0f2; }
+</style>
+</head>
+<body>
+
+<div id="app">
+
+  <header id="topbar">
+    <h1>chemistry_ndb <span class="sub">demo #4 — N-ary reactions + living data</span></h1>
+    <div class="sep"></div>
+    <span style="font-size:11px;color:#888">REACTION</span>
+    <select id="rxn-picker"><option>(loading…)</option></select>
+    <span id="counts-chip" class="chip">— loading nDB…</span>
+    <div class="sep"></div>
+    <button id="live-indicator" class="live-pill" title="Polling /subscribe for engine commits. Click to toggle.">
+      <span class="live-dot"></span><span>SUBSCRIBE</span>
+      <span id="live-counter" class="live-counter">tx 0</span>
+    </button>
+    <div class="grow"></div>
+    <a href="/" target="_blank" rel="noreferrer">knowledge site →</a>
+  </header>
+
+  <aside id="sidebar">
+    <h2>Engine</h2>
+    <div class="stat"><span>compounds</span><span id="stat-compounds">—</span></div>
+    <div class="stat"><span>reactions</span><span id="stat-reactions">—</span></div>
+    <div class="stat"><span>pathways</span><span id="stat-pathways">—</span></div>
+    <div class="stat"><span>max arity</span><span id="stat-arity">—</span></div>
+    <div class="stat"><span>API</span><span id="stat-api">—</span></div>
+
+    <h2>Filter by family</h2>
+    <div id="family-legend"></div>
+
+    <h2>Pathways</h2>
+    <div id="pathway-list"></div>
+
+    <h2>How "living data" works here</h2>
+    <p class="hint">
+      <b>LEFT</b> pane is the editor. <b>RIGHT</b> pane reads via the
+      engine's <code>/subscribe</code> long-poll. When you nudge a
+      condition slider on the LEFT, the SPA recomputes ΔG + K_eq, commits
+      a new version to nDB, and the RIGHT pane sees the update arrive
+      from the engine — the records that share any compound with the
+      edited one pulse yellow.
+    </p>
+    <p class="hint">
+      The engine has no triggers — propagation is application-layer.
+      What you're seeing is the same wire mechanism that would power
+      a multi-tab or multi-process reactive system.
+    </p>
+  </aside>
+
+  <main id="centre">
+    <!-- LEFT: editor pane ─────────────────────────────────────── -->
+    <section id="pane-editor" class="pane">
+      <div class="pane-header">
+        <h2>Editor</h2>
+        <span class="badge editor">local edit + commit</span>
+        <div class="grow"></div>
+        <span class="sub-status" id="editor-status">—</span>
+      </div>
+      <div id="editor-host"></div>
+    </section>
+
+    <!-- RIGHT: live-mirror pane (driven by /subscribe) ──────── -->
+    <section id="pane-mirror" class="pane">
+      <div class="pane-header">
+        <h2>Live mirror — reactions sharing any compound</h2>
+        <span class="badge mirror">via /subscribe</span>
+        <div class="grow"></div>
+        <span class="sub-status" id="mirror-status">awaiting first commit…</span>
+      </div>
+      <div id="mirror-host"></div>
+    </section>
+  </main>
+
+  <aside id="right-pane">
+    <div id="inspector-host"></div>
+  </aside>
+
+</div>
+
+<!-- SmilesDrawer for 2D molecular structures. Tiny (~40 KB), pure JS, no deps. -->
+<script src="https://cdn.jsdelivr.net/npm/smiles-drawer@2.1.7/dist/smiles-drawer.min.js"></script>
+
+<script type="module">
+"use strict";
+
+// ── API URL ──────────────────────────────────────────────────────
+const API_URL = (() => {
+  if (location.port === "9879" || location.hostname === "127.0.0.1" || location.hostname === "localhost") {
+    return "http://127.0.0.1:8747";
+  }
+  return location.origin + location.pathname.replace(/\/$/, "") + "/api";
+})();
+document.getElementById("stat-api").textContent = API_URL.replace(/^https?:\/\//, "");
+
+// ── Schema (in lockstep with main.rs) ───────────────────────────
+const T_COMPOUND = 1, T_CATALYST = 2, T_SOLVENT = 3, T_PATHWAY = 4;
+const T_REACTION = 100;
+const ROLE_REACTANT = 10, ROLE_PRODUCT = 11, ROLE_CATALYST = 12, ROLE_SOLVENT = 13;
+const PROP = {
+  NAME: 30, SMILES: 31, FORMULA: 32, INCHIKEY: 33, COMPOUND_KIND: 34, EC_NUMBER: 35,
+  PATHWAY_SHAPE: 36, PATHWAY_REACTIONS_JSON: 37,
+  TEMPERATURE_K: 40, PRESSURE_ATM: 41, PH: 42, GIBBS_KJMOL: 43, EQUILIBRIUM_K: 44,
+  YIELD_PCT: 45, CITATION: 46, FAMILY: 47, REACTION_NAME: 48,
+  PATHWAY_NAME: 49, PATHWAY_ORDER: 50, NOTE: 51,
+};
+const R = 8.314;  // J/mol/K — universal gas constant
+
+const STATE = {
+  compounds:    new Map(),  // entity_id → record
+  catalysts:    new Map(),
+  solvents:     new Map(),
+  reactions:    [],          // hyperedge records
+  pathways:     [],          // entity records (type 4)
+  byName:       new Map(),   // compound name → record
+  rxnById:      new Map(),
+  selectedRxn:  null,
+  mutedFamilies: new Set(),
+  latestTx:     0,           // tracked for /subscribe cursor
+};
+
+const $ = (sel) => document.querySelector(sel);
+const fmt = (v, d = 2) => (v == null || Number.isNaN(v)) ? "—" :
+  (Math.abs(v) >= 1000 || (Math.abs(v) > 0 && Math.abs(v) < 0.01)
+    ? Number(v).toExponential(d) : Number(v).toFixed(d));
+const escapeHtml = (s) => (s == null ? "" : String(s).replace(/[&<>"']/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])));
+
+// ── Load nDB ───────────────────────────────────────────────────
+async function loadAll() {
+  const r = await fetch(API_URL + "/iter");
+  if (!r.ok) throw new Error("/iter " + r.status);
+  const txt = await r.text();
+  STATE.compounds.clear(); STATE.catalysts.clear(); STATE.solvents.clear();
+  STATE.reactions.length = 0; STATE.pathways.length = 0;
+  STATE.byName.clear(); STATE.rxnById.clear();
+  let max_tx = 0;
+  for (const line of txt.split("\n")) {
+    if (!line.trim()) continue;
+    let rec; try { rec = JSON.parse(line); } catch { continue; }
+    if (rec.tx_id_assert) max_tx = Math.max(max_tx, rec.tx_id_assert);
+    const props = recProps(rec);
+    if (rec.kind === "entity") {
+      const e = { id: rec.entity_id, type_id: rec.type_id, props, raw: rec };
+      if      (rec.type_id === T_COMPOUND) STATE.compounds.set(e.id, e);
+      else if (rec.type_id === T_CATALYST) STATE.catalysts.set(e.id, e);
+      else if (rec.type_id === T_SOLVENT)  STATE.solvents.set(e.id, e);
+      else if (rec.type_id === T_PATHWAY)  STATE.pathways.push(e);
+      if (props[PROP.NAME]) STATE.byName.set(props[PROP.NAME], e);
+    } else if (rec.kind === "hyper_edge" && rec.type_id === T_REACTION) {
+      const r = { id: rec.hyperedge_id, roles: rec.roles || [], props, raw: rec };
+      STATE.reactions.push(r);
+      STATE.rxnById.set(r.id, r);
+    }
+  }
+  STATE.latestTx = Math.max(STATE.latestTx, max_tx);
+}
+
+function recProps(rec) {
+  const out = {};
+  for (const p of (rec.properties || [])) {
+    out[p.prop_id] = (p.value && p.value.value !== undefined) ? p.value.value : p.value;
+  }
+  return out;
+}
+
+function compoundLookup(eid) {
+  return STATE.compounds.get(eid) || STATE.catalysts.get(eid) || STATE.solvents.get(eid);
+}
+
+// ── Stoichiometry: count repeated role-fillers ─────────────────
+function rxnStoichiometry(rxn) {
+  // Returns { reactants: [[stoich, compound_record], ...], products: [...], catalysts: [], solvents: [] }
+  const buckets = { reactants: new Map(), products: new Map(), catalysts: new Map(), solvents: new Map() };
+  for (const role of rxn.roles) {
+    let bucket;
+    if      (role.role_id === ROLE_REACTANT) bucket = buckets.reactants;
+    else if (role.role_id === ROLE_PRODUCT)  bucket = buckets.products;
+    else if (role.role_id === ROLE_CATALYST) bucket = buckets.catalysts;
+    else if (role.role_id === ROLE_SOLVENT)  bucket = buckets.solvents;
+    else continue;
+    bucket.set(role.entity_id, (bucket.get(role.entity_id) || 0) + 1);
+  }
+  const toArray = (m) => [...m.entries()]
+    .map(([eid, n]) => [n, compoundLookup(eid)])
+    .filter(([, r]) => r != null);
+  return {
+    reactants: toArray(buckets.reactants),
+    products:  toArray(buckets.products),
+    catalysts: toArray(buckets.catalysts),
+    solvents:  toArray(buckets.solvents),
+  };
+}
+
+// ── Refresh stats / pickers / sidebars ─────────────────────────
+function refreshStats() {
+  $("#stat-compounds").textContent = STATE.compounds.size;
+  $("#stat-reactions").textContent = STATE.reactions.length;
+  $("#stat-pathways").textContent  = STATE.pathways.length;
+  const maxArity = Math.max(0, ...STATE.reactions.map(r => r.roles.length));
+  $("#stat-arity").textContent = maxArity;
+  $("#counts-chip").textContent =
+    STATE.compounds.size + " compounds · " +
+    STATE.reactions.length + " reactions · arity ≤ " + maxArity;
+}
+
+function refreshRxnPicker() {
+  const sel = $("#rxn-picker");
+  sel.innerHTML = "";
+  const blank = document.createElement("option");
+  blank.value = ""; blank.textContent = "— pick a reaction —";
+  sel.appendChild(blank);
+  const sorted = STATE.reactions.slice().sort((a, b) => {
+    const aN = a.props[PROP.REACTION_NAME] || "";
+    const bN = b.props[PROP.REACTION_NAME] || "";
+    return aN.localeCompare(bN);
+  });
+  for (const r of sorted) {
+    const opt = document.createElement("option");
+    opt.value = r.id;
+    opt.textContent = (r.props[PROP.REACTION_NAME] || r.id) + "  (arity " + r.roles.length + ")";
+    sel.appendChild(opt);
+  }
+  sel.onchange = () => { if (sel.value) selectReaction(sel.value); };
+}
+
+function refreshFamilyLegend() {
+  const counts = new Map();
+  for (const r of STATE.reactions) {
+    const fam = r.props[PROP.FAMILY] || "(other)";
+    counts.set(fam, (counts.get(fam) || 0) + 1);
+  }
+  const root = $("#family-legend");
+  root.innerHTML = "";
+  for (const [fam, n] of [...counts.entries()].sort((a, b) => b[1] - a[1])) {
+    const div = document.createElement("div");
+    div.className = "type-row" + (STATE.mutedFamilies.has(fam) ? " muted" : "");
+    const dot = document.createElement("span"); dot.className = "type-dot";
+    dot.style.background = familyColor(fam);
+    div.appendChild(dot);
+    div.appendChild(document.createTextNode(fam));
+    const ct = document.createElement("span"); ct.className = "count"; ct.textContent = n;
+    div.appendChild(ct);
+    div.addEventListener("click", () => {
+      if (STATE.mutedFamilies.has(fam)) STATE.mutedFamilies.delete(fam);
+      else STATE.mutedFamilies.add(fam);
+      refreshFamilyLegend(); refreshRxnPicker();
+    });
+    root.appendChild(div);
+  }
+}
+function familyColor(fam) {
+  // Stable hash → hue
+  let h = 0;
+  for (const c of fam) h = (h * 31 + c.charCodeAt(0)) & 0xffff;
+  return "hsl(" + (h % 360) + ", 60%, 60%)";
+}
+
+function refreshPathwayList() {
+  const root = $("#pathway-list"); root.innerHTML = "";
+  for (const p of STATE.pathways) {
+    const div = document.createElement("div");
+    div.className = "type-row";
+    const dot = document.createElement("span"); dot.className = "type-dot";
+    dot.style.background = "var(--pathway)"; div.appendChild(dot);
+    const label = document.createElement("span"); label.textContent = p.props[PROP.NAME];
+    div.appendChild(label);
+    let steps = []; try { steps = JSON.parse(p.props[PROP.PATHWAY_REACTIONS_JSON] || "[]"); } catch {}
+    const ct = document.createElement("span"); ct.className = "count";
+    ct.textContent = steps.length + " steps"; div.appendChild(ct);
+    div.style.cursor = "pointer";
+    div.addEventListener("click", () => {
+      // Select the first step.
+      const first = steps[0];
+      const r = STATE.reactions.find(rx => rx.props[PROP.REACTION_NAME] === first);
+      if (r) selectReaction(r.id);
+    });
+    root.appendChild(div);
+  }
+}
+
+// ── Editor pane (LEFT) ─────────────────────────────────────────
+let smilesDrawerInstance = null;
+function smilesDrawer() {
+  if (smilesDrawerInstance) return smilesDrawerInstance;
+  const opts = {
+    width: 110, height: 80,
+    bondThickness: 0.7,
+    bondLength: 14,
+    atomVisualization: "default",
+    fontSizeLarge: 6, fontSizeSmall: 4,
+    padding: 4.0,
+  };
+  smilesDrawerInstance = new SmilesDrawer.Drawer(opts);
+  return smilesDrawerInstance;
+}
+
+function drawMoleculeInto(canvas, smiles, themeName) {
+  // SmilesDrawer needs SmilesDrawer.parse(smiles, success, error).
+  try {
+    SmilesDrawer.parse(smiles, (tree) => {
+      smilesDrawer().draw(tree, canvas, themeName || "dark", false);
+    }, () => {
+      // Parse failed — leave the canvas empty.
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#666"; ctx.font = "10px monospace";
+      ctx.fillText("(no struct.)", 6, 14);
+    });
+  } catch (_) { /* noop */ }
+}
+
+function renderEditor() {
+  const host = $("#editor-host");
+  if (!STATE.selectedRxn) {
+    host.innerHTML = '<div class="empty">Pick a reaction from the top-bar dropdown,<br>or click a pathway from the sidebar.</div>';
+    return;
+  }
+  const rxn = STATE.rxnById.get(STATE.selectedRxn);
+  if (!rxn) return;
+  const s = rxnStoichiometry(rxn);
+  const t  = rxn.props[PROP.TEMPERATURE_K];
+  const p  = rxn.props[PROP.PRESSURE_ATM];
+  const ph = rxn.props[PROP.PH];
+  const G0 = rxn.props[PROP.GIBBS_KJMOL];
+  const K0 = rxn.props[PROP.EQUILIBRIUM_K];
+  const Y0 = rxn.props[PROP.YIELD_PCT];
+
+  // Build equation HTML.
+  function molHtml(stoich, compound) {
+    const sm = compound.props[PROP.SMILES];
+    const cid = "mol-" + compound.id.slice(-8) + "-" + Math.random().toString(36).slice(2, 6);
+    return `<div class="rxn-mol">
+      ${sm ? `<canvas class="mol-canvas" id="${cid}" width="110" height="80" data-smiles="${escapeHtml(sm)}" data-cid="${compound.id}"></canvas>`
+           : `<div class="mol-canvas" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:10.5px;font-family:var(--font-mono);text-align:center;padding:6px">${escapeHtml(compound.props[PROP.NAME] || '?')}</div>`}
+      <div class="mol-name">${escapeHtml(compound.props[PROP.NAME] || '?')}</div>
+      ${stoich > 1 ? `<div class="mol-stoich">×${stoich}</div>` : ""}
+    </div>`;
+  }
+  function sideHtml(arr) {
+    return arr.map(([n, c]) => molHtml(n, c)).join('<span class="rxn-plus">+</span>');
+  }
+
+  const cat = s.catalysts[0] ? s.catalysts[0][1].props[PROP.NAME] : null;
+  const sol = s.solvents[0]  ? s.solvents[0][1].props[PROP.NAME]  : null;
+  const overArrow = [cat ? "cat: " + escapeHtml(cat) : "", sol ? "in " + escapeHtml(sol) : ""].filter(Boolean).join(" · ");
+
+  host.innerHTML = `
+    <div style="font-size:13px;color:var(--text-muted);margin-bottom:4px;">
+      <b style="color:var(--text-strong)">${escapeHtml(rxn.props[PROP.REACTION_NAME])}</b>
+      ${rxn.props[PROP.FAMILY] ? '<span class="pill" style="margin-left:8px">' + escapeHtml(rxn.props[PROP.FAMILY]) + '</span>' : ''}
+      ${rxn.props[PROP.PATHWAY_NAME] ? '<span class="pill" style="margin-left:6px;background:rgba(255,94,138,0.18);color:var(--pathway)">' + escapeHtml(rxn.props[PROP.PATHWAY_NAME]) + ' step ' + (rxn.props[PROP.PATHWAY_ORDER]||'?') + '</span>' : ''}
+    </div>
+    <div class="rxn-equation">
+      <div class="rxn-side">${sideHtml(s.reactants)}</div>
+      <div style="display:flex;flex-direction:column;align-items:center;min-width:110px;">
+        ${overArrow ? '<div class="rxn-overarrow">' + overArrow + '</div>' : ''}
+        <div class="rxn-arrow">→</div>
+        <div style="font-size:10.5px;color:var(--text-muted);font-family:var(--font-mono);">${(t||0).toFixed(0)} K · ${(p||1).toFixed(1)} atm</div>
+      </div>
+      <div class="rxn-side">${sideHtml(s.products)}</div>
+    </div>
+
+    <h3 style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-muted);margin:16px 0 6px;">Conditions <span style="color:var(--text-muted)">— drag to recompute ΔG' + K_eq</span></h3>
+    <div class="conditions">
+      <div class="cond">
+        <label>Temperature <span class="value"><span id="ed-temp">${(t||298).toFixed(1)}</span> K</span></label>
+        <input id="ed-temp-slider" type="range" min="200" max="1500" step="1" value="${t||298}">
+      </div>
+      <div class="cond">
+        <label>Pressure <span class="value"><span id="ed-pres">${(p||1).toFixed(2)}</span> atm</span></label>
+        <input id="ed-pres-slider" type="range" min="0.01" max="300" step="0.01" value="${p||1}">
+      </div>
+      <div class="cond" style="grid-column:1 / -1;">
+        <div class="derived" id="ed-derived">
+          ΔG = ${fmt(G0, 1)} kJ/mol  ·  K_eq = ${fmt(K0)}  ·  yield = ${fmt(Y0, 1)} %
+        </div>
+        <div class="hint" style="margin:2px 0 0;font-size:11px;">
+          Recompute uses ΔG' = ΔG·(T₀/T) (a deliberate simplification — see "What this is not" in the narrative).
+          K_eq' = exp(−ΔG'/RT). Edits commit immediately to nDB.
+        </div>
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button id="ed-commit" class="btn" disabled>↻ Commit changes to nDB</button>
+      <button id="ed-revert" class="btn secondary" disabled>Revert</button>
+      <span class="info" id="ed-pending">no pending edits</span>
+    </div>
+  `;
+
+  // Render molecule canvases.
+  host.querySelectorAll("canvas.mol-canvas").forEach(canv => {
+    const sm = canv.dataset.smiles;
+    if (sm) drawMoleculeInto(canv, sm, "dark");
+    canv.addEventListener("click", () => {
+      const cid = canv.dataset.cid;
+      const c = compoundLookup(cid);
+      if (c) showCompoundInInspector(c);
+    });
+  });
+
+  // Wire condition sliders to local recompute + pending-commit indicator.
+  const tempSlider = $("#ed-temp-slider"), presSlider = $("#ed-pres-slider");
+  const tempReadout = $("#ed-temp"),       presReadout = $("#ed-pres");
+  const derivedEl   = $("#ed-derived"),    commitBtn   = $("#ed-commit"), revertBtn = $("#ed-revert"),
+        pendingEl   = $("#ed-pending");
+
+  const original = { t: t||298, p: p||1, G: G0, K: K0, Y: Y0 };
+  const pending  = { t: original.t, p: original.p };
+
+  function recomputeDerived() {
+    const Tn = pending.t;
+    // Simplified Van 't Hoff-ish recompute.
+    const G_n = (original.G != null) ? original.G * (original.t / Tn) : null;
+    const K_n = (G_n != null) ? Math.exp(-(G_n * 1000) / (R * Tn)) : null;
+    // Pressure scales yield slightly (Le Chatelier hand-wave).
+    const Y_n = (original.Y != null)
+      ? Math.min(100, Math.max(0, original.Y + Math.log10(pending.p / original.p) * 8))
+      : null;
+    derivedEl.innerHTML =
+      'ΔG = ' + fmt(G_n, 1) + ' kJ/mol  ·  K_eq = ' + fmt(K_n) + '  ·  yield = ' + fmt(Y_n, 1) + ' %' +
+      ((Tn !== original.t || pending.p !== original.p)
+        ? '  <span style="color:var(--catalyst)">(pending → click commit)</span>' : '');
+    const dirty = (Tn !== original.t) || (pending.p !== original.p);
+    commitBtn.disabled = !dirty;
+    revertBtn.disabled = !dirty;
+    pendingEl.textContent = dirty
+      ? 'pending: ΔG ' + fmt(G_n, 1) + ' kJ/mol  K_eq ' + fmt(K_n)
+      : 'no pending edits';
+    pending.G = G_n; pending.K = K_n; pending.Y = Y_n;
+  }
+  tempSlider.addEventListener("input", () => {
+    pending.t = parseFloat(tempSlider.value);
+    tempReadout.textContent = pending.t.toFixed(1);
+    recomputeDerived();
+  });
+  presSlider.addEventListener("input", () => {
+    pending.p = parseFloat(presSlider.value);
+    presReadout.textContent = pending.p.toFixed(2);
+    recomputeDerived();
+  });
+  revertBtn.addEventListener("click", () => {
+    pending.t = original.t; pending.p = original.p;
+    tempSlider.value = original.t; presSlider.value = original.p;
+    tempReadout.textContent = original.t.toFixed(1); presReadout.textContent = original.p.toFixed(2);
+    recomputeDerived();
+  });
+  commitBtn.addEventListener("click", () => commitReactionEdit(rxn, pending, original));
+}
+
+// Commit a re-assertion of the reaction hyperedge with the new T/P/ΔG/K_eq/yield.
+async function commitReactionEdit(rxn, pending, original) {
+  $("#editor-status").textContent = "committing…";
+  // Build a hyperedge record with NEW properties, same id + roles, same kind.
+  // The engine re-asserts: prior version is superseded by tx_id_assert=0 (server stamps).
+  const propsArr = [];
+  // Carry over all current properties except those we're changing.
+  for (const p of rxn.raw.properties) {
+    const pid = p.prop_id;
+    if (pid === PROP.TEMPERATURE_K || pid === PROP.PRESSURE_ATM ||
+        pid === PROP.GIBBS_KJMOL  || pid === PROP.EQUILIBRIUM_K ||
+        pid === PROP.YIELD_PCT) continue;
+    propsArr.push(p);
+  }
+  if (pending.t != null) propsArr.push({ prop_id: PROP.TEMPERATURE_K, value: { tag: "f64", value: pending.t } });
+  if (pending.p != null) propsArr.push({ prop_id: PROP.PRESSURE_ATM,  value: { tag: "f64", value: pending.p } });
+  if (pending.G != null) propsArr.push({ prop_id: PROP.GIBBS_KJMOL,   value: { tag: "f64", value: pending.G } });
+  if (pending.K != null) propsArr.push({ prop_id: PROP.EQUILIBRIUM_K, value: { tag: "f64", value: pending.K } });
+  if (pending.Y != null) propsArr.push({ prop_id: PROP.YIELD_PCT,     value: { tag: "f64", value: pending.Y } });
+
+  const record = {
+    kind:             "hyper_edge",
+    hyperedge_id:     rxn.id,
+    type_id:          T_REACTION,
+    tx_id_assert:     0,
+    tx_id_supersede:  "active",
+    roles:            rxn.roles,
+    properties:       propsArr,
+  };
+  const r = await fetch(API_URL + "/commit", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ records: [record] }),
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    $("#editor-status").textContent = "commit failed: " + r.status + " " + t.slice(0, 60);
+    return;
+  }
+  const j = await r.json().catch(() => ({}));
+  $("#editor-status").textContent = "committed → tx " + (j.tx_id || "?");
+  // We let /subscribe loop pick up the change for the RIGHT pane; the LEFT
+  // pane refreshes from /iter so its "original" baseline updates too.
+  await loadAll();
+  renderEditor();
+}
+
+// ── Mirror pane (RIGHT) — driven entirely by /subscribe ────────────
+function compoundIdsInReaction(rxn) {
+  const ids = new Set();
+  for (const role of rxn.roles) ids.add(role.entity_id);
+  return ids;
+}
+
+function renderMirror() {
+  const host = $("#mirror-host");
+  if (!STATE.selectedRxn) {
+    host.innerHTML = '<div class="empty">Pick a reaction first.<br>The mirror will list every other reaction that shares a compound.</div>';
+    return;
+  }
+  const focal = STATE.rxnById.get(STATE.selectedRxn);
+  if (!focal) return;
+  const focalCompounds = compoundIdsInReaction(focal);
+  // Find OTHER reactions that share at least one compound with the focal one.
+  const related = [];
+  for (const r of STATE.reactions) {
+    if (r.id === focal.id) continue;
+    const overlap = r.roles.filter(ro => focalCompounds.has(ro.entity_id));
+    if (overlap.length) related.push({ rxn: r, sharedIds: new Set(overlap.map(o => o.entity_id)) });
+  }
+  related.sort((a, b) => b.sharedIds.size - a.sharedIds.size);
+  if (!related.length) {
+    host.innerHTML = '<div class="empty">No other reaction in the seed shares a compound with this one.</div>';
+    return;
+  }
+  host.innerHTML = related.slice(0, 30).map(({ rxn, sharedIds }) => {
+    const s = rxnStoichiometry(rxn);
+    function name(c, sharedIds) {
+      const isShared = sharedIds.has(c.id);
+      return `<span class="compound${isShared ? ' shared' : ''}">${escapeHtml(c.props[PROP.NAME] || '?')}</span>`;
+    }
+    const reactants = s.reactants.map(([n, c]) => (n > 1 ? n + ' ' : '') + name(c, sharedIds)).join(' + ');
+    const products  = s.products .map(([n, c]) => (n > 1 ? n + ' ' : '') + name(c, sharedIds)).join(' + ');
+    return `<div class="dep-card" data-rxn-id="${rxn.id}">
+      <div class="dep-title">${escapeHtml(rxn.props[PROP.REACTION_NAME])}</div>
+      <div class="dep-eq">${reactants} → ${products}</div>
+      <div class="dep-cond">${(rxn.props[PROP.TEMPERATURE_K]||0).toFixed(0)} K · ${(rxn.props[PROP.PRESSURE_ATM]||1).toFixed(1)} atm · ΔG ${fmt(rxn.props[PROP.GIBBS_KJMOL], 1)} kJ/mol · K ${fmt(rxn.props[PROP.EQUILIBRIUM_K])}</div>
+    </div>`;
+  }).join('');
+  host.querySelectorAll('.dep-card').forEach(el => {
+    el.addEventListener('click', () => selectReaction(el.dataset.rxnId));
+  });
+}
+
+// ── Selection ────────────────────────────────────────────────────
+function selectReaction(id) {
+  STATE.selectedRxn = id;
+  renderEditor();
+  renderMirror();
+  renderInspector();
+  // Match the picker.
+  $("#rxn-picker").value = id;
+}
+
+// ── Right pane: nDB record inspector ─────────────────────────────
+function renderInspector() {
+  const host = $("#inspector-host");
+  if (!STATE.selectedRxn) {
+    host.innerHTML = '<div class="empty">Pick a reaction to see its full nDB records.</div>' +
+      '<h2 style="margin-top:18px">Engine schema</h2>' +
+      '<div class="db-section">' +
+        '<div class="db-row"><span class="k">entity types</span><span class="v">4</span></div>' +
+        '<div class="db-row"><span class="k">hyperedge types</span><span class="v">1</span></div>' +
+        '<div class="db-row"><span class="k">reaction arity</span><span class="v">2..' + Math.max(0, ...STATE.reactions.map(r => r.roles.length)) + '</span></div>' +
+        '<div class="db-row"><span class="k">port</span><span class="v">8747</span></div>' +
+      '</div>';
+    return;
+  }
+  const rxn = STATE.rxnById.get(STATE.selectedRxn);
+  if (!rxn) return;
+  const s = rxnStoichiometry(rxn);
+  let html = '<div class="db-section">' +
+    '<h3>REACTION hyperedge <span class="pill" style="float:right">arity ' + rxn.roles.length + '</span></h3>' +
+    '<div class="db-row"><span class="k">PROP_REACTION_NAME (48)</span><span class="v">' + escapeHtml(rxn.props[PROP.REACTION_NAME]) + '</span></div>';
+  if (rxn.props[PROP.FAMILY])      html += '<div class="db-row"><span class="k">family</span><span class="v">' + escapeHtml(rxn.props[PROP.FAMILY]) + '</span></div>';
+  if (rxn.props[PROP.CITATION])    html += '<div class="db-row"><span class="k">citation</span><span class="v">' + escapeHtml(rxn.props[PROP.CITATION]) + '</span></div>';
+  if (rxn.props[PROP.PATHWAY_NAME])html += '<div class="db-row"><span class="k">pathway</span><span class="v">' + escapeHtml(rxn.props[PROP.PATHWAY_NAME]) + ' · step ' + (rxn.props[PROP.PATHWAY_ORDER]||'?') + '</span></div>';
+  html += '<div class="db-row"><span class="k">temperature</span><span class="v">' + fmt(rxn.props[PROP.TEMPERATURE_K], 1) + ' K</span></div>';
+  html += '<div class="db-row"><span class="k">pressure</span><span class="v">' + fmt(rxn.props[PROP.PRESSURE_ATM], 2) + ' atm</span></div>';
+  html += '<div class="db-row"><span class="k">ΔG</span><span class="v">' + fmt(rxn.props[PROP.GIBBS_KJMOL], 1) + ' kJ/mol</span></div>';
+  html += '<div class="db-row"><span class="k">K_eq</span><span class="v">' + fmt(rxn.props[PROP.EQUILIBRIUM_K]) + '</span></div>';
+  html += '<div class="db-row"><span class="k">yield</span><span class="v">' + fmt(rxn.props[PROP.YIELD_PCT], 1) + ' %</span></div>';
+  // Role chips
+  const chips = (label, items, cls) => items.length ? items.map(([n, c]) =>
+    '<div class="role-chip ' + cls + '" data-cid="' + c.id + '"><span class="role-label">' + label + '</span>' + (n>1?n+'×':'') + escapeHtml(c.props[PROP.NAME]) + '</div>'
+  ).join('') : '';
+  html += '<div style="margin-top:6px">' +
+    chips('REACTANT', s.reactants, 'reactant') +
+    chips('PRODUCT',  s.products,  'product') +
+    chips('CATALYST', s.catalysts, 'catalyst') +
+    chips('SOLVENT',  s.solvents,  'solvent') +
+  '</div>';
+  html += '<p class="hint" style="margin:8px 0 0">Stoichiometry is encoded as <em>repeated role-fillers</em>: 6 ROLE_REACTANT slots all pointing to CO₂ for photosynthesis. One record, no separate stoichiometry table.</p>';
+  html += '</div>';
+
+  // Raw wire JSON
+  html += '<details class="db-section">' +
+    '<summary style="cursor:pointer;font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em">Raw wire JSON</summary>' +
+    '<pre>' + escapeHtml(JSON.stringify(rxn.raw, null, 1)) + '</pre>' +
+  '</details>';
+
+  host.innerHTML = html;
+  host.querySelectorAll('.role-chip[data-cid]').forEach(el => {
+    el.style.cursor = 'pointer';
+    el.addEventListener('click', () => {
+      const c = compoundLookup(el.dataset.cid);
+      if (c) showCompoundInInspector(c);
+    });
+  });
+}
+
+function showCompoundInInspector(c) {
+  // Where it appears: list reactions involving this compound.
+  const involved = STATE.reactions.filter(r => r.roles.some(role => role.entity_id === c.id));
+  let html = '<div class="db-section">' +
+    '<h3>Compound</h3>' +
+    '<div class="db-row"><span class="k">PROP_NAME</span><span class="v">' + escapeHtml(c.props[PROP.NAME]) + '</span></div>' +
+    (c.props[PROP.FORMULA]  ? '<div class="db-row"><span class="k">formula</span><span class="v">' + escapeHtml(c.props[PROP.FORMULA]) + '</span></div>' : '') +
+    (c.props[PROP.SMILES]   ? '<div class="db-row"><span class="k">SMILES</span><span class="v" style="font-size:10px;word-break:break-all">' + escapeHtml((c.props[PROP.SMILES] || '').slice(0, 60)) + '…</span></div>' : '') +
+    (c.props[PROP.INCHIKEY] ? '<div class="db-row"><span class="k">InChIKey</span><span class="v" style="font-size:10px">' + escapeHtml(c.props[PROP.INCHIKEY]) + '</span></div>' : '') +
+    (c.props[PROP.EC_NUMBER]? '<div class="db-row"><span class="k">EC</span><span class="v">' + escapeHtml(c.props[PROP.EC_NUMBER]) + '</span></div>' : '') +
+    '<div class="db-row"><span class="k">kind</span><span class="v">' + escapeHtml(c.props[PROP.COMPOUND_KIND] || '?') + '</span></div>' +
+  '</div>';
+  if (c.props[PROP.SMILES]) {
+    html += '<div class="db-section">' +
+      '<h3>Structure</h3>' +
+      '<canvas id="cmp-canvas" width="220" height="160" style="background:var(--surface-2);border:1px solid var(--border);border-radius:4px;display:block;margin:0 auto"></canvas>' +
+    '</div>';
+  }
+  html += '<div class="db-section"><h3>Participates in ' + involved.length + ' reactions</h3>' +
+    '<div style="max-height:280px;overflow-y:auto">' +
+    involved.slice(0, 30).map(r =>
+      '<div class="role-chip reactant" data-rid="' + r.id + '">' + escapeHtml(r.props[PROP.REACTION_NAME]) + '</div>'
+    ).join('') +
+    (involved.length > 30 ? '<span class="pill">+' + (involved.length - 30) + ' more</span>' : '') +
+    '</div></div>';
+  $("#inspector-host").innerHTML = html;
+  if (c.props[PROP.SMILES]) {
+    const canv = document.getElementById("cmp-canvas");
+    const big = new SmilesDrawer.Drawer({ width: 220, height: 160, padding: 8 });
+    SmilesDrawer.parse(c.props[PROP.SMILES], tree => big.draw(tree, canv, "dark", false), () => {});
+  }
+  document.querySelectorAll('.role-chip[data-rid]').forEach(el => {
+    el.style.cursor = 'pointer';
+    el.addEventListener('click', () => selectReaction(el.dataset.rid));
+  });
+}
+
+// ── /subscribe long-poll for live mirror ─────────────────────────
+const SUBSCRIBE = { enabled: true, timer: null };
+
+async function subscribeOnce() {
+  if (!SUBSCRIBE.enabled) return;
+  try {
+    const r = await fetch(API_URL + "/subscribe", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ since_tx_id: STATE.latestTx, timeout_ms: 25000 }),
+    });
+    if (!r.ok) throw new Error("/subscribe " + r.status);
+    // /subscribe returns JSONL: first line is {"current_tx_id":N}, then
+    // zero-or-more record lines for the changed records.
+    const txt = await r.text();
+    let newTx = STATE.latestTx;
+    const lines = txt.split("\n").filter(l => l.trim());
+    if (lines.length) {
+      try {
+        const head = JSON.parse(lines[0]);
+        if (typeof head.current_tx_id === "number") newTx = head.current_tx_id;
+      } catch {}
+    }
+    if (newTx > STATE.latestTx) {
+      // Something changed — refresh state, then flash the mirror.
+      const oldFocal = STATE.selectedRxn;
+      await loadAll();
+      $("#live-counter").textContent = "tx " + STATE.latestTx;
+      $("#mirror-status").textContent = "tx " + newTx + " · refreshed";
+      $("#mirror-status").classList.add("pulse");
+      setTimeout(() => $("#mirror-status").classList.remove("pulse"), 1300);
+
+      renderMirror();
+      // Flash every dep-card briefly.
+      document.querySelectorAll(".dep-card").forEach(el => {
+        el.classList.remove("refreshed");
+        // Trigger reflow so the same animation can replay.
+        void el.offsetWidth;
+        el.classList.add("refreshed");
+      });
+      // If editor showed the same reaction whose conditions changed,
+      // refresh it too (commits from our OWN edits already trigger it,
+      // but external commits — from another window — should refresh).
+      if (STATE.selectedRxn === oldFocal) {
+        renderEditor();
+        renderInspector();
+        refreshStats();
+      }
+    }
+  } catch (e) {
+    // /subscribe timeout is normal — just loop again.
+    if (!String(e).includes("subscribe")) console.warn("[subscribe]", e);
+  } finally {
+    if (SUBSCRIBE.enabled) {
+      // Re-loop immediately. The endpoint's long-poll absorbs idle time.
+      subscribeOnce();
+    }
+  }
+}
+
+function startSubscribe() {
+  SUBSCRIBE.enabled = true;
+  $("#live-indicator").classList.remove("paused");
+  subscribeOnce();
+}
+function stopSubscribe() {
+  SUBSCRIBE.enabled = false;
+  $("#live-indicator").classList.add("paused");
+}
+$("#live-indicator").addEventListener("click", () => {
+  if (SUBSCRIBE.enabled) stopSubscribe();
+  else                   startSubscribe();
+});
+
+// ── Boot ─────────────────────────────────────────────────────────
+(async () => {
+  try {
+    await loadAll();
+    refreshStats();
+    refreshRxnPicker();
+    refreshFamilyLegend();
+    refreshPathwayList();
+    renderEditor();
+    renderMirror();
+    renderInspector();
+    startSubscribe();
+  } catch (e) {
+    document.getElementById("centre").innerHTML =
+      '<div style="padding:24px;color:#ff7070">Could not load nDB: ' + escapeHtml(String(e)) + '<br><br>' +
+      'Make sure the explorer is running:<br><code>cargo run -p ndb-renderer --example chemistry_explorer</code></div>';
+  }
+})();
+</script>
+</body>
+</html>

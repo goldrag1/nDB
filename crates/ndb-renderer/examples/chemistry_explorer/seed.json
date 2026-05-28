@@ -1,0 +1,2596 @@
+{
+ "schema_note": "chemistry_ndb seed v1. Hand-curated reactions; SMILES + formulae from PubChem.",
+ "counts": {
+  "compounds": 96,
+  "catalysts": 28,
+  "solvents": 5,
+  "reactions": 43,
+  "pathways": 2
+ },
+ "compounds": [
+  {
+   "name": "1,3-bisphosphoglycerate",
+   "smiles": "OP(=O)(O)OCC(O)C(=O)OP(=O)(O)O",
+   "formula": "C3H8O10P2",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "1,3-butadiene",
+   "smiles": "C=CC=C",
+   "formula": "C4H6",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "1-(dimethylamino)-3-butanone",
+   "smiles": "CN(C)CCC(=O)C",
+   "formula": "C6H13NO",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "2-phosphoglycerate",
+   "smiles": "OCC(OP(=O)(O)O)C(=O)O",
+   "formula": "C3H7O7P",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "3-phosphoglycerate",
+   "smiles": "OC(C(=O)O)COP(=O)(O)O",
+   "formula": "C3H7O7P",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "FAD",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "cofactor",
+   "note": "C27H33N9O15P2",
+   "ec": null
+  },
+  {
+   "name": "FADH2",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "cofactor",
+   "note": "C27H35N9O15P2",
+   "ec": null
+  },
+  {
+   "name": "GDP",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "cofactor",
+   "note": "C10H15N5O11P2",
+   "ec": null
+  },
+  {
+   "name": "GTP",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "cofactor",
+   "note": "C10H16N5O14P3",
+   "ec": null
+  },
+  {
+   "name": "NAD+",
+   "smiles": "[NH2]C(=O)c1ccc[n+](C)c1",
+   "formula": "NAD+ (sketch)",
+   "inchikey": null,
+   "kind": "cofactor",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "NADH",
+   "smiles": "[NH2]C(=O)C1CC=CN1C",
+   "formula": "NADH (sketch)",
+   "inchikey": null,
+   "kind": "cofactor",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "acetaldehyde",
+   "smiles": null,
+   "formula": "C2H4O",
+   "inchikey": "IKHGUXGNUITLKF-UHFFFAOYSA-N",
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "acetamide",
+   "smiles": "CC(=O)N",
+   "formula": "C2H5NO",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "acetic acid",
+   "smiles": "CC(=O)O",
+   "formula": "C2H4O2",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "acetic anhydride",
+   "smiles": "CC(=O)OC(=O)C",
+   "formula": "C4H6O3",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "acetone",
+   "smiles": "CC(=O)C",
+   "formula": "C3H6O",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "acetophenone",
+   "smiles": "CC(=O)c1ccccc1",
+   "formula": "C8H8O",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "acetyl chloride",
+   "smiles": "CC(=O)Cl",
+   "formula": "C2H3ClO",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "acetyl-CoA",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "cofactor",
+   "note": "C23H38N7O17P3S",
+   "ec": null
+  },
+  {
+   "name": "adenosine diphosphate",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "cofactor",
+   "note": "C10H15N5O10P2",
+   "ec": null
+  },
+  {
+   "name": "adenosine triphosphate",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "cofactor",
+   "note": "C10H16N5O13P3",
+   "ec": null
+  },
+  {
+   "name": "adipic acid",
+   "smiles": "OC(=O)CCCCC(=O)O",
+   "formula": "C6H10O4",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "alpha-ketoglutarate",
+   "smiles": "OC(=O)CCC(=O)C(=O)O",
+   "formula": "C5H6O5",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "ammonia",
+   "smiles": "N",
+   "formula": "NH3",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "aspirin",
+   "smiles": "CC(=O)Oc1ccccc1C(=O)O",
+   "formula": "C9H8O4",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "benzaldehyde",
+   "smiles": "O=Cc1ccccc1",
+   "formula": "C7H6O",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "benzene",
+   "smiles": "c1ccccc1",
+   "formula": "C6H6",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "biphenyl",
+   "smiles": "c1ccc(-c2ccccc2)cc1",
+   "formula": "C12H10",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "boric acid",
+   "smiles": "OB(O)O",
+   "formula": "B(OH)3",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "bromine",
+   "smiles": "BrBr",
+   "formula": "Br2",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "bromobenzene",
+   "smiles": "Brc1ccccc1",
+   "formula": "C6H5Br",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "bromomalonic acid",
+   "smiles": "OC(=O)C(Br)C(=O)O",
+   "formula": "C3H3BrO4",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "butyllithium",
+   "smiles": "CCCC[Li]",
+   "formula": "C4H9Li",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "calcium carbonate",
+   "smiles": "[Ca+2].[O-]C(=O)[O-]",
+   "formula": "CaCO3",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "calcium oxide",
+   "smiles": "[Ca]=O",
+   "formula": "CaO",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "carbon dioxide",
+   "smiles": "O=C=O",
+   "formula": "CO2",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "chlorine",
+   "smiles": "ClCl",
+   "formula": "Cl2",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "citrate",
+   "smiles": "OC(=O)CC(O)(C(=O)O)CC(=O)O",
+   "formula": "C6H8O7",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "coenzyme A",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "cofactor",
+   "note": "C21H36N7O16P3S",
+   "ec": null
+  },
+  {
+   "name": "cyclohexene",
+   "smiles": "C1=CCCCC1",
+   "formula": "C6H10",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "dihydroxyacetone phosphate",
+   "smiles": "OCC(=O)COP(=O)(O)O",
+   "formula": "C3H7O6P",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "dimethylamine",
+   "smiles": "CNC",
+   "formula": "C2H7N",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "ethanol",
+   "smiles": "CCO",
+   "formula": "C2H6O",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "ethyl acetate",
+   "smiles": "CC(=O)OCC",
+   "formula": "C4H8O2",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "ethylene",
+   "smiles": "C=C",
+   "formula": "C2H4",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "formaldehyde",
+   "smiles": "C=O",
+   "formula": "CH2O",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "fructose 1,6-bisphosphate",
+   "smiles": "OP(=O)(O)OCC1(O)OC(COP(=O)(O)O)C(O)C1O",
+   "formula": "C6H14O12P2",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "fructose 6-phosphate",
+   "smiles": "OCC1(O)OC(COP(=O)(O)O)C(O)C1O",
+   "formula": "C6H13O9P",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "fructosylamine",
+   "smiles": "OCC(O)C(O)C(O)C(O)CN",
+   "formula": "C7H17NO5",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "fumarate",
+   "smiles": "OC(=O)/C=C/C(=O)O",
+   "formula": "C4H4O4",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "glucose",
+   "smiles": "OCC1OC(O)C(O)C(O)C1O",
+   "formula": "C6H12O6",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "glucose 6-phosphate",
+   "smiles": "OC1OC(COP(=O)(O)O)C(O)C(O)C1O",
+   "formula": "C6H13O9P",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "glyceraldehyde 3-phosphate",
+   "smiles": "OCC(O)COP(=O)(O)O",
+   "formula": "C3H7O6P",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "glycerol",
+   "smiles": null,
+   "formula": "C3H8O3",
+   "inchikey": "PEDCQBHIVMGVHV-UHFFFAOYSA-N",
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "glycine",
+   "smiles": "NCC(=O)O",
+   "formula": "C2H5NO2",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "hexamethylenediamine",
+   "smiles": "NCCCCCCN",
+   "formula": "C6H16N2",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "hydrogen",
+   "smiles": "[H][H]",
+   "formula": "H2",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "hydrogen chloride",
+   "smiles": "Cl",
+   "formula": "HCl",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "iron",
+   "smiles": "[Fe]",
+   "formula": "Fe",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "iron(III) oxide",
+   "smiles": "O=[Fe]O[Fe]=O",
+   "formula": "Fe2O3",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "isocitrate",
+   "smiles": "OC(C(=O)O)C(C(=O)O)CC(=O)O",
+   "formula": "C6H8O7",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "lithium bromide",
+   "smiles": "[Li+].[Br-]",
+   "formula": "LiBr",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "magnesium bromide hydroxide",
+   "smiles": "[Mg+2].[OH-].[Br-]",
+   "formula": "MgBrOH",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "malate",
+   "smiles": "OC(=O)C(O)CC(=O)O",
+   "formula": "C4H6O5",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "malonic acid",
+   "smiles": "OC(=O)CC(=O)O",
+   "formula": "C3H4O4",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "methane",
+   "smiles": "C",
+   "formula": "CH4",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "methylamine",
+   "smiles": "CN",
+   "formula": "CH5N",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "methylmagnesium bromide",
+   "smiles": "C[Mg]Br",
+   "formula": "CH3MgBr",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "methyltriphenylphosphonium bromide",
+   "smiles": "C[P+](c1ccccc1)(c1ccccc1)c1ccccc1.[Br-]",
+   "formula": "C19H18BrP",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "nitrogen",
+   "smiles": "N#N",
+   "formula": "N2",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "nylon-6,6 unit",
+   "smiles": "O=C(N)CCCCCC(=O)NCCCCCCN",
+   "formula": "C12H22N2O2 (repeat)",
+   "inchikey": null,
+   "kind": "polymer",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "oxaloacetate",
+   "smiles": "OC(=O)CC(=O)C(=O)O",
+   "formula": "C4H4O5",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "oxygen",
+   "smiles": "O=O",
+   "formula": "O2",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "phenylboronic acid",
+   "smiles": "OB(O)c1ccccc1",
+   "formula": "C6H7BO2",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "phosphate",
+   "smiles": "OP(=O)(O)O",
+   "formula": "Pi",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "phosphoenolpyruvate",
+   "smiles": "OP(=O)(O)OC(=C)C(=O)O",
+   "formula": "C3H5O6P",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "polyethylene",
+   "smiles": "CCCCCCCCCC",
+   "formula": "(C2H4)n",
+   "inchikey": null,
+   "kind": "polymer",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "potassium bromate",
+   "smiles": "[K+].[O-]Br(=O)=O",
+   "formula": "KBrO3",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "potassium bromide",
+   "smiles": "[K+].[Br-]",
+   "formula": "KBr",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "pyruvate",
+   "smiles": "CC(=O)C(=O)[O-]",
+   "formula": "C3H3O3-",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "salicylic acid",
+   "smiles": "OC(=O)c1ccccc1O",
+   "formula": "C7H6O3",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "sodium",
+   "smiles": "[Na]",
+   "formula": "Na",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "sodium bromide",
+   "smiles": "[Na+].[Br-]",
+   "formula": "NaBr",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "sodium carbonate",
+   "smiles": "[Na+].[Na+].[O-]C(=O)[O-]",
+   "formula": "Na2CO3",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "sodium chloride",
+   "smiles": "[Na+].[Cl-]",
+   "formula": "NaCl",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "sodium hydroxide",
+   "smiles": "[Na+].[OH-]",
+   "formula": "NaOH",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "sodium stearate",
+   "smiles": "[Na+].CCCCCCCCCCCCCCCCCC(=O)[O-]",
+   "formula": "C18H35NaO2",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "styrene",
+   "smiles": "C=Cc1ccccc1",
+   "formula": "C8H8",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "succinate",
+   "smiles": "OC(=O)CCC(=O)O",
+   "formula": "C4H6O4",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "succinyl-CoA",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "cofactor",
+   "note": "C25H40N7O19P3S",
+   "ec": null
+  },
+  {
+   "name": "sulfur dioxide",
+   "smiles": "O=S=O",
+   "formula": "SO2",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "sulfur trioxide",
+   "smiles": "O=S(=O)=O",
+   "formula": "SO3",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "sulfuric acid",
+   "smiles": "OS(=O)(=O)O",
+   "formula": "H2SO4",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "triphenylphosphine oxide",
+   "smiles": "O=P(c1ccccc1)(c1ccccc1)c1ccccc1",
+   "formula": "C18H15OP",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "tristearin",
+   "smiles": "CCCCCCCCCCCCCCCCCC(=O)OCC(OC(=O)CCCCCCCCCCCCCCCCC)COC(=O)CCCCCCCCCCCCCCCCC",
+   "formula": "C57H110O6",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  },
+  {
+   "name": "water",
+   "smiles": "O",
+   "formula": "H2O",
+   "inchikey": null,
+   "kind": "compound",
+   "note": null,
+   "ec": null
+  }
+ ],
+ "catalysts": [
+  {
+   "name": "RuBisCO",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "enzyme",
+   "ec": "EC 4.1.1.39",
+   "note": null
+  },
+  {
+   "name": "aconitase",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "enzyme",
+   "ec": "EC 4.2.1.3",
+   "note": null
+  },
+  {
+   "name": "alpha-ketoglutarate dehydrogenase complex",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "enzyme",
+   "ec": "EC 1.2.4.2",
+   "note": null
+  },
+  {
+   "name": "aluminum chloride",
+   "smiles": "Cl[Al](Cl)Cl",
+   "formula": "AlCl3",
+   "inchikey": null,
+   "kind": "compound",
+   "ec": null,
+   "note": null
+  },
+  {
+   "name": "cerium(IV)",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "compound",
+   "ec": null,
+   "note": "Ce4+ ion (in Ce(SO4)2)"
+  },
+  {
+   "name": "citrate synthase",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "enzyme",
+   "ec": "EC 2.3.3.1",
+   "note": null
+  },
+  {
+   "name": "enolase",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "enzyme",
+   "ec": "EC 4.2.1.11",
+   "note": null
+  },
+  {
+   "name": "fructose-bisphosphate aldolase",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "enzyme",
+   "ec": "EC 4.1.2.13",
+   "note": null
+  },
+  {
+   "name": "fumarase",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "enzyme",
+   "ec": "EC 4.2.1.2",
+   "note": null
+  },
+  {
+   "name": "glyceraldehyde 3-phosphate dehydrogenase",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "enzyme",
+   "ec": "EC 1.2.1.12",
+   "note": null
+  },
+  {
+   "name": "hexokinase",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "enzyme",
+   "ec": "EC 2.7.1.1",
+   "note": null
+  },
+  {
+   "name": "hydrogen chloride",
+   "smiles": "Cl",
+   "formula": "HCl",
+   "inchikey": null,
+   "kind": "compound",
+   "ec": null,
+   "note": null
+  },
+  {
+   "name": "iron",
+   "smiles": "[Fe]",
+   "formula": "Fe",
+   "inchikey": null,
+   "kind": "compound",
+   "ec": null,
+   "note": null
+  },
+  {
+   "name": "isocitrate dehydrogenase",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "enzyme",
+   "ec": "EC 1.1.1.41",
+   "note": null
+  },
+  {
+   "name": "malate dehydrogenase",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "enzyme",
+   "ec": "EC 1.1.1.37",
+   "note": null
+  },
+  {
+   "name": "palladium(II) chloride",
+   "smiles": "Cl[Pd]Cl",
+   "formula": "PdCl2",
+   "inchikey": null,
+   "kind": "compound",
+   "ec": null,
+   "note": null
+  },
+  {
+   "name": "phosphofructokinase-1",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "enzyme",
+   "ec": "EC 2.7.1.11",
+   "note": null
+  },
+  {
+   "name": "phosphoglucose isomerase",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "enzyme",
+   "ec": "EC 5.3.1.9",
+   "note": null
+  },
+  {
+   "name": "phosphoglycerate kinase",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "enzyme",
+   "ec": "EC 2.7.2.3",
+   "note": null
+  },
+  {
+   "name": "phosphoglycerate mutase",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "enzyme",
+   "ec": "EC 5.4.2.11",
+   "note": null
+  },
+  {
+   "name": "pyruvate kinase",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "enzyme",
+   "ec": "EC 2.7.1.40",
+   "note": null
+  },
+  {
+   "name": "succinate dehydrogenase",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "enzyme",
+   "ec": "EC 1.3.5.1",
+   "note": null
+  },
+  {
+   "name": "succinyl-CoA synthetase",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "enzyme",
+   "ec": "EC 6.2.1.4",
+   "note": null
+  },
+  {
+   "name": "sulfuric acid",
+   "smiles": "OS(=O)(=O)O",
+   "formula": "H2SO4",
+   "inchikey": null,
+   "kind": "compound",
+   "ec": null,
+   "note": null
+  },
+  {
+   "name": "tetrakis(triphenylphosphine)palladium(0)",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "catalyst",
+   "ec": null,
+   "note": "Pd(PPh3)4"
+  },
+  {
+   "name": "titanium tetrachloride",
+   "smiles": "Cl[Ti](Cl)(Cl)Cl",
+   "formula": "TiCl4",
+   "inchikey": null,
+   "kind": "compound",
+   "ec": null,
+   "note": null
+  },
+  {
+   "name": "triose phosphate isomerase",
+   "smiles": null,
+   "formula": null,
+   "inchikey": null,
+   "kind": "enzyme",
+   "ec": "EC 5.3.1.1",
+   "note": null
+  },
+  {
+   "name": "vanadium(V) oxide",
+   "smiles": "O=[V](=O)O[V](=O)=O",
+   "formula": "V2O5",
+   "inchikey": null,
+   "kind": "compound",
+   "ec": null,
+   "note": null
+  }
+ ],
+ "solvents": [
+  {
+   "name": "dichloromethane",
+   "smiles": "ClCCl",
+   "formula": "CH2Cl2",
+   "kind": "compound"
+  },
+  {
+   "name": "diethyl ether",
+   "smiles": "CCOCC",
+   "formula": "C4H10O",
+   "kind": "compound"
+  },
+  {
+   "name": "hexane",
+   "smiles": "CCCCCC",
+   "formula": "C6H14",
+   "kind": "compound"
+  },
+  {
+   "name": "tetrahydrofuran",
+   "smiles": "C1CCOC1",
+   "formula": "C4H8O",
+   "kind": "compound"
+  },
+  {
+   "name": "water",
+   "smiles": "O",
+   "formula": "H2O",
+   "kind": "compound"
+  }
+ ],
+ "reactions": [
+  {
+   "name": "Aspirin synthesis",
+   "reactants": [
+    [
+     1,
+     "salicylic acid"
+    ],
+    [
+     1,
+     "acetic anhydride"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "aspirin"
+    ],
+    [
+     1,
+     "acetic acid"
+    ]
+   ],
+   "catalyst": "sulfuric acid",
+   "solvent": null,
+   "conditions": {
+    "temperature_K": 358,
+    "pressure_atm": 1
+   },
+   "yield_pct": 74.0,
+   "gibbs_kjmol": -32.0,
+   "citation": "Kolbe-Schmitt / Charles Gerhardt 1853",
+   "family": "Esterification"
+  },
+  {
+   "name": "Diels-Alder: butadiene + ethylene",
+   "reactants": [
+    [
+     1,
+     "1,3-butadiene"
+    ],
+    [
+     1,
+     "ethylene"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "cyclohexene"
+    ]
+   ],
+   "catalyst": null,
+   "solvent": null,
+   "conditions": {
+    "temperature_K": 473,
+    "pressure_atm": 250
+   },
+   "yield_pct": 85.0,
+   "gibbs_kjmol": -159.0,
+   "citation": "Diels & Alder 1928",
+   "family": "Cycloaddition"
+  },
+  {
+   "name": "Friedel-Crafts acylation: benzene + acetyl chloride",
+   "reactants": [
+    [
+     1,
+     "benzene"
+    ],
+    [
+     1,
+     "acetyl chloride"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "acetophenone"
+    ],
+    [
+     1,
+     "hydrogen chloride"
+    ]
+   ],
+   "catalyst": "aluminum chloride",
+   "solvent": "dichloromethane",
+   "conditions": {
+    "temperature_K": 273,
+    "pressure_atm": 1
+   },
+   "yield_pct": 85.0,
+   "citation": "Friedel & Crafts 1877",
+   "family": "Electrophilic aromatic substitution"
+  },
+  {
+   "name": "Saponification of tristearin",
+   "reactants": [
+    [
+     1,
+     "tristearin"
+    ],
+    [
+     3,
+     "sodium hydroxide"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "glycerol"
+    ],
+    [
+     3,
+     "sodium stearate"
+    ]
+   ],
+   "catalyst": null,
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 373,
+    "pressure_atm": 1
+   },
+   "yield_pct": 92.0,
+   "citation": "Industrial soap-making",
+   "family": "Hydrolysis"
+  },
+  {
+   "name": "Fischer esterification: acetic acid + ethanol",
+   "reactants": [
+    [
+     1,
+     "acetic acid"
+    ],
+    [
+     1,
+     "ethanol"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "ethyl acetate"
+    ],
+    [
+     1,
+     "water"
+    ]
+   ],
+   "catalyst": "sulfuric acid",
+   "solvent": null,
+   "conditions": {
+    "temperature_K": 348,
+    "pressure_atm": 1
+   },
+   "yield_pct": 67.0,
+   "equilibrium_K": 4.0,
+   "citation": "Emil Fischer 1895",
+   "family": "Esterification"
+  },
+  {
+   "name": "Suzuki-Miyaura coupling",
+   "reactants": [
+    [
+     1,
+     "bromobenzene"
+    ],
+    [
+     1,
+     "phenylboronic acid"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "biphenyl"
+    ],
+    [
+     1,
+     "boric acid"
+    ],
+    [
+     1,
+     "potassium bromide"
+    ]
+   ],
+   "catalyst": "tetrakis(triphenylphosphine)palladium(0)",
+   "solvent": "tetrahydrofuran",
+   "conditions": {
+    "temperature_K": 343,
+    "base": "potassium carbonate"
+   },
+   "yield_pct": 91.0,
+   "citation": "Miyaura & Suzuki 1979",
+   "family": "Cross-coupling"
+  },
+  {
+   "name": "Grignard: methylmagnesium bromide + formaldehyde",
+   "reactants": [
+    [
+     1,
+     "methylmagnesium bromide"
+    ],
+    [
+     1,
+     "formaldehyde"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "ethanol"
+    ],
+    [
+     1,
+     "magnesium bromide hydroxide"
+    ]
+   ],
+   "catalyst": null,
+   "solvent": "diethyl ether",
+   "conditions": {
+    "temperature_K": 273,
+    "atmosphere": "dry nitrogen"
+   },
+   "yield_pct": 75.0,
+   "citation": "Grignard 1900 (Nobel 1912)",
+   "family": "Organometallic addition"
+  },
+  {
+   "name": "Wacker oxidation: ethylene to acetaldehyde",
+   "reactants": [
+    [
+     1,
+     "ethylene"
+    ],
+    [
+     0.5,
+     "oxygen"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "acetaldehyde"
+    ]
+   ],
+   "catalyst": "palladium(II) chloride",
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 393,
+    "pressure_atm": 3,
+    "co_catalyst": "copper(II) chloride"
+   },
+   "yield_pct": 95.0,
+   "citation": "Smidt 1959 (Wacker-Chemie)",
+   "family": "Oxidation"
+  },
+  {
+   "name": "Haber-Bosch ammonia synthesis",
+   "reactants": [
+    [
+     3,
+     "hydrogen"
+    ],
+    [
+     1,
+     "nitrogen"
+    ]
+   ],
+   "products": [
+    [
+     2,
+     "ammonia"
+    ]
+   ],
+   "catalyst": "iron",
+   "solvent": null,
+   "conditions": {
+    "temperature_K": 723,
+    "pressure_atm": 200
+   },
+   "yield_pct": 15.0,
+   "gibbs_kjmol": -33.0,
+   "equilibrium_K": 680000.0,
+   "citation": "Haber & Bosch 1909, Nobel 1918/1931",
+   "family": "Industrial inorganic"
+  },
+  {
+   "name": "Contact process: sulfur dioxide oxidation",
+   "reactants": [
+    [
+     2,
+     "sulfur dioxide"
+    ],
+    [
+     1,
+     "oxygen"
+    ]
+   ],
+   "products": [
+    [
+     2,
+     "sulfur trioxide"
+    ]
+   ],
+   "catalyst": "vanadium(V) oxide",
+   "solvent": null,
+   "conditions": {
+    "temperature_K": 723,
+    "pressure_atm": 2
+   },
+   "yield_pct": 98.0,
+   "gibbs_kjmol": -141.0,
+   "citation": "Phillips 1831 (industrial)",
+   "family": "Industrial inorganic"
+  },
+  {
+   "name": "Methane combustion",
+   "reactants": [
+    [
+     1,
+     "methane"
+    ],
+    [
+     2,
+     "oxygen"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "carbon dioxide"
+    ],
+    [
+     2,
+     "water"
+    ]
+   ],
+   "catalyst": null,
+   "solvent": null,
+   "conditions": {
+    "temperature_K": 2200,
+    "pressure_atm": 1,
+    "ignition": "spark"
+   },
+   "yield_pct": 99.0,
+   "gibbs_kjmol": -800.0,
+   "citation": "Standard combustion",
+   "family": "Combustion"
+  },
+  {
+   "name": "Iron oxidation (rusting)",
+   "reactants": [
+    [
+     4,
+     "iron"
+    ],
+    [
+     3,
+     "oxygen"
+    ]
+   ],
+   "products": [
+    [
+     2,
+     "iron(III) oxide"
+    ]
+   ],
+   "catalyst": null,
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 298,
+    "humidity_pct": 80
+   },
+   "yield_pct": 60.0,
+   "gibbs_kjmol": -742.0,
+   "citation": "Slow ambient oxidation",
+   "family": "Corrosion"
+  },
+  {
+   "name": "Sodium chloride neutralisation",
+   "reactants": [
+    [
+     1,
+     "hydrogen chloride"
+    ],
+    [
+     1,
+     "sodium hydroxide"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "sodium chloride"
+    ],
+    [
+     1,
+     "water"
+    ]
+   ],
+   "catalyst": null,
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 298,
+    "pressure_atm": 1,
+    "ph": 7.0
+   },
+   "yield_pct": 100.0,
+   "gibbs_kjmol": -56.0,
+   "citation": "Standard strong-strong neutralisation",
+   "family": "Acid-base"
+  },
+  {
+   "name": "Sodium chloride formation",
+   "reactants": [
+    [
+     2,
+     "sodium"
+    ],
+    [
+     1,
+     "chlorine"
+    ]
+   ],
+   "products": [
+    [
+     2,
+     "sodium chloride"
+    ]
+   ],
+   "catalyst": null,
+   "solvent": null,
+   "conditions": {
+    "temperature_K": 298,
+    "pressure_atm": 1
+   },
+   "yield_pct": 100.0,
+   "gibbs_kjmol": -769.0,
+   "citation": "Standard ionic bond formation",
+   "family": "Redox"
+  },
+  {
+   "name": "Water electrolysis",
+   "reactants": [
+    [
+     2,
+     "water"
+    ]
+   ],
+   "products": [
+    [
+     2,
+     "hydrogen"
+    ],
+    [
+     1,
+     "oxygen"
+    ]
+   ],
+   "catalyst": null,
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 298,
+    "voltage_V": 1.23,
+    "electric": true
+   },
+   "yield_pct": 95.0,
+   "gibbs_kjmol": 237.0,
+   "citation": "Nicholson & Carlisle 1800",
+   "family": "Electrolysis"
+  },
+  {
+   "name": "Calcium carbonate calcination",
+   "reactants": [
+    [
+     1,
+     "calcium carbonate"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "calcium oxide"
+    ],
+    [
+     1,
+     "carbon dioxide"
+    ]
+   ],
+   "catalyst": null,
+   "solvent": null,
+   "conditions": {
+    "temperature_K": 1173,
+    "pressure_atm": 1
+   },
+   "yield_pct": 99.0,
+   "gibbs_kjmol": -57.0,
+   "citation": "Lime kiln industrial",
+   "family": "Thermal decomposition"
+  },
+  {
+   "name": "Photosynthesis (overall, Calvin cycle summed)",
+   "reactants": [
+    [
+     6,
+     "carbon dioxide"
+    ],
+    [
+     6,
+     "water"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "glucose"
+    ],
+    [
+     6,
+     "oxygen"
+    ]
+   ],
+   "catalyst": "RuBisCO",
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 298,
+    "ph": 8.0,
+    "light_quanta": 48,
+    "compartment": "chloroplast stroma"
+   },
+   "yield_pct": 8.0,
+   "gibbs_kjmol": 2870.0,
+   "citation": "Bassham, Benson & Calvin 1950 (Nobel 1961)",
+   "family": "Photosynthesis"
+  },
+  {
+   "name": "Cellular respiration (overall)",
+   "reactants": [
+    [
+     1,
+     "glucose"
+    ],
+    [
+     6,
+     "oxygen"
+    ]
+   ],
+   "products": [
+    [
+     6,
+     "carbon dioxide"
+    ],
+    [
+     6,
+     "water"
+    ]
+   ],
+   "catalyst": null,
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 310,
+    "ph": 7.4,
+    "compartment": "mitochondrion"
+   },
+   "yield_pct": 40.0,
+   "gibbs_kjmol": -2870.0,
+   "citation": "Krebs 1937 (Nobel 1953)",
+   "family": "Catabolism"
+  },
+  {
+   "name": "Glycolysis step 1: hexokinase",
+   "reactants": [
+    [
+     1,
+     "glucose"
+    ],
+    [
+     1,
+     "adenosine triphosphate"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "glucose 6-phosphate"
+    ],
+    [
+     1,
+     "adenosine diphosphate"
+    ]
+   ],
+   "catalyst": "hexokinase",
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 310,
+    "ph": 7.4,
+    "compartment": "cytosol"
+   },
+   "gibbs_kjmol": -16.7,
+   "citation": "EC 2.7.1.1",
+   "pathway": "Glycolysis",
+   "pathway_order": 1
+  },
+  {
+   "name": "Glycolysis step 2: phosphoglucose isomerase",
+   "reactants": [
+    [
+     1,
+     "glucose 6-phosphate"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "fructose 6-phosphate"
+    ]
+   ],
+   "catalyst": "phosphoglucose isomerase",
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 310,
+    "ph": 7.4
+   },
+   "gibbs_kjmol": 1.7,
+   "citation": "EC 5.3.1.9",
+   "pathway": "Glycolysis",
+   "pathway_order": 2
+  },
+  {
+   "name": "Glycolysis step 3: phosphofructokinase-1",
+   "reactants": [
+    [
+     1,
+     "fructose 6-phosphate"
+    ],
+    [
+     1,
+     "adenosine triphosphate"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "fructose 1,6-bisphosphate"
+    ],
+    [
+     1,
+     "adenosine diphosphate"
+    ]
+   ],
+   "catalyst": "phosphofructokinase-1",
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 310,
+    "ph": 7.4
+   },
+   "gibbs_kjmol": -14.2,
+   "citation": "EC 2.7.1.11 \u2014 committed step",
+   "pathway": "Glycolysis",
+   "pathway_order": 3
+  },
+  {
+   "name": "Glycolysis step 4: aldolase",
+   "reactants": [
+    [
+     1,
+     "fructose 1,6-bisphosphate"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "dihydroxyacetone phosphate"
+    ],
+    [
+     1,
+     "glyceraldehyde 3-phosphate"
+    ]
+   ],
+   "catalyst": "fructose-bisphosphate aldolase",
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 310,
+    "ph": 7.4
+   },
+   "gibbs_kjmol": 23.8,
+   "citation": "EC 4.1.2.13",
+   "pathway": "Glycolysis",
+   "pathway_order": 4
+  },
+  {
+   "name": "Glycolysis step 5: triose phosphate isomerase",
+   "reactants": [
+    [
+     1,
+     "dihydroxyacetone phosphate"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "glyceraldehyde 3-phosphate"
+    ]
+   ],
+   "catalyst": "triose phosphate isomerase",
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 310,
+    "ph": 7.4
+   },
+   "gibbs_kjmol": 7.5,
+   "citation": "EC 5.3.1.1 \u2014 diffusion-limited enzyme",
+   "pathway": "Glycolysis",
+   "pathway_order": 5
+  },
+  {
+   "name": "Glycolysis step 6: GAPDH",
+   "reactants": [
+    [
+     1,
+     "glyceraldehyde 3-phosphate"
+    ],
+    [
+     1,
+     "NAD+"
+    ],
+    [
+     1,
+     "phosphate"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "1,3-bisphosphoglycerate"
+    ],
+    [
+     1,
+     "NADH"
+    ]
+   ],
+   "catalyst": "glyceraldehyde 3-phosphate dehydrogenase",
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 310,
+    "ph": 7.4
+   },
+   "gibbs_kjmol": 6.3,
+   "citation": "EC 1.2.1.12",
+   "pathway": "Glycolysis",
+   "pathway_order": 6
+  },
+  {
+   "name": "Glycolysis step 7: phosphoglycerate kinase",
+   "reactants": [
+    [
+     1,
+     "1,3-bisphosphoglycerate"
+    ],
+    [
+     1,
+     "adenosine diphosphate"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "3-phosphoglycerate"
+    ],
+    [
+     1,
+     "adenosine triphosphate"
+    ]
+   ],
+   "catalyst": "phosphoglycerate kinase",
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 310,
+    "ph": 7.4
+   },
+   "gibbs_kjmol": -18.8,
+   "citation": "EC 2.7.2.3 \u2014 first ATP made",
+   "pathway": "Glycolysis",
+   "pathway_order": 7
+  },
+  {
+   "name": "Glycolysis step 8: phosphoglycerate mutase",
+   "reactants": [
+    [
+     1,
+     "3-phosphoglycerate"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "2-phosphoglycerate"
+    ]
+   ],
+   "catalyst": "phosphoglycerate mutase",
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 310,
+    "ph": 7.4
+   },
+   "gibbs_kjmol": 4.4,
+   "citation": "EC 5.4.2.11",
+   "pathway": "Glycolysis",
+   "pathway_order": 8
+  },
+  {
+   "name": "Glycolysis step 9: enolase",
+   "reactants": [
+    [
+     1,
+     "2-phosphoglycerate"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "phosphoenolpyruvate"
+    ],
+    [
+     1,
+     "water"
+    ]
+   ],
+   "catalyst": "enolase",
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 310,
+    "ph": 7.4
+   },
+   "gibbs_kjmol": 7.5,
+   "citation": "EC 4.2.1.11",
+   "pathway": "Glycolysis",
+   "pathway_order": 9
+  },
+  {
+   "name": "Glycolysis step 10: pyruvate kinase",
+   "reactants": [
+    [
+     1,
+     "phosphoenolpyruvate"
+    ],
+    [
+     1,
+     "adenosine diphosphate"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "pyruvate"
+    ],
+    [
+     1,
+     "adenosine triphosphate"
+    ]
+   ],
+   "catalyst": "pyruvate kinase",
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 310,
+    "ph": 7.4
+   },
+   "gibbs_kjmol": -31.7,
+   "citation": "EC 2.7.1.40 \u2014 second ATP made",
+   "pathway": "Glycolysis",
+   "pathway_order": 10
+  },
+  {
+   "name": "Krebs step 1: citrate synthase",
+   "reactants": [
+    [
+     1,
+     "acetyl-CoA"
+    ],
+    [
+     1,
+     "oxaloacetate"
+    ],
+    [
+     1,
+     "water"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "citrate"
+    ],
+    [
+     1,
+     "coenzyme A"
+    ]
+   ],
+   "catalyst": "citrate synthase",
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 310,
+    "ph": 7.4,
+    "compartment": "mitochondrial matrix"
+   },
+   "gibbs_kjmol": -32.2,
+   "citation": "EC 2.3.3.1",
+   "pathway": "Krebs cycle",
+   "pathway_order": 1
+  },
+  {
+   "name": "Krebs step 2: aconitase",
+   "reactants": [
+    [
+     1,
+     "citrate"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "isocitrate"
+    ]
+   ],
+   "catalyst": "aconitase",
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 310,
+    "ph": 7.4
+   },
+   "gibbs_kjmol": 13.3,
+   "citation": "EC 4.2.1.3",
+   "pathway": "Krebs cycle",
+   "pathway_order": 2
+  },
+  {
+   "name": "Krebs step 3: isocitrate dehydrogenase",
+   "reactants": [
+    [
+     1,
+     "isocitrate"
+    ],
+    [
+     1,
+     "NAD+"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "alpha-ketoglutarate"
+    ],
+    [
+     1,
+     "carbon dioxide"
+    ],
+    [
+     1,
+     "NADH"
+    ]
+   ],
+   "catalyst": "isocitrate dehydrogenase",
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 310,
+    "ph": 7.4
+   },
+   "gibbs_kjmol": -8.4,
+   "citation": "EC 1.1.1.41",
+   "pathway": "Krebs cycle",
+   "pathway_order": 3
+  },
+  {
+   "name": "Krebs step 4: alpha-ketoglutarate dehydrogenase complex",
+   "reactants": [
+    [
+     1,
+     "alpha-ketoglutarate"
+    ],
+    [
+     1,
+     "NAD+"
+    ],
+    [
+     1,
+     "coenzyme A"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "succinyl-CoA"
+    ],
+    [
+     1,
+     "carbon dioxide"
+    ],
+    [
+     1,
+     "NADH"
+    ]
+   ],
+   "catalyst": "alpha-ketoglutarate dehydrogenase complex",
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 310,
+    "ph": 7.4
+   },
+   "gibbs_kjmol": -33.5,
+   "citation": "EC 1.2.4.2",
+   "pathway": "Krebs cycle",
+   "pathway_order": 4
+  },
+  {
+   "name": "Krebs step 5: succinyl-CoA synthetase",
+   "reactants": [
+    [
+     1,
+     "succinyl-CoA"
+    ],
+    [
+     1,
+     "GDP"
+    ],
+    [
+     1,
+     "phosphate"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "succinate"
+    ],
+    [
+     1,
+     "GTP"
+    ],
+    [
+     1,
+     "coenzyme A"
+    ]
+   ],
+   "catalyst": "succinyl-CoA synthetase",
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 310,
+    "ph": 7.4
+   },
+   "gibbs_kjmol": -2.9,
+   "citation": "EC 6.2.1.4 \u2014 substrate-level phosphorylation",
+   "pathway": "Krebs cycle",
+   "pathway_order": 5
+  },
+  {
+   "name": "Krebs step 6: succinate dehydrogenase",
+   "reactants": [
+    [
+     1,
+     "succinate"
+    ],
+    [
+     1,
+     "FAD"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "fumarate"
+    ],
+    [
+     1,
+     "FADH2"
+    ]
+   ],
+   "catalyst": "succinate dehydrogenase",
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 310,
+    "ph": 7.4
+   },
+   "gibbs_kjmol": 0.0,
+   "citation": "EC 1.3.5.1 \u2014 complex II of ETC",
+   "pathway": "Krebs cycle",
+   "pathway_order": 6
+  },
+  {
+   "name": "Krebs step 7: fumarase",
+   "reactants": [
+    [
+     1,
+     "fumarate"
+    ],
+    [
+     1,
+     "water"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "malate"
+    ]
+   ],
+   "catalyst": "fumarase",
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 310,
+    "ph": 7.4
+   },
+   "gibbs_kjmol": -3.8,
+   "citation": "EC 4.2.1.2",
+   "pathway": "Krebs cycle",
+   "pathway_order": 7
+  },
+  {
+   "name": "Krebs step 8: malate dehydrogenase",
+   "reactants": [
+    [
+     1,
+     "malate"
+    ],
+    [
+     1,
+     "NAD+"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "oxaloacetate"
+    ],
+    [
+     1,
+     "NADH"
+    ]
+   ],
+   "catalyst": "malate dehydrogenase",
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 310,
+    "ph": 7.4
+   },
+   "gibbs_kjmol": 29.7,
+   "citation": "EC 1.1.1.37 \u2014 regenerates oxaloacetate",
+   "pathway": "Krebs cycle",
+   "pathway_order": 8
+  },
+  {
+   "name": "Ethylene polymerisation (Ziegler-Natta)",
+   "reactants": [
+    [
+     1000,
+     "ethylene"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "polyethylene"
+    ]
+   ],
+   "catalyst": "titanium tetrachloride",
+   "solvent": "hexane",
+   "conditions": {
+    "temperature_K": 343,
+    "pressure_atm": 10,
+    "co_catalyst": "triethylaluminum"
+   },
+   "yield_pct": 98.0,
+   "citation": "Ziegler & Natta 1953 (Nobel 1963)",
+   "family": "Coordination polymerisation"
+  },
+  {
+   "name": "Nylon-6,6 condensation",
+   "reactants": [
+    [
+     1,
+     "hexamethylenediamine"
+    ],
+    [
+     1,
+     "adipic acid"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "nylon-6,6 unit"
+    ],
+    [
+     2,
+     "water"
+    ]
+   ],
+   "catalyst": null,
+   "solvent": null,
+   "conditions": {
+    "temperature_K": 553,
+    "pressure_atm": 1
+   },
+   "yield_pct": 95.0,
+   "citation": "Carothers (DuPont) 1935",
+   "family": "Condensation polymerisation"
+  },
+  {
+   "name": "Hofmann rearrangement: amide to amine",
+   "reactants": [
+    [
+     1,
+     "acetamide"
+    ],
+    [
+     1,
+     "bromine"
+    ],
+    [
+     4,
+     "sodium hydroxide"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "methylamine"
+    ],
+    [
+     1,
+     "sodium carbonate"
+    ],
+    [
+     2,
+     "sodium bromide"
+    ],
+    [
+     2,
+     "water"
+    ]
+   ],
+   "catalyst": null,
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 313,
+    "ph": 13
+   },
+   "yield_pct": 70.0,
+   "citation": "Hofmann 1881",
+   "family": "Rearrangement"
+  },
+  {
+   "name": "Maillard reaction: amino acid + sugar (initial)",
+   "reactants": [
+    [
+     1,
+     "glucose"
+    ],
+    [
+     1,
+     "glycine"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "fructosylamine"
+    ],
+    [
+     1,
+     "water"
+    ]
+   ],
+   "catalyst": null,
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 423,
+    "ph": 6.5
+   },
+   "yield_pct": 35.0,
+   "citation": "Maillard 1912",
+   "family": "Browning"
+  },
+  {
+   "name": "Belousov-Zhabotinsky reaction (overall)",
+   "reactants": [
+    [
+     3,
+     "malonic acid"
+    ],
+    [
+     4,
+     "potassium bromate"
+    ],
+    [
+     1,
+     "sulfuric acid"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "bromomalonic acid"
+    ],
+    [
+     1,
+     "carbon dioxide"
+    ],
+    [
+     1,
+     "water"
+    ]
+   ],
+   "catalyst": "cerium(IV)",
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 298,
+    "oscillating": true
+   },
+   "yield_pct": 50.0,
+   "citation": "Belousov 1958, Zhabotinsky 1964",
+   "family": "Oscillating"
+  },
+  {
+   "name": "Wittig olefination",
+   "reactants": [
+    [
+     1,
+     "methyltriphenylphosphonium bromide"
+    ],
+    [
+     1,
+     "butyllithium"
+    ],
+    [
+     1,
+     "benzaldehyde"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "styrene"
+    ],
+    [
+     1,
+     "triphenylphosphine oxide"
+    ],
+    [
+     1,
+     "lithium bromide"
+    ]
+   ],
+   "catalyst": null,
+   "solvent": "tetrahydrofuran",
+   "conditions": {
+    "temperature_K": 273,
+    "atmosphere": "dry nitrogen"
+   },
+   "yield_pct": 82.0,
+   "citation": "Wittig 1953 (Nobel 1979)",
+   "family": "Carbonyl olefination"
+  },
+  {
+   "name": "Mannich reaction",
+   "reactants": [
+    [
+     1,
+     "acetone"
+    ],
+    [
+     1,
+     "formaldehyde"
+    ],
+    [
+     1,
+     "dimethylamine"
+    ]
+   ],
+   "products": [
+    [
+     1,
+     "1-(dimethylamino)-3-butanone"
+    ],
+    [
+     1,
+     "water"
+    ]
+   ],
+   "catalyst": "hydrogen chloride",
+   "solvent": "water",
+   "conditions": {
+    "temperature_K": 333,
+    "ph": 5.0
+   },
+   "yield_pct": 60.0,
+   "citation": "Mannich 1912",
+   "family": "Aminoalkylation"
+  }
+ ],
+ "pathways": [
+  {
+   "name": "Glycolysis",
+   "n_steps": 10,
+   "reactions": [
+    "Glycolysis step 1: hexokinase",
+    "Glycolysis step 2: phosphoglucose isomerase",
+    "Glycolysis step 3: phosphofructokinase-1",
+    "Glycolysis step 4: aldolase",
+    "Glycolysis step 5: triose phosphate isomerase",
+    "Glycolysis step 6: GAPDH",
+    "Glycolysis step 7: phosphoglycerate kinase",
+    "Glycolysis step 8: phosphoglycerate mutase",
+    "Glycolysis step 9: enolase",
+    "Glycolysis step 10: pyruvate kinase"
+   ],
+   "shape": "linear"
+  },
+  {
+   "name": "Krebs cycle",
+   "n_steps": 8,
+   "reactions": [
+    "Krebs step 1: citrate synthase",
+    "Krebs step 2: aconitase",
+    "Krebs step 3: isocitrate dehydrogenase",
+    "Krebs step 4: alpha-ketoglutarate dehydrogenase complex",
+    "Krebs step 5: succinyl-CoA synthetase",
+    "Krebs step 6: succinate dehydrogenase",
+    "Krebs step 7: fumarase",
+    "Krebs step 8: malate dehydrogenase"
+   ],
+   "shape": "cycle"
+  }
+ ]
+}
