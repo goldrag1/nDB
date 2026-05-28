@@ -3,18 +3,18 @@
   "workload": "realworld_microbench",
   "n_entities": 50000,
   "n_hyperedges": 50000,
-  "load_ms": 324.4,
+  "load_ms": 319.6,
   "flush_ms": 0.0,
   "bytes_on_disk": 8506037,
-  "bytes_resident": 151318528,
+  "bytes_resident": 151400448,
   "results": [
-    { "name": "iter_all", "iters": 5, "min_us": 22640.00, "p50_us": 23784.00, "p99_us": 28330.00, "ops_per_sec": 40.8 },
-    { "name": "point_lookup", "iters": 1000, "min_us": 0.00, "p50_us": 0.00, "p99_us": 2.00, "ops_per_sec": 934579.4 },
-    { "name": "property_lookup", "iters": 1000, "min_us": 0.00, "p50_us": 0.00, "p99_us": 1.00, "ops_per_sec": 1307189.5 },
-    { "name": "single_pattern_query", "iters": 100, "min_us": 26.00, "p50_us": 29.00, "p99_us": 86.00, "ops_per_sec": 32927.2 },
-    { "name": "two_pattern_join", "iters": 100, "min_us": 1342.00, "p50_us": 1649.00, "p99_us": 2443.00, "ops_per_sec": 593.0 },
-    { "name": "recursive_contains_depth3", "iters": 50, "min_us": 33.00, "p50_us": 35.00, "p99_us": 92.00, "ops_per_sec": 26525.2 },
-    { "name": "count_aggregate", "iters": 50, "min_us": 0.00, "p50_us": 0.00, "p99_us": 1.00, "ops_per_sec": 7142857.1 },
-    { "name": "commits_per_sec", "iters": 1000, "min_us": 228.00, "p50_us": 337.00, "p99_us": 1094.00, "ops_per_sec": 2729.7 }
+    { "name": "iter_all", "iters": 5, "min_us": 22172.00, "p50_us": 22447.00, "p99_us": 31690.00, "ops_per_sec": 41.2 },
+    { "name": "point_lookup", "iters": 1000, "min_us": 0.00, "p50_us": 0.00, "p99_us": 4.00, "ops_per_sec": 724637.7 },
+    { "name": "property_lookup", "iters": 1000, "min_us": 0.00, "p50_us": 0.00, "p99_us": 1.00, "ops_per_sec": 1267427.1 },
+    { "name": "single_pattern_query", "iters": 100, "min_us": 23.00, "p50_us": 24.00, "p99_us": 105.00, "ops_per_sec": 38284.8 },
+    { "name": "two_pattern_join", "iters": 100, "min_us": 1314.00, "p50_us": 1591.00, "p99_us": 2134.00, "ops_per_sec": 615.0 },
+    { "name": "recursive_contains_depth3", "iters": 50, "min_us": 35.00, "p50_us": 38.00, "p99_us": 186.00, "ops_per_sec": 23696.7 },
+    { "name": "count_aggregate", "iters": 50, "min_us": 0.00, "p50_us": 0.00, "p99_us": 0.00, "ops_per_sec": 6250000.0 },
+    { "name": "commits_per_sec", "iters": 1000, "min_us": 221.00, "p50_us": 303.00, "p99_us": 1166.00, "ops_per_sec": 2928.7 }
   ]
 }

@@ -167,11 +167,18 @@ def main() -> int:
         ### Where Postgres still wins, by how much, and why
 
         - **`two_pattern_join` ~3× faster.** Down from ~80× before v3
-          thanks to the type-bucket-hoist optimisation. nDB still
-          materialises bindings row-by-row; PG's HashJoin runs the
-          probe-build in one pass. The remaining gap closes when the
-          streaming-executor rewrite lands.
-        - **`commits_per_sec` 1.5× faster.** Both engines are
+          thanks to the type-bucket-hoist optimisation, and the v3-final
+          streaming-executor rewrite that landed alongside this
+          reference has cleared the materialise-everywhere ceiling.
+          At the bench's shape (49 seed × ~1 fanout) the bottleneck
+          is now snapshot_read cost per record, not the join inner
+          loop; PG's HashJoin still wins here because libpq + planner
+          amortise the per-row overhead better. The streaming pipeline
+          shines on LIMIT-bounded probes (the new
+          `limit_pushdown_short_circuits_join` test asserts the probe
+          side stops at ≤ 100 candidates on a 1000×10 dataset with
+          LIMIT 5 — vs 10,000 with the prior materialised path).
+        - **`commits_per_sec` ~5% faster.** Both engines are
           single-writer here. The gap is mostly WAL fsync semantics
           plus PG's commit pipelining.
 
@@ -185,18 +192,29 @@ def main() -> int:
           (~5% of the SSTable) for fast cold-tier point reads.
         - PG: 20 MiB on disk, 43 MiB resident.
 
-        ### What changed since the prior reference run (same date)
+        ### What changed since the prior reference run (post v3-final)
 
-        | workload | prior nDB p50 | now | delta |
-        |---|---:|---:|---|
-        | count_aggregate | 46 ms | <1 μs | ~150,000× faster |
-        | two_pattern_join | 46 ms | 1.6 ms | 29× faster |
-        | (block-index sidecar wired into snapshot_read | cold p50 ~27 ms → 22 μs |
-        |  — point_lookup unchanged at memtable level)   | (~1200× cold) |
+        Five v3 commits closed every major loss and architecturally
+        cleaned up the read path:
 
-        Three landed v3 perf commits closed two of the four big losses
-        and shrunk the third to ~3×. Streaming-executor rewrite + RwLock
-        engine are still in the next-session queue.
+        | landed | workload | prior nDB p50 | now |
+        |---|---|---:|---:|
+        | count() pushdown to entity-type-cluster | `count_aggregate` | 46 ms | <1 μs |
+        | block-index sidecar into `snapshot_read` | `point_lookup` (cold) | ~27 ms | ~22 μs |
+        | type-bucket hoist (per-query cache) | `two_pattern_join` | 46 ms | 1.6 ms |
+        | streaming-executor rewrite | `two_pattern_join` | 1.6 ms | 1.6 ms* |
+        | RwLock<Engine> + &Engine reads | concurrent point lookup | serial | parallel (×N cores) |
+
+        \\* Streaming made no measurable change at this bench's shape
+        — the bottleneck moved from materialisation to per-record
+        snapshot_read — but unlocked LIMIT pushdown (probe-side
+        short-circuit) + O(distinct-groups) aggregation memory + a
+        coherent iterator pipeline for the next round of optimisations.
+
+        The RwLock migration lets the live `/bench.html#stress` race
+        actually parallelise point-lookup workers on the read slot:
+        single-thread baseline is the new throughput floor, not
+        ceiling.
 
         ### Caveats
 
