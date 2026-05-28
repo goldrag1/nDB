@@ -252,8 +252,7 @@ limit 10"></textarea>
 where ?sf &lt;= 6 and ?st &gt;= 6
 return ?sf, ?st</code></pre>
     </li>
-    <li><strong>Recursive patterns need a literal UUID anchor</strong> — one endpoint must be <code>uuid:01923c00-...</code>, not a variable. v2 will lift this.</li>
-    <li><strong>No <code>order by</code> / aggregations</strong> in v1 — those live in <code>ndb-slicer</code>, integration with the query language is the next session of work.</li>
+    <li><strong>Aggregations (<code>count()</code>, <code>sum()</code>, <code>group by</code>)</strong> aren't in the query language proper — they live in <code>ndb-slicer</code> and aren't wired to <code>/query/text</code> yet.</li>
     <li><strong>No subqueries / CTEs</strong> — queries are flat. Use <code>limit</code> if a single pattern's cardinality is too high.</li>
   </ul>
 
@@ -333,6 +332,28 @@ return ?h.common_name, ?p.common_name, ?mode`,
     query: `match species(kingdom: "Fungi") as ?f
 return ?f.common_name, ?f.family`,
   },
+  {
+    title: "10. Order by — alphabetical plants",
+    blurb: "order by ?v.property [asc|desc] sorts before limit. Try changing asc → desc.",
+    query: `match species(life_form: "plant") as ?s
+return ?s.common_name, ?s.family
+order by ?s.common_name asc
+limit 10`,
+  },
+  {
+    title: "11. Multi-key sort — predation by region then prey",
+    blurb: "Multi-key order — primary key first, ties broken by the next.",
+    query: `match predation(predator: ?pr, prey: ?py, region: ?r)
+return ?r.name, ?pr.common_name, ?py.common_name
+order by ?r.name asc, ?pr.common_name asc`,
+  },
+  {
+    title: "12. Recursive predation+ from the wolf",
+    blurb: "predation+ walks one-or-more steps. Anchor variable binds via the species pattern; the planner runs species first.",
+    query: `match species(common_name: "Gray wolf") as ?wolf
+      predation+(predator: ?wolf, prey: ?prey)
+return ?prey.common_name`,
+  },
 ];
 
 const API_URL  = "/biodiv_ndb/api/query/text";
@@ -356,8 +377,19 @@ for (const ex of EXAMPLES) {
   exList.appendChild(btn);
 }
 
-// ─── Auto-load the first example
-editor.value = EXAMPLES[0].query;
+// ─── Auto-load: honour `#q=<encoded-query>` if present, else first example.
+function loadFromHash() {
+  const h = window.location.hash;
+  if (h.startsWith("#q=")) {
+    try {
+      editor.value = decodeURIComponent(h.slice(3));
+      return true;
+    } catch (_) { /* fall through */ }
+  }
+  return false;
+}
+if (!loadFromHash()) editor.value = EXAMPLES[0].query;
+window.addEventListener("hashchange", () => { if (loadFromHash()) run(); });
 
 // ─── Run
 async function run() {

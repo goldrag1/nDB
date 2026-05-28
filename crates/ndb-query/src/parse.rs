@@ -28,7 +28,7 @@
 use ndb_engine::JsonValue;
 
 use crate::ast::{
-    NameAsOf, NameBinding, NameCmpOp, NameExpr, NamePattern, NameQuery, NameRecursion, NameReturn,
+    NameAsOf, NameBinding, NameCmpOp, NameExpr, NameOrderKey, NamePattern, NameQuery, NameRecursion, NameReturn,
     NameTerm,
 };
 use crate::error::{ParseError, Span};
@@ -142,6 +142,14 @@ impl Parser {
         self.expect(&TokKind::Return, "`return`")?;
         let returns = self.parse_returns()?;
 
+        // Optional `order by key [asc|desc], key [asc|desc], ...`
+        let order_by = if self.eat(&TokKind::Order).is_some() {
+            self.expect(&TokKind::By, "`by`")?;
+            self.parse_order_keys()?
+        } else {
+            Vec::new()
+        };
+
         let limit = if self.eat(&TokKind::Limit).is_some() {
             let t = self.advance();
             match t.kind {
@@ -169,6 +177,7 @@ impl Parser {
             patterns,
             filter,
             returns,
+            order_by,
             limit,
             span: Span::range(start, end),
         })
@@ -490,13 +499,56 @@ impl Parser {
     fn parse_returns(&mut self) -> Result<Vec<NameReturn>, ParseError> {
         let mut out = vec![self.parse_return_one()?];
         while self.eat(&TokKind::Comma).is_some() {
-            // Allow trailing comma: stop if we're at limit/eof.
-            if matches!(self.peek_kind(), TokKind::Limit | TokKind::Eof) {
+            // Allow trailing comma: stop if we're at order/limit/eof.
+            if matches!(self.peek_kind(), TokKind::Order | TokKind::Limit | TokKind::Eof) {
                 break;
             }
             out.push(self.parse_return_one()?);
         }
         Ok(out)
+    }
+
+    fn parse_order_keys(&mut self) -> Result<Vec<NameOrderKey>, ParseError> {
+        let mut out = vec![self.parse_order_one()?];
+        while self.eat(&TokKind::Comma).is_some() {
+            if matches!(self.peek_kind(), TokKind::Limit | TokKind::Eof) { break; }
+            out.push(self.parse_order_one()?);
+        }
+        Ok(out)
+    }
+
+    fn parse_order_one(&mut self) -> Result<NameOrderKey, ParseError> {
+        let t = self.advance();
+        let name = match t.kind {
+            TokKind::Var(name) => name,
+            other => return Err(ParseError::Unexpected {
+                expected: "variable in order-by list".into(),
+                found: other.describe(),
+                span: t.span,
+            }),
+        };
+        let (property, end_span) = if self.eat(&TokKind::Dot).is_some() {
+            let prop_tok = self.advance();
+            match prop_tok.kind {
+                TokKind::Ident(s) => (Some(s), prop_tok.span),
+                other => return Err(ParseError::Unexpected {
+                    expected: "property name after `.` in order-by".into(),
+                    found: other.describe(),
+                    span: prop_tok.span,
+                }),
+            }
+        } else {
+            (None, t.span)
+        };
+        // Optional direction.
+        let descending = if self.eat(&TokKind::Desc).is_some() {
+            true
+        } else {
+            self.eat(&TokKind::Asc);  // ascending is the default; consume but ignore
+            false
+        };
+        let combined_span = crate::error::Span::range(t.span.start, end_span.end());
+        Ok(NameOrderKey { name, property, descending, span: combined_span })
     }
 
     fn parse_return_one(&mut self) -> Result<NameReturn, ParseError> {

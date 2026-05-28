@@ -1399,6 +1399,22 @@ function renderSpeciesInspector(ins, sp) {
   html.push(`<div class="insp-row"><span class="key">life form</span><span class="val">${sp.life_form}</span></div>`);
   if (sp.wiki) html.push(`<div class="insp-row"><a href="${sp.wiki}" target="_blank" rel="noreferrer">Wikipedia →</a></div>`);
 
+  // "Open in query playground" — surfaces the equivalent nDB query
+  // for THIS species so visitors can pivot from visual exploration
+  // straight into the text-query playground.
+  const playgroundQuery = `match species(scientific_name: "${sp.sci}") as ?s
+return ?s.common_name, ?s.scientific_name, ?s.family, ?s.kingdom, ?s.life_form`;
+  const playgroundUrl = `/query-language.html#q=${encodeURIComponent(playgroundQuery)}`;
+  html.push(`<div class="insp-row" style="margin-top: 8px;">
+    <a href="${playgroundUrl}" target="_blank" rel="noreferrer"
+       style="display: inline-block; padding: 3px 10px;
+              background: var(--surface-2); border: 1px solid var(--border);
+              border-radius: 3px; font-size: 11.5px;
+              font-family: var(--font-mono); color: var(--text);">
+       → run as nDB query
+    </a>
+  </div>`);
+
   // Interactions in which this species appears
   const involved = interactionsForSpecies(sp.eid);
   if (involved.length) {

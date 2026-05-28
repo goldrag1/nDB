@@ -107,6 +107,6 @@ pub use wire::{
     VectorSearchResponse, WireError,
 };
 pub use wire_query::{
-    AsOf, CmpOp, DEFAULT_MAX_RECURSION_DEPTH, Expr, Pattern, PropertyFilter, QueryRequest,
+    AsOf, CmpOp, DEFAULT_MAX_RECURSION_DEPTH, Expr, OrderKey, Pattern, PropertyFilter, QueryRequest,
     QueryResponse, Recursion, ReturnItem, RoleBinding, Term,
 };

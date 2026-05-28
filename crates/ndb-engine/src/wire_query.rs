@@ -52,6 +52,7 @@ pub const DEFAULT_MAX_RECURSION_DEPTH: u32 = 64;
 ///     patterns: vec![],
 ///     filter: None,
 ///     returns: vec!["p".into()],
+///     order_by: vec![],
 ///     limit: Some(10),
 /// };
 /// let s = serde_json::to_string(&q).unwrap();
@@ -83,11 +84,41 @@ pub struct QueryRequest {
     /// don't need to change their wire payloads.
     pub returns: Vec<ReturnItem>,
 
+    /// Optional `order by` key list. Empty (default) means no sort —
+    /// rows come back in the executor's natural traversal order. Sort
+    /// is stable across keys: keys[0] is the primary, ties broken by
+    /// keys[1], and so on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub order_by: Vec<OrderKey>,
+
     /// Optional cap on the number of result tuples returned. `None`
     /// means no cap. Servers may enforce an implementation-defined hard
     /// cap regardless — see §6.4 of the query-language spec.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
+}
+
+/// One sort key for [`QueryRequest::order_by`].
+///
+/// Semantically equivalent to a return item plus a direction: the row
+/// is projected via the same UUID-and-property path used by
+/// [`ReturnItem::Path`], compared, ordered. `display` is purely
+/// diagnostic — it has no effect on sort semantics.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OrderKey {
+    /// Bound variable name (without the `?`).
+    pub variable: String,
+    /// Optional resolved property id. `None` sorts by the variable's
+    /// bound value directly (typically a UUID — stable but not
+    /// usually display-meaningful).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub property: Option<u32>,
+    /// Original property name from the source text — diagnostic only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
+    /// `true` for descending order. Defaults to ascending (`false`).
+    #[serde(default)]
+    pub descending: bool,
 }
 
 /// One entry in [`QueryRequest::returns`].
@@ -717,6 +748,7 @@ mod tests {
                 right: lit_term(lit_i64(1000)),
             }),
             returns: vec!["p".into(), "disease".into()],
+            order_by: Vec::new(),
             limit: Some(100),
         };
         assert_eq!(round_trip(q.clone()), q);
@@ -729,6 +761,7 @@ mod tests {
             patterns: vec![],
             filter: None,
             returns: vec!["x".into()],
+            order_by: Vec::new(),
             limit: None,
         };
         let s = serde_json::to_string(&q).unwrap();

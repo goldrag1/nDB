@@ -264,6 +264,30 @@ mod tests {
     }
 
     #[test]
+    fn execute_text_order_by_property_ascending_then_descending() {
+        let (mut engine, _dir) = build_engine();
+        let asc = execute_text(&mut engine,
+            "match customer(name: ?n) as ?c return ?c.name order by ?c.name asc"
+        ).expect("query");
+        let asc_names: Vec<String> = asc.rows.iter()
+            .filter_map(|r| match &r[0] {
+                ndb_engine::JsonValue::String { value } => Some(value.clone()),
+                _ => None,
+            }).collect();
+        assert_eq!(asc_names, vec!["Alice", "Bob"]);
+
+        let desc = execute_text(&mut engine,
+            "match customer(name: ?n) as ?c return ?c.name order by ?c.name desc"
+        ).expect("query");
+        let desc_names: Vec<String> = desc.rows.iter()
+            .filter_map(|r| match &r[0] {
+                ndb_engine::JsonValue::String { value } => Some(value.clone()),
+                _ => None,
+            }).collect();
+        assert_eq!(desc_names, vec!["Bob", "Alice"]);
+    }
+
+    #[test]
     fn execute_text_property_projection_returns_scalars() {
         let (mut engine, _dir) = build_engine();
         // ?c.name should project the literal "Alice" / "Bob" string,

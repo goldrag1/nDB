@@ -37,7 +37,7 @@ use crate::record::Record;
 use crate::value::Value;
 use crate::wire::JsonValue;
 use crate::wire_query::{
-    AsOf, CmpOp, Expr, Pattern, PropertyFilter, QueryRequest, QueryResponse, Recursion,
+    AsOf, CmpOp, Expr, OrderKey, Pattern, PropertyFilter, QueryRequest, QueryResponse, Recursion,
     ReturnItem, RoleBinding, Term,
 };
 
@@ -133,6 +133,12 @@ pub fn execute(engine: &mut Engine, req: QueryRequest) -> Result<QueryResponse, 
         rows = kept;
     }
 
+    // Sort BEFORE truncate so limit picks the top-N in user-specified
+    // order, not the executor's traversal order.
+    if !req.order_by.is_empty() {
+        sort_rows(engine, snapshot, &req.order_by, &mut rows);
+    }
+
     let mut truncated = false;
     if let Some(n) = req.limit
         && rows.len() > n
@@ -159,6 +165,95 @@ pub fn execute(engine: &mut Engine, req: QueryRequest) -> Result<QueryResponse, 
         rows: response_rows,
         truncated,
     })
+}
+
+/// Sort `rows` in-place by every key in `order_by`. Stable sort, so
+/// ties on key[0] fall through to key[1], etc.
+///
+/// Sort key resolution mirrors projection: bare variable → bound
+/// value; `variable.property` → follow the bound UUID to the record
+/// and look up the property. Missing-property and missing-UUID both
+/// sort to the end of the order (treated as "greatest") so the
+/// well-behaved rows cluster predictably.
+fn sort_rows(
+    engine: &mut Engine,
+    snapshot: TxId,
+    order_by: &[OrderKey],
+    rows: &mut [Bindings],
+) {
+    // Pre-extract each row's key vector ONCE so the comparator doesn't
+    // hit the engine per pairwise comparison.
+    let keyed: Vec<(usize, Vec<Option<Value>>)> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, r)| (i, order_by.iter().map(|k| key_for_row(engine, snapshot, k, r)).collect()))
+        .collect();
+
+    let mut indices: Vec<usize> = (0..rows.len()).collect();
+    indices.sort_by(|&a, &b| {
+        let ka = &keyed[a].1;
+        let kb = &keyed[b].1;
+        for (i, k) in order_by.iter().enumerate() {
+            let ord = compare_values(ka.get(i).and_then(|o| o.as_ref()),
+                                     kb.get(i).and_then(|o| o.as_ref()));
+            if ord != std::cmp::Ordering::Equal {
+                return if k.descending { ord.reverse() } else { ord };
+            }
+        }
+        std::cmp::Ordering::Equal
+    });
+
+    // Reorder `rows` to match the new index sequence. Using a temporary
+    // Option<Bindings> swap to avoid clone of every row.
+    let mut taken: Vec<Option<Bindings>> = rows.iter_mut().map(|r| Some(std::mem::take(r))).collect();
+    for (dst, &src) in indices.iter().enumerate() {
+        rows[dst] = taken[src].take().expect("each index used exactly once");
+    }
+}
+
+fn key_for_row(engine: &mut Engine, snapshot: TxId, key: &OrderKey, row: &Bindings) -> Option<Value> {
+    let v = row.get(&key.variable)?;
+    match key.property {
+        None => Some(v.clone()),
+        Some(pid) => {
+            let uuid = if let Value::EntityRef(eid) = v { eid.into_uuid() } else { return None };
+            let Ok(Resolved::Live(record)) = engine.snapshot_read(&uuid, snapshot) else { return None };
+            let props: &[(PropertyId, Value)] = match &record {
+                Record::Entity(e)    => &e.properties,
+                Record::HyperEdge(h) => &h.properties,
+                _ => return None,
+            };
+            let target = PropertyId::new(pid);
+            for (p, val) in props {
+                if *p == target {
+                    return Some(val.clone());
+                }
+            }
+            None
+        }
+    }
+}
+
+/// Total ordering across Value variants. None sorts last (= treated as
+/// greatest). Mixed-type comparisons fall back to type-tag ordering so
+/// the comparator is total even on heterogeneous data.
+fn compare_values(a: Option<&Value>, b: Option<&Value>) -> std::cmp::Ordering {
+    use std::cmp::Ordering::*;
+    match (a, b) {
+        (None, None) => Equal,
+        (None, _)    => Greater,   // missing sorts to the end
+        (_, None)    => Less,
+        (Some(x), Some(y)) => match (x, y) {
+            (Value::String(a), Value::String(b)) => a.cmp(b),
+            (Value::I64(a),    Value::I64(b))    => a.cmp(b),
+            (Value::F64(a),    Value::F64(b))    => a.partial_cmp(b).unwrap_or(Equal),
+            (Value::Bool(a),   Value::Bool(b))   => a.cmp(b),
+            (Value::Timestamp(a), Value::Timestamp(b)) => a.cmp(b),
+            (Value::EntityRef(a), Value::EntityRef(b)) => a.into_uuid().cmp(&b.into_uuid()),
+            // Mixed types: fall back to a stable tag ordering. Document the choice in the spec.
+            _ => format!("{x:?}").cmp(&format!("{y:?}")),
+        },
+    }
 }
 
 /// Project one `ReturnItem` for one row of bindings.
@@ -989,6 +1084,7 @@ mod tests {
             patterns: vec![entity_pattern_one_prop_filter()],
             filter: None,
             returns: vec!["c".into()],
+            order_by: Vec::new(),
             limit: None,
         };
         let resp = execute(&mut engine, req).unwrap();
@@ -1019,6 +1115,7 @@ mod tests {
             }],
             filter: None,
             returns: vec!["n".into()],
+            order_by: Vec::new(),
             limit: None,
         };
         let resp = execute(&mut engine, req).unwrap();
@@ -1078,6 +1175,7 @@ mod tests {
             ],
             filter: None,
             returns: vec!["a".into()],
+            order_by: Vec::new(),
             limit: None,
         };
         let resp = execute(&mut engine, req).unwrap();
@@ -1124,6 +1222,7 @@ mod tests {
                 },
             }),
             returns: vec!["a".into()],
+            order_by: Vec::new(),
             limit: None,
         };
         let resp = execute(&mut engine, req).unwrap();
@@ -1142,6 +1241,7 @@ mod tests {
             patterns: vec![entity_pattern_one_prop_filter()],
             filter: None,
             returns: vec!["c".into()],
+            order_by: Vec::new(),
             limit: Some(2),
         };
         let resp = execute(&mut engine, req).unwrap();
@@ -1158,6 +1258,7 @@ mod tests {
             patterns: vec![entity_pattern_one_prop_filter()],
             filter: None,
             returns: vec!["c".into()],
+            order_by: Vec::new(),
             limit: None,
         };
         let resp = execute(&mut engine, req).unwrap();
@@ -1179,6 +1280,7 @@ mod tests {
             }],
             filter: None,
             returns: vec![],
+            order_by: Vec::new(),
             limit: None,
         };
         let err = execute(&mut engine, req).unwrap_err();
@@ -1265,6 +1367,7 @@ mod tests {
             patterns: vec![star_pattern(body, "leaf")],
             filter: None,
             returns: vec!["leaf".into()],
+            order_by: Vec::new(),
             limit: None,
         };
         let resp = execute(&mut engine, req).unwrap();
@@ -1307,6 +1410,7 @@ mod tests {
             patterns: vec![pat],
             filter: None,
             returns: vec!["leaf".into()],
+            order_by: Vec::new(),
             limit: None,
         };
         let resp = execute(&mut engine, req).unwrap();
@@ -1349,6 +1453,7 @@ mod tests {
             patterns: vec![pat],
             filter: None,
             returns: vec!["leaf".into()],
+            order_by: Vec::new(),
             limit: None,
         };
         let resp = execute(&mut engine, req).unwrap();
@@ -1375,6 +1480,7 @@ mod tests {
             patterns: vec![star_pattern(a, "leaf")],
             filter: None,
             returns: vec!["leaf".into()],
+            order_by: Vec::new(),
             limit: None,
         };
         let resp = execute(&mut engine, req).unwrap();
@@ -1412,6 +1518,7 @@ mod tests {
             patterns: vec![pat],
             filter: None,
             returns: vec!["leaf".into()],
+            order_by: Vec::new(),
             limit: None,
         };
         let err = execute(&mut engine, req).unwrap_err();
@@ -1431,6 +1538,7 @@ mod tests {
             patterns: vec![entity_pattern_one_prop_filter()],
             filter: None,
             returns: vec!["c".into()],
+            order_by: Vec::new(),
             limit: None,
         };
         let err = execute(&mut engine, req).unwrap_err();
@@ -1459,6 +1567,7 @@ mod tests {
             patterns: vec![entity_pattern_one_prop_filter()],
             filter: None,
             returns: vec!["c".into()],
+            order_by: Vec::new(),
             limit: None,
         };
         let resp = execute(&mut engine, req).unwrap();

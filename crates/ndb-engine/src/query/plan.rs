@@ -301,6 +301,22 @@ fn estimate_hyperedge<S: BuildHasher>(
     // with the default cap, this is large enough to sort recursion last
     // unless the graph is truly small.
     if let Some(rec) = recursion {
+        // A recursive pattern REQUIRES one role-filler bound to a
+        // concrete entity (literal UUID or already-bound variable),
+        // otherwise the executor errors at runtime. If neither is
+        // satisfied yet, force this pattern to sort to the END of the
+        // plan so the seed walk gets its anchor from a sibling
+        // pattern first.
+        let has_anchor = role_bindings.iter().any(|rb| match &rb.term {
+            Term::Literal { value: JsonValue::Uuid { .. } } => true,
+            Term::Var { name } => bound.contains(name),
+            _ => false,
+        });
+        if !has_anchor {
+            // Larger than any non-recursive estimate, smaller than u64::MAX
+            // so saturating arithmetic upstream stays well-behaved.
+            return UNKNOWN_HIGH.saturating_mul(2);
+        }
         let max_steps = match *rec {
             Recursion::Star { max_depth } | Recursion::Plus { max_depth } => max_depth,
             Recursion::Optional => 1,
@@ -686,15 +702,12 @@ mod tests {
     }
 
     #[test]
-    fn recursive_pattern_estimates_with_depth_heuristic() {
-        let mut engine = temp_engine("rec");
-        // Build a small chain: a → b → c
-        let a = seed_customer(&mut engine, "x");
-        let b = seed_customer(&mut engine, "x");
-        let c = seed_customer(&mut engine, "x");
-        seed_sales_order(&mut engine, a, 1);
-        seed_sales_order(&mut engine, b, 1);
-        seed_sales_order(&mut engine, c, 1);
+    fn recursive_pattern_without_anchor_sorts_to_end() {
+        // A recursive pattern with NO role-fillers bound to a concrete
+        // entity can't be executed standalone. The planner forces it
+        // to the back of the plan via a punitive estimate (> UNKNOWN_HIGH).
+        let mut engine = temp_engine("rec-no-anchor");
+        let _a = seed_customer(&mut engine, "x");
 
         let pattern = Pattern::Hyperedge {
             type_id: T_SALES_ORDER,
@@ -704,8 +717,32 @@ mod tests {
             recursion: Some(Recursion::Star { max_depth: 8 }),
         };
         let card = estimate_cardinality(&engine, &pattern, &HashSet::new());
-        // avg_degree ≥ 1, max_depth = 8 → at least 8.
-        assert!(card >= 8, "recursive depth heuristic: got {card}");
-        assert!(card <= UNKNOWN_HIGH);
+        assert!(card > UNKNOWN_HIGH, "no-anchor recursive must sort behind any non-recursive pattern: got {card}");
+    }
+
+    #[test]
+    fn recursive_pattern_with_anchor_estimates_with_depth_heuristic() {
+        // With an anchor bound (literal UUID or pre-bound variable),
+        // the depth × avg-degree heuristic kicks in normally.
+        let mut engine = temp_engine("rec-anchored");
+        let a = seed_customer(&mut engine, "x");
+        let b = seed_customer(&mut engine, "x");
+        seed_sales_order(&mut engine, a, 1);
+        seed_sales_order(&mut engine, b, 1);
+
+        let pattern = Pattern::Hyperedge {
+            type_id: T_SALES_ORDER,
+            self_var: None,
+            role_bindings: vec![RoleBinding {
+                role_id: R_CUSTOMER,
+                term: Term::Literal {
+                    value: JsonValue::Uuid { value: a.into_uuid().to_string() },
+                },
+            }],
+            property_filters: vec![],
+            recursion: Some(Recursion::Star { max_depth: 8 }),
+        };
+        let card = estimate_cardinality(&engine, &pattern, &HashSet::new());
+        assert!(card <= UNKNOWN_HIGH, "anchored recursive estimate should stay in normal range: got {card}");
     }
 }

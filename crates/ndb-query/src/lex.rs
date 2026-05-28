@@ -33,6 +33,14 @@ pub struct Tok {
 /// All token kinds the parser understands.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokKind {
+    /// `order` keyword.
+    Order,
+    /// `by` keyword.
+    By,
+    /// `asc` keyword.
+    Asc,
+    /// `desc` keyword.
+    Desc,
     // Reserved words (case-insensitive on input)
     /// `match`
     Match,
@@ -125,6 +133,10 @@ impl TokKind {
             Self::Where => "`where`".into(),
             Self::Return => "`return`".into(),
             Self::Limit => "`limit`".into(),
+            Self::Order => "`order`".into(),
+            Self::By    => "`by`".into(),
+            Self::Asc   => "`asc`".into(),
+            Self::Desc  => "`desc`".into(),
             Self::As => "`as`".into(),
             Self::Of => "`of`".into(),
             Self::And => "`and`".into(),
@@ -505,6 +517,10 @@ fn lex_ident_or_uuid(source: &str, start: usize) -> Result<(Tok, usize), ParseEr
         "where" => TokKind::Where,
         "return" => TokKind::Return,
         "limit" => TokKind::Limit,
+        "order" => TokKind::Order,
+        "by"    => TokKind::By,
+        "asc"   => TokKind::Asc,
+        "desc"  => TokKind::Desc,
         "as" => TokKind::As,
         "of" => TokKind::Of,
         "and" => TokKind::And,

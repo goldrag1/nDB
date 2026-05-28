@@ -25,6 +25,9 @@ pub struct NameQuery {
     pub filter: Option<NameExpr>,
     /// `return` variable list.
     pub returns: Vec<NameReturn>,
+    /// `order by` key list, in source order. Empty when absent. Sort
+    /// is stable so multiple keys behave like SQL `ORDER BY a, b, c`.
+    pub order_by: Vec<NameOrderKey>,
     /// `limit N`, or `None`.
     pub limit: Option<usize>,
     /// Overall span of the query (start of first token through end of last).
@@ -179,6 +182,21 @@ pub enum NameCmpOp {
     Gt,
     /// `>=`
     Ge,
+}
+
+/// One sort key in the `order by` list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NameOrderKey {
+    /// Variable name (without the `?`).
+    pub name: String,
+    /// Optional property name (`?v.season_from`). `None` sorts by the
+    /// bound value directly (typically a UUID — useful for stable
+    /// pagination but not very meaningful as a display order).
+    pub property: Option<String>,
+    /// `true` for descending, `false` for ascending (the default).
+    pub descending: bool,
+    /// Source location.
+    pub span: Span,
 }
 
 /// One entry in the `return` list.

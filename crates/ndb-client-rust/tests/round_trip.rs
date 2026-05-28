@@ -359,6 +359,7 @@ fn query_round_trip_entity_pattern() {
         }],
         filter: None,
         returns: vec!["c".into(), "n".into()],
+        order_by: Vec::new(),
         limit: None,
     };
     let resp = cli.query(&req).unwrap();

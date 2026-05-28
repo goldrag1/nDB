@@ -243,6 +243,35 @@ pub fn resolve(query: NameQuery, dict: &Dictionaries) -> Result<QueryRequest, Re
         })
         .collect::<Result<_, _>>()?;
 
+    // order_by — same name → id resolution as return-side property projection.
+    let order_by: Vec<ndb_engine::OrderKey> = query
+        .order_by
+        .into_iter()
+        .map(|k| {
+            if !bound.contains(&k.name) {
+                return Err(ResolveError::UnboundVariable { name: k.name, span: k.span });
+            }
+            let (property, display) = match k.property {
+                None => (None, None),
+                Some(prop_name) => {
+                    let pid = *dict.properties.get(&prop_name).ok_or_else(||
+                        ResolveError::UnknownRoleOrProperty {
+                            name: prop_name.clone(),
+                            span: k.span,
+                        }
+                    )?;
+                    (Some(pid), Some(prop_name))
+                }
+            };
+            Ok(ndb_engine::OrderKey {
+                variable: k.name,
+                property,
+                display,
+                descending: k.descending,
+            })
+        })
+        .collect::<Result<_, _>>()?;
+
     let as_of = query.as_of.map(resolve_as_of);
 
     Ok(QueryRequest {
@@ -250,6 +279,7 @@ pub fn resolve(query: NameQuery, dict: &Dictionaries) -> Result<QueryRequest, Re
         patterns,
         filter,
         returns,
+        order_by,
         limit: query.limit,
     })
 }
