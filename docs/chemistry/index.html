@@ -194,6 +194,178 @@ h2:first-child { margin-top: 0; }
         background: var(--border-soft); font-family: var(--font-mono); font-size: 11px; }
 a { color: var(--accent); }
 a:hover { color: #5aa0f2; }
+
+/* ── Lab Bench ────────────────────────────────────────────── */
+.lb-challenge {
+  background: rgba(74,144,226,0.10); border: 1px solid rgba(74,144,226,0.35);
+  border-radius: 6px; padding: 10px 14px; margin-bottom: 12px;
+}
+.lb-challenge .lb-c-head {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--accent); margin-bottom: 4px; font-weight: 600;
+}
+.lb-challenge .lb-c-name { font-weight: 600; color: var(--text-strong); margin-bottom: 4px; }
+.lb-challenge .lb-c-hint { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+.lb-challenge .lb-c-progress { font-family: var(--font-mono); font-size: 11px; color: var(--accent); float: right; }
+.lb-challenge.done { background: rgba(126,211,33,0.10); border-color: rgba(126,211,33,0.4); }
+.lb-challenge.done .lb-c-head, .lb-challenge.done .lb-c-progress { color: var(--product); }
+
+.lb-section-head {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-muted); margin: 14px 0 6px; font-weight: 600;
+  display: flex; align-items: center; gap: 8px;
+}
+.lb-section-head .pill { font-size: 10px; padding: 0 6px; }
+
+.lb-inventory {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+  gap: 6px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px; max-height: 200px; overflow-y: auto;
+}
+.lb-chip {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
+  padding: 6px 4px 4px; text-align: center; cursor: pointer;
+  font-family: var(--font-mono); font-size: 11px; color: var(--text);
+  position: relative; transition: border-color 0.1s, background 0.1s;
+  user-select: none;
+}
+.lb-chip:hover { border-color: var(--accent); background: rgba(74,144,226,0.08); }
+.lb-chip.disabled { opacity: 0.35; cursor: not-allowed; }
+.lb-chip .lb-chip-canvas {
+  width: 64px; height: 36px; margin: 0 auto; background: var(--surface-2);
+  border-radius: 3px; display: block;
+}
+.lb-chip .lb-chip-name { margin-top: 3px; font-size: 10px; line-height: 1.2;
+                        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb-chip .lb-chip-formula {
+  display: block; font-size: 9.5px; color: var(--text-muted);
+}
+.lb-chip.new {
+  animation: chip-arrive 1.4s ease-out 1;
+}
+@keyframes chip-arrive {
+  0%   { box-shadow: 0 0 0 0 var(--live); background: rgba(255,216,74,0.18); }
+  100% { box-shadow: 0 0 0 12px rgba(255,216,74,0); background: var(--surface); }
+}
+
+.lb-reactor {
+  display: grid; grid-template-columns: 1fr 60px 1fr; gap: 10px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 12px; margin: 12px 0;
+}
+.lb-bay {
+  background: var(--surface-2); border: 1px dashed var(--border-soft); border-radius: 5px;
+  min-height: 130px; padding: 8px;
+  display: flex; flex-wrap: wrap; align-content: flex-start; gap: 6px;
+  position: relative;
+}
+.lb-bay-label {
+  position: absolute; top: 6px; right: 8px;
+  font-size: 10px; color: var(--text-muted); text-transform: uppercase;
+  letter-spacing: 0.06em; pointer-events: none;
+}
+.lb-bay.empty::before {
+  content: attr(data-empty-msg);
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--text-muted); font-size: 11.5px; font-style: italic; pointer-events: none;
+}
+.lb-tile {
+  position: relative; min-width: 78px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
+  padding: 4px 4px 2px; text-align: center;
+  font-family: var(--font-mono); font-size: 11px;
+}
+.lb-tile .lb-tile-canvas { width: 64px; height: 36px; background: var(--surface-2); border-radius: 3px; display: block; margin: 0 auto; }
+.lb-tile .lb-tile-name { font-size: 10px; margin-top: 2px; max-width: 80px;
+                        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb-tile .lb-tile-stoich {
+  position: absolute; top: -6px; left: -6px;
+  background: var(--accent); color: #fff; border-radius: 999px;
+  padding: 0 6px; font-size: 10px; font-family: var(--font-mono); font-weight: 600;
+}
+.lb-tile .lb-tile-x {
+  position: absolute; top: -6px; right: -6px;
+  background: var(--surface); color: var(--text-muted); border: 1px solid var(--border);
+  border-radius: 50%; width: 16px; height: 16px; font-size: 12px;
+  line-height: 14px; text-align: center; cursor: pointer;
+}
+.lb-tile .lb-tile-x:hover { color: var(--quake-shallow); background: rgba(255,94,58,0.15); }
+.lb-tile.product { border-color: rgba(126,211,33,0.35); }
+.lb-tile.in-flight { animation: tile-fade-out 0.55s ease-out forwards; }
+.lb-tile.appearing  { animation: tile-fade-in  0.55s ease-out backwards 0.4s; }
+@keyframes tile-fade-out {
+  0%   { opacity: 1; transform: translateX(0) scale(1); }
+  60%  { opacity: 0.7; transform: translateX(24px) scale(0.9); }
+  100% { opacity: 0;   transform: translateX(60px) scale(0.7); }
+}
+@keyframes tile-fade-in {
+  0%   { opacity: 0; transform: translateX(-30px) scale(0.7); }
+  60%  { opacity: 1; transform: translateX(0)    scale(1.06); }
+  100% { opacity: 1; transform: translateX(0)    scale(1); }
+}
+
+.lb-arrow {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 28px; color: var(--catalyst); font-weight: 600;
+}
+.lb-energy-flash {
+  position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(circle, rgba(255,216,74,0.35) 0%, transparent 70%);
+  opacity: 0; border-radius: 6px;
+}
+.lb-reactor.running .lb-energy-flash { animation: flash 0.6s ease-out 0.3s 1; }
+@keyframes flash {
+  0% { opacity: 0; }
+  50% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.lb-controls {
+  display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 10px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 10px 14px; margin: 10px 0;
+  align-items: end;
+}
+.lb-controls .cond { display: flex; flex-direction: column; gap: 3px; }
+.lb-controls label { font-size: 10.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.lb-controls .value { font-family: var(--font-mono); color: var(--text-strong); font-size: 11.5px; }
+.lb-controls select, .lb-controls input[type="range"] { width: 100%; }
+.lb-controls select { background: var(--surface-2); border: 1px solid #303040; border-radius: 4px; color: #fff; padding: 4px 6px; font-size: 12px; }
+
+.lb-run-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+.lb-run-row .btn { padding: 8px 16px; font-size: 13px; }
+.lb-run-row .feedback { font-size: 11.5px; font-family: var(--font-mono); color: var(--text-muted); flex: 1; }
+.lb-run-row .feedback.ok   { color: var(--product); }
+.lb-run-row .feedback.warn { color: var(--catalyst); }
+.lb-run-row .feedback.err  { color: var(--quake-shallow); }
+
+.lb-last-run {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 10px 14px; margin-top: 8px; font-size: 12px; line-height: 1.5;
+}
+.lb-last-run.success { border-color: rgba(126,211,33,0.35); }
+.lb-last-run h4 { margin: 0 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
+.lb-last-run .lb-eq { font-family: var(--font-mono); font-size: 11px; color: var(--text); line-height: 1.55; }
+.lb-last-run .lb-stats { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); margin-top: 4px; }
+
+.lb-levels {
+  display: flex; flex-direction: column; gap: 4px;
+}
+.lb-level {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 6px 9px; font-size: 12px; cursor: pointer;
+  display: flex; align-items: center; gap: 6px;
+}
+.lb-level:hover { border-color: var(--accent); }
+.lb-level.active { background: rgba(74,144,226,0.10); border-color: rgba(74,144,226,0.5); }
+.lb-level.done   { background: rgba(126,211,33,0.08); border-color: rgba(126,211,33,0.4); }
+.lb-level .lb-level-icon { width: 18px; height: 18px; font-family: var(--font-mono); font-size: 11px;
+                           border-radius: 50%; display: flex; align-items: center; justify-content: center;
+                           background: var(--border); color: var(--text-muted); }
+.lb-level.active .lb-level-icon { background: var(--accent); color: #fff; }
+.lb-level.done   .lb-level-icon { background: var(--product); color: var(--bg); }
+.lb-level .lb-level-name { flex: 1; }
 </style>
 </head>
 <body>
@@ -226,6 +398,9 @@ a:hover { color: #5aa0f2; }
     <h2>Filter by family</h2>
     <div id="family-legend"></div>
 
+    <h2>Challenges</h2>
+    <div id="level-list" class="lb-levels"></div>
+
     <h2>Pathways</h2>
     <div id="pathway-list"></div>
 
@@ -246,11 +421,11 @@ a:hover { color: #5aa0f2; }
   </aside>
 
   <main id="centre">
-    <!-- LEFT: editor pane ─────────────────────────────────────── -->
+    <!-- LEFT: lab bench (interactive reactor) ─────────────────── -->
     <section id="pane-editor" class="pane">
       <div class="pane-header">
-        <h2>Editor</h2>
-        <span class="badge editor">local edit + commit</span>
+        <h2>Lab Bench</h2>
+        <span class="badge editor">click compounds → Run → see what nDB matches</span>
         <div class="grow"></div>
         <span class="sub-status" id="editor-status">—</span>
       </div>
@@ -506,190 +681,578 @@ function drawMoleculeInto(canvas, smiles, themeName) {
   } catch (_) { /* noop */ }
 }
 
-function renderEditor() {
+// ── Lab Bench state (live game) ──────────────────────────────────
+const LB = {
+  // What compounds the player has access to. Key: compound entity id.
+  // Once a compound is discovered (either starter or produced by a
+  // successful reaction) it goes into the inventory and can be added
+  // to the reactor.
+  inventory:     new Set(),     // Set<entity_id>
+  // Reactor contents.
+  reactor:       new Map(),     // Map<entity_id, count>
+  catalystId:    null,
+  solventId:     null,
+  temperature_K: 298,
+  pressure_atm:  1,
+  // Current challenge.
+  levelIdx:      0,
+  // Has the level just been won (for confetti / message).
+  levelJustDone: false,
+  lastMatched:   null,           // last successfully matched reaction id
+};
+
+// Hand-curated starter inventory (compound NAMES; we resolve to ids at
+// boot once the entities load). Picked to enable the first 2–3 levels
+// directly, with later levels unlocking ingredients as they're produced.
+const LB_STARTER_INVENTORY = [
+  "hydrogen", "nitrogen", "oxygen", "water", "carbon dioxide",
+  "methane", "sodium", "chlorine", "sodium hydroxide", "hydrogen chloride",
+  "iron", "salicylic acid", "acetic anhydride", "sulfuric acid",
+  "glucose", "adenosine triphosphate", "NAD+", "coenzyme A",
+];
+
+// Each LEVEL describes a target reaction by name and a hint. When the
+// player runs that reaction successfully the level marks done and the
+// next unlocks.
+const LEVELS = [
+  {
+    name: "Combust methane",
+    target: "Methane combustion",
+    hint: "Add 1× methane and 2× oxygen to the reactants bay. Spark it (T > 700 K).",
+  },
+  {
+    name: "Burn iron (rusting, slow!)",
+    target: "Iron oxidation (rusting)",
+    hint: "4 iron + 3 oxygen. Real-world ambient T is fine.",
+  },
+  {
+    name: "Make table salt",
+    target: "Sodium chloride formation",
+    hint: "Drop sodium and chlorine into the reactor — they really, really want each other.",
+  },
+  {
+    name: "Neutralise an acid",
+    target: "Sodium chloride neutralisation",
+    hint: "HCl + NaOH. Should be a one-clicker.",
+  },
+  {
+    name: "Synthesise ammonia (Haber-Bosch)",
+    target: "Haber-Bosch ammonia synthesis",
+    hint: "3× hydrogen and 1× nitrogen. Industrial conditions need T ≈ 720 K and P ≈ 200 atm + an iron catalyst.",
+  },
+  {
+    name: "Make aspirin",
+    target: "Aspirin synthesis",
+    hint: "Salicylic acid + acetic anhydride. Sulfuric acid catalyst, T ≈ 358 K.",
+  },
+  {
+    name: "Photosynthesis (overall)",
+    target: "Photosynthesis (overall, Calvin cycle summed)",
+    hint: "6× CO₂ + 6× H₂O. You'll need RuBisCO as the catalyst (it'll appear after step 5).",
+  },
+  {
+    name: "Start glycolysis (step 1)",
+    target: "Glycolysis step 1: hexokinase",
+    hint: "Glucose + ATP. The hexokinase enzyme catalyses it.",
+  },
+];
+
+function renderLabBench() {
   const host = $("#editor-host");
-  if (!STATE.selectedRxn) {
-    host.innerHTML = '<div class="empty">Pick a reaction from the top-bar dropdown,<br>or click a pathway from the sidebar.</div>';
-    return;
-  }
-  const rxn = STATE.rxnById.get(STATE.selectedRxn);
-  if (!rxn) return;
-  const s = rxnStoichiometry(rxn);
-  const t  = rxn.props[PROP.TEMPERATURE_K];
-  const p  = rxn.props[PROP.PRESSURE_ATM];
-  const ph = rxn.props[PROP.PH];
-  const G0 = rxn.props[PROP.GIBBS_KJMOL];
-  const K0 = rxn.props[PROP.EQUILIBRIUM_K];
-  const Y0 = rxn.props[PROP.YIELD_PCT];
 
-  // Build equation HTML.
-  function molHtml(stoich, compound) {
-    const sm = compound.props[PROP.SMILES];
-    const cid = "mol-" + compound.id.slice(-8) + "-" + Math.random().toString(36).slice(2, 6);
-    return `<div class="rxn-mol">
-      ${sm ? `<canvas class="mol-canvas" id="${cid}" width="110" height="80" data-smiles="${escapeHtml(sm)}" data-cid="${compound.id}"></canvas>`
-           : `<div class="mol-canvas" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:10.5px;font-family:var(--font-mono);text-align:center;padding:6px">${escapeHtml(compound.props[PROP.NAME] || '?')}</div>`}
-      <div class="mol-name">${escapeHtml(compound.props[PROP.NAME] || '?')}</div>
-      ${stoich > 1 ? `<div class="mol-stoich">×${stoich}</div>` : ""}
-    </div>`;
-  }
-  function sideHtml(arr) {
-    return arr.map(([n, c]) => molHtml(n, c)).join('<span class="rxn-plus">+</span>');
+  // Build inventory IF empty (first call). On subsequent calls we re-render
+  // the same inventory but updated; produced compounds get a "new" flash.
+  if (LB.inventory.size === 0) {
+    for (const name of LB_STARTER_INVENTORY) {
+      const e = STATE.byName.get(name);
+      if (e) LB.inventory.add(e.id);
+    }
   }
 
-  const cat = s.catalysts[0] ? s.catalysts[0][1].props[PROP.NAME] : null;
-  const sol = s.solvents[0]  ? s.solvents[0][1].props[PROP.NAME]  : null;
-  const overArrow = [cat ? "cat: " + escapeHtml(cat) : "", sol ? "in " + escapeHtml(sol) : ""].filter(Boolean).join(" · ");
+  const level = LEVELS[LB.levelIdx];
+  const levelDone = level ? isLevelComplete(level) : false;
+  const challenge = level ? `
+    <div class="lb-challenge ${levelDone ? 'done' : ''}">
+      <div class="lb-c-head">Challenge ${LB.levelIdx + 1} / ${LEVELS.length}
+        <span class="lb-c-progress">${levelDone ? '✓ COMPLETE' : 'in progress'}</span>
+      </div>
+      <div class="lb-c-name">${escapeHtml(level.name)}</div>
+      <div class="lb-c-hint">${escapeHtml(level.hint)}</div>
+    </div>
+  ` : '';
+
+  // Compound chips (alphabetical, with last-produced first if any).
+  const inv = [...LB.inventory]
+    .map(eid => compoundLookup(eid))
+    .filter(Boolean)
+    .sort((a, b) => (a.props[PROP.NAME] || "").localeCompare(b.props[PROP.NAME] || ""));
+
+  // Catalysts + solvents drop-down options.
+  const catOptions = [...STATE.catalysts.values()]
+    .sort((a, b) => (a.props[PROP.NAME] || "").localeCompare(b.props[PROP.NAME] || ""));
+  const solOptions = [...STATE.solvents.values()]
+    .sort((a, b) => (a.props[PROP.NAME] || "").localeCompare(b.props[PROP.NAME] || ""));
+
+  // Reactor reactant tiles.
+  const reactorTiles = [...LB.reactor.entries()].map(([eid, n]) => {
+    const c = compoundLookup(eid);
+    return tileHtml(c, n, "reactant", true);
+  }).join("");
+  const reactorEmpty = LB.reactor.size === 0;
 
   host.innerHTML = `
-    <div style="font-size:13px;color:var(--text-muted);margin-bottom:4px;">
-      <b style="color:var(--text-strong)">${escapeHtml(rxn.props[PROP.REACTION_NAME])}</b>
-      ${rxn.props[PROP.FAMILY] ? '<span class="pill" style="margin-left:8px">' + escapeHtml(rxn.props[PROP.FAMILY]) + '</span>' : ''}
-      ${rxn.props[PROP.PATHWAY_NAME] ? '<span class="pill" style="margin-left:6px;background:rgba(255,94,138,0.18);color:var(--pathway)">' + escapeHtml(rxn.props[PROP.PATHWAY_NAME]) + ' step ' + (rxn.props[PROP.PATHWAY_ORDER]||'?') + '</span>' : ''}
+    ${challenge}
+
+    <div class="lb-section-head">Inventory <span class="pill">${inv.length}</span>
+      <span style="color:var(--text-muted);font-weight:normal;font-size:11px;text-transform:none;letter-spacing:0">click to add to reactor</span>
     </div>
-    <div class="rxn-equation">
-      <div class="rxn-side">${sideHtml(s.reactants)}</div>
-      <div style="display:flex;flex-direction:column;align-items:center;min-width:110px;">
-        ${overArrow ? '<div class="rxn-overarrow">' + overArrow + '</div>' : ''}
-        <div class="rxn-arrow">→</div>
-        <div style="font-size:10.5px;color:var(--text-muted);font-family:var(--font-mono);">${(t||0).toFixed(0)} K · ${(p||1).toFixed(1)} atm</div>
+    <div class="lb-inventory" id="lb-inventory"></div>
+
+    <div class="lb-section-head">Reactor <span class="pill">arity ${reactorArity()}</span></div>
+    <div class="lb-reactor" id="lb-reactor">
+      <div class="lb-bay ${reactorEmpty ? 'empty' : ''}" id="lb-bay-react" data-empty-msg="Click an inventory chip to add a reactant">
+        <span class="lb-bay-label">reactants</span>
+        ${reactorTiles}
       </div>
-      <div class="rxn-side">${sideHtml(s.products)}</div>
+      <div class="lb-arrow">→</div>
+      <div class="lb-bay empty" id="lb-bay-product" data-empty-msg="Run a reaction to see products">
+        <span class="lb-bay-label">products</span>
+      </div>
+      <div class="lb-energy-flash"></div>
     </div>
 
-    <h3 style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-muted);margin:16px 0 6px;">Conditions <span style="color:var(--text-muted)">— drag to recompute ΔG' + K_eq</span></h3>
-    <div class="conditions">
+    <div class="lb-controls">
       <div class="cond">
-        <label>Temperature <span class="value"><span id="ed-temp">${(t||298).toFixed(1)}</span> K</span></label>
-        <input id="ed-temp-slider" type="range" min="200" max="1500" step="1" value="${t||298}">
+        <label>Catalyst</label>
+        <select id="lb-catalyst">
+          <option value="">— none —</option>
+          ${catOptions.map(c => `<option value="${c.id}" ${LB.catalystId === c.id ? 'selected' : ''}>${escapeHtml(c.props[PROP.NAME])}</option>`).join("")}
+        </select>
       </div>
       <div class="cond">
-        <label>Pressure <span class="value"><span id="ed-pres">${(p||1).toFixed(2)}</span> atm</span></label>
-        <input id="ed-pres-slider" type="range" min="0.01" max="300" step="0.01" value="${p||1}">
+        <label>Solvent</label>
+        <select id="lb-solvent">
+          <option value="">— none —</option>
+          ${solOptions.map(s => `<option value="${s.id}" ${LB.solventId === s.id ? 'selected' : ''}>${escapeHtml(s.props[PROP.NAME])}</option>`).join("")}
+        </select>
       </div>
-      <div class="cond" style="grid-column:1 / -1;">
-        <div class="derived" id="ed-derived">
-          ΔG = ${fmt(G0, 1)} kJ/mol  ·  K_eq = ${fmt(K0)}  ·  yield = ${fmt(Y0, 1)} %
-        </div>
-        <div class="hint" style="margin:2px 0 0;font-size:11px;">
-          Recompute uses ΔG' = ΔG·(T₀/T) (a deliberate simplification — see "What this is not" in the narrative).
-          K_eq' = exp(−ΔG'/RT). Edits commit immediately to nDB.
-        </div>
+      <div class="cond">
+        <label>Temperature <span class="value"><span id="lb-temp-v">${LB.temperature_K.toFixed(0)}</span> K</span></label>
+        <input id="lb-temp" type="range" min="200" max="2500" step="10" value="${LB.temperature_K}">
+      </div>
+      <div class="cond">
+        <label>Pressure <span class="value"><span id="lb-pres-v">${LB.pressure_atm.toFixed(1)}</span> atm</span></label>
+        <input id="lb-pres" type="range" min="0.1" max="300" step="0.1" value="${LB.pressure_atm}">
       </div>
     </div>
 
-    <div class="btn-row">
-      <button id="ed-commit" class="btn" disabled>↻ Commit changes to nDB</button>
-      <button id="ed-revert" class="btn secondary" disabled>Revert</button>
-      <span class="info" id="ed-pending">no pending edits</span>
+    <div class="lb-run-row">
+      <button id="lb-run" class="btn">▶ Run reaction</button>
+      <button id="lb-clear" class="btn secondary">Clear reactor</button>
+      <div class="feedback" id="lb-feedback">Drag at least 2 compounds into the reactor, then press Run.</div>
     </div>
+
+    <div id="lb-last-run-host"></div>
   `;
 
-  // Render molecule canvases.
-  host.querySelectorAll("canvas.mol-canvas").forEach(canv => {
-    const sm = canv.dataset.smiles;
+  // Render inventory chips with structures.
+  const invHost = $("#lb-inventory");
+  for (const c of inv) {
+    const div = document.createElement("div");
+    div.className = "lb-chip";
+    div.dataset.cid = c.id;
+    div.innerHTML = `
+      <canvas class="lb-chip-canvas" width="64" height="36"></canvas>
+      <div class="lb-chip-name" title="${escapeHtml(c.props[PROP.NAME])}">${escapeHtml(c.props[PROP.NAME])}</div>
+      <div class="lb-chip-formula">${escapeHtml(c.props[PROP.FORMULA] || '')}</div>
+    `;
+    invHost.appendChild(div);
+    const canv = div.querySelector("canvas");
+    const sm = c.props[PROP.SMILES];
     if (sm) drawMoleculeInto(canv, sm, "dark");
-    canv.addEventListener("click", () => {
-      const cid = canv.dataset.cid;
-      const c = compoundLookup(cid);
-      if (c) showCompoundInInspector(c);
+    div.addEventListener("click", () => {
+      LB.reactor.set(c.id, (LB.reactor.get(c.id) || 0) + 1);
+      renderLabBench();
+    });
+  }
+  // Render structures inside reactor tiles too.
+  host.querySelectorAll(".lb-tile canvas").forEach(canv => {
+    const eid = canv.parentElement.dataset.cid;
+    const c = compoundLookup(eid);
+    if (c && c.props[PROP.SMILES]) drawMoleculeInto(canv, c.props[PROP.SMILES], "dark");
+  });
+
+  // Reactor tile interactions (remove / decrement).
+  host.querySelectorAll(".lb-tile .lb-tile-x").forEach(x => {
+    x.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const eid = x.parentElement.dataset.cid;
+      LB.reactor.delete(eid);
+      renderLabBench();
+    });
+  });
+  host.querySelectorAll(".lb-tile .lb-tile-stoich").forEach(s => {
+    s.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const eid = s.parentElement.dataset.cid;
+      const n = LB.reactor.get(eid) || 0;
+      if (n > 1) LB.reactor.set(eid, n - 1);
+      else        LB.reactor.delete(eid);
+      renderLabBench();
     });
   });
 
-  // Wire condition sliders to local recompute + pending-commit indicator.
-  const tempSlider = $("#ed-temp-slider"), presSlider = $("#ed-pres-slider");
-  const tempReadout = $("#ed-temp"),       presReadout = $("#ed-pres");
-  const derivedEl   = $("#ed-derived"),    commitBtn   = $("#ed-commit"), revertBtn = $("#ed-revert"),
-        pendingEl   = $("#ed-pending");
+  // Wire conditions.
+  $("#lb-catalyst").addEventListener("change", (e) => { LB.catalystId = e.target.value || null; });
+  $("#lb-solvent").addEventListener("change",  (e) => { LB.solventId  = e.target.value || null; });
+  $("#lb-temp").addEventListener("input", (e) => {
+    LB.temperature_K = parseFloat(e.target.value);
+    $("#lb-temp-v").textContent = LB.temperature_K.toFixed(0);
+  });
+  $("#lb-pres").addEventListener("input", (e) => {
+    LB.pressure_atm = parseFloat(e.target.value);
+    $("#lb-pres-v").textContent = LB.pressure_atm.toFixed(1);
+  });
+  $("#lb-run").addEventListener("click", runLabBench);
+  $("#lb-clear").addEventListener("click", () => {
+    LB.reactor.clear();
+    renderLabBench();
+  });
 
-  const original = { t: t||298, p: p||1, G: G0, K: K0, Y: Y0 };
-  const pending  = { t: original.t, p: original.p };
-
-  function recomputeDerived() {
-    const Tn = pending.t;
-    // Simplified Van 't Hoff-ish recompute.
-    const G_n = (original.G != null) ? original.G * (original.t / Tn) : null;
-    const K_n = (G_n != null) ? Math.exp(-(G_n * 1000) / (R * Tn)) : null;
-    // Pressure scales yield slightly (Le Chatelier hand-wave).
-    const Y_n = (original.Y != null)
-      ? Math.min(100, Math.max(0, original.Y + Math.log10(pending.p / original.p) * 8))
-      : null;
-    derivedEl.innerHTML =
-      'ΔG = ' + fmt(G_n, 1) + ' kJ/mol  ·  K_eq = ' + fmt(K_n) + '  ·  yield = ' + fmt(Y_n, 1) + ' %' +
-      ((Tn !== original.t || pending.p !== original.p)
-        ? '  <span style="color:var(--catalyst)">(pending → click commit)</span>' : '');
-    const dirty = (Tn !== original.t) || (pending.p !== original.p);
-    commitBtn.disabled = !dirty;
-    revertBtn.disabled = !dirty;
-    pendingEl.textContent = dirty
-      ? 'pending: ΔG ' + fmt(G_n, 1) + ' kJ/mol  K_eq ' + fmt(K_n)
-      : 'no pending edits';
-    pending.G = G_n; pending.K = K_n; pending.Y = Y_n;
-  }
-  tempSlider.addEventListener("input", () => {
-    pending.t = parseFloat(tempSlider.value);
-    tempReadout.textContent = pending.t.toFixed(1);
-    recomputeDerived();
-  });
-  presSlider.addEventListener("input", () => {
-    pending.p = parseFloat(presSlider.value);
-    presReadout.textContent = pending.p.toFixed(2);
-    recomputeDerived();
-  });
-  revertBtn.addEventListener("click", () => {
-    pending.t = original.t; pending.p = original.p;
-    tempSlider.value = original.t; presSlider.value = original.p;
-    tempReadout.textContent = original.t.toFixed(1); presReadout.textContent = original.p.toFixed(2);
-    recomputeDerived();
-  });
-  commitBtn.addEventListener("click", () => commitReactionEdit(rxn, pending, original));
+  // Last-run summary if available.
+  if (LB.lastMatched) renderLastRun(LB.lastMatched);
 }
 
-// Commit a re-assertion of the reaction hyperedge with the new T/P/ΔG/K_eq/yield.
-async function commitReactionEdit(rxn, pending, original) {
-  $("#editor-status").textContent = "committing…";
-  // Build a hyperedge record with NEW properties, same id + roles, same kind.
-  // The engine re-asserts: prior version is superseded by tx_id_assert=0 (server stamps).
-  const propsArr = [];
-  // Carry over all current properties except those we're changing.
-  for (const p of rxn.raw.properties) {
-    const pid = p.prop_id;
-    if (pid === PROP.TEMPERATURE_K || pid === PROP.PRESSURE_ATM ||
-        pid === PROP.GIBBS_KJMOL  || pid === PROP.EQUILIBRIUM_K ||
-        pid === PROP.YIELD_PCT) continue;
-    propsArr.push(p);
-  }
-  if (pending.t != null) propsArr.push({ prop_id: PROP.TEMPERATURE_K, value: { tag: "f64", value: pending.t } });
-  if (pending.p != null) propsArr.push({ prop_id: PROP.PRESSURE_ATM,  value: { tag: "f64", value: pending.p } });
-  if (pending.G != null) propsArr.push({ prop_id: PROP.GIBBS_KJMOL,   value: { tag: "f64", value: pending.G } });
-  if (pending.K != null) propsArr.push({ prop_id: PROP.EQUILIBRIUM_K, value: { tag: "f64", value: pending.K } });
-  if (pending.Y != null) propsArr.push({ prop_id: PROP.YIELD_PCT,     value: { tag: "f64", value: pending.Y } });
+function tileHtml(c, n, role, removable) {
+  return `
+    <div class="lb-tile ${role}" data-cid="${c.id}">
+      ${n > 1 ? `<div class="lb-tile-stoich" title="decrement">${n}×</div>` : ''}
+      ${removable ? '<div class="lb-tile-x" title="remove">×</div>' : ''}
+      <canvas class="lb-tile-canvas" width="64" height="36"></canvas>
+      <div class="lb-tile-name" title="${escapeHtml(c.props[PROP.NAME])}">${escapeHtml(c.props[PROP.NAME])}</div>
+    </div>
+  `;
+}
 
-  const record = {
-    kind:             "hyper_edge",
-    hyperedge_id:     rxn.id,
-    type_id:          T_REACTION,
-    tx_id_assert:     0,
-    tx_id_supersede:  "active",
-    roles:            rxn.roles,
-    properties:       propsArr,
-  };
-  const r = await fetch(API_URL + "/commit", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ records: [record] }),
+function reactorArity() {
+  let n = 0;
+  for (const v of LB.reactor.values()) n += v;
+  if (LB.catalystId) n += 1;
+  if (LB.solventId)  n += 1;
+  return n;
+}
+
+// ── Find matching reaction ───────────────────────────────────────
+function reactionReactantCounts(rxn) {
+  // Returns Map<entity_id, count> of REACTANT slots.
+  const m = new Map();
+  for (const role of rxn.roles) {
+    if (role.role_id !== ROLE_REACTANT) continue;
+    m.set(role.entity_id, (m.get(role.entity_id) || 0) + 1);
+  }
+  return m;
+}
+function reactionCatalystId(rxn) {
+  const slot = rxn.roles.find(r => r.role_id === ROLE_CATALYST);
+  return slot ? slot.entity_id : null;
+}
+function reactionSolventId(rxn) {
+  const slot = rxn.roles.find(r => r.role_id === ROLE_SOLVENT);
+  return slot ? slot.entity_id : null;
+}
+
+function mapsEqualByCount(a, b) {
+  if (a.size !== b.size) return false;
+  for (const [k, v] of a) if (b.get(k) !== v) return false;
+  return true;
+}
+
+function findMatchingReaction() {
+  // Strict match: reactor reactant counts == reaction REACTANT counts.
+  // Catalyst + solvent: if the reaction REQUIRES one, the user must have
+  // picked the same. (Otherwise we'd let any reaction match for "drag
+  // 1 thing" reactants which is too permissive.)
+  const matches = [];
+  for (const rxn of STATE.reactions) {
+    const expected = reactionReactantCounts(rxn);
+    if (!mapsEqualByCount(expected, LB.reactor)) continue;
+    const requiredCat = reactionCatalystId(rxn);
+    if (requiredCat && requiredCat !== LB.catalystId) continue;
+    const requiredSol = reactionSolventId(rxn);
+    // Solvent is permissive — many "in water" reactions also work without
+    // explicitly picking water as solvent in the demo.
+    matches.push({ rxn, requiredSol });
+  }
+  if (!matches.length) return null;
+  // Tie-break by condition similarity: prefer the reaction whose recorded
+  // temperature is closest to the player's chosen temp.
+  matches.sort((a, b) => {
+    const ta = a.rxn.props[PROP.TEMPERATURE_K] || 298;
+    const tb = b.rxn.props[PROP.TEMPERATURE_K] || 298;
+    return Math.abs(ta - LB.temperature_K) - Math.abs(tb - LB.temperature_K);
   });
-  if (!r.ok) {
-    const t = await r.text();
-    $("#editor-status").textContent = "commit failed: " + r.status + " " + t.slice(0, 60);
+  return matches[0].rxn;
+}
+
+// Diagnose why the reactor doesn't match — surface a hint.
+function diagnoseNoMatch() {
+  if (LB.reactor.size === 0) return "Reactor is empty. Click a compound chip from the inventory.";
+  // Look for the closest reaction by reactant overlap.
+  let best = null, bestScore = 0;
+  for (const rxn of STATE.reactions) {
+    const expected = reactionReactantCounts(rxn);
+    let overlap = 0;
+    for (const [k, v] of expected) {
+      const have = LB.reactor.get(k) || 0;
+      overlap += Math.min(v, have);
+    }
+    if (overlap > bestScore) { bestScore = overlap; best = { rxn, expected }; }
+  }
+  if (!best) return "These reactants don't appear in any reaction in nDB. Try different compounds.";
+  // What's missing in the reactor relative to the best match?
+  const missing = [];
+  for (const [k, v] of best.expected) {
+    const have = LB.reactor.get(k) || 0;
+    if (have < v) {
+      const c = compoundLookup(k);
+      missing.push(`${v - have}× ${c ? c.props[PROP.NAME] : "?"}`);
+    }
+  }
+  const extra = [];
+  for (const [k, v] of LB.reactor) {
+    const exp = best.expected.get(k) || 0;
+    if (v > exp) {
+      const c = compoundLookup(k);
+      extra.push(`${v - exp}× ${c ? c.props[PROP.NAME] : "?"}`);
+    }
+  }
+  let h = `Closest match: <b>${escapeHtml(best.rxn.props[PROP.REACTION_NAME])}</b>.`;
+  if (missing.length) h += ` Missing: ${missing.join(", ")}.`;
+  if (extra.length)   h += ` Extra: ${extra.join(", ")}.`;
+  const cat = reactionCatalystId(best.rxn);
+  if (cat && cat !== LB.catalystId) {
+    const catC = compoundLookup(cat);
+    h += ` Catalyst: ${catC ? catC.props[PROP.NAME] : "?"}.`;
+  }
+  return h;
+}
+
+// ── Run the reactor — match + animate + commit ──────────────────
+async function runLabBench() {
+  const fb = $("#lb-feedback");
+  const match = findMatchingReaction();
+  if (!match) {
+    fb.className = "feedback warn";
+    fb.innerHTML = diagnoseNoMatch();
     return;
   }
-  const j = await r.json().catch(() => ({}));
-  $("#editor-status").textContent = "committed → tx " + (j.tx_id || "?");
-  // We let /subscribe loop pick up the change for the RIGHT pane; the LEFT
-  // pane refreshes from /iter so its "original" baseline updates too.
-  await loadAll();
-  renderEditor();
+
+  fb.className = "feedback ok";
+  fb.textContent = "Matched: " + (match.props[PROP.REACTION_NAME]) + " — running…";
+
+  // Animate the existing tiles fading right.
+  document.querySelectorAll("#lb-bay-react .lb-tile").forEach(t => t.classList.add("in-flight"));
+  document.getElementById("lb-reactor").classList.add("running");
+
+  // After a beat, populate the product bay.
+  await new Promise(r => setTimeout(r, 750));
+  const productBay = $("#lb-bay-product");
+  productBay.classList.remove("empty");
+  productBay.innerHTML = '<span class="lb-bay-label">products</span>';
+  const productCounts = new Map();
+  for (const role of match.roles) {
+    if (role.role_id !== ROLE_PRODUCT) continue;
+    productCounts.set(role.entity_id, (productCounts.get(role.entity_id) || 0) + 1);
+  }
+  const newDiscoveries = [];
+  for (const [eid, n] of productCounts) {
+    const c = compoundLookup(eid);
+    if (!c) continue;
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = tileHtml(c, n, "product", false);
+    const tile = wrapper.firstElementChild;
+    tile.classList.add("appearing");
+    productBay.appendChild(tile);
+    const canv = tile.querySelector("canvas");
+    if (c.props[PROP.SMILES]) drawMoleculeInto(canv, c.props[PROP.SMILES], "dark");
+    // Add to inventory (if not already there).
+    if (!LB.inventory.has(eid)) {
+      LB.inventory.add(eid);
+      newDiscoveries.push(c.props[PROP.NAME]);
+    }
+  }
+
+  LB.lastMatched = match.id;
+
+  // Re-commit the reaction to nDB so the Live Mirror picks it up
+  // via /subscribe. Same trick as the old editor: re-assert with new
+  // run-timestamp property.
+  await commitRanReaction(match);
+
+  // Compose final feedback message.
+  const extra = newDiscoveries.length
+    ? ` · New in inventory: ${newDiscoveries.join(", ")}`
+    : "";
+  fb.className = "feedback ok";
+  fb.innerHTML = "✓ <b>" + escapeHtml(match.props[PROP.REACTION_NAME]) + "</b>"
+    + ` (ΔG ${fmt(match.props[PROP.GIBBS_KJMOL], 1)} kJ/mol)` + extra;
+
+  // Render the "last run" card.
+  renderLastRun(match.id);
+
+  // Level progression — any reaction whose name matches a level target
+  // marks that level as done. If the current level's target was hit,
+  // auto-advance to the next un-done level.
+  const ranName = match.props[PROP.REACTION_NAME];
+  for (const lvl of LEVELS) {
+    if (lvl.target === ranName) LB._completed.add(lvl.target);
+  }
+  renderLevelList();
+  const cur = LEVELS[LB.levelIdx];
+  if (cur && LB._completed.has(cur.target)) {
+    setTimeout(() => {
+      // Advance to first un-done level after current.
+      for (let i = LB.levelIdx + 1; i < LEVELS.length; i++) {
+        if (!LB._completed.has(LEVELS[i].target)) {
+          LB.levelIdx = i;
+          break;
+        }
+      }
+      renderLabBench();
+      renderLevelList();
+    }, 1800);
+  }
+
+  // After a beat, reset reactor for next round (keep inventory).
+  setTimeout(() => {
+    LB.reactor.clear();
+    renderLabBench();
+  }, 2500);
 }
+
+async function commitRanReaction(rxn) {
+  // Build a new reaction record with a "ran_at_temperature" annotation
+  // overriding the stored T/P. This is the same /commit + /subscribe
+  // round-trip the old editor used.
+  $("#editor-status").textContent = "running + committing…";
+  const propsArr = [];
+  for (const p of rxn.raw.properties) {
+    const pid = p.prop_id;
+    if (pid === PROP.TEMPERATURE_K || pid === PROP.PRESSURE_ATM) continue;
+    propsArr.push(p);
+  }
+  propsArr.push({ prop_id: PROP.TEMPERATURE_K, value: { tag: "f64", value: LB.temperature_K } });
+  propsArr.push({ prop_id: PROP.PRESSURE_ATM,  value: { tag: "f64", value: LB.pressure_atm } });
+  const record = {
+    kind: "hyper_edge",
+    hyperedge_id: rxn.id,
+    type_id: T_REACTION,
+    tx_id_assert: 0,
+    tx_id_supersede: "active",
+    roles: rxn.roles,
+    properties: propsArr,
+  };
+  try {
+    const r = await fetch(API_URL + "/commit", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ records: [record] }),
+    });
+    if (r.ok) {
+      const j = await r.json().catch(() => ({}));
+      $("#editor-status").textContent = "ran → tx " + (j.tx_id || "?");
+      await loadAll();
+    } else {
+      $("#editor-status").textContent = "commit failed: " + r.status;
+    }
+  } catch (e) {
+    $("#editor-status").textContent = "commit error: " + e;
+  }
+}
+
+function renderLastRun(rxnId) {
+  const rxn = STATE.rxnById.get(rxnId);
+  if (!rxn) return;
+  const s = rxnStoichiometry(rxn);
+  const sideText = (arr) => arr.map(([n, c]) => (n > 1 ? n + ' ' : '') + (c.props[PROP.NAME] || '?')).join(' + ');
+  const host = $("#lb-last-run-host");
+  if (!host) return;
+  host.innerHTML = `
+    <div class="lb-last-run success">
+      <h4>Last successful run</h4>
+      <div class="lb-eq">${escapeHtml(sideText(s.reactants))} → ${escapeHtml(sideText(s.products))}</div>
+      <div class="lb-stats">
+        T ${fmt(rxn.props[PROP.TEMPERATURE_K], 0)} K · P ${fmt(rxn.props[PROP.PRESSURE_ATM], 1)} atm ·
+        ΔG ${fmt(rxn.props[PROP.GIBBS_KJMOL], 1)} kJ/mol ·
+        K_eq ${fmt(rxn.props[PROP.EQUILIBRIUM_K])} ·
+        yield ${fmt(rxn.props[PROP.YIELD_PCT], 1)}%
+      </div>
+    </div>
+  `;
+}
+
+// ── Level system ────────────────────────────────────────────────
+function isLevelComplete(level) {
+  // A level is complete when its target reaction has been the lastMatched at any point.
+  return LB._completed && LB._completed.has(level.target);
+}
+LB._completed = new Set();
+
+function markLevelDone(reactionName) {
+  LB._completed.add(reactionName);
+}
+
+function renderLevelList() {
+  const host = $("#level-list");
+  if (!host) return;
+  host.innerHTML = "";
+  LEVELS.forEach((lvl, i) => {
+    const done = LB._completed.has(lvl.target);
+    const active = i === LB.levelIdx;
+    const div = document.createElement("div");
+    div.className = "lb-level" + (active ? " active" : "") + (done ? " done" : "");
+    div.innerHTML = `
+      <span class="lb-level-icon">${done ? '✓' : (i + 1)}</span>
+      <span class="lb-level-name">${escapeHtml(lvl.name)}</span>
+    `;
+    div.addEventListener("click", () => {
+      LB.levelIdx = i;
+      LB.reactor.clear();
+      renderLabBench();
+      renderLevelList();
+    });
+    host.appendChild(div);
+  });
+}
+
+// Re-render hooks: when a reaction completes its target, the level
+// system records it before the auto-advance.
+const _origRunHook = runLabBench;
+
+// renderEditor is now an alias for renderLabBench so the rest of the
+// code (selectReaction, boot, subscribe handlers) calls into the new flow.
+function renderEditor() {
+  renderLabBench();
+}
+
+// Keep the old reaction-picker behaviour: if the user picks a reaction
+// from the top-bar dropdown, pre-fill the reactor with its reactants.
+function loadReactionIntoReactor(rxn) {
+  LB.reactor.clear();
+  for (const role of rxn.roles) {
+    if (role.role_id !== ROLE_REACTANT) continue;
+    LB.reactor.set(role.entity_id, (LB.reactor.get(role.entity_id) || 0) + 1);
+  }
+  // Surface catalyst + solvent into the controls.
+  LB.catalystId    = reactionCatalystId(rxn);
+  LB.solventId     = reactionSolventId(rxn);
+  LB.temperature_K = rxn.props[PROP.TEMPERATURE_K] || 298;
+  LB.pressure_atm  = rxn.props[PROP.PRESSURE_ATM]  || 1;
+  renderLabBench();
+}
+
+// (The legacy renderEditor + commitReactionEdit functions that lived
+//  here have been deleted — they're replaced by renderLabBench +
+//  runLabBench + commitRanReaction above.)
 
 // ── Mirror pane (RIGHT) — driven entirely by /subscribe ────────────
 function compoundIdsInReaction(rxn) {
@@ -741,10 +1304,14 @@ function renderMirror() {
 // ── Selection ────────────────────────────────────────────────────
 function selectReaction(id) {
   STATE.selectedRxn = id;
-  renderEditor();
+  const rxn = STATE.rxnById.get(id);
+  // When the user picks a reaction from the dropdown, pre-fill the
+  // Lab Bench reactor with that reaction's reactants + conditions
+  // so playing it is one click away.
+  if (rxn) loadReactionIntoReactor(rxn);
+  else     renderEditor();
   renderMirror();
   renderInspector();
-  // Match the picker.
   $("#rxn-picker").value = id;
 }
 
@@ -923,7 +1490,8 @@ $("#live-indicator").addEventListener("click", () => {
     refreshRxnPicker();
     refreshFamilyLegend();
     refreshPathwayList();
-    renderEditor();
+    renderEditor();        // alias for renderLabBench
+    renderLevelList();
     renderMirror();
     renderInspector();
     startSubscribe();
