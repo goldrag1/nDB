@@ -177,10 +177,14 @@
   <p class="lede">
     Pattern matching over hyperedges, with property projection,
     multi-pattern joins via shared variables, recursive transitive
-    closure, and time travel. The editor below talks to the live
+    closure, time travel, <strong>and now declarative writes</strong>
+    (<code>create</code> + <code>delete</code>).
+    The editor below talks to the live
     <a href="/biodiv_ndb/"><strong>biodiv_ndb</strong></a> engine —
     145 species, 22 regions, 63 interactions, 6 food webs. Click an
-    example to try it, edit freely, hit <em>Run</em>.
+    example to try it, edit freely, hit <em>Run</em>. Writes really
+    do mutate the live engine, but everything's tombstone-able and
+    you can see prior state via <code>as of tx_id N</code>.
   </p>
 
   <div class="qlp-grid">
@@ -221,10 +225,14 @@ limit 10"></textarea>
         <dd>Multiple patterns share variables; same name binds to the same value (join).</dd>
         <dt>where ?x &lt;= 6 and ?y = "Vietnam"</dt>
         <dt>type+ · type* · type? · type{1,3}</dt>
-        <dd>Recursive transitive closure on a hyperedge type. One endpoint must be a literal UUID in v1.</dd>
+        <dd>Recursive transitive closure on a hyperedge type. Anchor must be a literal UUID or a variable bound by an earlier pattern.</dd>
         <dt>as of tx_id 42</dt>
         <dd>Snapshot the query at a past transaction.</dd>
         <dt>return ?a, ?b.name limit N</dt>
+        <dt>create type(prop: val, role: ?v) as ?new</dt>
+        <dd>Declarative insert. New entity or hyperedge gets a fresh UUID, optionally bound to <code>?new</code> for downstream return.</dd>
+        <dt>match … delete ?v</dt>
+        <dd>Tombstone every bound entity / hyperedge. The old record stays visible via <code>as of</code>.</dd>
       </dl>
     </aside>
   </div>
@@ -353,6 +361,39 @@ order by ?r.name asc, ?pr.common_name asc`,
     query: `match species(common_name: "Gray wolf") as ?wolf
       predation+(predator: ?wolf, prey: ?prey)
 return ?prey.common_name`,
+  },
+  {
+    title: "13. CREATE — add a new species",
+    blurb: "Declarative insert. Returns the new entity's projected properties — try running this twice to add it twice.",
+    query: `create species(common_name: "Eastern quoll",
+               scientific_name: "Dasyurus viverrinus",
+               life_form: "animal",
+               kingdom: "Animalia",
+               family: "Dasyuridae") as ?new
+return ?new.common_name, ?new.scientific_name, ?new.family`,
+  },
+  {
+    title: "14. Verify CREATE worked — match by name",
+    blurb: "After example 13 runs, the Eastern quoll is live in the engine. Find it by common name.",
+    query: `match species(common_name: "Eastern quoll") as ?q
+return ?q.scientific_name, ?q.family, ?q.kingdom`,
+  },
+  {
+    title: "15. DELETE — tombstone every Eastern quoll",
+    blurb: "match + delete. Returns the properties of what was deleted (projected before tombstone takes effect).",
+    query: `match species(common_name: "Eastern quoll") as ?q
+delete ?q
+return ?q.scientific_name`,
+  },
+  {
+    title: "16. CREATE a hyperedge from bound variables",
+    blurb: "Patterns first to bind role-fillers, then create a new pollination linking them.",
+    query: `match species(common_name: "Almond tree")     as ?tree
+      species(common_name: "Western honeybee") as ?bee
+      region(name: "North America")           as ?region
+create pollination(plant: ?tree, pollinator: ?bee, region: ?region,
+                    season_from: 3, season_to: 4, obligate: false) as ?new
+return ?new`,
   },
 ];
 

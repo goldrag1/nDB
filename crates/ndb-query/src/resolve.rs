@@ -214,6 +214,29 @@ pub fn resolve(query: NameQuery, dict: &Dictionaries) -> Result<QueryRequest, Re
         None => None,
     };
 
+    // deletes — variable must be bound by a match pattern. Resolve
+    // BEFORE creates so a `match X delete ?x create Y(...) as ?x return ?x`
+    // sequence treats them as ordered (delete the old, create the new
+    // under the same self-bind).
+    let deletes: Vec<ndb_engine::DeleteClause> = query
+        .deletes
+        .into_iter()
+        .map(|d| {
+            if !bound.contains(&d.name) {
+                return Err(ResolveError::UnboundVariable { name: d.name, span: d.span });
+            }
+            Ok(ndb_engine::DeleteClause { variable: d.name })
+        })
+        .collect::<Result<_, _>>()?;
+
+    // creates — must run BEFORE return resolution so that `create ... as ?new`
+    // makes `?new` visible to the return list.
+    let creates: Vec<ndb_engine::CreateClause> = query
+        .creates
+        .into_iter()
+        .map(|c| resolve_create(c, dict, &mut bound))
+        .collect::<Result<_, _>>()?;
+
     let returns: Vec<ndb_engine::ReturnItem> = query
         .returns
         .into_iter()
@@ -281,8 +304,91 @@ pub fn resolve(query: NameQuery, dict: &Dictionaries) -> Result<QueryRequest, Re
         returns,
         order_by,
         limit: query.limit,
+        creates,
+        deletes,
     })
 }
+
+fn resolve_create(
+    c: crate::ast::NameCreate,
+    dict: &Dictionaries,
+    bound: &mut HashSet<String>,
+) -> Result<ndb_engine::CreateClause, ResolveError> {
+    use crate::resolve::TypeKindObserved::*;
+    let type_id = *dict.types.get(&c.type_name).ok_or_else(||
+        ResolveError::UnknownType { name: c.type_name.clone(), span: c.type_span }
+    )?;
+    let observed = dict.type_kinds.get(&type_id).copied();
+    let is_hyperedge = match observed {
+        Some(Hyperedge) => true,
+        Some(Entity)    => false,
+        // No observations yet — new type. Heuristic: if every binding
+        // matches a registered ROLE name (and not a property), treat as
+        // hyperedge; else entity. The user can pick a different type if
+        // we guess wrong.
+        Some(Both) | None => c.bindings.iter().any(|b| dict.roles.contains_key(&b.name)),
+    };
+
+    // Each binding inside parens is either a role binding or a property
+    // binding. The same name can't be both (resolver enforces).
+    let mut role_bindings: Vec<ndb_engine::CreateRoleBinding> = Vec::new();
+    let mut prop_bindings: Vec<ndb_engine::CreateBinding>     = Vec::new();
+    for b in c.bindings {
+        let is_role = dict.roles.contains_key(&b.name);
+        let is_prop = dict.properties.contains_key(&b.name);
+        if is_role && is_prop {
+            return Err(ResolveError::AmbiguousName { name: b.name, span: b.name_span });
+        }
+        if !is_role && !is_prop {
+            return Err(ResolveError::UnknownRoleOrProperty {
+                name: b.name.clone(),
+                span: b.name_span,
+            });
+        }
+        let term = resolve_term(b.term, bound);
+        if is_role {
+            role_bindings.push(ndb_engine::CreateRoleBinding {
+                role_id: dict.roles[&b.name],
+                term,
+            });
+        } else {
+            prop_bindings.push(ndb_engine::CreateBinding {
+                property_id: dict.properties[&b.name],
+                term,
+            });
+        }
+    }
+    // Roles only make sense on hyperedges.
+    if !is_hyperedge && !role_bindings.is_empty() {
+        return Err(ResolveError::UnknownRoleOrProperty {
+            name: format!("{} (role on entity type)", c.type_name),
+            span: c.type_span,
+        });
+    }
+
+    // Self-bind variable becomes available downstream.
+    if let Some(ref v) = c.self_var {
+        bound.insert(v.clone());
+    }
+
+    Ok(if is_hyperedge {
+        ndb_engine::CreateClause::Hyperedge {
+            type_id,
+            role_bindings,
+            properties: prop_bindings,
+            self_var: c.self_var,
+        }
+    } else {
+        ndb_engine::CreateClause::Entity {
+            type_id,
+            properties: prop_bindings,
+            self_var: c.self_var,
+        }
+    })
+}
+
+// Note: the actual term-resolution logic lives lower in this file as
+// `fn resolve_term(t: NameTerm, bound: &mut HashSet<String>) -> Term`.
 
 fn resolve_as_of(a: NameAsOf) -> AsOf {
     match a {

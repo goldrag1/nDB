@@ -361,6 +361,8 @@ fn query_round_trip_entity_pattern() {
         returns: vec!["c".into(), "n".into()],
         order_by: Vec::new(),
         limit: None,
+        creates: Vec::new(),
+        deletes: Vec::new(),
     };
     let resp = cli.query(&req).unwrap();
     assert_eq!(resp.columns, vec!["c", "n"]);

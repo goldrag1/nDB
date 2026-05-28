@@ -41,6 +41,10 @@ pub enum TokKind {
     Asc,
     /// `desc` keyword.
     Desc,
+    /// `create` keyword — declarative insert.
+    Create,
+    /// `delete` keyword — tombstone via self-bind variable.
+    Delete,
     // Reserved words (case-insensitive on input)
     /// `match`
     Match,
@@ -137,6 +141,8 @@ impl TokKind {
             Self::By    => "`by`".into(),
             Self::Asc   => "`asc`".into(),
             Self::Desc  => "`desc`".into(),
+            Self::Create => "`create`".into(),
+            Self::Delete => "`delete`".into(),
             Self::As => "`as`".into(),
             Self::Of => "`of`".into(),
             Self::And => "`and`".into(),
@@ -521,6 +527,8 @@ fn lex_ident_or_uuid(source: &str, start: usize) -> Result<(Tok, usize), ParseEr
         "by"    => TokKind::By,
         "asc"   => TokKind::Asc,
         "desc"  => TokKind::Desc,
+        "create" => TokKind::Create,
+        "delete" => TokKind::Delete,
         "as" => TokKind::As,
         "of" => TokKind::Of,
         "and" => TokKind::And,

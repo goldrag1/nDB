@@ -54,6 +54,8 @@ pub const DEFAULT_MAX_RECURSION_DEPTH: u32 = 64;
 ///     returns: vec!["p".into()],
 ///     order_by: vec![],
 ///     limit: Some(10),
+///     creates: vec![],
+///     deletes: vec![],
 /// };
 /// let s = serde_json::to_string(&q).unwrap();
 /// let parsed: QueryRequest = serde_json::from_str(&s).unwrap();
@@ -96,6 +98,77 @@ pub struct QueryRequest {
     /// cap regardless — see §6.4 of the query-language spec.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
+
+    /// Optional `create` clauses (declarative writes). Each clause
+    /// produces one new entity OR hyperedge — the resolver decides
+    /// based on whether the type was observed as an entity or
+    /// hyperedge in the dictionary snapshot.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub creates: Vec<CreateClause>,
+
+    /// Optional `delete` clauses (tombstones). Each entry names a
+    /// variable bound by a `match` pattern; the executor writes a
+    /// tombstone record at the current commit tx for whichever record
+    /// the UUID points at.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deletes: Vec<DeleteClause>,
+}
+
+/// One `create` clause. See [`QueryRequest::creates`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CreateClause {
+    /// `create type(prop_a: lit, prop_b: ?bound_var) as ?new` — new entity.
+    Entity {
+        /// Type dictionary id.
+        type_id: u32,
+        /// Property bindings. Properties are written to the new
+        /// entity's record. `Term::Var` is resolved at exec-time
+        /// against the current row's bindings.
+        properties: Vec<CreateBinding>,
+        /// Optional `as ?v` capture variable.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        self_var: Option<String>,
+    },
+    /// `create type(role_a: ?ent_a, role_b: uuid:..., prop_c: lit) as ?new`
+    /// — new hyperedge.
+    Hyperedge {
+        /// Type dictionary id.
+        type_id: u32,
+        /// Role-fillers, in source order.
+        role_bindings: Vec<CreateRoleBinding>,
+        /// Property bindings.
+        properties: Vec<CreateBinding>,
+        /// Optional `as ?v` capture variable.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        self_var: Option<String>,
+    },
+}
+
+/// A property binding inside a `create` clause.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CreateBinding {
+    /// Property dictionary id.
+    pub property_id: u32,
+    /// Term — literal value or already-bound variable resolved per row.
+    pub term: Term,
+}
+
+/// A role binding inside a `create` clause for a hyperedge.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CreateRoleBinding {
+    /// Role dictionary id.
+    pub role_id: u32,
+    /// Term — literal UUID or already-bound variable (whose value
+    /// must be a UUID).
+    pub term: Term,
+}
+
+/// One `delete` clause. See [`QueryRequest::deletes`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DeleteClause {
+    /// Variable name (without the `?`) bound by a `match` pattern.
+    pub variable: String,
 }
 
 /// One sort key for [`QueryRequest::order_by`].
@@ -750,6 +823,8 @@ mod tests {
             returns: vec!["p".into(), "disease".into()],
             order_by: Vec::new(),
             limit: Some(100),
+            creates: Vec::new(),
+            deletes: Vec::new(),
         };
         assert_eq!(round_trip(q.clone()), q);
     }
@@ -763,6 +838,8 @@ mod tests {
             returns: vec!["x".into()],
             order_by: Vec::new(),
             limit: None,
+            creates: Vec::new(),
+            deletes: Vec::new(),
         };
         let s = serde_json::to_string(&q).unwrap();
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();

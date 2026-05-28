@@ -147,6 +147,121 @@ pub fn execute(engine: &mut Engine, req: QueryRequest) -> Result<QueryResponse, 
         truncated = true;
     }
 
+    // ── Write side ────────────────────────────────────────────────
+    // Deletes first (so create can "replace" an old record cleanly in
+    // the same query), then creates. Both share a single write txn
+    // when there's anything to do — the engine handles MVCC.
+    let has_writes = !req.deletes.is_empty() || !req.creates.is_empty();
+    let mut projection_snapshot = snapshot;
+    if has_writes {
+        // Deletes: tombstone every UUID bound by each variable across
+        // all rows. The same UUID across multiple rows tombstones once
+        // (the underlying SSTableKey identifies it).
+        let mut to_tombstone: HashSet<uuid::Uuid> = HashSet::new();
+        for d in &req.deletes {
+            for r in &rows {
+                if let Some(Value::EntityRef(eid)) = r.get(&d.variable) {
+                    to_tombstone.insert(eid.into_uuid());
+                }
+            }
+        }
+        if !to_tombstone.is_empty() {
+            let mut txn = engine.begin_write();
+            let tx_id = txn.tx_id();
+            for uuid in &to_tombstone {
+                txn.put_raw(crate::record::Record::Tombstone(crate::record::TombstoneRecord {
+                    target_id: *uuid,
+                    tx_id_supersede: tx_id,
+                }));
+            }
+            txn.commit().map_err(QueryError::Engine)?;
+        }
+
+        // Creates: one record per clause. Bindings (role + property) resolve
+        // their variable Term:s against the FIRST surviving row (or an empty
+        // bindings if there were no match patterns).
+        if !req.creates.is_empty() {
+            let row_for_bindings: Bindings = rows.first().cloned().unwrap_or_default();
+            let mut txn = engine.begin_write();
+            let tx_id = txn.tx_id();
+            for c in &req.creates {
+                let new_uuid = match c {
+                    crate::wire_query::CreateClause::Entity { type_id, properties, self_var } => {
+                        let eid = EntityId::now_v7();
+                        let mut props_v: Vec<(PropertyId, Value)> = Vec::with_capacity(properties.len());
+                        for cb in properties {
+                            let v = resolve_create_term(&cb.term, &row_for_bindings)?;
+                            props_v.push((PropertyId::new(cb.property_id), v));
+                        }
+                        txn.put_entity(crate::record::EntityRecord {
+                            entity_id: eid,
+                            type_id: TypeId::new(*type_id),
+                            tx_id_assert: tx_id,
+                            tx_id_supersede: TxId::ACTIVE,
+                            properties: props_v,
+                        });
+                        if let Some(v) = self_var.as_deref() {
+                            // Make this binding visible for downstream return projection.
+                            // Each row gets the same self-bind.
+                            for r in &mut rows { r.insert(v.to_string(), Value::EntityRef(eid)); }
+                            // If there were no match patterns, ensure a single row exists
+                            // so the return projection sees the new entity.
+                            if rows.is_empty() {
+                                let mut b = Bindings::new();
+                                b.insert(v.to_string(), Value::EntityRef(eid));
+                                rows.push(b);
+                            }
+                        }
+                        eid.into_uuid()
+                    }
+                    crate::wire_query::CreateClause::Hyperedge { type_id, role_bindings, properties, self_var } => {
+                        let hid = HyperedgeId::now_v7();
+                        let mut roles: Vec<(RoleId, EntityId)> = Vec::with_capacity(role_bindings.len());
+                        for rb in role_bindings {
+                            let v = resolve_create_term(&rb.term, &row_for_bindings)?;
+                            let Value::EntityRef(eid) = v else {
+                                return Err(QueryError::RecursionConfigInvalid {
+                                    reason: format!("role filler for role_id={} is not an entity UUID", rb.role_id),
+                                });
+                            };
+                            roles.push((RoleId::new(rb.role_id), eid));
+                        }
+                        let mut props_v: Vec<(PropertyId, Value)> = Vec::with_capacity(properties.len());
+                        for cb in properties {
+                            let v = resolve_create_term(&cb.term, &row_for_bindings)?;
+                            props_v.push((PropertyId::new(cb.property_id), v));
+                        }
+                        txn.put_hyperedge(crate::record::HyperEdgeRecord {
+                            hyperedge_id: hid,
+                            type_id: TypeId::new(*type_id),
+                            tx_id_assert: tx_id,
+                            tx_id_supersede: TxId::ACTIVE,
+                            roles,
+                            properties: props_v,
+                        });
+                        if let Some(v) = self_var.as_deref() {
+                            // EntityRef is the storage representation for both kinds.
+                            let eref = EntityId::from_uuid(hid.into_uuid());
+                            for r in &mut rows { r.insert(v.to_string(), Value::EntityRef(eref)); }
+                            if rows.is_empty() {
+                                let mut b = Bindings::new();
+                                b.insert(v.to_string(), Value::EntityRef(eref));
+                                rows.push(b);
+                            }
+                        }
+                        hid.into_uuid()
+                    }
+                };
+                let _ = new_uuid;  // silence: we don't currently surface it outside self_var
+            }
+            txn.commit().map_err(QueryError::Engine)?;
+        }
+        // Newly-committed records aren't visible at the original
+        // `snapshot` — bump projection to the latest committed tx so
+        // `return ?new.prop` after a `create as ?new` sees the props.
+        projection_snapshot = TxId::ACTIVE;
+    }
+
     // Build the column header list (independent of row iteration so we
     // don't have to recompute per row).
     let columns: Vec<String> = req.returns.iter().map(ReturnItem::column_name).collect();
@@ -155,7 +270,7 @@ pub fn execute(engine: &mut Engine, req: QueryRequest) -> Result<QueryResponse, 
         .into_iter()
         .map(|r| {
             req.returns.iter()
-                .map(|item| project_item(engine, snapshot, item, &r))
+                .map(|item| project_item(engine, projection_snapshot, item, &r))
                 .collect()
         })
         .collect();
@@ -253,6 +368,21 @@ fn compare_values(a: Option<&Value>, b: Option<&Value>) -> std::cmp::Ordering {
             // Mixed types: fall back to a stable tag ordering. Document the choice in the spec.
             _ => format!("{x:?}").cmp(&format!("{y:?}")),
         },
+    }
+}
+
+/// Resolve a `Term` from a `create` binding to a `Value` using the
+/// row's current bindings. Variables resolve via row.get; literals
+/// convert from the wire's `JsonValue` to the engine's `Value`.
+fn resolve_create_term(term: &Term, row: &Bindings) -> Result<Value, QueryError> {
+    match term {
+        Term::Var { name } => row.get(name)
+            .cloned()
+            .ok_or_else(|| QueryError::UnboundVariableAtExec { name: name.clone() }),
+        Term::Literal { value } => Value::try_from(value.clone())
+            .map_err(|_| QueryError::RecursionConfigInvalid {
+                reason: format!("cannot convert literal to value: {value:?}"),
+            }),
     }
 }
 
@@ -1086,6 +1216,8 @@ mod tests {
             returns: vec!["c".into()],
             order_by: Vec::new(),
             limit: None,
+            creates: Vec::new(),
+            deletes: Vec::new(),
         };
         let resp = execute(&mut engine, req).unwrap();
         assert_eq!(resp.columns, vec!["c"]);
@@ -1117,6 +1249,8 @@ mod tests {
             returns: vec!["n".into()],
             order_by: Vec::new(),
             limit: None,
+            creates: Vec::new(),
+            deletes: Vec::new(),
         };
         let resp = execute(&mut engine, req).unwrap();
         assert_eq!(resp.rows.len(), 2);
@@ -1177,6 +1311,8 @@ mod tests {
             returns: vec!["a".into()],
             order_by: Vec::new(),
             limit: None,
+            creates: Vec::new(),
+            deletes: Vec::new(),
         };
         let resp = execute(&mut engine, req).unwrap();
         assert_eq!(resp.rows.len(), 2);
@@ -1224,6 +1360,8 @@ mod tests {
             returns: vec!["a".into()],
             order_by: Vec::new(),
             limit: None,
+            creates: Vec::new(),
+            deletes: Vec::new(),
         };
         let resp = execute(&mut engine, req).unwrap();
         assert_eq!(resp.rows.len(), 1);
@@ -1243,6 +1381,8 @@ mod tests {
             returns: vec!["c".into()],
             order_by: Vec::new(),
             limit: Some(2),
+            creates: Vec::new(),
+            deletes: Vec::new(),
         };
         let resp = execute(&mut engine, req).unwrap();
         assert_eq!(resp.rows.len(), 2);
@@ -1260,6 +1400,8 @@ mod tests {
             returns: vec!["c".into()],
             order_by: Vec::new(),
             limit: None,
+            creates: Vec::new(),
+            deletes: Vec::new(),
         };
         let resp = execute(&mut engine, req).unwrap();
         assert_eq!(resp.rows.len(), 0);
@@ -1282,6 +1424,8 @@ mod tests {
             returns: vec![],
             order_by: Vec::new(),
             limit: None,
+            creates: Vec::new(),
+            deletes: Vec::new(),
         };
         let err = execute(&mut engine, req).unwrap_err();
         assert!(matches!(err, QueryError::RecursionConfigInvalid { .. }));
@@ -1369,6 +1513,8 @@ mod tests {
             returns: vec!["leaf".into()],
             order_by: Vec::new(),
             limit: None,
+            creates: Vec::new(),
+            deletes: Vec::new(),
         };
         let resp = execute(&mut engine, req).unwrap();
         // 4 rows: body itself (0-step), organ, tissue, cell.
@@ -1412,6 +1558,8 @@ mod tests {
             returns: vec!["leaf".into()],
             order_by: Vec::new(),
             limit: None,
+            creates: Vec::new(),
+            deletes: Vec::new(),
         };
         let resp = execute(&mut engine, req).unwrap();
         // 2 rows: organ, cell. body excluded.
@@ -1455,6 +1603,8 @@ mod tests {
             returns: vec!["leaf".into()],
             order_by: Vec::new(),
             limit: None,
+            creates: Vec::new(),
+            deletes: Vec::new(),
         };
         let resp = execute(&mut engine, req).unwrap();
         assert_eq!(resp.rows.len(), 1);
@@ -1482,6 +1632,8 @@ mod tests {
             returns: vec!["leaf".into()],
             order_by: Vec::new(),
             limit: None,
+            creates: Vec::new(),
+            deletes: Vec::new(),
         };
         let resp = execute(&mut engine, req).unwrap();
         // 3 unique entities: a (0-step), b, c.
@@ -1520,6 +1672,8 @@ mod tests {
             returns: vec!["leaf".into()],
             order_by: Vec::new(),
             limit: None,
+            creates: Vec::new(),
+            deletes: Vec::new(),
         };
         let err = execute(&mut engine, req).unwrap_err();
         assert!(matches!(
@@ -1540,6 +1694,8 @@ mod tests {
             returns: vec!["c".into()],
             order_by: Vec::new(),
             limit: None,
+            creates: Vec::new(),
+            deletes: Vec::new(),
         };
         let err = execute(&mut engine, req).unwrap_err();
         assert!(matches!(err, QueryError::TimestampUnavailable { .. }));
@@ -1569,6 +1725,8 @@ mod tests {
             returns: vec!["c".into()],
             order_by: Vec::new(),
             limit: None,
+            creates: Vec::new(),
+            deletes: Vec::new(),
         };
         let resp = execute(&mut engine, req).unwrap();
         assert_eq!(resp.rows.len(), 1, "only Alice should be visible at t=1.5s");

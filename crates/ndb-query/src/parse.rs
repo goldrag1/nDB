@@ -28,7 +28,7 @@
 use ndb_engine::JsonValue;
 
 use crate::ast::{
-    NameAsOf, NameBinding, NameCmpOp, NameExpr, NameOrderKey, NamePattern, NameQuery, NameRecursion, NameReturn,
+    NameAsOf, NameBinding, NameCmpOp, NameCreate, NameDelete, NameExpr, NameOrderKey, NamePattern, NameQuery, NameRecursion, NameReturn,
     NameTerm,
 };
 use crate::error::{ParseError, Span};
@@ -127,20 +127,59 @@ impl Parser {
             None
         };
 
-        self.expect(&TokKind::Match, "`match`")?;
-        let patterns = self.parse_patterns()?;
-        if patterns.is_empty() {
-            return Err(self.unexpected("at least one pattern after `match`"));
-        }
-
-        let filter = if self.eat(&TokKind::Where).is_some() {
-            Some(self.parse_or()?)
+        // `match` is now optional — a pure-create query has no match.
+        let (patterns, filter) = if self.eat(&TokKind::Match).is_some() {
+            let patterns = self.parse_patterns()?;
+            if patterns.is_empty() {
+                return Err(self.unexpected("at least one pattern after `match`"));
+            }
+            let filter = if self.eat(&TokKind::Where).is_some() {
+                Some(self.parse_or()?)
+            } else {
+                None
+            };
+            (patterns, filter)
         } else {
-            None
+            (Vec::new(), None)
         };
 
-        self.expect(&TokKind::Return, "`return`")?;
-        let returns = self.parse_returns()?;
+        // Optional `delete ?v[, ?v2, ...]` — requires preceding match.
+        let mut deletes = Vec::new();
+        if self.eat(&TokKind::Delete).is_some() {
+            if patterns.is_empty() {
+                return Err(self.unexpected("`delete` requires a preceding `match` clause"));
+            }
+            deletes.push(self.parse_delete_one()?);
+            while self.eat(&TokKind::Comma).is_some() {
+                deletes.push(self.parse_delete_one()?);
+            }
+        }
+
+        // Optional one-or-more `create type(...) [as ?v]` clauses.
+        let mut creates = Vec::new();
+        while self.check(&TokKind::Create) {
+            self.advance();
+            creates.push(self.parse_create_one()?);
+        }
+
+        // A query must have at least one of match / create / delete.
+        if patterns.is_empty() && creates.is_empty() && deletes.is_empty() {
+            return Err(self.unexpected("`match`, `create`, or `delete`"));
+        }
+
+        // `return` is optional for write-only queries.
+        let returns = if self.eat(&TokKind::Return).is_some() {
+            self.parse_returns()?
+        } else {
+            Vec::new()
+        };
+
+        // A query must do SOMETHING — either project results, create
+        // records, or tombstone matched records. A pure `match` with
+        // no action is pointless syntax.
+        if returns.is_empty() && creates.is_empty() && deletes.is_empty() {
+            return Err(self.unexpected("`return`, `create`, or `delete`"));
+        }
 
         // Optional `order by key [asc|desc], key [asc|desc], ...`
         let order_by = if self.eat(&TokKind::Order).is_some() {
@@ -179,6 +218,66 @@ impl Parser {
             returns,
             order_by,
             limit,
+            creates,
+            deletes,
+            span: Span::range(start, end),
+        })
+    }
+
+    /// Parse one `delete ?var`. (`delete` keyword already consumed.)
+    fn parse_delete_one(&mut self) -> Result<NameDelete, ParseError> {
+        let t = self.advance();
+        match t.kind {
+            TokKind::Var(name) => Ok(NameDelete { name, span: t.span }),
+            other => Err(ParseError::Unexpected {
+                expected: "variable in delete clause".into(),
+                found: other.describe(),
+                span: t.span,
+            }),
+        }
+    }
+
+    /// Parse one `create type(...) [as ?v]`. (`create` keyword already consumed.)
+    fn parse_create_one(&mut self) -> Result<NameCreate, ParseError> {
+        let type_tok = self.advance();
+        let (type_name, type_span) = match type_tok.kind {
+            TokKind::Ident(s) => (s, type_tok.span),
+            other => return Err(ParseError::Unexpected {
+                expected: "type identifier after `create`".into(),
+                found: other.describe(),
+                span: type_tok.span,
+            }),
+        };
+        let start = type_span.start;
+        self.expect(&TokKind::LParen, "`(`")?;
+        let bindings = if matches!(self.peek_kind(), TokKind::RParen) {
+            Vec::new()
+        } else {
+            self.parse_binding_list()?
+        };
+        let rparen = self.expect(&TokKind::RParen, "`)`")?;
+        let mut end = rparen.span.end();
+        // Optional `as ?var`.
+        let self_var = if self.check(&TokKind::As) {
+            let save = self.pos;
+            self.advance();
+            if let TokKind::Var(name) = self.peek_kind() {
+                let name = name.clone();
+                let vtok = self.advance();
+                end = vtok.span.end();
+                Some(name)
+            } else {
+                self.pos = save;
+                None
+            }
+        } else {
+            None
+        };
+        Ok(NameCreate {
+            type_name,
+            type_span,
+            bindings,
+            self_var,
             span: Span::range(start, end),
         })
     }

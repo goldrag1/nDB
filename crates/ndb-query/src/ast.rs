@@ -23,13 +23,21 @@ pub struct NameQuery {
     pub patterns: Vec<NamePattern>,
     /// `where` clause, or `None`.
     pub filter: Option<NameExpr>,
-    /// `return` variable list.
+    /// `return` variable list. Empty for write-only queries that don't
+    /// project any results.
     pub returns: Vec<NameReturn>,
     /// `order by` key list, in source order. Empty when absent. Sort
     /// is stable so multiple keys behave like SQL `ORDER BY a, b, c`.
     pub order_by: Vec<NameOrderKey>,
     /// `limit N`, or `None`.
     pub limit: Option<usize>,
+    /// `create` clauses, in source order. Executed AFTER `match` (so
+    /// role-fillers can reference bound variables) and AFTER `delete`.
+    pub creates: Vec<NameCreate>,
+    /// `delete` clauses, in source order. Variables MUST be bound by
+    /// a `match` pattern. Executed BEFORE `create` so a single query
+    /// can replace data atomically.
+    pub deletes: Vec<NameDelete>,
     /// Overall span of the query (start of first token through end of last).
     pub span: Span,
 }
@@ -182,6 +190,44 @@ pub enum NameCmpOp {
     Gt,
     /// `>=`
     Ge,
+}
+
+/// A `create` clause in a write query.
+///
+/// `create species(common_name: "Foo") as ?new` creates one new entity
+/// with type `species`, properties bound via the role-binding-style
+/// inside the parens, and optionally binds the new UUID to `?new`.
+///
+/// `create predation(predator: ?wolf, prey: ?elk, season_from: 1)` creates
+/// a new hyperedge whose role-fillers reference variables bound by a
+/// preceding `match` (or literal UUIDs). The resolver decides whether
+/// the type is entity-kind or hyperedge-kind via the dictionary.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NameCreate {
+    /// Type name from source text (resolver maps → `type_id`).
+    pub type_name: String,
+    /// Source span of the type name token.
+    pub type_span: Span,
+    /// Inside-parens bindings. For entities, every binding is a property.
+    /// For hyperedges, names matching a role → role binding, names matching
+    /// a property → property binding. Resolver disambiguates.
+    pub bindings: Vec<NameBinding>,
+    /// Optional `as ?v` capture of the new record's UUID.
+    pub self_var: Option<String>,
+    /// Span of the whole clause (`create type(...) [as ?v]`).
+    pub span: Span,
+}
+
+/// A `delete ?v` clause.
+///
+/// The variable MUST be bound by a preceding `match`. The executor
+/// writes a tombstone for whichever record the UUID points at.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NameDelete {
+    /// Variable name (without the `?`).
+    pub name: String,
+    /// Source location.
+    pub span: Span,
 }
 
 /// One sort key in the `order by` list.

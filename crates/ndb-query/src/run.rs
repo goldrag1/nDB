@@ -264,6 +264,65 @@ mod tests {
     }
 
     #[test]
+    fn create_entity_then_match_then_delete_full_lifecycle() {
+        let (mut engine, _dir) = build_engine();
+
+        // Sanity: 2 customers before any writes.
+        let before = execute_text(&mut engine, "match customer() as ?c return ?c").expect("match");
+        assert_eq!(before.rows.len(), 2);
+
+        // CREATE — add Charlie + project his properties back.
+        let created = execute_text(&mut engine,
+            r#"create customer(name: "Charlie") as ?new return ?new.name"#
+        ).expect("create");
+        assert_eq!(created.rows.len(), 1);
+        let charlie_name = match &created.rows[0][0] {
+            ndb_engine::JsonValue::String { value } => value.clone(),
+            other => panic!("expected string, got {other:?}"),
+        };
+        assert_eq!(charlie_name, "Charlie");
+
+        // MATCH — confirm Charlie is now findable.
+        let after_create = execute_text(&mut engine, "match customer() as ?c return ?c.name").expect("match");
+        assert_eq!(after_create.rows.len(), 3);
+
+        // DELETE — tombstone Charlie.
+        let deleted = execute_text(&mut engine,
+            r#"match customer(name: "Charlie") as ?c delete ?c return ?c.name"#
+        ).expect("delete");
+        assert_eq!(deleted.rows.len(), 1, "delete should return what was tombstoned");
+
+        // MATCH — Charlie is gone.
+        let after_delete = execute_text(&mut engine, "match customer() as ?c return ?c").expect("match");
+        assert_eq!(after_delete.rows.len(), 2);
+    }
+
+    #[test]
+    fn create_hyperedge_with_bound_role_fillers() {
+        let (mut engine, _dir) = build_engine();
+        // The build_engine fixture has Alice + Bob + one buyer/seller purchase.
+        // Create a SECOND purchase via the query language, naming the same
+        // entities by bound variables.
+        let resp = execute_text(&mut engine,
+            r#"match customer(name: "Alice") as ?a
+                     customer(name: "Bob")   as ?b
+               create purchase(buyer: ?a, seller: ?b) as ?p2
+               return ?p2"#
+        ).expect("create hyperedge");
+        assert_eq!(resp.rows.len(), 1);
+        // Verify by counting purchases now.
+        let count = execute_text(&mut engine, "match purchase() as ?p return ?p").expect("count");
+        assert_eq!(count.rows.len(), 2, "should be two purchase hyperedges now");
+    }
+
+    #[test]
+    fn query_with_no_match_or_create_errors() {
+        let (mut engine, _dir) = build_engine();
+        let err = execute_text(&mut engine, "return ?c").unwrap_err();
+        assert_eq!(err.envelope().error, "parse");
+    }
+
+    #[test]
     fn execute_text_order_by_property_ascending_then_descending() {
         let (mut engine, _dir) = build_engine();
         let asc = execute_text(&mut engine,
