@@ -378,6 +378,33 @@
     </p>
   </div>
 
+  <div class="bench-intro" style="background:rgba(120,120,120,0.05);padding:14px 18px;border-radius:8px;border-left:3px solid #6cf;margin-bottom:18px;">
+    <p style="margin-top:0;"><strong>What this bench actually measures.</strong>
+    This is not "which engine is faster" — both engines work fine across
+    all of these workloads, often within microseconds of each other.
+    What the bench surfaces is <strong>where each engine's architectural
+    bet pays off</strong>.</p>
+    <ul style="margin:8px 0 8px 18px;line-height:1.6;">
+      <li><strong>nDB</strong> bets on <em>graph-shaped data + every index
+        in RAM + MVCC for free time-travel reads.</em> It wins on access
+        patterns that match: keyed point lookups, typed property lookups,
+        graph walks, count-by-type.</li>
+      <li><strong>SQLite</strong> bets on <em>tabular data + B-tree
+        everywhere + 25 years of query-planner work.</em> It wins on
+        relational access patterns: table scans, joins, ad-hoc SQL
+        filters.</li>
+      <li><strong>Postgres</strong> makes the same bet as SQLite but
+        runs as a separate process, so it pays a libpq + network tax on
+        every query that nDB and SQLite skip by being embedded. That
+        tax is real and shows up on micro-latency workloads.</li>
+    </ul>
+    <p style="margin-bottom:0;">The workloads below are grouped by
+    <strong>access pattern, not by raw speed</strong>. If your real
+    workload is dominated by one of these patterns, the bench tells you
+    something. If it's a mix, the absolute numbers matter less than
+    knowing where each engine lives.</p>
+  </div>
+
   <div class="tabs" role="tablist">
     <button class="tab" data-tab="controlled" role="tab">Controlled · 1 client</button>
     <button class="tab" data-tab="stress" role="tab">Concurrent stress · 1-64 clients</button>
@@ -389,10 +416,10 @@
       Both sides loaded the same 100,000-record shape on startup:
       50,000 entities (49k customers + 1k regions) + 50,000 hyperedges
       (45k sales junctions + 5k region-containment edges). The schemas
-      are honest — Postgres uses the natural junction-table encoding
-      with indexes on every join key and <code>ANALYZE</code> run before
-      this page went live. Same Linux host, same kernel, no Docker,
-      single-threaded.
+      are honest — the relational sides use the natural junction-table
+      encoding with indexes on every join key and <code>ANALYZE</code>
+      run before this page went live. Same Linux host, same kernel,
+      no Docker, single-threaded.
     </p>
     <p>
       Pick a workload, hit Race. Both backends run the workload N times
@@ -456,26 +483,57 @@
       <div class="verdict" id="verdict" style="display:none"></div>
 
       <div class="reference-table">
-        <h3>Reference run · 2026-05-28 (post v3-final, committed)</h3>
+        <h3>Reference run · 2026-05-28 (grouped by access pattern)</h3>
         <table>
           <thead>
             <tr>
               <th>workload</th>
               <th class="right">nDB p50</th>
               <th class="right">PG p50</th>
-              <th class="right">ratio</th>
+              <th class="right">notes</th>
             </tr>
           </thead>
           <tbody>
-            <tr><td>iter_all</td>                  <td class="right">22 ms</td>   <td class="right">69 ms</td>    <td class="right win">nDB 3.1×</td></tr>
-            <tr><td>point_lookup</td>              <td class="right">&lt;1 μs</td><td class="right">17 μs</td>    <td class="right win">nDB ≫</td></tr>
-            <tr><td>property_lookup</td>           <td class="right">&lt;1 μs</td><td class="right">81 μs</td>    <td class="right win">nDB ≫</td></tr>
-            <tr><td>single_pattern_query</td>      <td class="right">24 μs</td>   <td class="right">50 μs</td>    <td class="right win">nDB 2.1×</td></tr>
-            <tr><td>two_pattern_join</td>          <td class="right">1.6 ms</td>  <td class="right">0.5 ms</td>   <td class="right loss">PG 2.9×</td></tr>
-            <tr><td>recursive_contains_depth3</td> <td class="right">38 μs</td>   <td class="right">557 μs</td>   <td class="right win">nDB 15×</td></tr>
-            <tr><td>count_aggregate</td>           <td class="right">&lt;1 μs</td><td class="right">1.4 ms</td>   <td class="right win">nDB ≫</td></tr>
+            <tr style="background:rgba(120,180,140,0.08);"><td colspan="4" style="padding:8px 10px;font-size:12px;letter-spacing:0.05em;text-transform:uppercase;opacity:0.85;">
+              Access pattern: find by ID or key — nDB's home turf
+            </td></tr>
+            <tr><td>point_lookup</td>              <td class="right">&lt;1 μs</td><td class="right">17 μs</td>    <td class="right">HashMap probe vs B-tree + SQL parse</td></tr>
+            <tr><td>property_lookup</td>           <td class="right">&lt;1 μs</td><td class="right">81 μs</td>    <td class="right">(type, prop, val) → HashMap vs secondary B-tree</td></tr>
+            <tr><td>count_aggregate</td>           <td class="right">&lt;1 μs</td><td class="right">1.4 ms</td>   <td class="right">precomputed type counter vs row count</td></tr>
+
+            <tr style="background:rgba(120,180,140,0.08);"><td colspan="4" style="padding:8px 10px;font-size:12px;letter-spacing:0.05em;text-transform:uppercase;opacity:0.85;">
+              Access pattern: walk relationships — nDB's data model fits
+            </td></tr>
+            <tr><td>recursive_contains_depth3</td> <td class="right">38 μs</td>   <td class="right">557 μs</td>   <td class="right">in-memory adjacency walk vs WITH RECURSIVE</td></tr>
+
+            <tr style="background:rgba(220,140,140,0.10);"><td colspan="4" style="padding:8px 10px;font-size:12px;letter-spacing:0.05em;text-transform:uppercase;opacity:0.85;">
+              Access pattern: scan + join — SQLite / PG's home turf
+            </td></tr>
+            <tr><td>iter_all</td>                  <td class="right">22 ms</td>   <td class="right">69 ms</td>    <td class="right">embedded LSM scan vs networked B-tree walk</td></tr>
+            <tr><td>single_pattern_query</td>      <td class="right">24 μs</td>   <td class="right">50 μs</td>    <td class="right">pattern executor vs SQL planner — close fight</td></tr>
+            <tr><td>two_pattern_join</td>          <td class="right">1.6 ms</td>  <td class="right">0.5 ms</td>   <td class="right loss">B-tree HashJoin still wins — nDB's executor needs work</td></tr>
           </tbody>
         </table>
+        <p style="opacity:0.7;font-size:13px;margin-top:10px;">
+          The PG column carries the embedded-vs-networked tax — see
+          "vs SQLite (Rust)" mode for a like-for-like architecture
+          race that isolates storage-engine quality from the
+          libpq+planner cost.
+        </p>
+      </div>
+
+      <div style="background:rgba(255,220,140,0.06);padding:14px 18px;border-radius:8px;border-left:3px solid #f5b342;margin-top:14px;font-size:14px;line-height:1.6;">
+        <strong>Where nDB is NOT the right answer.</strong>
+        If your domain is naturally tabular — accounting ledgers,
+        inventory transactions, sales orders, master data tables that
+        join by foreign key — SQLite or Postgres is the correct tool.
+        Trying to model classic ERP entities as nDB hyperedges would be
+        friction without benefit; the bench shows SQLite handily wins
+        the join-shaped workloads even on equal language footing. nDB
+        earns its keep on the <em>graph-shaped subdomains</em> embedded
+        inside larger systems: bills of materials, approval chains,
+        org hierarchies, lot/serial traceability, audit trails,
+        dependency cascades. Use the right tool per access pattern.
       </div>
     </div>
   </div>
@@ -878,31 +936,31 @@ function renderVerdict(name, ndb, pg, winner) {
 
 function explainGap(name, ndb, pg, winner) {
   const gaps_pg = {
-    "iter_all":                  "Streaming snapshot scan vs four-table UNION ALL. nDB's flat memtable wins when both sides walk every record.",
-    "point_lookup":              "nDB hits the in-memory memtable (HashMap-equivalent O(1)); PG round-trips libpq + the planner even on a primary-key lookup.",
-    "property_lookup":           "nDB's <code>(type_id, property_id, value) → entity_ids</code> B-tree is a HashMap probe; PG's btree pays for sortcompare + tuple visibility.",
-    "single_pattern_query":      "Same shape as property_lookup but routed through the full query pipeline (planner + executor).",
-    "two_pattern_join":          "v3 closed the prior 80× gap to ~3×. The remaining cost is nDB materialising ~490 binding rows where PG's HashJoin runs probe-build in one pass. Streaming executor lands the rest.",
-    "recursive_contains_depth3": "nDB walks the in-memory adjacency cluster directly; PG's WITH RECURSIVE materialises a workset table per step.",
-    "count_aggregate":           "nDB v3 pushes count() down to the entity-type-cluster index — O(1) probe, no materialisation. PG sequential scan still has to walk the table.",
+    "iter_all":                  "<strong>Access pattern: scan everything.</strong> Both engines walk every record — nDB streams its memtable+SSTables, PG walks four tables via UNION ALL across the socket. nDB wins partly on architecture (in-memory) and partly because PG pays the network tax on each batch.",
+    "point_lookup":              "<strong>Access pattern: find one record by UUID.</strong> nDB's HashMap probe is the right shape for keyed lookups. PG round-trips libpq + parses the SQL + plans the query even when everything's cached. If your workload is mostly keyed lookups, the architectural fit is real.",
+    "property_lookup":           "<strong>Access pattern: find records by typed attribute.</strong> nDB precomputes a HashMap on <code>(type, property, value) → ids</code>; PG walks a secondary B-tree + decodes tuples. Both are correct; nDB's index just matches the access pattern more directly.",
+    "single_pattern_query":      "<strong>Access pattern: filter a table.</strong> Same shape as property_lookup but routed through the full query executor on both sides. The gap narrows because PG's planner is mature for this case.",
+    "two_pattern_join":          "<strong>Access pattern: join two relations.</strong> This is what relational engines are built for. PG's HashJoin runs probe-build in one pass; nDB materialises bindings per-row and probes adjacency. <em>Honest signal: SQLite/PG win here, and the gap doesn't close just because nDB is in-process.</em>",
+    "recursive_contains_depth3": "<strong>Access pattern: walk a graph.</strong> nDB's adjacency cluster (HashMap&lt;entity, edges&gt;) is pointer-chasing; PG's WITH RECURSIVE builds a worktable per step + joins back. If your domain is genuinely a graph, the data-model fit pays for itself.",
+    "count_aggregate":           "<strong>Access pattern: count records of a type.</strong> nDB maintains a precomputed counter per type → returns <code>index.len()</code> in O(1). PG actually counts. This one is asymmetric by design — change the workload to <code>count(*) WHERE region=X</code> and both engines do real work.",
   };
   const gaps_sqlite = {
-    "iter_all":                  "Both embedded — same architectural class. nDB's flat memtable still beats SQLite's four-table UNION ALL by ~10%.",
-    "point_lookup":              "Both in-process — no socket. nDB's HashMap probe beats SQLite's B-tree + SQL parse pipeline by ~5×. Pure storage-engine win.",
-    "property_lookup":           "nDB's (type_id, property_id, value) HashMap → SQLite's secondary B-tree + SQL parse. The 30-50× gap is real storage-engine signal — no network tax involved.",
-    "single_pattern_query":      "Same query routed through nDB's planner + executor vs SQLite's parse + plan + execute pipeline.",
-    "two_pattern_join":          "SQLite's nested-loop / B-tree join can beat nDB's per-row adjacency probe at this dataset shape. Honest signal — SQLite's join is more mature.",
-    "recursive_contains_depth3": "nDB's adjacency cluster (HashMap<entity_id, Vec<edge_id>>) beats SQLite's WITH RECURSIVE workset materialisation by ~2-3×.",
-    "count_aggregate":           "nDB pushes count() to a precomputed type-cluster counter — O(1). SQLite has to count rows; still microseconds because in-process, but not free.",
+    "iter_all":                  "<strong>Access pattern: scan everything.</strong> Both embedded — no socket cost on either side. nDB's flat memtable + SSTables vs SQLite's four-table UNION ALL ends close. Either fits in-process.",
+    "point_lookup":              "<strong>Access pattern: find by UUID.</strong> Both in-process. nDB's HashMap probe beats SQLite's B-tree + SQL parse pipeline. <em>This is pure storage-engine signal</em> — no network tax to blame on PG.",
+    "property_lookup":           "<strong>Access pattern: find by typed attribute.</strong> nDB's (type, property, value) HashMap → SQLite's secondary B-tree + SQL parse. <em>Real architectural win that survives equal language footing.</em>",
+    "single_pattern_query":      "<strong>Access pattern: filter a table.</strong> Both pay parser+planner cost; SQLite's planner is more mature, nDB's wins on the data-model fit. Often near-tied.",
+    "two_pattern_join":          "<strong>Access pattern: join two relations.</strong> SQLite was built for this; its nested-loop B-tree join beats nDB's per-row adjacency probe even with Python out of the way. <em>If your data is naturally tabular, use SQLite — the bench tells you that.</em>",
+    "recursive_contains_depth3": "<strong>Access pattern: walk a graph.</strong> nDB's adjacency cluster fits the access pattern. SQLite's WITH RECURSIVE works but materialises a workset per step. Graph-shaped data is where nDB earns its bet.",
+    "count_aggregate":           "<strong>Access pattern: count records of a type.</strong> nDB precomputes; SQLite counts. The asymmetry is in the index design — both correct, one specialised for this pattern.",
   };
   const gaps_sqlite_rust = {
-    "iter_all":                  "Same .db file as the Python lane, but the Rust caller doesn't pay per-row tuple/GIL costs. The C library iterates at native speed; nDB's flat memtable is still slightly faster on cold cache but the gap narrows.",
-    "point_lookup":              "nDB's HashMap probe is still faster than SQLite's B-tree + SQL parse; the language no longer matters. The remaining gap is storage-engine architecture.",
-    "property_lookup":           "Same as SQLite-Python qualitatively (HashMap vs B-tree) but the Rust caller removes the wrapper overhead — what's left is the storage-engine difference.",
-    "single_pattern_query":      "Rust caller closes most of the wrapper gap. What's left is nDB's planner vs SQLite's parser+planner. Both fast.",
-    "two_pattern_join":          "SQLite's mature B-tree join still wins here, often by 5-10× — and now you can't blame Python. nDB's per-row adjacency probe is the real bottleneck; streaming executor is the planned fix.",
-    "recursive_contains_depth3": "nDB's in-memory adjacency walk beats WITH RECURSIVE because the data structure fits the access pattern. SQLite has to re-plan and materialise per step regardless of language.",
-    "count_aggregate":           "nDB's count() pushdown to the type-cluster index is O(1); SQLite still has to count, faster in Rust than Python but not free.",
+    "iter_all":                  "<strong>Access pattern: scan everything, no language tax.</strong> Same .db file as the Python lane, but the Rust caller doesn't pay per-row tuple/GIL costs. The C library iterates at native speed; the gap to nDB's MVCC-aware scan narrows considerably.",
+    "point_lookup":              "<strong>Access pattern: find by UUID, no language tax.</strong> nDB's HashMap probe is still faster than SQLite's B-tree + SQL parse; the language no longer matters. <em>What's left is pure data-structure choice.</em>",
+    "property_lookup":           "<strong>Access pattern: find by typed attribute.</strong> Same as SQLite-Python qualitatively (HashMap vs B-tree) but the Rust caller removes the wrapper overhead — what's left is the data-model fit.",
+    "single_pattern_query":      "<strong>Access pattern: filter a table.</strong> Rust caller closes the wrapper gap. What's left is nDB's planner vs SQLite's parser+planner. Both fast at this scale.",
+    "two_pattern_join":          "<strong>Access pattern: join two relations.</strong> SQLite's mature B-tree join wins by 5-10× — and now you can't blame Python. <em>This workload says: if your data is tabular, SQLite is the right tool.</em>",
+    "recursive_contains_depth3": "<strong>Access pattern: walk a graph.</strong> nDB's in-memory adjacency walk beats WITH RECURSIVE because the data structure fits the access pattern. SQLite has to re-plan and materialise per step regardless of language.",
+    "count_aggregate":           "<strong>Access pattern: count records of a type.</strong> nDB's pushdown to the type-cluster index is O(1); SQLite still has to count, faster in Rust than Python but not free.",
   };
   const gaps = state.challenger === "sqlite-rust" ? gaps_sqlite_rust
              : state.challenger === "sqlite"      ? gaps_sqlite
