@@ -93,6 +93,15 @@ DEMO_PREFIX = DEMOS[0]["prefix"]
 # Upstream for the feedback nDB. Separate engine + DB from the demo.
 FEEDBACK_API = "http://127.0.0.1:8744"
 
+# Live bench-race backends. Each one preloads the same 100k realworld
+# shape and exposes /health, /workloads, /run/<name>. Reverse-proxied
+# at /bench/ndb/* and /bench/pg/* so the static `bench.html` page can
+# call them same-origin.
+BENCH_BACKENDS = {
+    "/bench/ndb": "http://127.0.0.1:8771",
+    "/bench/pg":  "http://127.0.0.1:8772",
+}
+
 # Feedback schema. Type 200 for the feedback entity; property IDs are
 # also in the 200s so they don't collide with the demo's biology schema
 # (which uses 30-69) if anyone ever points the same client at both.
@@ -300,6 +309,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._feedback_status(m.group(1))
             return
 
+        # ── bench-race proxy (live nDB vs PG) ──
+        for pre, upstream in BENCH_BACKENDS.items():
+            if bare == pre or bare.startswith(pre + "/"):
+                self._proxy_bench(upstream, pre, method, path)
+                return
+
         # ── demo proxy (match the longest demo prefix) ──
         for demo in DEMOS:
             pre = demo["prefix"]
@@ -480,6 +495,46 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    # ── bench-race proxy (no HTML rewrite, no widget injection) ─────
+    def _proxy_bench(self, upstream_base: str, prefix: str, method: str, path: str):
+        bare, _, query = path.partition("?")
+        sub = bare[len(prefix):] or "/"
+        upstream_url = upstream_base + sub
+        if query:
+            upstream_url += "?" + query
+        body = None
+        if method in ("POST", "PUT"):
+            length = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(length) if length else b""
+        req = urllib.request.Request(upstream_url, data=body, method=method)
+        for header in ("Content-Type", "Accept"):
+            value = self.headers.get(header)
+            if value:
+                req.add_header(header, value)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                status = resp.status
+                payload = resp.read()
+                ctype = resp.headers.get("Content-Type", "application/json")
+        except urllib.error.HTTPError as e:
+            status = e.code
+            payload = e.read() if hasattr(e, "read") else b""
+            ctype = e.headers.get("Content-Type", "application/json") if e.headers else "application/json"
+        except Exception as exc:  # noqa: BLE001
+            self.send_response(502)
+            self.send_header("Content-Type", "application/json")
+            msg = json.dumps({"error": "bench_upstream_unreachable", "detail": str(exc)}).encode()
+            self.send_header("Content-Length", str(len(msg)))
+            self.end_headers()
+            self.wfile.write(msg)
+            return
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(payload)
+
     # ── demo proxy (per-demo entry from DEMOS) ──────────────────────
     def _proxy_demo(self, demo: dict, method: str, path: str):
         prefix = demo["prefix"]
@@ -565,6 +620,8 @@ def main():
     for d in DEMOS:
         print(f"  demo proxy:     {d['prefix']}/  → {d['static']}", flush=True)
         print(f"                  {d['prefix']}/api/  → {d['api']}", flush=True)
+    for prefix, upstream in BENCH_BACKENDS.items():
+        print(f"  bench proxy:    {prefix}/  → {upstream}", flush=True)
     print(f"  feedback API:   /api/feedback  → {FEEDBACK_API} (nDB type {FB_TYPE_FEEDBACK})", flush=True)
     print(f"  event log:      {FEEDBACK_EVENT_LOG}", flush=True)
     print(f"  telegram push:  {'enabled' if _tg_configured() else 'disabled (no ~/.claude/channels/telegram/.env or chat_id)'}", flush=True)

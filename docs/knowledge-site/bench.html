@@ -1,0 +1,504 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nDB vs Postgres — live race</title>
+<link rel="stylesheet" href="/static/styles.css">
+<style>
+  .bench-intro {
+    max-width: 740px; line-height: 1.65; color: var(--text);
+    font-size: 14.5px;
+  }
+  .bench-intro p { margin: 0 0 12px; }
+
+  .race-grid {
+    display: grid; grid-template-columns: 1fr; gap: 14px;
+    margin-top: 22px;
+  }
+  @media (min-width: 900px) {
+    .race-grid { grid-template-columns: 280px 1fr; }
+  }
+  .race-side {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 14px 16px;
+  }
+  .race-side h3 {
+    margin: 0 0 6px; font-size: 12.5px; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .race-side h2 {
+    margin: 0 0 8px; font-size: 17px; color: var(--text-strong);
+  }
+  .race-side .blurb {
+    font-size: 12.5px; color: var(--text-muted); line-height: 1.55;
+    margin-bottom: 12px;
+  }
+  .workload-picker {
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .workload-btn {
+    background: var(--surface-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 5px;
+    padding: 9px 12px; font: inherit; font-size: 13px;
+    text-align: left; cursor: pointer;
+    transition: border-color 0.1s;
+  }
+  .workload-btn:hover { border-color: var(--accent); }
+  .workload-btn.active {
+    border-color: var(--accent); background: var(--surface);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+  .workload-btn .name {
+    font-weight: 500; color: var(--text-strong);
+    margin-bottom: 2px;
+  }
+  .workload-btn .desc {
+    font-size: 11.5px; color: var(--text-muted); line-height: 1.4;
+    font-family: var(--font-mono);
+  }
+  .race-controls {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
+  }
+  .race-controls .go {
+    background: var(--accent); color: #fff; border: none;
+    padding: 8px 22px; border-radius: 5px; font-weight: 500;
+    font-size: 14px; cursor: pointer;
+  }
+  .race-controls .go:hover { background: var(--accent-hover); }
+  .race-controls .go:disabled { opacity: 0.55; cursor: wait; }
+  .race-controls .auto {
+    font-size: 12.5px; color: var(--text-muted);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .race-controls .status {
+    margin-left: auto; font-size: 12px; color: var(--text-muted);
+    font-family: var(--font-mono);
+  }
+
+  .race-lanes {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+  }
+  .lane {
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 14px 16px;
+    transition: border-color 0.2s;
+  }
+  .lane.winner   { border-color: var(--property); box-shadow: 0 0 0 1px var(--property); }
+  .lane.loser    { opacity: 0.92; }
+  .lane.running  { border-color: var(--accent); }
+  .lane.error    { border-color: #e85a4a; }
+  .lane .who {
+    font-size: 12px; color: var(--text-muted); margin-bottom: 6px;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .lane .who .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--text-muted);
+  }
+  .lane.running .who .dot { background: var(--accent); animation: pulse 1s infinite; }
+  .lane.winner  .who .dot { background: var(--property); }
+  .lane.error   .who .dot { background: #e85a4a; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.4; }
+  }
+  .lane .headline {
+    font-size: 28px; font-weight: 600; color: var(--text-strong);
+    font-family: var(--font-mono); margin: 4px 0 8px;
+  }
+  .lane.winner .headline { color: var(--property); }
+  .lane .stats {
+    display: grid; grid-template-columns: auto 1fr;
+    gap: 4px 12px; font-size: 12px; color: var(--text-muted);
+    font-family: var(--font-mono); line-height: 1.55;
+  }
+  .lane .stats .v { color: var(--text); }
+  .lane .err { color: #e85a4a; font-size: 12px; font-family: var(--font-mono); }
+  .verdict {
+    margin-top: 14px; padding: 10px 14px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 5px; font-size: 13px; line-height: 1.6;
+    color: var(--text);
+  }
+  .verdict .ratio { color: var(--property); font-weight: 500;
+                    font-family: var(--font-mono); }
+  .verdict .ratio.loss { color: #e85a4a; }
+
+  .reference-table {
+    margin-top: 24px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 6px; overflow: hidden;
+  }
+  .reference-table h3 {
+    margin: 0; padding: 10px 14px; font-size: 12.5px;
+    color: var(--text-muted); text-transform: uppercase;
+    letter-spacing: 0.08em; background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  .reference-table table {
+    width: 100%; border-collapse: collapse;
+    font-size: 12.5px; font-family: var(--font-mono);
+  }
+  .reference-table th, .reference-table td {
+    padding: 6px 12px; text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+  .reference-table th { color: var(--text-muted); font-weight: 500; }
+  .reference-table tr:last-child td { border-bottom: none; }
+  .reference-table td.right { text-align: right; color: var(--text); }
+  .reference-table td.win  { color: var(--property); }
+  .reference-table td.loss { color: #e85a4a; }
+
+  .footnote {
+    margin-top: 18px; font-size: 12px; color: var(--text-muted);
+    line-height: 1.55;
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">nDB <span class="sub">N-dimensional database</span></div>
+  <nav>
+    <a href="/">Home</a>
+    <a href="/whitepaper.html">Whitepaper</a>
+    <a href="/discussion.html">Discussion</a>
+    <a href="/demos.html">Demos</a>
+    <a href="/query-language.html">Query</a>
+    <a href="/bench.html" class="active">Bench</a>
+    <a href="/repo.html">Repo</a>
+  </nav>
+  <div class="right">v2.3.0 · live race</div>
+</header>
+
+<main class="page">
+
+  <h1>Live race — nDB vs Postgres</h1>
+  <div class="bench-intro">
+    <p>
+      Both sides loaded the same 100,000-record shape on startup:
+      50,000 entities (49k customers + 1k regions) + 50,000 hyperedges
+      (45k sales junctions + 5k region-containment edges). The schemas
+      are honest — Postgres uses the natural junction-table encoding
+      with indexes on every join key and <code>ANALYZE</code> run before
+      this page went live. Same Linux host, same kernel, no Docker,
+      single-threaded.
+    </p>
+    <p>
+      Pick a workload, hit Race. Both backends run the workload N times
+      in parallel and report wall-clock μs at the user-call boundary
+      (p50, p99, throughput). The winner's card lights up. Numbers
+      vary ~10-30% run-to-run — the gap is the signal, not the
+      headline number. Rate-limited to one race per workload per 3
+      seconds.
+    </p>
+  </div>
+
+  <div class="race-grid">
+    <div class="race-side">
+      <h3>Workload</h3>
+      <div class="workload-picker" id="picker"></div>
+      <h3 style="margin-top:18px;">Backends</h3>
+      <div class="blurb" id="backends-status">checking…</div>
+    </div>
+
+    <div>
+      <div class="race-controls">
+        <button class="go" id="race-btn">Race</button>
+        <label class="auto" title="Race all 7 workloads end-to-end">
+          <input type="checkbox" id="race-all">
+          Race all
+        </label>
+        <span class="status" id="status">ready</span>
+      </div>
+
+      <div class="race-lanes">
+        <div class="lane" id="lane-ndb">
+          <div class="who"><span class="dot"></span> nDB</div>
+          <div class="headline" id="ndb-headline">—</div>
+          <div class="stats" id="ndb-stats">
+            <span>p99</span><span class="v">—</span>
+            <span>throughput</span><span class="v">—</span>
+            <span>iters</span><span class="v">—</span>
+          </div>
+        </div>
+        <div class="lane" id="lane-pg">
+          <div class="who"><span class="dot"></span> Postgres</div>
+          <div class="headline" id="pg-headline">—</div>
+          <div class="stats" id="pg-stats">
+            <span>p99</span><span class="v">—</span>
+            <span>throughput</span><span class="v">—</span>
+            <span>iters</span><span class="v">—</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="verdict" id="verdict" style="display:none"></div>
+
+      <div class="reference-table">
+        <h3>Reference run · 2026-05-28 (committed)</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>workload</th>
+              <th class="right">nDB p50</th>
+              <th class="right">PG p50</th>
+              <th class="right">ratio</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>iter_all</td>                  <td class="right">21 ms</td>   <td class="right">92 ms</td>    <td class="right win">nDB 4×</td></tr>
+            <tr><td>point_lookup</td>              <td class="right">&lt;1 μs</td><td class="right">19 μs</td>    <td class="right win">nDB ≫</td></tr>
+            <tr><td>property_lookup</td>           <td class="right">&lt;1 μs</td><td class="right">77 μs</td>    <td class="right win">nDB ≫</td></tr>
+            <tr><td>single_pattern_query</td>      <td class="right">29 μs</td>   <td class="right">54 μs</td>    <td class="right win">nDB 1.9×</td></tr>
+            <tr><td>two_pattern_join</td>          <td class="right">46 ms</td>   <td class="right">0.6 ms</td>   <td class="right loss">PG 80×</td></tr>
+            <tr><td>recursive_contains_depth3</td> <td class="right">37 μs</td>   <td class="right">968 μs</td>   <td class="right win">nDB 26×</td></tr>
+            <tr><td>count_aggregate</td>           <td class="right">46 ms</td>   <td class="right">1.5 ms</td>   <td class="right loss">PG 30×</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <p class="footnote">
+    Full report + raw JSON dumps:
+    <a href="https://github.com/goldrag1/nDB/blob/main/docs/benchmarks/realworld-2026-05-28.md" target="_blank" rel="noreferrer">
+      docs/benchmarks/realworld-2026-05-28.md
+    </a>.
+    Source for both backends:
+    <code>crates/ndb-engine/examples/bench_race.rs</code> ·
+    <code>tools/bench/race_pg_server.py</code>.
+    Read-only on both — no <code>commits_per_sec</code> workload exposed
+    here (would mutate shared state visible to every visitor).
+  </p>
+
+</main>
+
+<footer class="site-foot">
+  <p>nDB is open-source under MIT. <a href="https://github.com/goldrag1/nDB" target="_blank" rel="noreferrer">github.com/goldrag1/nDB</a></p>
+  <p class="mono">ndb.nextstar-erp.com · knowledge site v0.1</p>
+</footer>
+
+<script>
+const NDB_BASE = "/bench/ndb";
+const PG_BASE  = "/bench/pg";
+
+const picker      = document.getElementById("picker");
+const raceBtn     = document.getElementById("race-btn");
+const raceAllChk  = document.getElementById("race-all");
+const statusEl    = document.getElementById("status");
+const verdictEl   = document.getElementById("verdict");
+const laneNdb     = document.getElementById("lane-ndb");
+const lanePg      = document.getElementById("lane-pg");
+const backendsEl  = document.getElementById("backends-status");
+
+let workloads = [];
+let selected = null;
+
+// ─── Health probe + workload load ──────────────────────────────────────
+(async function init() {
+  try {
+    const [hNdb, hPg, wNdb] = await Promise.all([
+      fetch(NDB_BASE + "/health").then(r => r.json()),
+      fetch(PG_BASE  + "/health").then(r => r.json()),
+      fetch(NDB_BASE + "/workloads").then(r => r.json()),
+    ]);
+    workloads = wNdb;
+    backendsEl.innerHTML = renderBackendStatus(hNdb, hPg);
+    renderPicker();
+  } catch (e) {
+    backendsEl.textContent = "❌ one backend unreachable: " + String(e);
+    backendsEl.style.color = "#e85a4a";
+  }
+})();
+
+function renderBackendStatus(ndb, pg) {
+  return `
+    <strong>${escapeHtml(ndb.engine)}</strong>
+    <span style="opacity:0.7;">· ${ndb.n_entities.toLocaleString()} entities + ${ndb.n_hyperedges.toLocaleString()} hyperedges</span><br>
+    <strong>${escapeHtml(pg.engine)}</strong>
+    <span style="opacity:0.7;">· same shape, junction tables, indexed</span>
+  `;
+}
+
+function renderPicker() {
+  picker.innerHTML = "";
+  for (const w of workloads) {
+    const btn = document.createElement("button");
+    btn.className = "workload-btn";
+    btn.innerHTML = `<div class="name">${escapeHtml(w.label)}</div><div class="desc">${escapeHtml(w.blurb)}</div>`;
+    btn.addEventListener("click", () => select(w.name));
+    btn.dataset.name = w.name;
+    picker.appendChild(btn);
+  }
+  if (workloads.length) select(workloads[0].name);
+}
+
+function select(name) {
+  selected = name;
+  for (const b of picker.querySelectorAll(".workload-btn")) {
+    b.classList.toggle("active", b.dataset.name === name);
+  }
+  resetLanes();
+}
+
+raceBtn.addEventListener("click", () => {
+  if (raceAllChk.checked) raceAll();
+  else                    race(selected);
+});
+
+async function raceAll() {
+  raceBtn.disabled = true;
+  for (const w of workloads) {
+    select(w.name);
+    await race(w.name);
+    await new Promise(r => setTimeout(r, 3100));  // respect rate limit
+  }
+  raceBtn.disabled = false;
+}
+
+async function race(name) {
+  if (!name) return;
+  raceBtn.disabled = true;
+  resetLanes();
+  setStatus("running…", "");
+  laneNdb.classList.add("running");
+  lanePg.classList.add("running");
+
+  const t0 = performance.now();
+  const ndbP = postWorkload(NDB_BASE, name, laneNdb, "ndb");
+  const pgP  = postWorkload(PG_BASE,  name, lanePg,  "pg");
+  const [ndbR, pgR] = await Promise.allSettled([ndbP, pgP]);
+  const totalMs = (performance.now() - t0).toFixed(0);
+
+  const ndbOk = ndbR.status === "fulfilled" && ndbR.value;
+  const pgOk  = pgR.status === "fulfilled"  && pgR.value;
+
+  if (ndbOk && pgOk) {
+    const winner = ndbR.value.p50_us <= pgR.value.p50_us ? "ndb" : "pg";
+    laneNdb.classList.toggle("winner", winner === "ndb");
+    lanePg.classList.toggle("winner",  winner === "pg");
+    laneNdb.classList.toggle("loser",  winner !== "ndb");
+    lanePg.classList.toggle("loser",   winner !== "pg");
+    renderVerdict(name, ndbR.value, pgR.value, winner);
+    setStatus(`${totalMs} ms wall-clock · ${selected}`, "ok");
+  } else {
+    setStatus("race finished with errors", "err");
+  }
+  laneNdb.classList.remove("running");
+  lanePg.classList.remove("running");
+  raceBtn.disabled = false;
+}
+
+async function postWorkload(base, name, lane, who) {
+  try {
+    const r = await fetch(base + "/run/" + name, { method: "POST" });
+    const body = await r.json();
+    if (!r.ok) {
+      lane.classList.add("error");
+      const label = body.error === "rate_limit"
+        ? `rate-limited · retry in ${body.retry_after_s || 3}s`
+        : `${body.error || "error"}: ${body.detail || ""}`;
+      paintLane(who, { error: label });
+      return null;
+    }
+    paintLane(who, body);
+    return body;
+  } catch (e) {
+    lane.classList.add("error");
+    paintLane(who, { error: String(e) });
+    return null;
+  }
+}
+
+function paintLane(who, r) {
+  const headEl = document.getElementById(who + "-headline");
+  const statEl = document.getElementById(who + "-stats");
+  if (r.error) {
+    headEl.textContent = "—";
+    statEl.innerHTML = `<span class="err" style="grid-column: 1 / -1;">${escapeHtml(r.error)}</span>`;
+    return;
+  }
+  headEl.textContent = fmtUs(r.p50_us) + " p50";
+  statEl.innerHTML =
+    `<span>p99</span><span class="v">${fmtUs(r.p99_us)}</span>` +
+    `<span>throughput</span><span class="v">${fmtOps(r.ops_per_sec)}</span>` +
+    `<span>iters</span><span class="v">${r.iters.toLocaleString()}</span>`;
+}
+
+function renderVerdict(name, ndb, pg, winner) {
+  const ndbP50 = ndb.p50_us, pgP50 = pg.p50_us;
+  const ratio = ndbP50 > 0 && pgP50 > 0
+    ? (winner === "ndb" ? pgP50 / ndbP50 : ndbP50 / pgP50)
+    : null;
+  const ratioStr = ratio
+    ? (ratio < 2 ? ratio.toFixed(2) + "×" : ratio.toFixed(1) + "×")
+    : "—";
+  const winnerWord = winner === "ndb" ? "nDB" : "Postgres";
+  const ratioClass = winner === "ndb" ? "ratio" : "ratio loss";
+  verdictEl.style.display = "block";
+  verdictEl.innerHTML =
+    `<strong>${escapeHtml(name)}</strong>: ` +
+    `<span class="${ratioClass}">${winnerWord} ${ratioStr} faster (p50).</span> ` +
+    explainGap(name, ndb, pg, winner);
+}
+
+function explainGap(name, ndb, pg, winner) {
+  const gaps = {
+    "iter_all":                  "Streaming snapshot scan vs four-table UNION ALL. nDB's flat memtable wins when both sides walk every record.",
+    "point_lookup":              "nDB hits the in-memory memtable (HashMap-equivalent O(1)); PG round-trips libpq + the planner even on a primary-key lookup.",
+    "property_lookup":           "nDB's <code>(type_id, property_id, value) → entity_ids</code> B-tree is a HashMap probe; PG's btree pays for sortcompare + tuple visibility.",
+    "single_pattern_query":      "Same shape as property_lookup but routed through the full query pipeline (planner + executor).",
+    "two_pattern_join":          "PG's HashJoin wins big at this size — nDB materialises ~490 binding rows row-by-row (Bindings::clone is the hot path). Streaming executor is v2 work.",
+    "recursive_contains_depth3": "nDB walks the in-memory adjacency cluster directly; PG's WITH RECURSIVE materialises a workset table per step.",
+    "count_aggregate":           "PG sequential scan with row visibility short-circuits; nDB materialises 49k binding rows to count them. count-pushdown is a follow-up.",
+  };
+  return gaps[name] || "";
+}
+
+function resetLanes() {
+  for (const l of [laneNdb, lanePg]) {
+    l.classList.remove("winner", "loser", "running", "error");
+  }
+  document.getElementById("ndb-headline").textContent = "—";
+  document.getElementById("pg-headline").textContent  = "—";
+  for (const id of ["ndb-stats", "pg-stats"]) {
+    document.getElementById(id).innerHTML =
+      `<span>p99</span><span class="v">—</span>` +
+      `<span>throughput</span><span class="v">—</span>` +
+      `<span>iters</span><span class="v">—</span>`;
+  }
+  verdictEl.style.display = "none";
+}
+
+function setStatus(text, cls) {
+  statusEl.textContent = text;
+  statusEl.className = "status" + (cls ? " " + cls : "");
+}
+
+function fmtUs(v) {
+  if (v >= 10_000) return (v / 1000).toFixed(1) + " ms";
+  if (v >= 100)    return v.toFixed(0) + " μs";
+  if (v < 1)       return "<1 μs";
+  return v.toFixed(1) + " μs";
+}
+
+function fmtOps(v) {
+  if (v >= 1_000_000) return (v / 1_000_000).toFixed(1) + "M/s";
+  if (v >= 1_000)     return (v / 1_000).toFixed(1) + "k/s";
+  return v.toFixed(0) + "/s";
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    c === '&' ? '&amp;' :
+    c === '<' ? '&lt;'  :
+    c === '>' ? '&gt;'  :
+    c === '"' ? '&quot;': '&#39;');
+}
+</script>
+
+</body>
+</html>
