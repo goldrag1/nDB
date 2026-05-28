@@ -218,29 +218,40 @@ a:hover { color: #5aa0f2; }
 .lb-section-head .pill { font-size: 10px; padding: 0 6px; }
 
 .lb-inventory {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
-  gap: 6px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 8px;
   background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-  padding: 8px; max-height: 200px; overflow-y: auto;
+  padding: 10px; max-height: 320px; overflow-y: auto;
 }
 .lb-chip {
-  background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
-  padding: 6px 4px 4px; text-align: center; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 5px;
+  padding: 8px 6px 5px; text-align: center; cursor: pointer;
   font-family: var(--font-mono); font-size: 11px; color: var(--text);
-  position: relative; transition: border-color 0.1s, background 0.1s;
+  position: relative; transition: border-color 0.1s, background 0.1s, transform 0.08s;
   user-select: none;
 }
-.lb-chip:hover { border-color: var(--accent); background: rgba(74,144,226,0.08); }
+.lb-chip:hover  { border-color: var(--accent); background: rgba(74,144,226,0.10); transform: translateY(-1px); }
+.lb-chip:active { transform: translateY(0); }
 .lb-chip.disabled { opacity: 0.35; cursor: not-allowed; }
 .lb-chip .lb-chip-canvas {
-  width: 64px; height: 36px; margin: 0 auto; background: var(--surface-2);
-  border-radius: 3px; display: block;
+  width: 100px; height: 56px; margin: 0 auto; background: var(--surface-2);
+  border-radius: 4px; display: block; border: 1px solid rgba(255,255,255,0.04);
 }
-.lb-chip .lb-chip-name { margin-top: 3px; font-size: 10px; line-height: 1.2;
-                        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb-chip .lb-chip-name { margin-top: 5px; font-size: 11px; line-height: 1.25;
+                        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                        color: var(--text-strong); }
 .lb-chip .lb-chip-formula {
-  display: block; font-size: 9.5px; color: var(--text-muted);
+  display: block; font-size: 10px; color: var(--text-muted); margin-top: 1px;
+  font-family: var(--font-mono);
 }
+.lb-chip .lb-chip-add {
+  position: absolute; top: 4px; right: 4px;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: rgba(74,144,226,0.18); color: var(--accent);
+  font-size: 13px; line-height: 16px; text-align: center;
+  opacity: 0; transition: opacity 0.12s;
+}
+.lb-chip:hover .lb-chip-add { opacity: 1; }
 .lb-chip.new {
   animation: chip-arrive 1.4s ease-out 1;
 }
@@ -271,14 +282,16 @@ a:hover { color: #5aa0f2; }
   color: var(--text-muted); font-size: 11.5px; font-style: italic; pointer-events: none;
 }
 .lb-tile {
-  position: relative; min-width: 78px;
+  position: relative; min-width: 96px;
   background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
-  padding: 4px 4px 2px; text-align: center;
+  padding: 6px 6px 4px; text-align: center;
   font-family: var(--font-mono); font-size: 11px;
 }
-.lb-tile .lb-tile-canvas { width: 64px; height: 36px; background: var(--surface-2); border-radius: 3px; display: block; margin: 0 auto; }
-.lb-tile .lb-tile-name { font-size: 10px; margin-top: 2px; max-width: 80px;
-                        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb-tile .lb-tile-canvas { width: 84px; height: 52px; background: var(--surface-2); border-radius: 3px; display: block; margin: 0 auto; }
+.lb-tile .lb-tile-name { font-size: 10.5px; margin-top: 3px; max-width: 96px;
+                        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                        color: var(--text-strong); }
+.lb-tile .lb-tile-formula { font-size: 9.5px; color: var(--text-muted); margin-top: 0; }
 .lb-tile .lb-tile-stoich {
   position: absolute; top: -6px; left: -6px;
   background: var(--accent); color: #fff; border-radius: 999px;
@@ -668,17 +681,48 @@ function smilesDrawer() {
 }
 
 function drawMoleculeInto(canvas, smiles, themeName) {
-  // SmilesDrawer needs SmilesDrawer.parse(smiles, success, error).
+  // SmilesDrawer is sensitive to a mismatch between its `width`/`height`
+  // options and the canvas's actual pixel dimensions — when they
+  // disagree, parse silently fails via the error callback and we'd see
+  // "(no struct.)" plastered everywhere. Build a fresh drawer per call
+  // matched to the canvas's own size. Cheap; we only render a few hundred
+  // canvases per page-load.
+  if (typeof SmilesDrawer === "undefined" || !smiles) {
+    fallbackFormula(canvas);
+    return;
+  }
+  const w = canvas.width || 64, h = canvas.height || 36;
+  // Scale bond geometry to canvas size so small chips stay legible.
+  const bondLength = Math.max(8, Math.min(16, w / 6));
+  const drawer = new SmilesDrawer.Drawer({
+    width: w,
+    height: h,
+    bondThickness: 0.7,
+    bondLength,
+    atomVisualization: "default",
+    fontSizeLarge: Math.max(4, h / 8),
+    fontSizeSmall: Math.max(3, h / 12),
+    padding: 3.0,
+  });
   try {
-    SmilesDrawer.parse(smiles, (tree) => {
-      smilesDrawer().draw(tree, canvas, themeName || "dark", false);
-    }, () => {
-      // Parse failed — leave the canvas empty.
-      const ctx = canvas.getContext("2d");
-      ctx.fillStyle = "#666"; ctx.font = "10px monospace";
-      ctx.fillText("(no struct.)", 6, 14);
-    });
-  } catch (_) { /* noop */ }
+    SmilesDrawer.parse(smiles,
+      (tree) => { drawer.draw(tree, canvas, themeName || "dark", false); },
+      () => fallbackFormula(canvas),
+    );
+  } catch (_) {
+    fallbackFormula(canvas);
+  }
+}
+
+function fallbackFormula(canvas) {
+  // When the structure can't be drawn (parse failure, library missing,
+  // empty SMILES, etc.), draw a centred dim dash so the chip is visibly
+  // "structure unavailable" instead of literally crowded with text.
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#444";
+  ctx.fillRect(canvas.width / 2 - 8, canvas.height / 2 - 1, 16, 2);
 }
 
 // ── Lab Bench state (live game) ──────────────────────────────────
@@ -861,15 +905,18 @@ function renderLabBench() {
     const div = document.createElement("div");
     div.className = "lb-chip";
     div.dataset.cid = c.id;
+    const formula = c.props[PROP.FORMULA] || '';
     div.innerHTML = `
-      <canvas class="lb-chip-canvas" width="64" height="36"></canvas>
+      <div class="lb-chip-add">+</div>
+      <canvas class="lb-chip-canvas" width="100" height="56"></canvas>
       <div class="lb-chip-name" title="${escapeHtml(c.props[PROP.NAME])}">${escapeHtml(c.props[PROP.NAME])}</div>
-      <div class="lb-chip-formula">${escapeHtml(c.props[PROP.FORMULA] || '')}</div>
+      <div class="lb-chip-formula">${escapeHtml(formula || '—')}</div>
     `;
     invHost.appendChild(div);
     const canv = div.querySelector("canvas");
     const sm = c.props[PROP.SMILES];
     if (sm) drawMoleculeInto(canv, sm, "dark");
+    else    fallbackFormula(canv);
     div.addEventListener("click", () => {
       LB.reactor.set(c.id, (LB.reactor.get(c.id) || 0) + 1);
       renderLabBench();
@@ -924,12 +971,14 @@ function renderLabBench() {
 }
 
 function tileHtml(c, n, role, removable) {
+  const formula = c.props[PROP.FORMULA] || '';
   return `
     <div class="lb-tile ${role}" data-cid="${c.id}">
       ${n > 1 ? `<div class="lb-tile-stoich" title="decrement">${n}×</div>` : ''}
       ${removable ? '<div class="lb-tile-x" title="remove">×</div>' : ''}
-      <canvas class="lb-tile-canvas" width="64" height="36"></canvas>
+      <canvas class="lb-tile-canvas" width="84" height="52"></canvas>
       <div class="lb-tile-name" title="${escapeHtml(c.props[PROP.NAME])}">${escapeHtml(c.props[PROP.NAME])}</div>
+      <div class="lb-tile-formula">${escapeHtml(formula)}</div>
     </div>
   `;
 }
@@ -1448,14 +1497,13 @@ async function subscribeOnce() {
         void el.offsetWidth;
         el.classList.add("refreshed");
       });
-      // If editor showed the same reaction whose conditions changed,
-      // refresh it too (commits from our OWN edits already trigger it,
-      // but external commits — from another window — should refresh).
-      if (STATE.selectedRxn === oldFocal) {
-        renderEditor();
-        renderInspector();
-        refreshStats();
-      }
+      // Notably we do NOT re-render the editor / Lab Bench here. Doing
+      // so would destroy the <select> dropdowns mid-interaction (a real
+      // bug the user reported) since /subscribe ticks 1-2× per minute.
+      // The Bench refreshes via its own actions (runLabBench, click
+      // chips, click levels) — it doesn't need a /subscribe-driven
+      // rebuild. refreshStats does no DOM thrash so it's safe.
+      refreshStats();
     }
   } catch (e) {
     // /subscribe timeout is normal — just loop again.
