@@ -132,12 +132,10 @@ def main() -> int:
     print(textwrap.dedent("""\
         The bench keeps the loaded data in the engine's memtable — no
         explicit flush before reads — because that mirrors the realistic
-        hot tier: recent commits stay resident until compaction. nDB v1
-        currently lacks block-index sidecars on flushed SSTables (§11.4
-        of the design spec is the open sub-question), so cold L0 point
-        reads scan the full segment. The bench therefore reports the
-        warm-tier numbers production users see for recently-committed
-        data; cold-tier numbers will drop ≥100× once the sidecar lands.
+        hot tier: recent commits stay resident until compaction. Cold
+        L0 reads now use the block-index sidecar shipped in v3 (~1200×
+        faster than the previous full-scan fallback); flushed-tier
+        numbers are no longer the cliff they were pre-v3.
 
         Postgres ran on the same machine via the local domain socket —
         no Docker, no network. Schema is the natural junction-table
@@ -150,62 +148,62 @@ def main() -> int:
         - **`point_lookup` ≫ ∞ × faster.** nDB's memtable is an in-process
           BTreeMap keyed by `(record_kind, uuid)`. PG round-trips via
           libpq + the planner even on a primary-key lookup — there's no
-          cheaper path. Memtable lookup beats network-free libpq by
-          ~50×; once the engine is embedded (no HTTP wire) the gap is
-          structural.
+          cheaper path.
         - **`property_lookup` ~125× faster.** The B-tree on
           `(type_id, property_id, value) → entity_ids` is an in-memory
           HashMap probe; PG's index access still pays for sortcompare +
           tuple visibility + result materialisation.
-        - **`recursive_contains_depth3` ~26× faster.** nDB's recursive
+        - **`recursive_contains_depth3` ~14× faster.** nDB's recursive
           BFS walks the in-memory adjacency cluster directly; PG's
           `WITH RECURSIVE` builds a temporary workset table and joins
           back row-at-a-time.
-        - **`iter_all` ~4× faster.** Streaming snapshot scan against a
+        - **`count_aggregate` ≫ ∞ × faster (v3 win).** count() pushed
+          down to the entity-type-cluster index returns the count in
+          O(1) without materialising any binding rows. Before the
+          pushdown this was a 30× LOSS; now it's a 1200×+ win.
+        - **`iter_all` ~3× faster.** Streaming snapshot scan against a
           flat memtable beats walking four PG tables via UNION ALL.
 
-        ### Where Postgres wins, by how much, and why
+        ### Where Postgres still wins, by how much, and why
 
-        - **`two_pattern_join` ~80× faster.** This is the honest weak
-          spot. nDB executes the join by materialising bindings
-          row-by-row: 49 customers × ~10 adjacent sales = ~490 binding
-          rows, each going through `Bindings::clone() + snapshot_read`.
-          PG's HashJoin builds a hash on customer (49 rows), probes
-          sales (45k probes at ~13 ns each) — 0.6 ms total. The current
-          executor's materialised-bindings strategy beats a SQL planner
-          on small joins (where adjacency wins) and loses on large
-          joins (where hash dominates). A streaming iterator pipeline
-          for the executor is v2 work.
-        - **`count_aggregate` ~30× faster.** nDB's count over the
-          customer type scans the type-cluster and materialises 49k
-          binding rows just to count them; PG runs `SELECT count(*)`
-          via a sequential scan with row visibility short-circuits.
-          A count-pushed-down-to-the-cluster fast path is a one-day
-          optimisation when prioritised.
-        - **`commits_per_sec` 1.3× faster.** Both engines are
-          single-writer here. The gap is mostly WAL fsync semantics.
+        - **`two_pattern_join` ~3× faster.** Down from ~80× before v3
+          thanks to the type-bucket-hoist optimisation. nDB still
+          materialises bindings row-by-row; PG's HashJoin runs the
+          probe-build in one pass. The remaining gap closes when the
+          streaming-executor rewrite lands.
+        - **`commits_per_sec` 1.5× faster.** Both engines are
+          single-writer here. The gap is mostly WAL fsync semantics
+          plus PG's commit pipelining.
 
         ### Disk + memory KPIs
 
-        - nDB: 8 MiB on disk, 148 MiB resident. Resident includes
-          in-memory indexes (B-tree + adjacency + lookup-key); they're
-          rebuilt from the snapshot on open and live for the process'
-          lifetime.
+        - nDB: 8 MiB on disk, 144 MiB resident. Resident includes
+          all six in-memory indexes (lookup-key, property B-tree,
+          adjacency, entity-type-cluster, hyperedge-type-cluster,
+          vector); they're rebuilt from the snapshot on open and live
+          for the process' lifetime. Block-index sidecars live on disk
+          (~5% of the SSTable) for fast cold-tier point reads.
         - PG: 20 MiB on disk, 43 MiB resident.
+
+        ### What changed since the prior reference run (same date)
+
+        | workload | prior nDB p50 | now | delta |
+        |---|---:|---:|---|
+        | count_aggregate | 46 ms | <1 μs | ~150,000× faster |
+        | two_pattern_join | 46 ms | 1.6 ms | 29× faster |
+        | (block-index sidecar wired into snapshot_read | cold p50 ~27 ms → 22 μs |
+        |  — point_lookup unchanged at memtable level)   | (~1200× cold) |
+
+        Three landed v3 perf commits closed two of the four big losses
+        and shrunk the third to ~3×. Streaming-executor rewrite + RwLock
+        engine are still in the next-session queue.
 
         ### Caveats
 
-        - The biology bench at the project's bench dashboard
-          (`/home/long/long/rust/`) runs the same data shape at N up to
-          250k with hub-routed edges and shows nDB pulling ahead of PG
-          on multi-hop traversals from N≈10k onward. The realworld
-          microbench here catches N=100k where PG's hash join still
-          wins on simple two-way joins. They're consistent: nDB's
-          execution model favours single-pattern lookups + adjacency
-          walks + recursive closure; PG's planner wins on equi-joins
-          that hash well.
         - All numbers are single-threaded. Both engines have concurrent
-          paths in production; this is the lower bound.
+          paths in production; this is the lower bound. The live race at
+          `/bench.html#stress` shows multi-client RPS + per-side
+          disk/RAM/CPU.
     """))
 
     return 0

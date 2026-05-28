@@ -441,7 +441,7 @@
       <div class="verdict" id="verdict" style="display:none"></div>
 
       <div class="reference-table">
-        <h3>Reference run · 2026-05-28 (committed)</h3>
+        <h3>Reference run · 2026-05-28 (post v3-perf, committed)</h3>
         <table>
           <thead>
             <tr>
@@ -452,13 +452,13 @@
             </tr>
           </thead>
           <tbody>
-            <tr><td>iter_all</td>                  <td class="right">21 ms</td>   <td class="right">92 ms</td>    <td class="right win">nDB 4×</td></tr>
-            <tr><td>point_lookup</td>              <td class="right">&lt;1 μs</td><td class="right">19 μs</td>    <td class="right win">nDB ≫</td></tr>
-            <tr><td>property_lookup</td>           <td class="right">&lt;1 μs</td><td class="right">77 μs</td>    <td class="right win">nDB ≫</td></tr>
-            <tr><td>single_pattern_query</td>      <td class="right">29 μs</td>   <td class="right">54 μs</td>    <td class="right win">nDB 1.9×</td></tr>
-            <tr><td>two_pattern_join</td>          <td class="right">46 ms</td>   <td class="right">0.6 ms</td>   <td class="right loss">PG 80×</td></tr>
-            <tr><td>recursive_contains_depth3</td> <td class="right">37 μs</td>   <td class="right">968 μs</td>   <td class="right win">nDB 26×</td></tr>
-            <tr><td>count_aggregate</td>           <td class="right">46 ms</td>   <td class="right">1.5 ms</td>   <td class="right loss">PG 30×</td></tr>
+            <tr><td>iter_all</td>                  <td class="right">24 ms</td>   <td class="right">65 ms</td>    <td class="right win">nDB 2.7×</td></tr>
+            <tr><td>point_lookup</td>              <td class="right">&lt;1 μs</td><td class="right">18 μs</td>    <td class="right win">nDB ≫</td></tr>
+            <tr><td>property_lookup</td>           <td class="right">&lt;1 μs</td><td class="right">66 μs</td>    <td class="right win">nDB ≫</td></tr>
+            <tr><td>single_pattern_query</td>      <td class="right">29 μs</td>   <td class="right">48 μs</td>    <td class="right win">nDB 1.7×</td></tr>
+            <tr><td>two_pattern_join</td>          <td class="right">1.6 ms</td>  <td class="right">0.5 ms</td>   <td class="right loss">PG 3×</td></tr>
+            <tr><td>recursive_contains_depth3</td> <td class="right">35 μs</td>   <td class="right">496 μs</td>   <td class="right win">nDB 14×</td></tr>
+            <tr><td>count_aggregate</td>           <td class="right">&lt;1 μs</td><td class="right">1.2 ms</td>   <td class="right win">nDB ≫</td></tr>
           </tbody>
         </table>
       </div>
@@ -802,9 +802,9 @@ function explainGap(name, ndb, pg, winner) {
     "point_lookup":              "nDB hits the in-memory memtable (HashMap-equivalent O(1)); PG round-trips libpq + the planner even on a primary-key lookup.",
     "property_lookup":           "nDB's <code>(type_id, property_id, value) → entity_ids</code> B-tree is a HashMap probe; PG's btree pays for sortcompare + tuple visibility.",
     "single_pattern_query":      "Same shape as property_lookup but routed through the full query pipeline (planner + executor).",
-    "two_pattern_join":          "PG's HashJoin wins big at this size — nDB materialises ~490 binding rows row-by-row (Bindings::clone is the hot path). Streaming executor is v2 work.",
+    "two_pattern_join":          "v3 closed the prior 80× gap to ~3×. The remaining cost is nDB materialising ~490 binding rows where PG's HashJoin runs probe-build in one pass. Streaming executor lands the rest.",
     "recursive_contains_depth3": "nDB walks the in-memory adjacency cluster directly; PG's WITH RECURSIVE materialises a workset table per step.",
-    "count_aggregate":           "PG sequential scan with row visibility short-circuits; nDB materialises 49k binding rows to count them. count-pushdown is a follow-up.",
+    "count_aggregate":           "nDB v3 pushes count() down to the entity-type-cluster index — O(1) probe, no materialisation. PG sequential scan still has to walk the table.",
   };
   return gaps[name] || "";
 }

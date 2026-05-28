@@ -3,74 +3,74 @@
   "workload": "realworld_microbench",
   "n_entities": 50000,
   "n_hyperedges": 50000,
-  "load_ms": 1207.7743260015268,
+  "load_ms": 1256.1742460020469,
   "flush_ms": 0.0,
-  "bytes_on_disk": 21119503,
-  "bytes_resident": 45522944,
+  "bytes_on_disk": 21330967,
+  "bytes_resident": 45662208,
   "results": [
     {
       "name": "iter_all",
       "iters": 5,
-      "min_us": 65165.0,
-      "p50_us": 91556.0,
-      "p99_us": 96023.0,
-      "ops_per_sec": 11.729228360970248
+      "min_us": 61839.0,
+      "p50_us": 65020.0,
+      "p99_us": 70877.0,
+      "ops_per_sec": 15.185102573928395
     },
     {
       "name": "point_lookup",
       "iters": 1000,
-      "min_us": 16.0,
-      "p50_us": 19.0,
-      "p99_us": 111.0,
-      "ops_per_sec": 37782.3070337634
+      "min_us": 15.0,
+      "p50_us": 18.0,
+      "p99_us": 183.0,
+      "ops_per_sec": 28571.485713172035
     },
     {
       "name": "property_lookup",
       "iters": 1000,
-      "min_us": 51.0,
-      "p50_us": 77.0,
-      "p99_us": 287.0,
-      "ops_per_sec": 10331.993505209814
+      "min_us": 50.0,
+      "p50_us": 66.0,
+      "p99_us": 160.0,
+      "ops_per_sec": 14090.287036748427
     },
     {
       "name": "single_pattern_query",
       "iters": 100,
-      "min_us": 49.0,
-      "p50_us": 54.0,
-      "p99_us": 113.0,
-      "ops_per_sec": 17867.368749016754
+      "min_us": 47.0,
+      "p50_us": 48.0,
+      "p99_us": 84.0,
+      "ops_per_sec": 20118.036550517503
     },
     {
       "name": "two_pattern_join",
       "iters": 100,
-      "min_us": 512.0,
-      "p50_us": 585.0,
-      "p99_us": 1036.0,
-      "ops_per_sec": 1641.4486264045315
+      "min_us": 483.0,
+      "p50_us": 548.0,
+      "p99_us": 1087.0,
+      "ops_per_sec": 1746.0990706581692
     },
     {
       "name": "recursive_contains_depth3",
       "iters": 50,
-      "min_us": 539.0,
-      "p50_us": 968.0,
-      "p99_us": 2069.0,
-      "ops_per_sec": 1023.8757378898399
+      "min_us": 474.0,
+      "p50_us": 496.0,
+      "p99_us": 1038.0,
+      "ops_per_sec": 1868.9781987181468
     },
     {
       "name": "count_aggregate",
       "iters": 50,
-      "min_us": 1385.0,
-      "p50_us": 1490.0,
-      "p99_us": 2877.0,
-      "ops_per_sec": 637.3019104329684
+      "min_us": 1182.0,
+      "p50_us": 1207.0,
+      "p99_us": 1617.0,
+      "ops_per_sec": 818.0249909051879
     },
     {
       "name": "commits_per_sec",
       "iters": 1000,
       "min_us": 155.0,
-      "p50_us": 265.0,
-      "p99_us": 1056.0,
-      "ops_per_sec": 3214.7198885685025
+      "p50_us": 187.0,
+      "p99_us": 747.0,
+      "ops_per_sec": 4041.27538836375
     }
   ]
 }
