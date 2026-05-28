@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Query language playground · nDB</title>
+<link rel="stylesheet" href="/static/styles.css">
+<style>
+  /* Playground-specific styles, scoped via .qlp-* prefix. */
+  .qlp-grid {
+    display: grid; grid-template-columns: 1fr 320px; gap: 22px;
+    margin: 24px 0;
+  }
+  @media (max-width: 900px) { .qlp-grid { grid-template-columns: 1fr; } }
+
+  .qlp-editor-wrap {
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 6px; overflow: hidden;
+  }
+  .qlp-editor-header {
+    padding: 8px 12px; background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+    font-size: 12px; color: var(--text-muted);
+  }
+  .qlp-editor-header .target {
+    font-family: var(--font-mono); color: var(--text);
+  }
+  .qlp-editor-header .kbd {
+    margin-left: auto; font-family: var(--font-mono); font-size: 11px;
+    color: var(--text-muted);
+  }
+  .qlp-editor {
+    width: 100%; min-height: 180px;
+    background: var(--surface-2); color: var(--text);
+    border: none; padding: 12px 14px;
+    font-family: var(--font-mono); font-size: 13px; line-height: 1.6;
+    resize: vertical; outline: none;
+    tab-size: 2;
+  }
+  .qlp-toolbar {
+    padding: 8px 12px; background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .qlp-toolbar .run {
+    background: var(--accent); color: #fff; border: none;
+    padding: 6px 18px; border-radius: 4px;
+    font-size: 13px; font-weight: 500; cursor: pointer;
+  }
+  .qlp-toolbar .run:hover { background: var(--accent-hover); }
+  .qlp-toolbar .run:disabled { opacity: 0.5; cursor: wait; }
+  .qlp-toolbar .clear {
+    background: var(--surface-2); color: var(--text-muted);
+    border: 1px solid var(--border); padding: 6px 10px;
+    border-radius: 4px; font-size: 12px; cursor: pointer;
+  }
+  .qlp-toolbar .status {
+    margin-left: auto; font-size: 12px; color: var(--text-muted);
+    font-family: var(--font-mono);
+  }
+  .qlp-toolbar .status.ok { color: var(--property); }
+  .qlp-toolbar .status.err { color: #e85a4a; }
+
+  .qlp-result {
+    margin-top: 14px; background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 6px;
+    overflow: hidden;
+  }
+  .qlp-result-header {
+    padding: 8px 14px; background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px; color: var(--text-muted);
+    display: flex; align-items: center; gap: 16px;
+  }
+  .qlp-result-header strong { color: var(--text); }
+  .qlp-table-wrap { overflow-x: auto; max-height: 480px; overflow-y: auto; }
+  .qlp-table {
+    width: 100%; border-collapse: collapse; margin: 0;
+    font-family: var(--font-mono); font-size: 12.5px;
+  }
+  .qlp-table th, .qlp-table td {
+    text-align: left; padding: 6px 12px; vertical-align: top;
+    border-bottom: 1px solid var(--border);
+  }
+  .qlp-table th {
+    background: var(--surface); color: var(--entity);
+    font-weight: 600; position: sticky; top: 0;
+    text-transform: none; letter-spacing: 0;
+    font-size: 11.5px;
+  }
+  .qlp-table td.val-string { color: var(--text); }
+  .qlp-table td.val-i64,
+  .qlp-table td.val-f64    { color: var(--property); text-align: right; }
+  .qlp-table td.val-bool   { color: var(--relation); }
+  .qlp-table td.val-uuid   { color: var(--text-muted); font-size: 11px; }
+  .qlp-table td.val-null   { color: var(--text-muted); font-style: italic; }
+  .qlp-empty {
+    padding: 30px 18px; text-align: center; color: var(--text-muted);
+    font-size: 13px;
+  }
+
+  .qlp-error {
+    padding: 14px 16px; background: rgba(232,90,74,0.08);
+    border-left: 3px solid #e85a4a;
+    font-family: var(--font-mono); font-size: 12.5px; color: var(--text);
+  }
+  .qlp-error .code { color: #e85a4a; font-weight: 600; margin-right: 6px; }
+  .qlp-error .span {
+    display: inline-block; margin-top: 6px;
+    background: var(--surface-2); padding: 4px 8px;
+    border-radius: 3px; font-size: 11.5px; color: var(--text-muted);
+  }
+  .qlp-error pre { background: var(--surface-2); padding: 8px; margin: 8px 0 0; }
+  .qlp-error pre .hl {
+    background: rgba(232,90,74,0.3); color: #fff;
+    padding: 1px 2px; border-radius: 2px;
+  }
+
+  .qlp-examples h3 {
+    font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--text-muted);
+    margin: 0 0 8px; font-weight: 600;
+  }
+  .qlp-example {
+    display: block; width: 100%; text-align: left;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: 5px;
+    padding: 10px 12px; margin-bottom: 8px; cursor: pointer;
+    font: inherit;
+  }
+  .qlp-example:hover {
+    border-color: var(--accent);
+    background: var(--surface-2);
+  }
+  .qlp-example .title {
+    font-size: 13px; font-weight: 500; color: var(--text-strong);
+    margin-bottom: 3px;
+  }
+  .qlp-example .blurb {
+    font-size: 11.5px; color: var(--text-muted); line-height: 1.45;
+  }
+
+  .qlp-cheat {
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 5px; padding: 12px 14px;
+    font-size: 12px; line-height: 1.65; color: var(--text);
+  }
+  .qlp-cheat dt {
+    color: var(--entity); font-family: var(--font-mono);
+    font-size: 11.5px; margin-top: 8px;
+  }
+  .qlp-cheat dt:first-child { margin-top: 0; }
+  .qlp-cheat dd {
+    margin: 0 0 4px 0; color: var(--text-muted); font-size: 11.5px;
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">nDB <span class="sub">N-dimensional database</span></div>
+  <nav>
+    <a href="/">Home</a>
+    <a href="/whitepaper.html">Whitepaper</a>
+    <a href="/discussion.html">Discussion</a>
+    <a href="/demos.html">Demos</a>
+    <a href="/query-language.html" class="active">Query</a>
+    <a href="/repo.html">Repo</a>
+  </nav>
+  <div class="right">v2.3.0 · 488 tests</div>
+</header>
+
+<main class="page wide">
+
+  <h1>Query language playground</h1>
+  <p class="lede">
+    Pattern matching over hyperedges, with property projection,
+    multi-pattern joins via shared variables, recursive transitive
+    closure, and time travel. The editor below talks to the live
+    <a href="/biodiv_ndb/"><strong>biodiv_ndb</strong></a> engine —
+    145 species, 22 regions, 63 interactions, 6 food webs. Click an
+    example to try it, edit freely, hit <em>Run</em>.
+  </p>
+
+  <div class="qlp-grid">
+    <div>
+      <div class="qlp-editor-wrap">
+        <div class="qlp-editor-header">
+          <span>POST </span>
+          <span class="target">/biodiv_ndb/api/query/text</span>
+          <span class="kbd">⌘ + Enter to run</span>
+        </div>
+        <textarea id="qlp-editor" class="qlp-editor" spellcheck="false" autocomplete="off"
+          placeholder="match species(life_form: &quot;plant&quot;) as ?s
+return ?s.common_name, ?s.family
+limit 10"></textarea>
+        <div class="qlp-toolbar">
+          <button class="run" id="qlp-run">Run</button>
+          <button class="clear" id="qlp-clear">Clear</button>
+          <span class="status" id="qlp-status">ready</span>
+        </div>
+      </div>
+
+      <div class="qlp-result" id="qlp-result">
+        <div class="qlp-empty">No query run yet. Pick an example on the right →</div>
+      </div>
+    </div>
+
+    <aside class="qlp-examples">
+      <h3>Try these</h3>
+      <div id="qlp-example-list"></div>
+
+      <h3 style="margin-top: 18px;">Cheat sheet</h3>
+      <dl class="qlp-cheat">
+        <dt>match type(role: term, ...) [as ?v]</dt>
+        <dd>Pattern atom. <code>term</code> is a variable <code>?v</code>, a literal (<code>"text"</code>, <code>42</code>, <code>true</code>), or a UUID <code>uuid:...</code>.</dd>
+        <dt>?v.property_name</dt>
+        <dd>Property projection — follows the bound UUID to the record, returns the property value.</dd>
+        <dt>match a(...) b(...) ...</dt>
+        <dd>Multiple patterns share variables; same name binds to the same value (join).</dd>
+        <dt>where ?x &lt;= 6 and ?y = "Vietnam"</dt>
+        <dt>type+ · type* · type? · type{1,3}</dt>
+        <dd>Recursive transitive closure on a hyperedge type. One endpoint must be a literal UUID in v1.</dd>
+        <dt>as of tx_id 42</dt>
+        <dd>Snapshot the query at a past transaction.</dd>
+        <dt>return ?a, ?b.name limit N</dt>
+      </dl>
+    </aside>
+  </div>
+
+  <h2>How this works</h2>
+  <p>
+    Each <em>Run</em> click sends the query text verbatim as a
+    <code>POST /biodiv_ndb/api/query/text</code> body. The server (one
+    nDB instance per demo) lexes + parses the text, resolves names
+    against its dictionary, plans the patterns into an operator tree,
+    and executes against the engine. Results come back as
+    <code>{columns, rows, truncated}</code> JSON.
+  </p>
+  <p>
+    The implementation lives in <code>crates/ndb-query</code> (lexer +
+    parser + resolver) and <code>crates/ndb-engine/src/query</code>
+    (planner + executor). The full grammar is in
+    <a href="https://github.com/goldrag1/nDB/blob/main/docs/superpowers/specs/2026-05-27-query-language.md" target="_blank" rel="noreferrer">the working spec</a>.
+  </p>
+
+  <h2>v1 limits worth knowing</h2>
+  <ul>
+    <li><strong>Property access in <code>where</code></strong> isn't supported yet — bind the property as a variable inside the pattern and compare in <code>where</code>:
+      <pre><code>match pollination(season_from: ?sf, season_to: ?st)
+where ?sf &lt;= 6 and ?st &gt;= 6
+return ?sf, ?st</code></pre>
+    </li>
+    <li><strong>Recursive patterns need a literal UUID anchor</strong> — one endpoint must be <code>uuid:01923c00-...</code>, not a variable. v2 will lift this.</li>
+    <li><strong>No <code>order by</code> / aggregations</strong> in v1 — those live in <code>ndb-slicer</code>, integration with the query language is the next session of work.</li>
+    <li><strong>No subqueries / CTEs</strong> — queries are flat. Use <code>limit</code> if a single pattern's cardinality is too high.</li>
+  </ul>
+
+</main>
+
+<footer class="site-foot">
+  <p>nDB is open-source under MIT. <a href="https://github.com/goldrag1/nDB" target="_blank" rel="noreferrer">github.com/goldrag1/nDB</a></p>
+</footer>
+
+<script>
+"use strict";
+
+// ─── Example queries — these drive both the sidebar list and the
+//     auto-run on click. Each is hand-crafted to demonstrate one
+//     specific capability of the query language against the biodiv
+//     dataset, in increasing order of complexity. ──────────────────
+const EXAMPLES = [
+  {
+    title: "1. All species (with projection)",
+    blurb: "Every species + its family. The simplest match — type filter + property projection.",
+    query: `match species() as ?s
+return ?s.common_name, ?s.family, ?s.life_form
+limit 12`,
+  },
+  {
+    title: "2. Filter by literal in pattern",
+    blurb: "Plants only — literal filters land inside the pattern parens, not in where.",
+    query: `match species(life_form: "plant") as ?s
+return ?s.common_name, ?s.scientific_name
+limit 12`,
+  },
+  {
+    title: "3. Two-pattern join via shared ?wolf",
+    blurb: "Find what the wolf eats — bind ?wolf from species lookup, use it in predation pattern.",
+    query: `match species(common_name: "Gray wolf") as ?wolf
+      predation(predator: ?wolf, prey: ?prey)
+return ?prey.common_name, ?prey.life_form`,
+  },
+  {
+    title: "4. Temporal qualifier — pollinations in June",
+    blurb: "Hyperedge property bindings + where clause. Pollination is valid only May–July for yucca.",
+    query: `match pollination(plant: ?p, pollinator: ?b,
+                  season_from: ?sf, season_to: ?st)
+where ?sf <= 6 and ?st >= 6
+return ?p.common_name, ?b.common_name, ?sf, ?st
+limit 10`,
+  },
+  {
+    title: "5. Obligate-only mutualisms",
+    blurb: "obligate: true is a literal on the hyperedge — yucca/yucca-moth and fig/wasp.",
+    query: `match pollination(plant: ?p, pollinator: ?b, obligate: true)
+return ?p.common_name, ?b.common_name`,
+  },
+  {
+    title: "6. Co-pattern on same role-filler",
+    blurb: "Same species in both plant and pollinator roles. Returns 0 rows — data integrity check.",
+    query: `match pollination(plant: ?same, pollinator: ?same)
+return ?same.common_name`,
+  },
+  {
+    title: "7. All predator–prey pairs",
+    blurb: "Every direct predation edge in the dataset.",
+    query: `match predation(predator: ?pr, prey: ?py, region: ?r)
+return ?pr.common_name, ?py.common_name, ?r.name
+limit 15`,
+  },
+  {
+    title: "8. Parasitism with transmission mode",
+    blurb: "Hyperedge type carries a transmission property — bind + project.",
+    query: `match parasitism(host: ?h, parasite: ?p,
+                 transmission: ?mode)
+return ?h.common_name, ?p.common_name, ?mode`,
+  },
+  {
+    title: "9. Fungi only — kingdom filter",
+    blurb: "Property filter on the entity kind. Returns species in the fungal kingdom.",
+    query: `match species(kingdom: "Fungi") as ?f
+return ?f.common_name, ?f.family`,
+  },
+];
+
+const API_URL  = "/biodiv_ndb/api/query/text";
+
+const editor   = document.getElementById("qlp-editor");
+const status   = document.getElementById("qlp-status");
+const runBtn   = document.getElementById("qlp-run");
+const clearBtn = document.getElementById("qlp-clear");
+const result   = document.getElementById("qlp-result");
+const exList   = document.getElementById("qlp-example-list");
+
+// ─── Sidebar examples
+for (const ex of EXAMPLES) {
+  const btn = document.createElement("button");
+  btn.className = "qlp-example";
+  btn.innerHTML = `<div class="title">${ex.title}</div><div class="blurb">${ex.blurb}</div>`;
+  btn.addEventListener("click", () => {
+    editor.value = ex.query;
+    run();
+  });
+  exList.appendChild(btn);
+}
+
+// ─── Auto-load the first example
+editor.value = EXAMPLES[0].query;
+
+// ─── Run
+async function run() {
+  const text = editor.value.trim();
+  if (!text) {
+    setStatus("ready", "");
+    return;
+  }
+  setStatus("running…", "");
+  runBtn.disabled = true;
+  const t0 = performance.now();
+  try {
+    const r = await fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: text,
+    });
+    const ms = (performance.now() - t0).toFixed(0);
+    const body = await r.json();
+    if (r.ok) {
+      renderResult(body, ms);
+      setStatus(`${body.rows.length} row${body.rows.length === 1 ? '' : 's'} · ${ms} ms${body.truncated ? ' · truncated' : ''}`, "ok");
+    } else {
+      renderError(body, text, ms);
+      setStatus(`${body.error || 'error'} · ${ms} ms`, "err");
+    }
+  } catch (e) {
+    renderError({ error: "network", code: "network_error", detail: String(e) }, text, 0);
+    setStatus("network error", "err");
+  } finally {
+    runBtn.disabled = false;
+  }
+}
+
+function setStatus(text, cls) {
+  status.textContent = text;
+  status.className = "status" + (cls ? " " + cls : "");
+}
+
+function renderResult(body, ms) {
+  const { columns, rows, truncated } = body;
+  if (!rows || rows.length === 0) {
+    result.innerHTML = `
+      <div class="qlp-result-header"><strong>0 rows</strong> · ${ms} ms</div>
+      <div class="qlp-empty">No matches.</div>`;
+    return;
+  }
+  const headerHTML = `
+    <div class="qlp-result-header">
+      <strong>${rows.length}</strong> row${rows.length === 1 ? '' : 's'}
+      · ${columns.length} column${columns.length === 1 ? '' : 's'}
+      · ${ms} ms
+      ${truncated ? ' · <span style="color:var(--relation)">truncated</span>' : ''}
+    </div>`;
+  let html = headerHTML + '<div class="qlp-table-wrap"><table class="qlp-table"><thead><tr>';
+  for (const c of columns) html += `<th>${escapeHtml(c)}</th>`;
+  html += '</tr></thead><tbody>';
+  for (const row of rows) {
+    html += '<tr>';
+    for (const cell of row) html += renderCell(cell);
+    html += '</tr>';
+  }
+  html += '</tbody></table></div>';
+  result.innerHTML = html;
+}
+
+function renderCell(cell) {
+  if (cell === null || cell === undefined) {
+    return `<td class="val-null">null</td>`;
+  }
+  if (typeof cell === "object" && cell.tag !== undefined) {
+    const t = cell.tag;
+    const v = cell.value;
+    if (t === "string")            return `<td class="val-string">${escapeHtml(String(v))}</td>`;
+    if (t === "i64")               return `<td class="val-i64">${v}</td>`;
+    if (t === "f64")               return `<td class="val-f64">${v}</td>`;
+    if (t === "bool")              return `<td class="val-bool">${v ? 'true' : 'false'}</td>`;
+    if (t === "uuid")              return `<td class="val-uuid" title="${escapeHtml(String(v))}">${String(v).slice(0, 8)}…</td>`;
+    return `<td class="val-string">${escapeHtml(JSON.stringify(v))}</td>`;
+  }
+  return `<td class="val-string">${escapeHtml(JSON.stringify(cell))}</td>`;
+}
+
+function renderError(err, text, ms) {
+  const { error, code, detail, span } = err;
+  let html = '<div class="qlp-result-header" style="border-bottom-color: #e85a4a;">'
+           + `<strong style="color:#e85a4a;">${escapeHtml(error || 'error')}</strong>`
+           + ` · ${ms} ms</div><div class="qlp-error">`
+           + `<span class="code">${escapeHtml(code || 'unknown')}</span>`
+           + escapeHtml(detail || '');
+  if (span && typeof span.start === "number" && typeof span.end === "number") {
+    const before = text.slice(0, span.start);
+    const error_part = text.slice(span.start, span.end);
+    const after  = text.slice(span.end);
+    html += `<pre>${escapeHtml(before)}<span class="hl">${escapeHtml(error_part || ' ')}</span>${escapeHtml(after)}</pre>`;
+    html += `<span class="span">byte ${span.start}–${span.end}</span>`;
+  }
+  html += '</div>';
+  result.innerHTML = html;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    c === '&' ? '&amp;' :
+    c === '<' ? '&lt;'  :
+    c === '>' ? '&gt;'  :
+    c === '"' ? '&quot;': '&#39;');
+}
+
+// ─── Bindings
+runBtn.addEventListener("click", run);
+clearBtn.addEventListener("click", () => {
+  editor.value = "";
+  result.innerHTML = '<div class="qlp-empty">Editor cleared. Type a query or pick an example →</div>';
+  setStatus("ready", "");
+  editor.focus();
+});
+editor.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+    e.preventDefault();
+    run();
+  }
+});
+
+// Auto-run the first example on first load so the page lands lively
+run();
+</script>
+
+</body>
+</html>
