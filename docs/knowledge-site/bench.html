@@ -155,6 +155,129 @@
     margin-top: 18px; font-size: 12px; color: var(--text-muted);
     line-height: 1.55;
   }
+
+  /* ── Tabs ──────────────────────────────────────────────────────── */
+  .tabs {
+    display: flex; gap: 4px; margin: 14px 0 22px;
+    border-bottom: 1px solid var(--border);
+  }
+  .tab {
+    background: none; color: var(--text-muted); border: none;
+    border-bottom: 2px solid transparent;
+    padding: 9px 18px; font: inherit; font-size: 13.5px;
+    cursor: pointer; transition: color 0.1s, border-color 0.1s;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active {
+    color: var(--text-strong); border-bottom-color: var(--accent);
+    font-weight: 500;
+  }
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
+
+  /* ── Stress tab ────────────────────────────────────────────────── */
+  .stress-controls {
+    display: flex; align-items: center; gap: 18px; margin: 6px 0 18px;
+    flex-wrap: wrap;
+  }
+  .stress-controls .group {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; color: var(--text-muted);
+  }
+  .pill-group {
+    display: inline-flex; border: 1px solid var(--border);
+    border-radius: 5px; overflow: hidden;
+  }
+  .pill-group button {
+    background: var(--surface-2); color: var(--text-muted);
+    border: none; padding: 5px 12px; font: inherit; font-size: 12.5px;
+    cursor: pointer; border-right: 1px solid var(--border);
+  }
+  .pill-group button:last-child { border-right: none; }
+  .pill-group button:hover { color: var(--text); }
+  .pill-group button.active {
+    background: var(--accent); color: #fff; font-weight: 500;
+  }
+  .stress-controls .go {
+    background: var(--accent); color: #fff; border: none;
+    padding: 7px 22px; border-radius: 5px; font: inherit;
+    font-size: 13.5px; font-weight: 500; cursor: pointer;
+    margin-left: auto;
+  }
+  .stress-controls .go:hover { background: var(--accent-hover); }
+  .stress-controls .go:disabled { opacity: 0.5; cursor: wait; }
+  .stress-controls .status {
+    font-size: 12px; color: var(--text-muted);
+    font-family: var(--font-mono);
+  }
+  .stress-controls .status.ok  { color: var(--property); }
+  .stress-controls .status.err { color: #e85a4a; }
+
+  .stress-lanes {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+  }
+  .stress-lane {
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 16px 18px;
+    transition: border-color 0.2s;
+  }
+  .stress-lane.winner { border-color: var(--property); box-shadow: 0 0 0 1px var(--property); }
+  .stress-lane.loser  { opacity: 0.92; }
+  .stress-lane.running { border-color: var(--accent); }
+  .stress-lane .who {
+    font-size: 12px; color: var(--text-muted); margin-bottom: 4px;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .stress-lane .who .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--text-muted);
+  }
+  .stress-lane.running .who .dot { background: var(--accent); animation: pulse 1s infinite; }
+  .stress-lane.winner  .who .dot { background: var(--property); }
+  .stress-lane .rps {
+    font-size: 32px; font-weight: 600; color: var(--text-strong);
+    font-family: var(--font-mono); margin: 4px 0 2px;
+  }
+  .stress-lane.winner .rps { color: var(--property); }
+  .stress-lane .rps-unit {
+    color: var(--text-muted); font-size: 13px; margin-left: 6px;
+  }
+  .stress-lane .sub {
+    font-size: 12px; color: var(--text-muted);
+    font-family: var(--font-mono); margin-bottom: 12px;
+  }
+  .stress-lane .ladder {
+    display: grid; grid-template-columns: auto 1fr; gap: 3px 12px;
+    font-size: 12px; color: var(--text-muted);
+    font-family: var(--font-mono); line-height: 1.55;
+    margin-bottom: 12px;
+  }
+  .stress-lane .ladder .v { color: var(--text); text-align: right; }
+  .stress-lane .hist {
+    display: flex; align-items: flex-end; height: 56px; gap: 1px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 3px; padding: 4px;
+  }
+  .stress-lane .hist .bar {
+    flex: 1; background: var(--accent); min-height: 1px;
+    border-radius: 1px 1px 0 0; opacity: 0.85;
+  }
+  .stress-lane.winner .hist .bar { background: var(--property); }
+  .stress-lane .hist-axis {
+    display: flex; justify-content: space-between;
+    font-size: 10.5px; color: var(--text-muted); margin-top: 3px;
+    font-family: var(--font-mono);
+  }
+  .stress-verdict {
+    margin-top: 14px; padding: 12px 14px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 5px; font-size: 13px; line-height: 1.6;
+    color: var(--text);
+  }
+  .stress-verdict .ratio { font-weight: 500; font-family: var(--font-mono); }
+  .stress-verdict .ratio.win  { color: var(--property); }
+  .stress-verdict .ratio.loss { color: #e85a4a; }
 </style>
 </head>
 <body>
@@ -176,6 +299,13 @@
 <main class="page">
 
   <h1>Live race — nDB vs Postgres</h1>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" data-tab="controlled" role="tab">Controlled · 1 client</button>
+    <button class="tab" data-tab="stress" role="tab">Concurrent stress · 1-64 clients</button>
+  </div>
+
+  <section class="tab-pane" id="tab-controlled" role="tabpanel">
   <div class="bench-intro">
     <p>
       Both sides loaded the same 100,000-record shape on startup:
@@ -261,6 +391,87 @@
       </div>
     </div>
   </div>
+  </section>
+
+  <section class="tab-pane" id="tab-stress" role="tabpanel">
+    <div class="bench-intro">
+      <p>
+        Same 100k dataset. Now <strong>both backends are hammered by
+        N concurrent client threads</strong> for a fixed duration; we
+        report sustained throughput (RPS) and the latency distribution
+        (p50 / p95 / p99 / p999). nDB's v1 engine is single-writer —
+        the in-process backend uses a <code>Mutex&lt;Engine&gt;</code>
+        so concurrent reads queue. Postgres uses a libpq connection
+        pool with N concurrent connections + the planner can execute
+        many reads in parallel.
+      </p>
+      <p>
+        That asymmetry is real. The race shows where each side's
+        architecture pays off: nDB's in-memory ops are so cheap that
+        even serialised through a mutex they outrun PG's
+        socket+planner cost on simple lookups. PG's connection-pool
+        parallelism pays off on join-shaped queries where each op is
+        heavy enough that planner overhead is amortised.
+      </p>
+    </div>
+
+    <div class="stress-controls">
+      <div class="group">
+        <span>Workload</span>
+        <select id="stress-workload"></select>
+      </div>
+      <div class="group">
+        <span>Clients</span>
+        <div class="pill-group" id="stress-conc">
+          <button data-v="1">1</button>
+          <button data-v="4" class="active">4</button>
+          <button data-v="16">16</button>
+          <button data-v="64">64</button>
+        </div>
+      </div>
+      <div class="group">
+        <span>Duration</span>
+        <div class="pill-group" id="stress-dur">
+          <button data-v="2000">2 s</button>
+          <button data-v="5000" class="active">5 s</button>
+          <button data-v="10000">10 s</button>
+        </div>
+      </div>
+      <button class="go" id="stress-btn">Stress race</button>
+      <span class="status" id="stress-status">ready</span>
+    </div>
+
+    <div class="stress-lanes">
+      <div class="stress-lane" id="slane-ndb">
+        <div class="who"><span class="dot"></span> nDB</div>
+        <div class="rps" id="ndb-rps">—<span class="rps-unit"></span></div>
+        <div class="sub" id="ndb-sub">awaiting race…</div>
+        <div class="ladder" id="ndb-ladder">
+          <span>p50</span><span class="v">—</span>
+          <span>p95</span><span class="v">—</span>
+          <span>p99</span><span class="v">—</span>
+          <span>p999</span><span class="v">—</span>
+        </div>
+        <div class="hist" id="ndb-hist"></div>
+        <div class="hist-axis"><span>1 μs</span><span>1 ms</span><span>1 s</span></div>
+      </div>
+      <div class="stress-lane" id="slane-pg">
+        <div class="who"><span class="dot"></span> Postgres</div>
+        <div class="rps" id="pg-rps">—<span class="rps-unit"></span></div>
+        <div class="sub" id="pg-sub">awaiting race…</div>
+        <div class="ladder" id="pg-ladder">
+          <span>p50</span><span class="v">—</span>
+          <span>p95</span><span class="v">—</span>
+          <span>p99</span><span class="v">—</span>
+          <span>p999</span><span class="v">—</span>
+        </div>
+        <div class="hist" id="pg-hist"></div>
+        <div class="hist-axis"><span>1 μs</span><span>1 ms</span><span>1 s</span></div>
+      </div>
+    </div>
+
+    <div class="stress-verdict" id="stress-verdict" style="display:none"></div>
+  </section>
 
   <p class="footnote">
     Full report + raw JSON dumps:
@@ -497,6 +708,249 @@ function escapeHtml(s) {
     c === '<' ? '&lt;'  :
     c === '>' ? '&gt;'  :
     c === '"' ? '&quot;': '&#39;');
+}
+
+// ─── Tabs ──────────────────────────────────────────────────────────────
+const tabs  = document.querySelectorAll(".tab");
+const panes = document.querySelectorAll(".tab-pane");
+
+function setTab(name) {
+  for (const t of tabs)  t.classList.toggle("active", t.dataset.tab === name);
+  for (const p of panes) p.classList.toggle("active", p.id === "tab-" + name);
+  if (history.replaceState) {
+    history.replaceState(null, "", "#" + name);
+  } else {
+    location.hash = name;
+  }
+}
+for (const t of tabs) {
+  t.addEventListener("click", () => setTab(t.dataset.tab));
+}
+const initial = (location.hash.slice(1) === "stress") ? "stress" : "controlled";
+setTab(initial);
+
+// ─── Stress race ──────────────────────────────────────────────────────
+const stressWorkload = document.getElementById("stress-workload");
+const stressConc     = document.getElementById("stress-conc");
+const stressDur      = document.getElementById("stress-dur");
+const stressBtn      = document.getElementById("stress-btn");
+const stressStatus   = document.getElementById("stress-status");
+const stressVerdict  = document.getElementById("stress-verdict");
+const slaneNdb       = document.getElementById("slane-ndb");
+const slanePg        = document.getElementById("slane-pg");
+
+// Populate workload select (reuses the same list as controlled tab).
+function populateStressWorkloads() {
+  if (!workloads.length) return;
+  stressWorkload.innerHTML = "";
+  for (const w of workloads) {
+    const opt = document.createElement("option");
+    opt.value = w.name;
+    opt.textContent = w.label;
+    stressWorkload.appendChild(opt);
+  }
+  // Default selection: point_lookup (the most visually distinctive).
+  const def = workloads.find(w => w.name === "point_lookup") || workloads[0];
+  if (def) stressWorkload.value = def.name;
+}
+// Init pill-group toggles
+function pillToggle(group) {
+  group.addEventListener("click", (e) => {
+    if (e.target.tagName !== "BUTTON") return;
+    for (const b of group.querySelectorAll("button")) b.classList.remove("active");
+    e.target.classList.add("active");
+  });
+}
+pillToggle(stressConc);
+pillToggle(stressDur);
+
+function pillVal(group) {
+  const a = group.querySelector("button.active");
+  return parseInt(a.dataset.v, 10);
+}
+
+stressBtn.addEventListener("click", stressRace);
+
+// Try to populate stress workloads once /workloads has loaded. The
+// init promise above sets `workloads`; re-check shortly after page
+// load.
+(function waitForWorkloads() {
+  if (workloads.length) {
+    populateStressWorkloads();
+  } else {
+    setTimeout(waitForWorkloads, 200);
+  }
+})();
+
+async function stressRace() {
+  const w   = stressWorkload.value;
+  const n   = pillVal(stressConc);
+  const ms  = pillVal(stressDur);
+  if (!w) return;
+  stressBtn.disabled = true;
+  resetStressLanes();
+  slaneNdb.classList.add("running");
+  slanePg.classList.add("running");
+  setStressStatus(`firing ${n} clients × ${ms / 1000}s on each side…`, "");
+
+  const body = JSON.stringify({ workload: w, concurrency: n, duration_ms: ms });
+  const t0 = performance.now();
+  const ndbP = fetch(NDB_BASE + "/stress", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body,
+  }).then(r => r.json().then(b => ({ r, b })));
+  const pgP = fetch(PG_BASE + "/stress", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body,
+  }).then(r => r.json().then(b => ({ r, b })));
+
+  // Optional live progress: tick the status while waiting.
+  const ticker = setInterval(() => {
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+    setStressStatus(`firing ${n} clients × ${ms / 1000}s on each side… ${elapsed}s elapsed`, "");
+  }, 250);
+
+  const [ndbRes, pgRes] = await Promise.allSettled([ndbP, pgP]);
+  clearInterval(ticker);
+  const totalMs = (performance.now() - t0).toFixed(0);
+  const ndbBody = pickBody(ndbRes);
+  const pgBody  = pickBody(pgRes);
+
+  paintStressLane("ndb", ndbBody);
+  paintStressLane("pg",  pgBody);
+
+  if (ndbBody && pgBody && ndbBody.rps > 0 && pgBody.rps > 0) {
+    const winner = ndbBody.rps >= pgBody.rps ? "ndb" : "pg";
+    slaneNdb.classList.toggle("winner", winner === "ndb");
+    slanePg.classList.toggle("winner",  winner === "pg");
+    slaneNdb.classList.toggle("loser",  winner !== "ndb");
+    slanePg.classList.toggle("loser",   winner !== "pg");
+    renderStressVerdict(w, n, ndbBody, pgBody, winner);
+    setStressStatus(`finished in ${totalMs} ms`, "ok");
+  } else {
+    setStressStatus("stress race finished with errors", "err");
+  }
+  slaneNdb.classList.remove("running");
+  slanePg.classList.remove("running");
+  stressBtn.disabled = false;
+}
+
+function pickBody(res) {
+  if (res.status !== "fulfilled") return null;
+  const { r, b } = res.value;
+  if (!r.ok) return { ...b, _http: r.status };
+  return b;
+}
+
+function paintStressLane(who, b) {
+  const lane = who === "ndb" ? slaneNdb : slanePg;
+  const rpsEl = document.getElementById(who + "-rps");
+  const subEl = document.getElementById(who + "-sub");
+  const ladderEl = document.getElementById(who + "-ladder");
+  const histEl = document.getElementById(who + "-hist");
+
+  if (!b || b.error) {
+    lane.classList.add("error");
+    rpsEl.textContent = "—";
+    subEl.textContent = (b && (b.detail || b.error)) || "no response";
+    histEl.innerHTML = "";
+    return;
+  }
+  rpsEl.innerHTML = fmtRps(b.rps) + '<span class="rps-unit">rps</span>';
+  subEl.textContent =
+    `${b.total_ops.toLocaleString()} ops · ${b.errors} errors · wall ${(b.wall_ms/1000).toFixed(2)}s`;
+  ladderEl.innerHTML =
+    `<span>p50</span><span class="v">${fmtUs(b.p50_us)}</span>` +
+    `<span>p95</span><span class="v">${fmtUs(b.p95_us)}</span>` +
+    `<span>p99</span><span class="v">${fmtUs(b.p99_us)}</span>` +
+    `<span>p999</span><span class="v">${fmtUs(b.p999_us)}</span>`;
+  renderHistogram(histEl, b.histogram_log10);
+}
+
+function renderHistogram(el, pairs) {
+  // 60 bins, log10 scale from 1 μs to 1 s. We pre-build all 60 bars
+  // so the layout doesn't jump between different workloads.
+  el.innerHTML = "";
+  const counts = new Array(60).fill(0);
+  for (const [edge, n] of pairs) {
+    const i = Math.round(Math.log10(Math.max(1, edge)) * 10);
+    if (i >= 0 && i < 60) counts[i] = n;
+  }
+  const max = Math.max(1, ...counts);
+  for (let i = 0; i < 60; i++) {
+    const h = (counts[i] / max) * 100;
+    const bar = document.createElement("div");
+    bar.className = "bar";
+    bar.style.height = h + "%";
+    bar.title = counts[i] + " ops at ~" + fmtUs(Math.pow(10, i / 10));
+    el.appendChild(bar);
+  }
+}
+
+function resetStressLanes() {
+  for (const l of [slaneNdb, slanePg]) {
+    l.classList.remove("winner", "loser", "running", "error");
+  }
+  for (const who of ["ndb", "pg"]) {
+    document.getElementById(who + "-rps").innerHTML = "—<span class=\"rps-unit\"></span>";
+    document.getElementById(who + "-sub").textContent = "running…";
+    document.getElementById(who + "-ladder").innerHTML =
+      `<span>p50</span><span class="v">—</span>` +
+      `<span>p95</span><span class="v">—</span>` +
+      `<span>p99</span><span class="v">—</span>` +
+      `<span>p999</span><span class="v">—</span>`;
+    document.getElementById(who + "-hist").innerHTML = "";
+  }
+  stressVerdict.style.display = "none";
+}
+
+function setStressStatus(text, cls) {
+  stressStatus.textContent = text;
+  stressStatus.className = "status" + (cls ? " " + cls : "");
+}
+
+function renderStressVerdict(workload, conc, ndb, pg, winner) {
+  const ratio = winner === "ndb" ? (ndb.rps / pg.rps) : (pg.rps / ndb.rps);
+  const ratioStr = ratio < 2 ? ratio.toFixed(2) + "×" : ratio.toFixed(1) + "×";
+  const winnerWord = winner === "ndb" ? "nDB" : "Postgres";
+  const ratioClass = winner === "ndb" ? "ratio win" : "ratio loss";
+  const expl = stressExplain(workload, conc, winner);
+  stressVerdict.style.display = "block";
+  stressVerdict.innerHTML =
+    `<strong>${escapeHtml(workload)}</strong> @ ${conc} clients: ` +
+    `<span class="${ratioClass}">${winnerWord} ${ratioStr} faster (sustained RPS).</span> ` +
+    expl;
+}
+
+function stressExplain(workload, conc, winner) {
+  if (workload === "point_lookup" || workload === "property_lookup" || workload === "recursive_contains_depth3") {
+    if (winner === "ndb") {
+      return "Each op is so cheap on nDB (memtable hash lookup / adjacency walk) " +
+             "that even queued through a single-writer Mutex&lt;Engine&gt; it outruns " +
+             "Postgres's libpq+planner socket round-trip per op.";
+    }
+    return "Postgres's connection-pool parallelism amortised the per-op planner " +
+           "cost faster than nDB's single-writer mutex can serve.";
+  }
+  if (workload === "two_pattern_join" || workload === "count_aggregate") {
+    if (winner === "pg") {
+      return "PG's HashJoin runs in parallel across the connection pool while " +
+             "nDB's executor materialises bindings row-by-row, serialised through " +
+             "Mutex&lt;Engine&gt;. Streaming executor + RwLock engine is v2 work.";
+    }
+    return "Surprising — at this concurrency the mutex cost on PG's side beat the " +
+           "row-by-row bindings cost. Try a different concurrency.";
+  }
+  if (workload === "iter_all") {
+    return "Full scans are dominated by raw bytes-walked. nDB's flat memtable " +
+           "beats PG's four-table UNION ALL; at higher concurrency the picture " +
+           "flips when PG's pool fans out to multiple readers.";
+  }
+  return "";
+}
+
+function fmtRps(v) {
+  if (v >= 1_000_000) return (v / 1_000_000).toFixed(2) + "M";
+  if (v >= 1_000)     return (v / 1_000).toFixed(1) + "k";
+  return v.toFixed(0);
 }
 </script>
 

@@ -38,6 +38,10 @@ try:
     import psycopg
 except ImportError:
     sys.exit("psycopg3 required: pip install --user --break-system-packages psycopg[binary]")
+try:
+    from psycopg_pool import ConnectionPool
+except ImportError:
+    sys.exit("psycopg_pool required: pip install --user --break-system-packages psycopg_pool")
 
 BENCH_DB = os.environ.get("BENCH_DB", "ndb_bench_race")
 ADMIN_URL = os.environ.get("ADMIN_URL", "postgresql:///postgres")
@@ -380,6 +384,22 @@ class State:
         self.conn = psycopg.connect(db_url)
         self.rate_limit: dict[tuple[str, str], float] = {}
         self.rate_lock = Lock()
+        # Lazy pool for stress mode — sized up to the max stress
+        # concurrency. Created on first /stress request so non-stress
+        # users don't pay for it.
+        self.pool: ConnectionPool | None = None
+        self.pool_lock = Lock()
+
+    def get_pool(self, min_size: int) -> ConnectionPool:
+        with self.pool_lock:
+            if self.pool is None:
+                self.pool = ConnectionPool(
+                    self.db_url,
+                    min_size=4, max_size=128,
+                    timeout=10, num_workers=2,
+                )
+                self.pool.wait()
+            return self.pool
 
 
 def make_handler(state: State):
@@ -413,6 +433,9 @@ def make_handler(state: State):
             self._send_json(404, {"error": "not_found"})
 
         def do_POST(self):
+            if self.path == "/stress":
+                self._do_stress()
+                return
             if not self.path.startswith("/run/"):
                 self._send_json(404, {"error": "not_found"})
                 return
@@ -451,7 +474,167 @@ def make_handler(state: State):
                     return
             self._send_json(200, out)
 
+        def _do_stress(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                req = json.loads(raw or b"{}")
+            except json.JSONDecodeError:
+                self._send_json(400, {"error": "bad_json"})
+                return
+            workload_name = req.get("workload", "")
+            workload = next((w for w in WORKLOADS if w["name"] == workload_name), None)
+            if workload is None:
+                self._send_json(404, {"error": "unknown_workload"})
+                return
+            concurrency = max(1, min(128, int(req.get("concurrency", 4))))
+            duration_ms = max(500, min(30_000, int(req.get("duration_ms", 5000))))
+            # Rate limit.
+            peer = self.client_address[0] if self.client_address else "?"
+            key = (peer, "/stress")
+            now = time.monotonic()
+            with state.rate_lock:
+                prev = state.rate_limit.get(key)
+                if prev is not None and now - prev < RATE_LIMIT_SECS:
+                    wait = int(RATE_LIMIT_SECS - (now - prev))
+                    self._send_json(429, {"error": "rate_limit", "retry_after_s": wait})
+                    return
+                state.rate_limit[key] = now
+            try:
+                out = run_stress(state, workload_name, concurrency, duration_ms)
+            except Exception as e:
+                log(f"stress {workload_name} failed: {e}")
+                self._send_json(500, {"error": "stress_failed", "detail": str(e)})
+                return
+            self._send_json(200, out)
+
     return Handler
+
+
+# ─── Concurrent stress runner ─────────────────────────────────────────
+
+def run_stress(state: "State", workload_name: str, concurrency: int, duration_ms: int) -> dict:
+    """Fire `concurrency` worker threads, each holding its own pooled
+    connection, looping the workload until deadline. Merge per-thread
+    latencies, compute percentiles + a log10 histogram, return."""
+    import threading
+    pool = state.get_pool(concurrency)
+    deadline = time.monotonic() + (duration_ms / 1000.0)
+    started = time.perf_counter()
+    samples = state.samples
+
+    latencies: list[list[int]] = [[] for _ in range(concurrency)]
+    errors = [0] * concurrency
+
+    def worker(tid: int) -> None:
+        idx_seed = (tid * 0x9e3779b97f4a7c15) & 0xFFFFFFFFFFFFFFFF
+        while time.monotonic() < deadline:
+            idx_seed ^= (idx_seed << 13) & 0xFFFFFFFFFFFFFFFF
+            idx_seed ^= idx_seed >> 7
+            idx_seed ^= (idx_seed << 17) & 0xFFFFFFFFFFFFFFFF
+            idx = idx_seed
+            t0 = time.perf_counter()
+            try:
+                with pool.connection() as conn:
+                    _do_one_op(conn, workload_name, samples, idx)
+                latencies[tid].append(int((time.perf_counter() - t0) * 1e6))
+            except Exception:
+                errors[tid] += 1
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(concurrency)]
+    for t in threads: t.start()
+    for t in threads: t.join()
+    wall_ms = (time.perf_counter() - started) * 1000.0
+
+    flat: list[int] = []
+    for lst in latencies:
+        flat.extend(lst)
+    flat.sort()
+    total_ops = len(flat)
+    err_total = sum(errors)
+
+    def pct(q: float) -> int:
+        if not flat: return 0
+        return flat[min(len(flat) - 1, int(len(flat) * q))]
+
+    p50 = pct(0.50); p95 = pct(0.95); p99 = pct(0.99); p999 = pct(0.999)
+    rps = (total_ops * 1000.0 / wall_ms) if wall_ms > 0 else 0.0
+
+    # Log10 histogram: 6 decades × 10 bins per decade = 60 bins.
+    import math
+    hist = [0] * 60
+    for us in flat:
+        v = max(1, us)
+        b = int(math.log10(v) * 10)
+        if b < 0: b = 0
+        if b >= 60: b = 59
+        hist[b] += 1
+    hist_pairs = []
+    for i, count in enumerate(hist):
+        if count == 0: continue
+        edge = 10 ** (i / 10.0)
+        hist_pairs.append([round(edge), count])
+
+    return {
+        "workload": workload_name,
+        "concurrency": concurrency,
+        "duration_ms": duration_ms,
+        "wall_ms": wall_ms,
+        "total_ops": total_ops,
+        "errors": err_total,
+        "rps": rps,
+        "p50_us": p50, "p95_us": p95, "p99_us": p99, "p999_us": p999,
+        "max_us": flat[-1] if flat else 0,
+        "histogram_log10": hist_pairs,
+    }
+
+
+def _do_one_op(conn: psycopg.Connection, workload_name: str, samples: dict, idx: int) -> None:
+    """One iteration of the named workload — fastest path possible."""
+    with conn.cursor() as cur:
+        if workload_name == "iter_all":
+            cur.execute(
+                "SELECT id FROM region UNION ALL SELECT id FROM customer UNION ALL "
+                "SELECT id FROM sales UNION ALL SELECT id FROM contains"
+            )
+            for _ in cur: pass
+        elif workload_name == "point_lookup":
+            pool = samples["lookup_ids"]
+            cur.execute("SELECT id, name, region_code FROM customer WHERE id = %s",
+                        (pool[idx % len(pool)],))
+            cur.fetchone()
+        elif workload_name == "property_lookup":
+            pool = samples["lookup_codes"]
+            cur.execute("SELECT id FROM customer WHERE region_code = %s",
+                        (pool[idx % len(pool)],))
+            cur.fetchall()
+        elif workload_name == "single_pattern_query":
+            cur.execute("SELECT id FROM customer WHERE region_code = %s",
+                        (samples["narrow_region"],))
+            cur.fetchall()
+        elif workload_name == "two_pattern_join":
+            cur.execute("""
+                SELECT c.id, s.id
+                  FROM customer c
+                  JOIN sales s ON s.buyer_id = c.id
+                 WHERE c.region_code = %s
+            """, (samples["narrow_region"],))
+            cur.fetchall()
+        elif workload_name == "recursive_contains_depth3":
+            cur.execute("""
+                WITH RECURSIVE walk(node, depth) AS (
+                    SELECT child_id, 1 FROM contains WHERE parent_id = %s
+                    UNION
+                    SELECT c.child_id, w.depth + 1
+                      FROM contains c JOIN walk w ON c.parent_id = w.node
+                     WHERE w.depth < 3
+                )
+                SELECT DISTINCT node FROM walk
+            """, (samples["chain_root"],))
+            cur.fetchall()
+        elif workload_name == "count_aggregate":
+            cur.execute("SELECT count(*) FROM customer")
+            cur.fetchone()
 
 
 def main() -> int:

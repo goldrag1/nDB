@@ -40,7 +40,7 @@ use ndb_engine::{
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 // ─── Schema (kept narrow + obvious) ────────────────────────────────────
@@ -133,7 +133,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(s) => {
                 let state = std::sync::Arc::clone(&state);
                 std::thread::spawn(move || {
-                    if let Err(e) = handle(&state, s) {
+                    if let Err(e) = handle(state, s) {
                         eprintln!("connection error: {e}");
                     }
                 });
@@ -184,7 +184,7 @@ const WORKLOADS: &[Workload] = &[
 
 // ─── HTTP loop ─────────────────────────────────────────────────────────
 
-fn handle(state: &State, mut stream: TcpStream) -> std::io::Result<()> {
+fn handle(state: Arc<State>, mut stream: TcpStream) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     let peer_ip = stream.peer_addr()
         .map(|a| a.ip().to_string())
@@ -207,8 +207,9 @@ fn handle(state: &State, mut stream: TcpStream) -> std::io::Result<()> {
             content_length = v.trim().parse().unwrap_or(0);
         }
     }
+    let mut body = Vec::new();
     if content_length > 0 {
-        let mut body = vec![0u8; content_length];
+        body.resize(content_length, 0u8);
         reader.read_exact(&mut body)?;
     }
 
@@ -261,7 +262,42 @@ fn handle(state: &State, mut stream: TcpStream) -> std::io::Result<()> {
                     rl.retain(|_, t| now.duration_since(*t) < Duration::from_secs(60));
                 }
             }
-            let result = run_workload(state, workload);
+            let result = run_workload(&state, workload);
+            send_json(&mut stream, 200, &result)
+        }
+        ("POST", "/stress") => {
+            let req: serde_json::Value = match serde_json::from_slice(&body) {
+                Ok(v) => v,
+                Err(e) => return send_json(&mut stream, 400,
+                    &format!("{{\"error\":\"bad_json\",\"detail\":\"{}\"}}",
+                             escape_json(&e.to_string()))),
+            };
+            let workload_name = req.get("workload").and_then(|v| v.as_str()).unwrap_or("");
+            let Some(workload) = WORKLOADS.iter().find(|w| w.name == workload_name) else {
+                return send_json(&mut stream, 404,
+                    "{\"error\":\"unknown_workload\"}");
+            };
+            let concurrency = req.get("concurrency").and_then(|v| v.as_u64()).unwrap_or(4) as usize;
+            let duration_ms = req.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(5000);
+            let concurrency = concurrency.clamp(1, 128);
+            let duration_ms = duration_ms.clamp(500, 30_000);
+            // Stress rate limit: per-IP, regardless of workload — these
+            // ops are heavy.
+            {
+                let mut rl = state.rate_limiter.lock().unwrap();
+                let key = (peer_ip.clone(), "/stress".to_string());
+                let now = Instant::now();
+                if let Some(prev) = rl.get(&key) {
+                    let dt = now.duration_since(*prev);
+                    if dt < Duration::from_secs(RATE_LIMIT_SECS) {
+                        let wait = RATE_LIMIT_SECS - dt.as_secs();
+                        return send_json(&mut stream, 429,
+                            &format!("{{\"error\":\"rate_limit\",\"retry_after_s\":{wait}}}"));
+                    }
+                }
+                rl.insert(key, now);
+            }
+            let result = run_stress(&state, workload, concurrency, duration_ms);
             send_json(&mut stream, 200, &result)
         }
         _ => send_json(&mut stream, 404, "{\"error\":\"not_found\"}"),
@@ -308,6 +344,142 @@ fn run_workload(state: &State, workload: &Workload) -> String {
          \"p99_us\":{:.0},\"ops_per_sec\":{:.1},\"total_ms\":{:.1}}}",
         r.name, r.iters, r.min_us, r.p50_us, r.p99_us, r.ops_per_sec, r.total_ms,
     )
+}
+
+// ─── Concurrent stress runner ─────────────────────────────────────────
+//
+// Spawns `concurrency` worker threads. Each thread loops until the
+// deadline expires: acquire `state.engine` mutex, run one op, record
+// latency in its local Vec. Then we merge all threads' Vecs, compute
+// percentiles + a log10 histogram. The engine mutex serialises ops
+// (v1 single-writer), so above conc=1 the lanes just queue — that's
+// the realistic v1 ceiling and we report it honestly.
+
+fn run_stress(state: &Arc<State>, workload: &Workload, concurrency: usize, duration_ms: u64) -> String {
+    let deadline = Instant::now() + Duration::from_millis(duration_ms);
+    let started = Instant::now();
+    let workload_name: &'static str = workload.name;
+
+    let mut handles = Vec::with_capacity(concurrency);
+    for tid in 0..concurrency {
+        let st = Arc::clone(state);
+        handles.push(std::thread::spawn(move || -> (Vec<u64>, u64) {
+            let mut latencies: Vec<u64> = Vec::with_capacity(1024);
+            let mut errors: u64 = 0;
+            // Per-thread index rotation seed so workers don't all hit
+            // the same lookup uuid.
+            let mut idx_seed = (tid as u64).wrapping_mul(0x9e3779b97f4a7c15);
+            while Instant::now() < deadline {
+                idx_seed ^= idx_seed << 13;
+                idx_seed ^= idx_seed >> 7;
+                idx_seed ^= idx_seed << 17;
+                let idx = idx_seed as usize;
+                let t = Instant::now();
+                let ok = {
+                    let mut engine = st.engine.lock().unwrap();
+                    do_one_op(&mut engine, &st, workload_name, idx)
+                };
+                let us = t.elapsed().as_micros() as u64;
+                if ok { latencies.push(us); } else { errors += 1; }
+            }
+            (latencies, errors)
+        }));
+    }
+    let mut all = Vec::with_capacity(concurrency * 1024);
+    let mut errors = 0_u64;
+    for h in handles {
+        let (lat, err) = h.join().unwrap_or((Vec::new(), 0));
+        all.extend(lat);
+        errors += err;
+    }
+    let wall_ms = started.elapsed().as_secs_f64() * 1000.0;
+
+    let total_ops = all.len() as u64;
+    all.sort_unstable();
+    let pct = |q: f64| -> u64 {
+        if all.is_empty() { 0 }
+        else { all[((all.len() as f64) * q).min(all.len() as f64 - 1.0) as usize] }
+    };
+    let p50 = pct(0.50);
+    let p95 = pct(0.95);
+    let p99 = pct(0.99);
+    let p999 = pct(0.999);
+    let max = all.last().copied().unwrap_or(0);
+    let rps = if wall_ms > 0.0 { (total_ops as f64) * 1000.0 / wall_ms } else { 0.0 };
+
+    // Log10 histogram, 6 decades (1 μs … 1 s) × 10 bins/decade = 60.
+    const N_BUCKETS: usize = 60;
+    let mut hist = [0u64; N_BUCKETS];
+    for us in &all {
+        let v = (*us).max(1);
+        let b = ((v as f64).log10() * 10.0) as i64;
+        let b = b.clamp(0, N_BUCKETS as i64 - 1) as usize;
+        hist[b] += 1;
+    }
+
+    let mut hist_json = String::from("[");
+    for (i, &count) in hist.iter().enumerate() {
+        if count == 0 { continue; }
+        if hist_json.len() > 1 { hist_json.push(','); }
+        let edge = 10f64.powf(i as f64 / 10.0);
+        hist_json.push_str(&format!("[{:.0},{}]", edge, count));
+    }
+    hist_json.push(']');
+
+    format!(
+        "{{\"workload\":\"{}\",\"concurrency\":{},\"duration_ms\":{},\
+         \"wall_ms\":{:.1},\"total_ops\":{},\"errors\":{},\"rps\":{:.1},\
+         \"p50_us\":{},\"p95_us\":{},\"p99_us\":{},\"p999_us\":{},\
+         \"max_us\":{},\"histogram_log10\":{}}}",
+        workload_name, concurrency, duration_ms, wall_ms,
+        total_ops, errors, rps, p50, p95, p99, p999, max, hist_json,
+    )
+}
+
+/// Run a single op of the named workload. Picks deterministic samples
+/// using `idx` (per-thread rotating seed) for the workloads that need a
+/// pool element. Returns true on success.
+fn do_one_op(engine: &mut Engine, state: &State, workload: &str, idx: usize) -> bool {
+    match workload {
+        "iter_all" => {
+            let mut n = 0_u64;
+            for r in engine.snapshot_iter_streaming(TxId::ACTIVE) {
+                if r.is_err() { return false; }
+                n += 1;
+            }
+            n > 0
+        }
+        "point_lookup" => {
+            let eid = state.lookup_uuids[idx % state.lookup_uuids.len()];
+            engine.snapshot_read(&eid.into_uuid(), TxId::ACTIVE).is_ok()
+        }
+        "property_lookup" => {
+            let code = &state.region_probes[idx % state.region_probes.len()];
+            let _ = engine.property_lookup(
+                TypeId::new(TYPE_CUSTOMER),
+                PropertyId::new(PROP_REGION),
+                &Value::String(code.clone()),
+            );
+            true
+        }
+        "single_pattern_query" => {
+            let req = single_pattern_request(&state.narrow_region);
+            execute(engine, req).is_ok()
+        }
+        "two_pattern_join" => {
+            let req = two_pattern_request(&state.narrow_region);
+            execute(engine, req).is_ok()
+        }
+        "recursive_contains_depth3" => {
+            let req = recursive_request(state.chain_root);
+            execute(engine, req).is_ok()
+        }
+        "count_aggregate" => {
+            let req = count_request();
+            execute(engine, req).is_ok()
+        }
+        _ => false,
+    }
 }
 
 struct BenchResult {
