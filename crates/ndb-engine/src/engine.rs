@@ -44,8 +44,8 @@ use crate::encryption::{
 use crate::error::EncodeError;
 use crate::id::{EntityId, HyperedgeId, PropertyId, TX_ACTIVE, TxId, TypeId};
 use crate::index::{
-    AdjacencyIndex, Distance, HyperEdgeTypeIndex, Index, LookupKeyIndex, PropertyBTreeIndex,
-    VectorIndex,
+    AdjacencyIndex, Distance, EntityTypeIndex, HyperEdgeTypeIndex, Index, LookupKeyIndex,
+    PropertyBTreeIndex, VectorIndex,
 };
 use crate::memtable::Memtable;
 use crate::mvcc::{Resolved, resolve_iter};
@@ -262,6 +262,9 @@ pub struct Engine {
     adjacency: AdjacencyIndex,
     /// Hyperedge-type clustering — `type_id → [hyperedge ids]`.
     type_cluster: HyperEdgeTypeIndex,
+    /// Entity-type clustering — `type_id → [entity ids]`. Load-bearing
+    /// for the v3 count-aggregate fast path.
+    entity_type_cluster: EntityTypeIndex,
     /// Brute-force vector index for k-NN search over embedding props.
     vector: VectorIndex,
     /// Property B-tree — `(type, prop, value) → entities` for exact +
@@ -324,6 +327,7 @@ impl Engine {
             lookup_key: LookupKeyIndex::new(),
             adjacency: AdjacencyIndex::new(),
             type_cluster: HyperEdgeTypeIndex::new(),
+            entity_type_cluster: EntityTypeIndex::new(),
             vector: VectorIndex::new(),
             property_btree: PropertyBTreeIndex::new(),
             validation: ValidationEngine::new(),
@@ -436,6 +440,7 @@ impl Engine {
             lookup_key: LookupKeyIndex::new(),
             adjacency: AdjacencyIndex::new(),
             type_cluster: HyperEdgeTypeIndex::new(),
+            entity_type_cluster: EntityTypeIndex::new(),
             vector: VectorIndex::new(),
             property_btree: PropertyBTreeIndex::new(),
             validation: ValidationEngine::new(),
@@ -487,6 +492,7 @@ impl Engine {
         self.lookup_key.clear();
         self.adjacency.clear();
         self.type_cluster.clear();
+        self.entity_type_cluster.clear();
         self.vector.clear();
         self.property_btree.clear();
         // Metadata maps (v2.0+) — rebuilt from the durable records.
@@ -517,6 +523,7 @@ impl Engine {
                 self.lookup_key.apply(&rec, tx);
                 self.adjacency.apply(&rec, tx);
                 self.type_cluster.apply(&rec, tx);
+                self.entity_type_cluster.apply(&rec, tx);
                 self.vector.apply(&rec, tx);
                 self.property_btree.apply(&rec, tx);
             }
@@ -544,6 +551,7 @@ impl Engine {
             self.lookup_key.apply(rec, tx);
             self.adjacency.apply(rec, tx);
             self.type_cluster.apply(rec, tx);
+            self.entity_type_cluster.apply(rec, tx);
             self.vector.apply(rec, tx);
             self.property_btree.apply(rec, tx);
         }
@@ -604,6 +612,19 @@ impl Engine {
     #[must_use]
     pub fn hyperedge_type_count(&self, type_id: TypeId) -> usize {
         self.type_cluster.count(type_id)
+    }
+
+    /// All entities of the given type. O(N) in bucket size.
+    #[must_use]
+    pub fn entities_by_type(&self, type_id: TypeId) -> Vec<EntityId> {
+        self.entity_type_cluster.by_type_vec(type_id)
+    }
+
+    /// Count of entities of `type_id`. Constant-time index probe. Used
+    /// by the v3 count-aggregate fast path in the query executor.
+    #[must_use]
+    pub fn entity_type_count(&self, type_id: TypeId) -> usize {
+        self.entity_type_cluster.count(type_id)
     }
 
     /// Degree of `entity` in the adjacency index — number of hyperedges
@@ -1496,6 +1517,7 @@ impl WriteTxn<'_> {
             self.engine.lookup_key.apply(&r, self.tx_id);
             self.engine.adjacency.apply(&r, self.tx_id);
             self.engine.type_cluster.apply(&r, self.tx_id);
+            self.engine.entity_type_cluster.apply(&r, self.tx_id);
             self.engine.vector.apply(&r, self.tx_id);
             self.engine.property_btree.apply(&r, self.tx_id);
             self.engine.memtable.insert(r)?;

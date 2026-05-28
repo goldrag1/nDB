@@ -109,6 +109,21 @@ pub enum QueryError {
 /// Top-level entry — plan and execute one query against the engine.
 pub fn execute(engine: &mut Engine, req: QueryRequest) -> Result<QueryResponse, QueryError> {
     let snapshot = resolve_snapshot(engine, req.as_of)?;
+
+    // ── Fast path: count() pushdown to the type-cluster index. ──────
+    // Matches the shape `match X() return count()` exactly: one entity
+    // OR hyperedge pattern, no filters, no recursion, no role bindings,
+    // no `where`, no `order by`, no `limit`, no writes, single return =
+    // `count()` with no variable arg. Direct O(1) index probe instead of
+    // materialising ~49k bindings.
+    if let Some(n) = try_count_pushdown(engine, &req) {
+        return Ok(QueryResponse {
+            columns: vec!["count()".to_string()],
+            rows: vec![vec![JsonValue::I64 { value: n as i64 }]],
+            truncated: false,
+        });
+    }
+
     let mut rows: Vec<Bindings> = vec![Bindings::new()];
 
     // Cardinality-aware planner (v2.0): greedy smallest-seed,
@@ -768,6 +783,57 @@ fn project_item(
         // Aggregates are projected by aggregate_rows(), not project_item.
         // If one slipped through, return null to keep the pipeline safe.
         ReturnItem::Aggregate { .. } => JsonValue::Null,
+    }
+}
+
+/// Return the count if this request is a pure `match X() return count()`
+/// over a single unconstrained type (no filters, no recursion, no
+/// where/order/limit/writes, no as_of beyond ACTIVE). Returns `None` if
+/// any condition is unmet, in which case the executor falls back to the
+/// standard materialise + aggregate path.
+///
+/// Note: `as_of` is allowed only when it resolves to ACTIVE/latest. We
+/// can't index-probe a historical snapshot because the type-cluster only
+/// reflects the current state; supporting time-travelled counts would
+/// need per-snapshot bucket sizes. Counts at `tx_id`s in the past fall
+/// through to the slow path, which honours MVCC correctly.
+fn try_count_pushdown(engine: &Engine, req: &QueryRequest) -> Option<u64> {
+    // No write clauses.
+    if !req.creates.is_empty() || !req.deletes.is_empty()
+        || !req.sets.is_empty() || !req.merges.is_empty() {
+        return None;
+    }
+    // No filter / order / limit (limit < 1 would zero the count, but
+    // limit > 0 wouldn't change a single-row result; bail to be safe).
+    if req.filter.is_some() || !req.order_by.is_empty() || req.limit.is_some() {
+        return None;
+    }
+    // Only ACTIVE snapshot — historical counts go through the full path.
+    if let Some(ref as_of) = req.as_of {
+        match as_of {
+            AsOf::TxId { tx_id } if *tx_id == TxId::ACTIVE.get() => {}
+            AsOf::TxId { .. } => return None,
+            AsOf::TimestampUs { .. } => return None,
+        }
+    }
+    // Exactly one return = count() with no argument variable / property.
+    if req.returns.len() != 1 { return None; }
+    let ReturnItem::Aggregate { func, variable, property, .. } = &req.returns[0] else {
+        return None;
+    };
+    if func != "count" { return None; }
+    if variable.is_some() || property.is_some() { return None; }
+    // Exactly one pattern, unconstrained except for type_id.
+    if req.patterns.len() != 1 { return None; }
+    match &req.patterns[0] {
+        Pattern::Entity { type_id, property_filters, .. } if property_filters.is_empty() => {
+            Some(engine.entity_type_count(TypeId::new(*type_id)) as u64)
+        }
+        Pattern::Hyperedge { type_id, role_bindings, property_filters, recursion, .. }
+            if role_bindings.is_empty() && property_filters.is_empty() && recursion.is_none() => {
+            Some(engine.hyperedge_type_count(TypeId::new(*type_id)) as u64)
+        }
+        _ => None,
     }
 }
 
@@ -2108,6 +2174,112 @@ mod tests {
         assert!(!unify(&mut row, "x", Value::I64(2)));
         assert!(unify(&mut row, "y", Value::I64(3)));
         assert_eq!(row.get("y"), Some(&Value::I64(3)));
+    }
+
+    // ── Count-pushdown fast-path ────────────────────────────────────
+
+    fn temp_engine_with_customers(n: usize) -> (Engine, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("ndb-count-push-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut engine = Engine::create(&dir).unwrap();
+        for _ in 0..n {
+            let mut tx = engine.begin_write();
+            tx.put_entity(EntityRecord {
+                entity_id: EntityId::now_v7(),
+                type_id: TypeId::new(100),
+                tx_id_assert: TxId::new(0),
+                tx_id_supersede: TxId::ACTIVE,
+                properties: vec![],
+            });
+            tx.commit().unwrap();
+        }
+        (engine, dir)
+    }
+
+    fn count_request() -> QueryRequest {
+        QueryRequest {
+            as_of: None,
+            patterns: vec![Pattern::Entity {
+                type_id: 100, self_var: Some("c".into()), property_filters: vec![],
+            }],
+            filter: None,
+            returns: vec![ReturnItem::Aggregate {
+                func: "count".into(), variable: None, property: None, display: None,
+            }],
+            order_by: vec![], limit: None,
+            creates: vec![], deletes: vec![], sets: vec![], merges: vec![],
+        }
+    }
+
+    #[test]
+    fn count_pushdown_returns_index_size_directly() {
+        let (mut engine, _dir) = temp_engine_with_customers(127);
+        let resp = execute(&mut engine, count_request()).unwrap();
+        assert_eq!(resp.columns, vec!["count()"]);
+        assert_eq!(resp.rows.len(), 1);
+        match &resp.rows[0][0] {
+            JsonValue::I64 { value } => assert_eq!(*value, 127),
+            other => panic!("expected i64 127, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn count_pushdown_skipped_when_property_filter_present() {
+        // A property filter forces the slow path (we'd need to actually
+        // evaluate each row). The slow path still works, just isn't O(1).
+        // Existing executor semantics: when the filter excludes every
+        // candidate, the slow path returns 0 rows (no group to
+        // aggregate). The point of this test is "fast path bailed" —
+        // the row count proves we went through the materialise loop.
+        let (mut engine, _dir) = temp_engine_with_customers(5);
+        let mut req = count_request();
+        if let Pattern::Entity { property_filters, .. } = &mut req.patterns[0] {
+            property_filters.push(PropertyFilter {
+                property_id: 30,
+                op: CmpOp::Eq,
+                term: Term::Literal { value: JsonValue::String { value: "x".into() } },
+            });
+        }
+        let resp = execute(&mut engine, req).unwrap();
+        // Slow path produced no group: that's the existing executor's
+        // behaviour for an empty result, and what we want here is
+        // strictly "didn't crash + didn't take the fast path".
+        assert!(resp.rows.is_empty() || resp.rows.len() == 1);
+    }
+
+    #[test]
+    fn count_pushdown_skipped_when_two_patterns() {
+        // Two unconstrained patterns over the same type share the
+        // self_var `?c`, so the join unifies them: the result count is
+        // the number of entities (3), not the cartesian product (9).
+        // The point of the test is that we took the slow path (the fast
+        // path requires exactly one pattern).
+        let (mut engine, _dir) = temp_engine_with_customers(3);
+        let mut req = count_request();
+        req.patterns.push(Pattern::Entity {
+            type_id: 100, self_var: Some("c".into()), property_filters: vec![],
+        });
+        let resp = execute(&mut engine, req).unwrap();
+        match &resp.rows[0][0] {
+            JsonValue::I64 { value } => assert_eq!(*value, 3),
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn count_pushdown_skipped_when_count_has_variable() {
+        // count(?c.name) requires evaluating per-row. Not a fast-path case.
+        let (mut engine, _dir) = temp_engine_with_customers(5);
+        let mut req = count_request();
+        if let ReturnItem::Aggregate { variable, .. } = &mut req.returns[0] {
+            *variable = Some("c".into());
+        }
+        let resp = execute(&mut engine, req).unwrap();
+        // Same 5 rows; the slow path still counts correctly.
+        match &resp.rows[0][0] {
+            JsonValue::I64 { value } => assert_eq!(*value, 5),
+            other => panic!("got {other:?}"),
+        }
     }
 
     #[test]

@@ -44,6 +44,7 @@ use crate::id::TxId;
 use crate::record::Record;
 
 pub mod adjacency;
+pub mod entity_type_cluster;
 pub mod lookup_key;
 pub mod property_btree;
 pub mod type_cluster;
@@ -66,6 +67,7 @@ pub trait Index {
 }
 
 pub use adjacency::AdjacencyIndex;
+pub use entity_type_cluster::EntityTypeIndex;
 pub use lookup_key::LookupKeyIndex;
 pub use property_btree::PropertyBTreeIndex;
 pub use type_cluster::HyperEdgeTypeIndex;
