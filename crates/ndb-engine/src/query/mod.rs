@@ -964,11 +964,19 @@ fn execute_hyperedge_pattern(
     rows: Vec<Bindings>,
 ) -> Result<Vec<Bindings>, QueryError> {
     let mut out = Vec::new();
+    // Pre-compute the type bucket ONCE for the whole call. Building this
+    // per-row was the dominant cost on two-pattern joins — for 49 seed
+    // rows the previous code did 49× `hyperedges_by_type()` walks +
+    // 49× HashSet rebuilds, even though the type bucket is invariant
+    // across rows. The cache is shared via `candidate_hyperedges_with_cache`.
+    let mut type_bucket_cache: Option<HashSet<HyperedgeId>> = None;
     for row in rows {
         // Candidate hyperedges — narrowed via adjacency when any role term
         // resolves to a concrete entity (bound var or literal UUID), else
         // via type cluster.
-        let candidates = candidate_hyperedges(engine, type_id, role_bindings, &row);
+        let candidates = candidate_hyperedges_with_cache(
+            engine, type_id, role_bindings, &row, &mut type_bucket_cache,
+        );
         for hid in candidates {
             let Some(rec) = hyperedge_at(engine, snapshot, hid.into_uuid())? else {
                 continue;
@@ -1320,22 +1328,38 @@ fn candidate_hyperedges(
     role_bindings: &[RoleBinding],
     row: &Bindings,
 ) -> Vec<HyperedgeId> {
-    // If any role term is a concrete entity (bound var or literal UUID),
-    // intersect with that entity's adjacency.
+    let mut cache = None;
+    candidate_hyperedges_with_cache(engine, type_id, role_bindings, row, &mut cache)
+}
+
+/// Cached version — accepts a shared `type_bucket_cache` so the
+/// expensive `(hyperedges_by_type(t) → Vec → HashSet)` work happens
+/// once per query, not once per row. The per-row cost drops from
+/// O(type_cluster_size) to O(adjacency_degree). On the bench's
+/// two_pattern_join this changes 49 × 45k = 2.2M row-iters of work
+/// to 1 × 45k + 49 × ~40 = ~47k, ~40× fewer set-builds and
+/// proportionally faster end-to-end.
+fn candidate_hyperedges_with_cache(
+    engine: &Engine,
+    type_id: u32,
+    role_bindings: &[RoleBinding],
+    row: &Bindings,
+    cache: &mut Option<HashSet<HyperedgeId>>,
+) -> Vec<HyperedgeId> {
     for rb in role_bindings {
         if let Some(eid) = role_term_to_entity(&rb.term, row) {
             let adj = engine.hyperedges_for_entity(eid);
             if adj.is_empty() {
                 return adj;
             }
-            // Filter by type at the candidate stage to shrink the set;
-            // the later snapshot_read still verifies.
-            let type_match = engine.hyperedges_by_type(TypeId::new(type_id));
-            let type_set: HashSet<HyperedgeId> = type_match.into_iter().collect();
+            let type_set = cache.get_or_insert_with(|| {
+                engine.hyperedges_by_type(TypeId::new(type_id)).into_iter().collect()
+            });
             return adj.into_iter().filter(|h| type_set.contains(h)).collect();
         }
     }
-    // Fallback: every hyperedge of this type.
+    // Fallback: every hyperedge of this type. No cache needed — single
+    // call, returned directly.
     engine.hyperedges_by_type(TypeId::new(type_id))
 }
 
