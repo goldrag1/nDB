@@ -2261,12 +2261,16 @@ fn apply_entity_filters(
     mut row: Bindings,
 ) -> Option<Bindings> {
     for f in property_filters {
+        // Borrow the property value — `match_filter` only clones when it
+        // actually binds a fresh variable (the Var branch); a literal
+        // comparison (the common indexed-filter case) needs no clone at
+        // all, so the old unconditional `.clone()` per candidate was waste.
         let prop_val = rec
             .properties
             .iter()
             .find(|(pid, _)| pid.get() == f.property_id)
-            .map(|(_, v)| v.clone())?;
-        if !match_filter(&prop_val, f, &mut row) {
+            .map(|(_, v)| v)?;
+        if !match_filter(prop_val, f, &mut row) {
             return None;
         }
     }
@@ -2282,8 +2286,8 @@ fn apply_hyperedge_property_filters(
         let prop_val = properties
             .iter()
             .find(|(pid, _)| pid.get() == f.property_id)
-            .map(|(_, v)| v.clone())?;
-        if !match_filter(&prop_val, f, &mut row) {
+            .map(|(_, v)| v)?;
+        if !match_filter(prop_val, f, &mut row) {
             return None;
         }
     }
