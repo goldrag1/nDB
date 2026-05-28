@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Feedback inbox · nDB</title>
+<link rel="stylesheet" href="/static/styles.css">
+<style>
+  .fb-toolbar {
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    margin: 12px 0 20px; font-size: 13px;
+  }
+  .fb-toolbar select {
+    background: #14141a; border: 1px solid #303040; border-radius: 4px;
+    color: #fff; padding: 6px 8px; font: inherit; font-size: 13px;
+  }
+  .fb-counts { color: var(--text-muted); margin-left: auto; font-family: var(--font-mono); font-size: 12px; }
+
+  .fb-item {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 14px 16px; margin: 0 0 12px;
+  }
+  .fb-item .head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin-bottom: 6px; }
+  .fb-item .who { font-weight: 600; color: var(--text-strong); }
+  .fb-item .ts  { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted); }
+  .fb-item .email { font-family: var(--font-mono); font-size: 12px; color: var(--accent); }
+  .fb-item .page  { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted); }
+  .fb-item .msg {
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 9px 12px; margin: 8px 0;
+    white-space: pre-wrap; word-wrap: break-word;
+    font-size: 13.5px; line-height: 1.55;
+  }
+  .fb-item .actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+  .fb-status-badge {
+    display: inline-block; padding: 1px 8px; border-radius: 3px;
+    font-family: var(--font-mono); font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .fb-status-new      { background: #1e3a8a; color: #fff; }
+  .fb-status-read     { background: #2d2d3a; color: #cfcfd6; }
+  .fb-status-resolved { background: #1f5e2d; color: #b8f3c2; }
+  .fb-status-wontfix  { background: #5a2727; color: #ffb8b8; }
+  .fb-status-set {
+    background: var(--surface-2); border: 1px solid var(--border-soft);
+    color: var(--text); border-radius: 3px; padding: 3px 7px; font-size: 11.5px;
+    cursor: pointer; font-family: var(--font-mono);
+  }
+  .fb-status-set:hover { background: var(--border-soft); }
+  .fb-id { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+
+  .fb-empty {
+    background: var(--surface); border: 1px dashed var(--border-soft);
+    border-radius: 6px; padding: 28px; text-align: center;
+    color: var(--text-muted); font-size: 13px;
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">nDB <span class="sub">N-dimensional database</span></div>
+  <nav>
+    <a href="/">Home</a>
+    <a href="/whitepaper.html">Whitepaper</a>
+    <a href="/discussion.html">Discussion</a>
+    <a href="/demos.html">Demos</a>
+    <a href="/repo.html">Repo</a>
+    <a href="/feedback.html" class="active">Feedback</a>
+  </nav>
+  <div class="right"><span id="last-refresh" style="color: var(--text-muted);">…</span></div>
+</header>
+
+<main class="page wide">
+
+  <h1>Feedback inbox</h1>
+  <p class="lede">
+    Every submission from the floating "Feedback" button on any page on
+    this site is stored as one nDB entity (<code>type_id = 200</code>) in
+    the dedicated feedback engine at <code>127.0.0.1:8744</code>. Status
+    changes append a new version — the engine is MVCC, so prior states
+    stay in the audit trail.
+  </p>
+
+  <div class="fb-toolbar">
+    <label style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Status</label>
+    <select id="filter-status">
+      <option value="all">All</option>
+      <option value="new" selected>New only</option>
+      <option value="read">Read</option>
+      <option value="resolved">Resolved</option>
+      <option value="wontfix">Won't fix</option>
+    </select>
+    <button class="btn secondary" id="refresh-btn" type="button">Refresh</button>
+    <span class="fb-counts" id="counts">—</span>
+  </div>
+
+  <div id="list"></div>
+
+</main>
+
+<footer class="site-foot">
+  <p>nDB is open-source under MIT. <a href="https://github.com/goldrag1/nDB" target="_blank" rel="noreferrer">github.com/goldrag1/nDB</a></p>
+  <p class="mono">Storage engine: ndb-server :8744 · DB: <code>.demo-data/ndb-feedback</code></p>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  var listEl       = document.getElementById("list");
+  var countsEl     = document.getElementById("counts");
+  var filterEl     = document.getElementById("filter-status");
+  var refreshBtn   = document.getElementById("refresh-btn");
+  var lastRefresh  = document.getElementById("last-refresh");
+
+  var items = [];
+
+  function fmtTs(iso) {
+    if (!iso) return "—";
+    try {
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) return iso;
+      var pad = function (n) { return n < 10 ? "0" + n : "" + n; };
+      return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate())
+        + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+    } catch (e) { return iso; }
+  }
+
+  function escapeHtml(s) {
+    return (s || "").replace(/[&<>"']/g, function (c) {
+      return ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]);
+    });
+  }
+
+  function render() {
+    var f = filterEl.value;
+    var view = items.filter(function (it) { return f === "all" || it.status === f; });
+    var byStatus = items.reduce(function (acc, it) { acc[it.status] = (acc[it.status] || 0) + 1; return acc; }, {});
+    countsEl.textContent =
+      "total " + items.length +
+      "   ·   new " + (byStatus.new || 0) +
+      "   ·   read " + (byStatus.read || 0) +
+      "   ·   resolved " + (byStatus.resolved || 0) +
+      "   ·   wontfix " + (byStatus.wontfix || 0);
+
+    if (!view.length) {
+      listEl.innerHTML = '<div class="fb-empty">No feedback matching this filter.</div>';
+      return;
+    }
+
+    listEl.innerHTML = view.map(function (it) {
+      var who = it.name || (it.email ? it.email : "anonymous");
+      var actions = ["new", "read", "resolved", "wontfix"]
+        .filter(function (s) { return s !== it.status; })
+        .map(function (s) {
+          return '<button class="fb-status-set" data-id="' + it.id + '" data-status="' + s + '">→ ' + s + '</button>';
+        }).join("");
+      var emailLine = it.email
+        ? '<span class="email">&lt;' + escapeHtml(it.email) + '&gt;</span>'
+        : "";
+      var pageLine = it.page
+        ? '<span class="page">' + escapeHtml(it.page) + '</span>'
+        : "";
+      return (
+        '<div class="fb-item">' +
+          '<div class="head">' +
+            '<span class="who">' + escapeHtml(who) + '</span>' +
+            emailLine +
+            '<span class="ts">' + escapeHtml(fmtTs(it.ts)) + '</span>' +
+            pageLine +
+          '</div>' +
+          '<div class="msg">' + escapeHtml(it.message) + '</div>' +
+          '<div class="actions">' +
+            '<span class="fb-status-badge fb-status-' + it.status + '">' + it.status + '</span>' +
+            actions +
+            '<span class="fb-id" title="' + escapeHtml(it.id) + '">id ' + escapeHtml((it.id || "").slice(0, 8)) + '…</span>' +
+          '</div>' +
+        '</div>'
+      );
+    }).join("");
+  }
+
+  function refresh() {
+    fetch("/api/feedback/list", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        items = (j && j.items) || [];
+        render();
+        var d = new Date();
+        lastRefresh.textContent = "refreshed " +
+          ("0" + d.getHours()).slice(-2) + ":" +
+          ("0" + d.getMinutes()).slice(-2) + ":" +
+          ("0" + d.getSeconds()).slice(-2);
+      })
+      .catch(function (err) {
+        listEl.innerHTML = '<div class="fb-empty">Could not reach /api/feedback/list — ' + escapeHtml(String(err)) + '</div>';
+      });
+  }
+
+  filterEl.addEventListener("change", render);
+  refreshBtn.addEventListener("click", refresh);
+
+  listEl.addEventListener("click", function (e) {
+    var btn = e.target.closest && e.target.closest(".fb-status-set");
+    if (!btn) return;
+    var id = btn.getAttribute("data-id");
+    var status = btn.getAttribute("data-status");
+    if (!id || !status) return;
+    btn.disabled = true;
+    btn.textContent = "…";
+    fetch("/api/feedback/" + encodeURIComponent(id) + "/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: status }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j && j.ok) refresh();
+        else alert("Update failed: " + (j && j.error || "unknown"));
+      })
+      .catch(function (err) { alert("Network error: " + err); });
+  });
+
+  // Auto-refresh every 30s so a new submission shows up without
+  // hand-clicking — nice for the desktop-monitor case.
+  refresh();
+  setInterval(refresh, 30000);
+})();
+</script>
+</body>
+</html>

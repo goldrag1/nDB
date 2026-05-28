@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Repo · nDB</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">nDB <span class="sub">N-dimensional database</span></div>
+  <nav>
+    <a href="/">Home</a>
+    <a href="/whitepaper.html">Whitepaper</a>
+    <a href="/discussion.html">Discussion</a>
+    <a href="/demos.html">Demos</a>
+    <a href="/repo.html" class="active">Repo</a>
+  </nav>
+  <div class="right">v2.3.0 · 488 tests</div>
+</header>
+
+<main class="page">
+
+  <h1>Run it locally</h1>
+  <p class="lede">
+    nDB is open-source under MIT. The repo holds the engine, the renderer,
+    the alphafold demo, the whitepaper, and the design spec.
+  </p>
+
+  <div class="btn-row">
+    <a href="https://github.com/goldrag1/nDB" class="btn" target="_blank" rel="noreferrer">github.com/goldrag1/nDB</a>
+    <a href="https://github.com/goldrag1/nDB/releases/tag/v2.3.0" class="btn secondary" target="_blank" rel="noreferrer">v2.3.0 release notes</a>
+  </div>
+
+  <h2>Current status</h2>
+
+  <table>
+    <tbody>
+      <tr><td><strong>Latest release</strong></td><td>v2.3.0 (2026-05-28)</td></tr>
+      <tr><td><strong>Branches</strong></td><td><code>main</code> (releases) · <code>develop</code> (active)</td></tr>
+      <tr><td><strong>Language</strong></td><td>Rust (8 crates) + a single-HTML web app</td></tr>
+      <tr><td><strong>Tests</strong></td><td>488 Rust tests + 12 Python tests, all passing sequentially. Clippy clean.</td></tr>
+      <tr><td><strong>License</strong></td><td>MIT</td></tr>
+    </tbody>
+  </table>
+
+  <h2>What ships in v2.3</h2>
+
+  <ul>
+    <li>Engine format v2 — <code>u32</code> arity (max 4.3B; v1 was u8, capped at 255 — KRAS at 1517 atoms broke that)</li>
+    <li>Atoms as first-class nDB entities (type 7) with property codes 60–69 (NAME, ELEMENT, SERIAL, X/Y/Z, BFACTOR, CHAIN, RES_POS, RES_NAME)</li>
+    <li>N-ary <code>protein_atoms</code> hyperedge (arity 1518 for KRAS) — replaces 1517 binary <code>atom_of</code> edges in v2.2</li>
+    <li>Persistent DB survives restarts; seeds only when DB has no proteins</li>
+    <li>Engine format breaking change accepted — v1 DBs cannot be opened by v2 code</li>
+  </ul>
+
+  <h2>Install + run</h2>
+
+<pre><code># Clone
+git clone https://github.com/goldrag1/nDB
+cd nDB
+
+# Build + test everything
+cargo build --workspace
+cargo test --workspace
+
+# Launch the alphafold demo
+cargo run -p ndb-renderer --example v22_explorer
+# Opens two ports: 8742 (API), 9876 (web app)
+# Browse to http://127.0.0.1:9876/
+
+# Stop with Ctrl-C
+</code></pre>
+
+  <p>Demo state persists at <code>&lt;workspace&gt;/.demo-data/alphafold-ndb</code>. To start fresh, delete that directory.</p>
+
+  <h2>Repository layout</h2>
+
+  <table>
+    <thead><tr><th>Path</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><code>crates/ndb-engine/</code></td><td>The core engine — append-only storage, MVCC, record format, snapshot iteration.</td></tr>
+      <tr><td><code>crates/ndb-record/</code></td><td>Wire-format Record enum (Entity, HyperEdge), property dictionary.</td></tr>
+      <tr><td><code>crates/ndb-query/</code></td><td>Pattern matching, filtering, projection.</td></tr>
+      <tr><td><code>crates/ndb-renderer/</code></td><td>Slicer crate + the alphafold explorer example.</td></tr>
+      <tr><td><code>crates/ndb-server/</code></td><td>HTTP/JSON server exposing the engine.</td></tr>
+      <tr><td><code>docs/nDB-whitepaper.md</code></td><td>The whitepaper.</td></tr>
+      <tr><td><code>docs/superpowers/specs/</code></td><td>Full design spec — byte-level record layout, MVCC semantics, query DSL grammar.</td></tr>
+      <tr><td><code>docs/alphafold_nDB/</code></td><td>Science-facing landing for the explorer demo.</td></tr>
+      <tr><td><code>docs/explorer/index.html</code></td><td>The single-file web app — 3D hypergraph + NGL viewer.</td></tr>
+      <tr><td><code>docs/knowledge-site/</code></td><td>This site.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Roadmap</h2>
+
+  <ul>
+    <li><strong>v3.0 — Analytics + first GPU support.</strong> Columnar index plugin (CPU + CUDA), GPU vector similarity, dataset slicer.</li>
+    <li><strong>v4.0 — Distribution + inference.</strong> Multi-writer, distributed transactions, MCP server with inference rules.</li>
+    <li><strong>v4.x — High-dimensional embeddings as first-class.</strong> Vector index + structured pattern in one query plan.</li>
+  </ul>
+
+  <p>
+    Detailed milestones in the
+    <a href="https://github.com/goldrag1/nDB#roadmap" target="_blank" rel="noreferrer">repo README</a>.
+  </p>
+
+  <h2>Contributing</h2>
+
+  <p>
+    Issues, PRs, and "I tried this and it broke" emails are welcome.
+    Style: small commits, descriptive messages, tests cover the change. The
+    Rust workspace is conventional: <code>cargo fmt</code>, <code>cargo clippy
+    --all-targets --all-features -- -D warnings</code>, <code>cargo test
+    --workspace</code> all clean before opening a PR.
+  </p>
+
+  <div class="btn-row" style="margin-top: 36px;">
+    <a href="https://github.com/goldrag1/nDB" class="btn" target="_blank" rel="noreferrer">Open on GitHub</a>
+    <a href="/alphafold_ndb/" class="btn secondary">Try the live demo</a>
+  </div>
+
+</main>
+
+<footer class="site-foot">
+  <p>nDB is open-source under MIT. <a href="https://github.com/goldrag1/nDB" target="_blank" rel="noreferrer">github.com/goldrag1/nDB</a></p>
+</footer>
+
+</body>
+</html>

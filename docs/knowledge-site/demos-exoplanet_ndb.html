@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>exoplanet_ndb · Demo · nDB</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">nDB <span class="sub">N-dimensional database</span></div>
+  <nav>
+    <a href="/">Home</a>
+    <a href="/whitepaper.html">Whitepaper</a>
+    <a href="/discussion.html">Discussion</a>
+    <a href="/demos.html" class="active">Demos</a>
+    <a href="/repo.html">Repo</a>
+  </nav>
+  <div class="right">v2.3.0 · 488 tests</div>
+</header>
+
+<main class="page">
+
+  <h1>exoplanet_ndb</h1>
+  <p class="lede">
+    Confirmed exoplanets from the NASA Exoplanet Archive, browsed as N-ary
+    discovery facts. Every dot in the scatter is one PLANET entity. Every
+    discovery is one arity-4 hyperedge <code>[star, planet, method, mission]</code>.
+    Every multi-planet system is one arity-(N+1) hyperedge — Kepler-90
+    rolls up as arity <strong>9</strong>, TRAPPIST-1 as arity <strong>8</strong>.
+  </p>
+
+  <div class="btn-row">
+    <a href="/exoplanet_ndb/" class="btn">Launch live demo →</a>
+    <a href="https://exoplanetarchive.ipac.caltech.edu/" class="btn secondary" target="_blank" rel="noreferrer">NASA Exoplanet Archive</a>
+  </div>
+
+  <p style="font-size: 13px; color: var(--text-muted);">
+    ⚠ The 91-planet curated seed is a historically-chosen subset of the
+    ~6,300 confirmed planets in the archive (May 2026). The live-fetch
+    form lets you grow it to any planet in the public table.
+  </p>
+
+  <h2>What this is</h2>
+
+  <p>A single-page web app that lets you walk through the history of exoplanet hunting the way nDB stores it:</p>
+
+  <ul>
+    <li><strong>91 planets across 40 systems</strong>, picked to cover all 11 NASA-recognised detection methods (transit, radial velocity, microlensing, direct imaging, astrometry, pulsar timing, TTV, ETV, OBM, pulsation-timing, disk kinematics) and the historical timeline 1992–2025.</li>
+    <li><strong>One arity-4 DISCOVERY hyperedge per planet.</strong> A single record holds star + planet + method + mission, with year / facility / telescope as edge properties. The same fact in SQL is a JOIN across <code>discovery_method</code> + <code>discovery_mission</code> tables.</li>
+    <li><strong>One arity-(N+1) SYSTEM hyperedge per system.</strong> TRAPPIST-1 = 1 star + 7 planets = arity 8. Kepler-90 = 1 star + 8 planets = arity 9 (the demo's tallest).</li>
+    <li><strong>One HABITABLE_ZONE hyperedge per system that has HZ planets</strong> (TOI-700, TRAPPIST-1, Kepler-186, Proxima Cen, …).</li>
+    <li><strong>Live NASA TAP fetch.</strong> Type any planet name in the sidebar — one row pulled from the archive, committed to nDB as one PLANET entity + one DISCOVERY hyperedge.</li>
+  </ul>
+
+  <h2>The 30-second tour</h2>
+
+  <ol>
+    <li><strong>Look at the M-R scatter.</strong> X axis = planet radius (Earth radii, log). Y axis = planet mass (Earth masses, log). Every dot is one PLANET entity. Color = discovery method. The yellow-bordered dots are habitable-zone candidates.</li>
+    <li><strong>Click a method in the left legend.</strong> It mutes that method's dots — useful for "what did Kepler see vs what Hubble imaged?"</li>
+    <li><strong>Click any dot.</strong> The right pane fills with the planet's record, the host star's record, the arity-4 DISCOVERY hyperedge with its four role-fillers, and the arity-(N+1) SYSTEM hyperedge listing every co-planet.</li>
+    <li><strong>The orbital diagram appears at the top of the right pane</strong> — co-planets rendered as concentric scaled orbits with animated dots. The selected planet is the highlighted ring; HZ orbits are dashed yellow.</li>
+    <li><strong>Switch the centre to "Discovery year"</strong> in the top-right toggle — a stacked-bar histogram of who detected what when. Pulsar timing peaks in 1992; Kepler's wave is 2014–2016; TESS's is 2020–.</li>
+    <li><strong>Open the "What does nDB store?" disclosure</strong> at the bottom of the right pane to see the raw wire-format JSON for the PLANET entity and its DISCOVERY hyperedge.</li>
+  </ol>
+
+  <h2>Why "N-dimensional database" for this dataset</h2>
+
+  <p>Most exoplanet databases are giant tables. The NASA Exoplanet Archive's "Planetary Systems" view, for example, is one row per planet with hundreds of columns. That works for filtering and aggregation — but it loses the fact that several distinct kinds of relationships live on top of each planet:</p>
+
+  <table>
+    <thead><tr><th>Fact</th><th>True arity</th><th>SQL equivalent</th></tr></thead>
+    <tbody>
+      <tr><td>Planet discovered by a method using a mission</td><td><strong>4</strong></td><td>Joins to <code>method</code> + <code>mission</code> + <code>year</code> + <code>team</code> tables</td></tr>
+      <tr><td>Multi-planet system (TRAPPIST-1)</td><td><strong>8</strong></td><td>1 row in <code>system</code> + 7 rows in <code>system_member</code></td></tr>
+      <tr><td>Multi-planet system (Kepler-90)</td><td><strong>9</strong></td><td>1 row in <code>system</code> + 8 rows in <code>system_member</code></td></tr>
+      <tr><td>HR 8799 direct-imaged system</td><td>5</td><td>Same junction pattern</td></tr>
+      <tr><td>Habitable-zone group (TOI-700)</td><td>3</td><td>Filter query + materialised view</td></tr>
+    </tbody>
+  </table>
+
+  <p>In nDB you don't reify. The relationship <em>is</em> the record. A <code>SYSTEM</code> hyperedge has type <code>101</code>, arity 9, and role-fillers <code>[star=Kepler-90, planet=b, c, i, d, e, f, g, h]</code> — that's the whole story. Click the system in the dropdown and the orbital diagram is reading from <em>one record</em>.</p>
+
+  <h2>Schema</h2>
+
+  <p>Kept in lockstep between <code>crates/ndb-renderer/examples/exoplanet_explorer/main.rs</code> and <code>docs/exoplanet/index.html</code>.</p>
+
+  <h3>Entity types</h3>
+  <ul>
+    <li><code>T_STAR = 1</code> — one entity per unique host star (40 in the seed)</li>
+    <li><code>T_PLANET = 2</code> — one entity per planet (91)</li>
+    <li><code>T_METHOD = 3</code> — one entity per detection method (11)</li>
+    <li><code>T_MISSION = 4</code> — one entity per facility / mission (21)</li>
+  </ul>
+
+  <h3>Hyperedge types</h3>
+  <ul>
+    <li><code>T_DISCOVERY = 100</code> — arity 4: <code>[STAR, PLANET, METHOD, MISSION]</code>, with year/facility/telescope as edge properties</li>
+    <li><code>T_SYSTEM = 101</code> — arity 2..9: <code>[STAR, PLANET, PLANET, …]</code></li>
+    <li><code>T_HABITABLE_ZONE = 102</code> — arity 2..M+1: <code>[STAR, HZ_PLANET, …]</code></li>
+  </ul>
+
+  <h3>Property IDs (selection)</h3>
+  <table>
+    <thead><tr><th>ID</th><th>Field</th><th>Type</th></tr></thead>
+    <tbody>
+      <tr><td>30</td><td>PROP_NAME</td><td>string</td></tr>
+      <tr><td>40</td><td>PROP_PL_RADIUS_RE</td><td>f64 (Earth radii)</td></tr>
+      <tr><td>41</td><td>PROP_PL_MASS_ME</td><td>f64 (Earth masses)</td></tr>
+      <tr><td>42</td><td>PROP_PL_ORBITAL_PERIOD</td><td>f64 (days)</td></tr>
+      <tr><td>43</td><td>PROP_PL_SEMI_MAJOR_AU</td><td>f64 (AU)</td></tr>
+      <tr><td>44</td><td>PROP_PL_EQ_TEMP_K</td><td>f64 (Kelvin)</td></tr>
+      <tr><td>45</td><td>PROP_PL_HABITABLE</td><td>"yes" / "no"</td></tr>
+      <tr><td>60</td><td>PROP_DISC_YEAR</td><td>i64</td></tr>
+      <tr><td>70</td><td>PROP_SYSTEM_HOST</td><td>string</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Data provenance</h2>
+
+  <p>Every number in this demo comes from the NASA Exoplanet Archive's "Planetary Systems" table (<code>default_flag=1</code> rows) — the same machine-readable source used by published exoplanet review papers. The curated 91-planet picks file is at <code>tools/exoplanet/build_seed.py</code> and re-running it after fetching a fresh CSV regenerates <code>seed.json</code> deterministically.</p>
+
+  <ul>
+    <li><strong>1992 pulsar planets</strong> — Wolszczan A. &amp; Frail D. 1992. <em>Nature</em> 355:145.</li>
+    <li><strong>51 Peg b (1995)</strong> — Mayor M. &amp; Queloz D. 1995. <em>Nature</em> 378:355. (Nobel Prize in Physics 2019.)</li>
+    <li><strong>HD 209458 b transit (1999)</strong> — Charbonneau D. et al. 2000. <em>ApJ</em> 529:L45.</li>
+    <li><strong>OGLE-2005-BLG-390L b microlensing</strong> — Beaulieu J.P. et al. 2006. <em>Nature</em> 439:437.</li>
+    <li><strong>2M1207 b direct imaging (2004)</strong> — Chauvin G. et al. 2005. <em>A&amp;A</em> 438:L25.</li>
+    <li><strong>HR 8799 system</strong> — Marois C. et al. 2008, 2010. <em>Science</em> 322:1348; <em>Nature</em> 468:1080.</li>
+    <li><strong>TRAPPIST-1 seven planets</strong> — Gillon M. et al. 2017. <em>Nature</em> 542:456.</li>
+    <li><strong>Kepler-90 eighth planet</strong> — Shallue C.J. &amp; Vanderburg A. 2018. <em>AJ</em> 155:94.</li>
+    <li><strong>HD 110067 resonant chain</strong> — Luque R. et al. 2023. <em>Nature</em> 623:932.</li>
+  </ul>
+
+  <h2>Where the code lives</h2>
+
+  <table>
+    <thead><tr><th>Component</th><th>Path</th></tr></thead>
+    <tbody>
+      <tr><td>Rust binary (engine + ndb-server + static server)</td><td><code>crates/ndb-renderer/examples/exoplanet_explorer/main.rs</code></td></tr>
+      <tr><td>Curated seed (JSON, generated by Python)</td><td><code>crates/ndb-renderer/examples/exoplanet_explorer/seed.json</code></td></tr>
+      <tr><td>Seed generator (picks rows from the CSV)</td><td><code>tools/exoplanet/build_seed.py</code></td></tr>
+      <tr><td>Web app (scatter + orbital diagram + nDB inspector)</td><td><code>docs/exoplanet/index.html</code></td></tr>
+      <tr><td>NASA Exoplanet Archive snapshot (CSV)</td><td><code>.demo-data/source-data/nasa-exoplanets-default.csv</code></td></tr>
+    </tbody>
+  </table>
+
+  <h2>What this is not</h2>
+
+  <ul>
+    <li><strong>Not a replacement for the NASA Exoplanet Archive.</strong> Treat the local nDB as a curated working set. The archive remains the source of record.</li>
+    <li><strong>Not full-archive.</strong> 91 of ~6,300 confirmed planets, picked to tell a story across all detection methods. The fetch form lets you grow it; the engine itself scales to millions.</li>
+    <li><strong>Not multi-default-handling.</strong> The archive has many rows per planet (one per published refinement). The seed uses only the row with <code>default_flag=1</code>.</li>
+    <li><strong>Not 3D galactic position</strong> — RA/Dec are stored but the 3D sky map is deferred to v2.</li>
+  </ul>
+
+  <h2>Run it yourself</h2>
+
+<pre><code>git clone https://github.com/goldrag1/nDB
+cd nDB
+cargo run -p ndb-renderer --example exoplanet_explorer
+# then open http://127.0.0.1:9877/
+</code></pre>
+
+  <p>The engine state lives at <code>&lt;workspace&gt;/.demo-data/exoplanet-ndb</code> (project-local, gitignored). Planets you add via the fetch form persist between runs.</p>
+
+  <div class="btn-row" style="margin-top: 36px;">
+    <a href="/exoplanet_ndb/" class="btn">Launch live demo →</a>
+    <a href="/demos.html" class="btn secondary">Other demos</a>
+  </div>
+
+</main>
+
+<footer class="site-foot">
+  <p>nDB is open-source under MIT. <a href="https://github.com/goldrag1/nDB" target="_blank" rel="noreferrer">github.com/goldrag1/nDB</a></p>
+</footer>
+
+</body>
+</html>

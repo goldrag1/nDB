@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Does N-dimensional cost more storage? · nDB</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">nDB <span class="sub">N-dimensional database</span></div>
+  <nav>
+    <a href="/">Home</a>
+    <a href="/whitepaper.html">Whitepaper</a>
+    <a href="/discussion.html" class="active">Discussion</a>
+    <a href="/demos.html">Demos</a>
+    <a href="/repo.html">Repo</a>
+  </nav>
+  <div class="right">v2.3.0 · 488 tests</div>
+</header>
+
+<main class="page">
+
+  <h1>Does N-dimensional cost more storage than tables?</h1>
+  <p class="lede">
+    A common intuition: "if every entity stores its own property labels,
+    they repeat across entities — that has to cost more than a table
+    where the column name is stored once in the schema." The short answer
+    is <em>no, not in nDB</em> — but only because nDB doesn't store label
+    strings per entity. The trap is real; the design specifically dodges it.
+  </p>
+
+  <h2>The naive "schemaless tax"</h2>
+
+  <p>The textbook critique of property-bag / document stores (BSON, JSONB, RDF-as-strings) is exactly this:</p>
+
+  <ul>
+    <li><strong>Table DB:</strong> schema stores <code>column_name</code> once. A row is just <code>[v1, v2, v3]</code> — position implies meaning. Per-row label cost = 0 bytes.</li>
+    <li><strong>Naive property-bag:</strong> every entity stores <code>{"name": "KRAS", "uniprot": "P01116", ...}</code>. The strings <code>"name"</code>, <code>"uniprot"</code> repeat in every entity. With N entities × K properties × ~10 bytes/label, you pay N × K × 10 bytes just for labels.</li>
+  </ul>
+
+  <p>For 1M entities × 5 properties × 10-byte label = 50 MB of pure redundancy. That's the trap.</p>
+
+  <h2>What nDB actually does</h2>
+
+  <p>
+    Look at the schema constants for the alphafold demo: <code>PROP_NAME=30</code>, <code>PROP_UNIPROT=39</code>, <code>PROP_ATOM_X=63</code>, etc. These aren't strings stored per entity — they're small <strong>integer codes</strong> (1–2 bytes) and the string ↔ code mapping lives in a <strong>schema dictionary that's amortized across the entire DB</strong>.
+  </p>
+
+  <p>So the per-entity cost of a label in nDB is:</p>
+  <ul>
+    <li><code>prop_id</code>: 1–2 bytes (varint or u16) — <em>the reference</em></li>
+    <li>Value bytes (same as the table would store anyway)</li>
+  </ul>
+
+  <p>vs the table DB's 0 bytes per row for the label.</p>
+
+  <p>
+    The overhead is <strong>a few bytes per property per entity</strong>, not "the full label string per entity." On a 1518-atom KRAS structure with ~10 properties per atom, that's ~15 KB of prop_id overhead — negligible against the coordinate floats.
+  </p>
+
+  <h2>Where nDB wins on storage</h2>
+
+  <p>Tables pay a hidden tax that property-bags don't: <strong>NULLs in sparse columns</strong>. If <code>Protein</code> has 50 possible properties but a given protein only fills 8, a wide table stores 42 NULL slots (1 byte each + nullability bitmap). nDB stores nothing for absent properties.</p>
+
+  <p>For heterogeneous data (proteins with different annotations, atoms vs residues vs pathways all in one DB), the table approach either:</p>
+  <ul>
+    <li>Wastes space with mostly-NULL wide tables, or</li>
+    <li>Fragments into N tables + JOIN cost</li>
+  </ul>
+
+  <p>nDB's variable per-entity property set is genuinely cheaper for sparse / heterogeneous data.</p>
+
+  <h2>Where tables still win</h2>
+
+  <ul>
+    <li><strong>Dense, uniform schema</strong> (every row has every column populated): the per-property prop_id overhead is pure loss vs positional layout.</li>
+    <li><strong>Columnar formats</strong> (Parquet, ClickHouse): column header stored once, values run-length / dictionary encoded per column. Strongest compression story for analytics workloads — beats both row-store tables and property-bags.</li>
+    <li><strong>Fixed-shape numeric data</strong> (coordinates, time series): a <code>float[N][3]</code> array beats N entities × 3 properties × (prop_id + float) every time. Exactly why mmCIF's <code>atom_site</code> loop is more compact than nDB's atom-entity representation on disk — and why the explorer's KPI table honestly splits "atomic data" from "metadata + relations" rather than claiming nDB wins everywhere.</li>
+  </ul>
+
+  <h2>The interesting question hiding underneath</h2>
+
+  <p>
+    The cost comparison isn't really "labels repeated vs not." It's <strong>what's the unit of schema sharing</strong>, and what's the access pattern.
+  </p>
+
+  <table>
+    <thead><tr><th>Approach</th><th>Schema unit</th><th>Best for</th></tr></thead>
+    <tbody>
+      <tr><td>Wide table</td><td>Per-table, positional</td><td>Dense uniform rows, OLTP</td></tr>
+      <tr><td>Narrow table (EAV)</td><td>Per-row entity_id+attr_id+value</td><td>Sparse — but kills query perf</td></tr>
+      <tr><td>Columnar (Parquet)</td><td>Per-column, with dict + RLE</td><td>Analytics on dense numeric</td></tr>
+      <tr><td>nDB (dict-coded props)</td><td>Per-DB schema dictionary</td><td>Heterogeneous entities + relations</td></tr>
+      <tr><td>Naive JSON / BSON</td><td>None (labels per doc)</td><td>Worst of all worlds for storage</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    nDB sits closer to the columnar / dictionary-coded end than the JSON end — the <code>prop_id</code> is the same trick a columnar engine uses for column references. The "labels repeat" critique applies to a strawman (string labels per entity), not to nDB's actual encoding.
+  </p>
+
+  <h2>The honest summary</h2>
+
+  <p>
+    nDB pays a small per-property reference tax (1–2 bytes) in exchange for
+    variable schema and unified storage of entities + N-ary relations. For
+    protein / atom / pathway data with 10+ entity types and N-ary containment,
+    that tax is much cheaper than the JOIN / NULL / multi-table cost of forcing
+    it into a relational shape. For a 1B-row uniform time series, a table or
+    Parquet column wins.
+  </p>
+
+  <div class="btn-row" style="margin-top: 36px;">
+    <a href="/discussion-nesting.html" class="btn secondary">Next: six ways to declare nested entities →</a>
+    <a href="/alphafold_ndb/" class="btn">See storage KPIs in the live demo</a>
+  </div>
+
+</main>
+
+<footer class="site-foot">
+  <p>nDB is open-source under MIT. <a href="https://github.com/goldrag1/nDB" target="_blank" rel="noreferrer">github.com/goldrag1/nDB</a></p>
+</footer>
+
+</body>
+</html>

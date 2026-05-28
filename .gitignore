@@ -6,3 +6,4 @@ Cargo.lock.bak
 __pycache__/
 *.pyc
 .playwright-mcp/
+.demo-data/

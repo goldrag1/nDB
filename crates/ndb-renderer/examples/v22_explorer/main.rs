@@ -81,7 +81,6 @@ const PROP_SEQ_LEN: u32 = 40;
 const PROP_ORGANISM: u32 = 41;
 const PROP_GENE: u32 = 42;
 
-const DB_PATH: &str = "/tmp/v22-explorer-ndb";
 const API_PORT: u16 = 8742;
 const STATIC_PORT: u16 = 9876;
 
@@ -91,7 +90,16 @@ fn main() {
     // CIFs cached by "Warm cache", any atom entities the SPA wrote
     // back, and any proteins added via the Fetch form. We only run
     // the curated seed when the engine has zero protein records.
-    let db_dir = Path::new(DB_PATH);
+    //
+    // Path is project-local (`<workspace>/.demo-data/alphafold-ndb`)
+    // so the demo survives /tmp wipes on reboot. CARGO_MANIFEST_DIR
+    // is baked in at build time → resolves regardless of cwd.
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root");
+    let db_dir_owned = workspace_root.join(".demo-data/alphafold-ndb");
+    let db_dir = db_dir_owned.as_path();
     if !db_dir.exists() {
         std::fs::create_dir_all(db_dir).expect("mkdir db");
     }

@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Five things tables can't describe well · nDB</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">nDB <span class="sub">N-dimensional database</span></div>
+  <nav>
+    <a href="/">Home</a>
+    <a href="/whitepaper.html">Whitepaper</a>
+    <a href="/discussion.html" class="active">Discussion</a>
+    <a href="/demos.html">Demos</a>
+    <a href="/repo.html">Repo</a>
+  </nav>
+  <div class="right">v2.3.0 · 488 tests</div>
+</header>
+
+<main class="page wide">
+
+  <h1>Five things tables can't describe well</h1>
+  <p class="lede">
+    Five examples where the N-ary hyperedge + role + relation-property
+    combination genuinely beats tables. For each: the natural fact, the
+    nDB shape, the SQL shape, and what tables actually lose.
+  </p>
+
+  <!-- ── 1 ─────────────────────────────────────────────────────── -->
+  <h2>1. Multi-subunit protein assembly — hemoglobin</h2>
+
+  <p>
+    <strong>The fact:</strong> one hemoglobin molecule = 2 α-globin subunits +
+    2 β-globin subunits + 4 heme groups + 4 O₂ binding sites + 1
+    cooperativity coefficient (Hill = 2.8). It's <em>one assembly</em>, with
+    stoichiometric positions, and the cooperativity is a property of the
+    whole, not any subunit.
+  </p>
+
+  <div class="compare">
+    <div class="ndb">
+      <div class="head">nDB</div>
+<pre><code>Entities: α-globin (×2), β-globin (×2), heme (×4)
+HyperEdge type=COMPLEX, arity=9,
+  roles=[SUBUNIT_A1, SUBUNIT_A2,
+         SUBUNIT_B1, SUBUNIT_B2,
+         HEME1..HEME4]
+Properties on the edge:
+  hill_coefficient = 2.8
+  dissociation_constant = ...
+  resolution_Å = 2.1</code></pre>
+      <p style="margin: 8px 0 0; font-size: 12.5px;">One record. The assembly <em>is</em> a thing with its own properties.</p>
+    </div>
+    <div class="sql">
+      <div class="head">SQL</div>
+<pre><code>complex(id, name, hill, kd, resolution)
+complex_subunit(complex_id, subunit_id,
+                role, position, stoichiometry)
+subunit(id, type, sequence)</code></pre>
+      <p style="margin: 8px 0 0; font-size: 12.5px;">Plus joins. The "complex" exists only as an ID that other tables reference. Hill coefficient lives on a row you can only see by joining 3 tables.</p>
+    </div>
+  </div>
+
+  <p>
+    <strong>What tables lose:</strong> set identity.
+    <code>SELECT * FROM complex_subunit WHERE complex_id=42</code> returns
+    9 rows — the consumer must remember they're one fact. Add a 10th
+    binding partner and you add rows, never schema; sounds good, but
+    you've also lost any compile-time guarantee about arity. The
+    relation's properties drift to a sibling table that
+    <em>describes</em> the relation rather than <em>being</em> it.
+  </p>
+
+  <!-- ── 2 ─────────────────────────────────────────────────────── -->
+  <h2>2. Chemical reaction with full context</h2>
+
+  <p>
+    <strong>The fact:</strong> photosynthesis at a chloroplast:
+    <code>6 CO₂ + 6 H₂O + light → C₆H₁₂O₆ + 6 O₂</code>, catalyzed by
+    RuBisCO, in stroma, at 25°C, with quantum yield 0.08 mol/Einstein.
+  </p>
+
+  <div class="compare">
+    <div class="ndb">
+      <div class="head">nDB</div>
+<pre><code>Entities: CO₂, H₂O, glucose, O₂ (molecules);
+          RuBisCO (enzyme);
+          chloroplast_stroma (compartment);
+          photon (energy)
+HyperEdge type=REACTION, arity=7
+  roles=[REACTANT(CO₂, stoich=6),
+         REACTANT(H₂O, stoich=6),
+         ENERGY_INPUT(photon),
+         PRODUCT(glucose, stoich=1),
+         PRODUCT(O₂, stoich=6),
+         CATALYST(RuBisCO),
+         COMPARTMENT(stroma)]
+Properties on edge:
+  ΔG = −2870 kJ/mol
+  quantum_yield = 0.08
+  temperature_K = 298
+  ph = 8.0</code></pre>
+    </div>
+    <div class="sql">
+      <div class="head">SQL</div>
+<pre><code>reaction(id, name, dG, quantum_yield,
+         temp_K, ph)
+reaction_reactant(reaction_id, molecule_id,
+                  stoichiometry)
+reaction_product(reaction_id, molecule_id,
+                 stoichiometry)
+reaction_catalyst(reaction_id, enzyme_id,
+                  km, kcat)
+reaction_compartment(reaction_id,
+                     compartment_id)
+reaction_energy(reaction_id, energy_type)
+  -- new junction for photon</code></pre>
+      <p style="margin: 8px 0 0; font-size: 12.5px;">5 junction tables. Adding a new role type (inhibitor, cofactor, allosteric regulator) = new table.</p>
+    </div>
+  </div>
+
+  <p>
+    <strong>What tables lose:</strong> role taxonomy is hard-coded in table names. If next year you discover a new role ("scaffold protein"), you migrate schema rather than add a tagged participant. In nDB the role is data, not schema.
+  </p>
+
+  <!-- ── 3 ─────────────────────────────────────────────────────── -->
+  <h2>3. Frame-semantic events in language</h2>
+
+  <p>
+    <strong>The fact:</strong> "Alice gave Bob a book on Tuesday in Paris."
+    One event, six semantic roles: AGENT(Alice), RECIPIENT(Bob),
+    THEME(book), TIME(Tuesday), LOCATION(Paris), and implicitly
+    MANNER(unspecified). This is FrameNet / PropBank-style annotation —
+    and these projects exist <em>because</em> natural language is inherently
+    N-ary with named roles.
+  </p>
+
+  <div class="compare">
+    <div class="ndb">
+      <div class="head">nDB</div>
+<pre><code>Entities: Alice (person), Bob (person),
+          book123 (object),
+          Tuesday (time), Paris (place)
+HyperEdge type=GIVING_EVENT, arity=5,
+  roles=[AGENT, RECIPIENT, THEME,
+         TIME, LOCATION]
+Properties on edge:
+  tense = past
+  certainty = asserted
+  source_sentence_id = ...</code></pre>
+    </div>
+    <div class="sql">
+      <div class="head">SQL — two attempts</div>
+<pre><code>-- Wide table
+event(id, frame, agent_id, recipient_id,
+      theme_id, time_id, location_id,
+      manner_id, instrument_id, ...)
+-- 30+ nullable columns, one per role any
+-- frame in your inventory might use.
+-- "Alice sneezed" leaves 29 NULLs.
+
+-- EAV junction
+event_role(event_id, role_name,
+           participant_id, participant_type)
+-- Works, but you've manually reinvented
+-- hyperedges with strings, lost integrity
+-- (role names typo'd), and added 5+ join
+-- rows per event.</code></pre>
+    </div>
+  </div>
+
+  <p>
+    <strong>What tables lose:</strong> FrameNet defines ~1200 frames with
+    frame-specific role inventories. Modeling this in tables forces either
+    schema explosion (one column per role ever) or the EAV pattern — which
+    is itself a property-bag, just less honest. nDB's typed roles are
+    exactly the right primitive.
+  </p>
+
+  <!-- ── 4 ─────────────────────────────────────────────────────── -->
+  <h2>4. Multi-species ecological coevolution</h2>
+
+  <p>
+    <strong>The fact:</strong> the fig–fig-wasp–parasitoid–bird system. A
+    specific <em>Ficus</em> species is pollinated by exactly one
+    <em>Agaonidae</em> wasp species; the wasp's larvae are parasitized by
+    a non-pollinating <em>Sycophaginae</em> wasp; the fruit is dispersed
+    by frugivorous birds. The relationship has properties: ~80 million
+    years coevolution, mutualism strength = obligate for fig+pollinator,
+    ~30% parasitism rate, dispersal radius ~2 km.
+  </p>
+
+  <div class="compare">
+    <div class="ndb">
+      <div class="head">nDB</div>
+<pre><code>Entities: Ficus_carica, Blastophaga_psenes,
+          Apocrypta, Sylvia_atricapilla
+HyperEdge type=COEVOLUTION_SYSTEM, arity=4,
+  roles=[HOST_PLANT,
+         OBLIGATE_POLLINATOR,
+         PARASITOID,
+         DISPERSER]
+Properties on edge:
+  age_mya = 80
+  mutualism_strength = obligate
+  parasitism_rate = 0.30
+  dispersal_radius_km = 2</code></pre>
+    </div>
+    <div class="sql">
+      <div class="head">SQL — fragmented</div>
+<pre><code>pollinates(plant, insect)
+parasitizes(parasitoid, host)
+disperses(plant, bird)
+
+-- Each works in isolation. But the
+-- *system* — the four-way coevolutionary
+-- unit — has nowhere to live. The
+-- 80-million-year property doesn't
+-- belong on pollinates(plant, insect);
+-- it characterises the four-species
+-- ensemble.</code></pre>
+    </div>
+  </div>
+
+  <p>
+    <strong>What tables lose:</strong> the system-as-an-entity. Ecologists
+    <em>think</em> in terms of the keystone interaction; tables can only
+    represent binary relations and force the ecologist to mentally
+    re-aggregate them. You can fake it with
+    <code>interaction_system + system_member</code> — but now you've just
+    hand-coded a hyperedge with strings, with no DB-level enforcement that
+    "exactly one HOST_PLANT and one DISPERSER" is well-formed.
+  </p>
+
+  <!-- ── 5 ─────────────────────────────────────────────────────── -->
+  <h2>5. Multi-party legal / political agreement</h2>
+
+  <p>
+    <strong>The fact:</strong> the Paris Climate Agreement (2015). 196
+    signatory states + UN secretariat + observer organisations + IPCC as
+    scientific authority + specific binding obligations per signatory +
+    ratification dates per signatory + a single shared text. Different
+    parties have different roles (signatory vs ratifier vs observer vs
+    depositary), and signatories themselves have per-state properties
+    (nationally determined contribution).
+  </p>
+
+  <div class="compare">
+    <div class="ndb">
+      <div class="head">nDB</div>
+<pre><code>Entities: France, USA, China, ... (196),
+          UN_Secretariat, IPCC,
+          Greenpeace_obs, ...
+HyperEdge type=TREATY, arity=200+
+  roles=[SIGNATORY (×196),
+         DEPOSITARY (UN),
+         SCIENTIFIC_AUTHORITY (IPCC),
+         OBSERVER (×N)]
+Properties on edge:
+  opened_for_signature = 2015-12-12
+  entered_into_force = 2016-11-04
+  treaty_text_hash = ...
+Per-participation properties (on the slot):
+  France:  signed=2016-04-22,
+           ratified=2016-10-05,
+           ndc_target_pct=40
+  USA:     signed=2016-04-22,
+           ratified=2016-09-03,
+           withdrew=2020-11-04,
+           rejoined=2021-02-19</code></pre>
+    </div>
+    <div class="sql">
+      <div class="head">SQL — workable here</div>
+<pre><code>treaty(id, name, opened, entered_force, ...)
+treaty_party(treaty_id, party_id, role,
+             signed_date, ratified_date,
+             withdrawn_date, ndc_target)
+party(id, type, name)
+  -- state, IGO, NGO, ...</code></pre>
+      <p style="margin: 8px 0 0; font-size: 12.5px;">Reasonable for the participation list (a join table with role + dates).</p>
+    </div>
+  </div>
+
+  <p>
+    <strong>The pain shows when:</strong> roles have role-specific attributes (NDCs only for signatories) → either NULLs or per-role junctions. Participation state changes over time (US withdrew, rejoined) → either overwrite-and-lose, or a fully temporal model. A party plays <em>multiple</em> roles (a state is signatory AND host of next COP) → join table needs multiple rows or role becomes a set.
+  </p>
+
+  <p>
+    <strong>What nDB still wins:</strong> (a) the <em>agreement</em> is one record with its own identity and properties, not an ID floating between tables; (b) per-participation properties live naturally on the edge slot rather than being shoehorned into the junction; (c) role-specific attributes don't force schema migration when a new role appears.
+  </p>
+
+  <h2>The unifying pattern</h2>
+
+  <table>
+    <thead><tr><th>Capability nDB needs</th><th>What tables substitute</th></tr></thead>
+    <tbody>
+      <tr><td>One record per N-ary fact</td><td>Junction table (set identity → ID, must be reconstructed)</td></tr>
+      <tr><td>Typed roles per participant</td><td>Either role column (string, no integrity) or per-role table (rigid)</td></tr>
+      <tr><td>Properties on the relation</td><td>Either parent table with role-irrelevant columns, or per-role junction</td></tr>
+      <tr><td>Heterogeneous participant types in one fact</td><td>Polymorphic FK (anti-pattern) or N junctions</td></tr>
+      <tr><td>Variable arity (3 vs 200)</td><td>Always works in SQL, but at the cost of treating arity-200 as 200 rows</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    Tables aren't <em>wrong</em> — they're the right primitive when
+    relations are binary, dense, and uniform. They get awkward when
+    reality is N-ary with named roles and the relation itself carries
+    information. Every example above is from a domain where domain
+    experts already think in N-ary terms (biochemists name the complex,
+    linguists name the frame, ecologists name the system) — tables force
+    a translation that loses the named thing.
+  </p>
+
+  <p>
+    The honest summary: tables can <em>encode</em> anything
+    (Turing-complete data model), but the encoding cost is paid by every
+    query that has to JOIN back to the fact the table decomposed.
+  </p>
+
+  <div class="btn-row" style="margin-top: 36px;">
+    <a href="/alphafold_ndb/" class="btn">See arity 1518 live in alphafold_ndb →</a>
+    <a href="/whitepaper.html" class="btn secondary">Back to whitepaper</a>
+  </div>
+
+</main>
+
+<footer class="site-foot">
+  <p>nDB is open-source under MIT. <a href="https://github.com/goldrag1/nDB" target="_blank" rel="noreferrer">github.com/goldrag1/nDB</a></p>
+</footer>
+
+</body>
+</html>

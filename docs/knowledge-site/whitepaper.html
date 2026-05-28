@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Whitepaper · nDB</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">nDB <span class="sub">N-dimensional database</span></div>
+  <nav>
+    <a href="/">Home</a>
+    <a href="/whitepaper.html" class="active">Whitepaper</a>
+    <a href="/discussion.html">Discussion</a>
+    <a href="/demos.html">Demos</a>
+    <a href="/repo.html">Repo</a>
+  </nav>
+  <div class="right">v2.3.0 · 488 tests</div>
+</header>
+
+<main class="page">
+
+  <h1>nDB — a database for N-dimensional reality</h1>
+  <p class="lede">
+    Most real-world events involve many participants at once. nDB stores them
+    as one record each, instead of fragmenting them across join tables or
+    multiple binary edges. This is the public introduction; byte-level
+    layouts and MVCC semantics live in
+    <a href="https://github.com/goldrag1/nDB/blob/main/docs/superpowers/specs/2026-05-27-nDB-hypergraph-design.md" target="_blank" rel="noreferrer">the design spec</a>.
+  </p>
+
+  <h2>The problem: reality is multi-dimensional, databases are 2D</h2>
+
+  <p>
+    Relational databases were designed in the 1970s for tabular data —
+    payroll rows, ledger entries, inventory lists. The relational model
+    normalized data into rows and columns, and SQL gave the world a powerful
+    query language that has lasted half a century. But the events modern
+    applications care about are rarely 2D.
+  </p>
+
+  <p>Three quick examples from different domains:</p>
+
+  <ul>
+    <li><strong>Biology.</strong> A gene-expression event involves the gene, its transcription factors, co-factors, the chromatin state of its locus, the cell type, the time point, and the resulting protein. Seven role-players in one atomic fact.</li>
+    <li><strong>Construction engineering.</strong> A structural load test involves the component, its material spec, the load applied, the measured deflection, ambient temperature, the engineer performing the test, and the timestamp. Seven dimensions all required to make the result regulatory-quality.</li>
+    <li><strong>Business operations.</strong> An approval event involves the document, the approver, the timestamp, the workflow used, and the outcome. Five participants in one atomic event.</li>
+  </ul>
+
+  <p>
+    All three are inherently N-ary. Each loses meaning when fragmented into a
+    2D table. To store the business approval in SQL you need at minimum: an
+    <code>approvals</code> table with a synthetic primary key, foreign keys
+    to <code>users</code>, <code>documents</code>, <code>workflows</code>, a
+    separate <code>audit_log</code> table, and an ORM layer that
+    reconstructs the event from these fragments at query time.
+  </p>
+
+  <p>
+    Property graphs (Neo4j, TigerGraph) help — they put relationships first —
+    but their edges are still binary. A 5-arity fact requires
+    <em>reification</em>: a stub node connected to 5 binary edges. The fact's
+    atomicity is lost. Triple stores (RDF) handle N-ary via reification too.
+    Hypergraph databases (TypeDB, HyperGraphDB) get N-ary right but require
+    upfront schema declaration, which excludes the AI-extraction use case.
+  </p>
+
+  <p>
+    The category gap nDB targets: a hyperedge-native database that is also
+    schemaless-friendly, optimized for AI / ERP / scientific workloads, and
+    architecturally minimal so the ecosystem can extend it.
+  </p>
+
+  <h2>What nDB is</h2>
+
+  <p>A production-grade hypergraph database engine in Rust. Five foundational commitments:</p>
+
+  <h3>1. Hyperedge-native data model</h3>
+
+  <p>
+    Every fact in nDB is a hyperedge — a connection between any number of
+    named role-players, with optional properties. No reification, no
+    synthetic intermediate node, no foreign-key choreography.
+  </p>
+
+  <p>The same primitive expresses facts from very different domains:</p>
+
+<pre><code># Chemistry — an N-ary reaction
+HyperEdge {
+    type: "chemical_reaction"
+    roles: {
+        reactant_1:   Sodium,
+        reactant_2:   Chlorine,
+        product:      SodiumChloride,
+        catalyst:     Water,
+        temperature:  T_25C,
+        environment:  Exothermic
+    }
+    properties: { yield_pct: 98.5, study_ref: "PubChem-117" }
+}
+
+# Construction engineering — a structural load test
+HyperEdge {
+    type: "load_test"
+    roles: {
+        component:        BEAM-A12,
+        material:         ReinforcedConcrete_C30,
+        load_applied_kN:  250,
+        deflection_mm:    1.2,
+        ambient_temp_C:   22,
+        tested_by:        engineer_pham,
+        date:             2026-05-26
+    }
+    properties: { pass: true, certified_per: "TCVN-5574-2018" }
+}
+
+# Business — an approval event
+HyperEdge {
+    type: "approval"
+    roles: {
+        document:   SO-001,
+        approver:   Alice,
+        timestamp:  2026-05-26T15:00,
+        workflow:   fast-track,
+        outcome:    approved
+    }
+    properties: { comment: "all conditions met" }
+}
+</code></pre>
+
+  <p>
+    One atomic fact per event. One write. One traversal. No reification.
+    Nested entity hierarchies (body → cells → proteins → amino acids;
+    building → floor → room → component) are expressed as standard
+    hyperedges with a <code>contains</code> relation type.
+  </p>
+
+  <h3>2. Schema as metadata, not a separate primitive</h3>
+
+  <p>
+    "Schema" in nDB is not a separate engine concept. It is the collection
+    of metadata hyperedges that describe other hyperedges. Type assertions,
+    constraints, index declarations, inference rules — all written with the
+    same query DSL as any data.
+  </p>
+
+<pre><code>write type_def(name: "Customer",
+               required_properties: ["customer_code", "name"])
+
+write constraint(target_type: "Customer",
+                 rule_expr: "matches(tax_id, '^[0-9]{10,13}$')")</code></pre>
+
+  <p>
+    Consequences: no <code>CREATE TABLE</code>, no <code>ALTER TABLE</code>,
+    no migration ceremony. Schema evolves at the speed of data. AI agents
+    extracting facts can write <code>type_def</code> hyperedges as they
+    discover concepts. Schema queries use the same DSL as data queries —
+    no separate <code>INFORMATION_SCHEMA</code>. Schema is MVCC-versioned,
+    so "what did our schema look like last year?" is a normal time-travel
+    query.
+  </p>
+
+  <p>
+    Apps choose enforcement strictness per type: schemaless, soft-validated,
+    strictly-validated, or fully reasoned over. The same engine serves AI
+    extraction (loose) and ERP audit (strict).
+  </p>
+
+  <h3>3. Append-only storage with MVCC</h3>
+
+  <p>
+    The storage core is append-only. Updates are new assertions superseding
+    old ones. Deletions are tombstone assertions. Compaction removes old
+    versions per per-type retention policies.
+  </p>
+
+  <ul>
+    <li><strong>Provenance is free.</strong> The history <em>is</em> the storage.</li>
+    <li><strong>MVCC is natural.</strong> Every write creates a new version; no separate version-tracking machinery.</li>
+    <li><strong>Time-travel is a feature.</strong> <code>as of 2025-12-31 match customer(id: ?c, balance: ?b)</code> works natively.</li>
+    <li><strong>Audit trail is free.</strong> Every assertion records who, when, and from what source.</li>
+    <li><strong>LSM-friendly.</strong> Append-only maps cleanly to log-structured merge trees.</li>
+    <li><strong>GDPR-compatible.</strong> Selective deletion via compaction supports right-to-be-forgotten.</li>
+  </ul>
+
+  <p>
+    Realistic ERP workload (100M facts/year, 5-year retention) lands at
+    ~100 GB hot + ~$2/month cold archival. Roughly 3× the storage of an
+    update-in-place database, in exchange for free audit, MVCC, and provenance.
+  </p>
+
+  <h3>4. Engine retrieves; slicers compute</h3>
+
+  <p>
+    The engine is small. It does: primary storage (append-only LSM, custom
+    binary format), pattern matching / filtering / projection / time-travel,
+    MVCC transactions (snapshot isolation by default, serializable per
+    transaction), the index framework, and compaction.
+  </p>
+
+  <p>
+    The engine does <em>not</em> do aggregation, sorting, grouping, or
+    computation. Those live in <strong>slicer crates</strong> — composable
+    companion crates that build on the engine's retrieval primitives. A
+    slicer is also a declarative projection from the N-dimensional
+    hyperedge graph onto a K-dimensional visual space (grammar of graphics,
+    extended from tabular to hypergraph).
+  </p>
+
+  <h3>5. Plugin framework everywhere</h3>
+
+  <p>
+    Indexes, slicers, renderers, vector similarity, full-text search,
+    geographic indexes — all plugins. The engine ships the framework; the
+    ecosystem ships the features. GPU acceleration arrives in v2 as opt-in
+    plugin crates (vector indexes, columnar aggregation, GPU slicers)
+    without engine changes.
+  </p>
+
+  <h2>Three worlds where this matters</h2>
+
+  <h3>AI agent reasoning and LLM knowledge graphs</h3>
+  <p>
+    LLMs naturally produce N-ary structured facts when given the freedom to.
+    "Alice gave Bob a book on Tuesday in the library" is one mental fact for
+    an LLM — and it's one hyperedge in nDB. Current GraphRAG pipelines work
+    hard to bend LLM output into reified property-graph triples or
+    constrained SQL schemas. nDB matches what LLMs produce natively. First-
+    class MCP integration ships with v1: <code>nDB-mcp-server</code> exposes
+    the engine as a Model Context Protocol server — Claude, GPT, Llama, any
+    MCP-aware agent can drive nDB without custom integration glue.
+  </p>
+
+  <h3>Multi-party operational systems</h3>
+  <p>
+    BIM data is naturally hypergraph-shaped — components with many
+    attributes <em>and</em> many relationships. 3-way invoice match
+    (PO + GRN + Invoice) is one hyperedge, not three tables + a match
+    table. International trade events are 5-party native. Per-tenant SaaS:
+    each tenant defines its own <code>Customer</code> type without database
+    sprawl. Regulatory time-travel: Vietnamese VAS transition from TT200/2014
+    to TT99/2025 with auditors in 2030 reconstructing 2024 state without
+    backups.
+  </p>
+
+  <h3>Scientific, biomedical, provenance/lineage</h3>
+  <p>
+    Most experimental events involve many parameters. W3C PROV-O lineage
+    facts are 6+-arity: <code>(output, derived_from, inputs…, by_transformation, at_time, with_parameters, by_researcher)</code>.
+    nDB stores these natively without reification. EUDR compliance: trace
+    crop batches from harvest geolocation through processing to retail —
+    one hyperedge per stage, atomic and multi-party.
+  </p>
+
+  <h2>How nDB compares</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Dimension</th>
+        <th>SQL</th>
+        <th>Neo4j</th>
+        <th>TypeDB</th>
+        <th>Datomic</th>
+        <th>MongoDB</th>
+        <th>nDB</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>N-ary facts native</td><td>No</td><td>No</td><td>Yes</td><td>Partial</td><td>Document</td><td><strong>Yes</strong></td></tr>
+      <tr><td>Schemaless option</td><td>No</td><td>Partial</td><td>No</td><td>No</td><td>Yes</td><td><strong>Yes (opt-in)</strong></td></tr>
+      <tr><td>Schema is data</td><td>No</td><td>No</td><td>No</td><td>Yes</td><td>No</td><td><strong>Yes</strong></td></tr>
+      <tr><td>Time travel native</td><td>No</td><td>Partial</td><td>No</td><td>Yes</td><td>No</td><td><strong>Yes</strong></td></tr>
+      <tr><td>Audit trail free</td><td>No</td><td>No</td><td>No</td><td>Yes</td><td>No</td><td><strong>Yes</strong></td></tr>
+      <tr><td>AI-extracted schema</td><td>No</td><td>Partial</td><td>No</td><td>Partial</td><td>Yes*</td><td><strong>Yes</strong></td></tr>
+      <tr><td>Visual projection built-in</td><td>No</td><td>No</td><td>No</td><td>No</td><td>No</td><td><strong>Yes</strong></td></tr>
+      <tr><td>GPU acceleration path</td><td>Limited</td><td>None</td><td>None</td><td>None</td><td>None</td><td><strong>Plugin (v2)</strong></td></tr>
+      <tr><td>MVCC</td><td>Yes</td><td>Limited</td><td>Yes</td><td>Yes</td><td>Limited</td><td><strong>Yes</strong></td></tr>
+      <tr><td>Storage durability</td><td>Mature</td><td>Mature</td><td>Mature</td><td>Mature</td><td>Mature</td><td><strong>v1 target</strong></td></tr>
+    </tbody>
+  </table>
+
+  <p style="font-size: 12.5px; color: var(--text-muted); margin-top: -8px;">
+    * MongoDB is schemaless without validation.
+  </p>
+
+  <h2>Performance characteristics</h2>
+
+  <p><strong>Strong points:</strong></p>
+  <ul>
+    <li>Point lookups: comparable to RocksDB / LevelDB — sub-millisecond on hot data</li>
+    <li>Pattern traversal: comparable to property graphs for binary patterns; faster for N-ary because there are no reification hops</li>
+    <li>Time-travel queries: same cost as current-state queries (MVCC + snapshot reads)</li>
+    <li>Append throughput: single-writer + batching, RocksDB territory (10K+ writes/sec per writer)</li>
+    <li>Read concurrency: lock-free MVCC; many readers don't contend</li>
+    <li>Streaming subscriptions: append-only log makes change-feed trivial</li>
+  </ul>
+
+  <p><strong>Honest trade-offs:</strong></p>
+  <ul>
+    <li>Ad-hoc aggregation without prepared indexes: slower than DuckDB / ClickHouse / BigQuery. Mitigated by columnar index plugin (v2).</li>
+    <li>Multi-writer throughput in v1: single-writer + batching. Multi-writer revisited in v3+ alongside distribution.</li>
+    <li>Distributed transactions: v3+. v1 is single-node.</li>
+  </ul>
+
+  <h2>What nDB is not</h2>
+
+  <ul>
+    <li><strong>Not a relational replacement</strong> for OLTP banking, payroll, and other workloads where SQL has 50 years of operational hardening. nDB is for the workloads SQL was not designed for.</li>
+    <li><strong>Not a graph database</strong> in the property-graph sense (Neo4j, TigerGraph). Those are binary-edge engines. nDB is hypergraph-native.</li>
+    <li><strong>Not a vector database</strong> by itself. Vector similarity is a v2 plugin index, alongside structured queries — not the engine's primary purpose.</li>
+    <li><strong>Not a triple store</strong>. RDF triples are 3-arity; nDB hyperedges are N-arity. The engines target overlapping but distinct workloads.</li>
+    <li><strong>Not distributed in v1</strong>. Single-node with strong durability and replication. Distribution arrives in v3.</li>
+  </ul>
+
+  <h2>Risks honestly</h2>
+
+  <ul>
+    <li><strong>Adoption inertia.</strong> SQL is the world's default. Convincing a team to adopt a hypergraph database is a real cost. nDB is positioned for workloads where SQL is the bottleneck — not as a SQL replacement.</li>
+    <li><strong>Operational maturity.</strong> v1 is foundational. Backup / restore / replication tooling lags Postgres by decades. Early adopters accept this.</li>
+    <li><strong>Query language familiarity.</strong> nDB's DSL is new. Tooling, IDE support, ecosystem libraries — all need building. We bet on LLM-native query generation to compress this gap, but it's a bet.</li>
+    <li><strong>The hyperedge vs binary debate isn't settled.</strong> Reasonable people disagree about whether N-ary primitives are worth the complexity vs reification on binary edges. nDB is taking the N-ary side; the evidence in its favor accumulates with every demo (see <a href="/discussion-examples.html">5 examples</a>).</li>
+  </ul>
+
+  <div class="btn-row" style="margin-top: 36px;">
+    <a href="/alphafold_ndb/" class="btn">See it working → live demo</a>
+    <a href="https://github.com/goldrag1/nDB" class="btn secondary" target="_blank" rel="noreferrer">GitHub source</a>
+  </div>
+
+</main>
+
+<footer class="site-foot">
+  <p>nDB is open-source under MIT. <a href="https://github.com/goldrag1/nDB" target="_blank" rel="noreferrer">github.com/goldrag1/nDB</a></p>
+  <p class="mono">Adapted from <code>docs/nDB-whitepaper.md</code> in the repo. Full design spec linked at top.</p>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Discussion · nDB</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">nDB <span class="sub">N-dimensional database</span></div>
+  <nav>
+    <a href="/">Home</a>
+    <a href="/whitepaper.html">Whitepaper</a>
+    <a href="/discussion.html" class="active">Discussion</a>
+    <a href="/demos.html">Demos</a>
+    <a href="/repo.html">Repo</a>
+  </nav>
+  <div class="right">v2.3.0 · 488 tests</div>
+</header>
+
+<main class="page">
+
+  <h1>Discussion</h1>
+  <p class="lede">
+    Three questions that came up while explaining nDB to people who already
+    know relational databases. Each is a conversation, not a definitive
+    answer — pushback welcome.
+  </p>
+
+  <div class="card-grid">
+
+    <div class="card">
+      <a href="/discussion-storage.html" class="card-title">Does N-dimensional cost more storage than tables? →</a>
+      <p>
+        The intuition: "if every entity stores its own property labels,
+        labels repeat — that has to cost more than a table where the
+        column name is stored once." Why this is true for naive
+        property-bags, why nDB sidesteps it, and where tables still win.
+      </p>
+    </div>
+
+    <div class="card">
+      <a href="/discussion-nesting.html" class="card-title">How many ways are there to declare nested entities? →</a>
+      <p>
+        nDB has no literal "nested" type. Containment is always modeled.
+        Three fundamental mechanisms combine into six distinct patterns —
+        when each is right, when one is an anti-pattern, and what the
+        v2.2 → v2.3 rewrite of <code>protein_atoms</code> taught us.
+      </p>
+    </div>
+
+    <div class="card">
+      <a href="/discussion-examples.html" class="card-title">Five things tables can't describe well →</a>
+      <p>
+        Multi-subunit protein assemblies, chemical reactions with full
+        context, frame-semantic events in language, multi-species
+        coevolution, multi-party treaties. For each: the nDB shape, the
+        SQL shape, and what tables actually lose.
+      </p>
+    </div>
+
+  </div>
+
+</main>
+
+<footer class="site-foot">
+  <p>nDB is open-source under MIT. <a href="https://github.com/goldrag1/nDB" target="_blank" rel="noreferrer">github.com/goldrag1/nDB</a></p>
+</footer>
+
+</body>
+</html>

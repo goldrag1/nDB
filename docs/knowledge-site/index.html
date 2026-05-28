@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nDB — N-dimensional database</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">nDB <span class="sub">N-dimensional database</span></div>
+  <nav>
+    <a href="/" class="active">Home</a>
+    <a href="/whitepaper.html">Whitepaper</a>
+    <a href="/discussion.html">Discussion</a>
+    <a href="/demos.html">Demos</a>
+    <a href="/repo.html">Repo</a>
+  </nav>
+  <div class="right">v2.3.0 · 488 tests</div>
+</header>
+
+<main class="page">
+
+  <section class="hero">
+    <h1>One record per fact, no matter how many things it involves.</h1>
+    <p class="lede">
+      nDB is a hyperedge-native database for relations that aren't binary.
+      Where a table needs a join table and a graph DB needs N edges,
+      nDB stores one arity-N record — keeping the set, its roles, and its
+      properties as a single first-class fact.
+    </p>
+    <div class="btn-row">
+      <a href="/alphafold_ndb/" class="btn">Launch live demo →</a>
+      <a href="/whitepaper.html" class="btn secondary">Read the whitepaper</a>
+      <a href="https://github.com/goldrag1/nDB" class="btn secondary" target="_blank" rel="noreferrer">GitHub</a>
+    </div>
+    <div class="meta">
+      Latest release · v2.3.0 (2026-05-28) · Rust · MIT · 8 crates · 488 tests passing
+    </div>
+  </section>
+
+  <h2>Why this exists</h2>
+  <p>
+    Most of reality is N-ary. A reaction has reactants, products, catalysts, conditions.
+    A protein complex has subunits with roles and stoichiometry. A sentence has an agent,
+    a recipient, a theme, a time, a location. Tables decompose these into junction tables
+    — losing the fact that they're <em>one thing</em>. Graph DBs decompose them into N binary
+    edges — paying N× the storage to represent one fact.
+  </p>
+  <p>
+    nDB takes the N-ary record as the primitive. An <span class="pill entity">Entity</span>
+    is a thing; a <span class="pill relation">HyperEdge</span> of arity N is one record
+    naming N entities together with named roles; a <span class="pill property">Property</span>
+    is an attribute on either. That's the whole data model.
+  </p>
+
+  <h2>Read next</h2>
+  <div class="card-grid">
+
+    <div class="card">
+      <a href="/whitepaper.html" class="card-title">Whitepaper →</a>
+      <p>The data model, storage architecture, plugin framework, performance characteristics, and an honest list of what it isn't.</p>
+    </div>
+
+    <div class="card">
+      <a href="/demos.html" class="card-title">Demos →</a>
+      <p>Live, interactive demonstrations. Two so far: a hyperedge-native protein-structure browser (alphafold_ndb) and an N-ary exoplanet-discovery explorer (exoplanet_ndb, all 11 detection methods).</p>
+    </div>
+
+    <div class="card">
+      <a href="/discussion-storage.html" class="card-title">Does N-dimensional cost more storage? →</a>
+      <p>The naive worry — "labels repeat per entity" — and why nDB's dictionary-coded properties dodge it. When tables still win.</p>
+    </div>
+
+    <div class="card">
+      <a href="/discussion-nesting.html" class="card-title">Six ways to declare nested entities →</a>
+      <p>nDB has no literal "nested" type. Containment is modeled. The six patterns, when each is right, and when one becomes an anti-pattern.</p>
+    </div>
+
+    <div class="card">
+      <a href="/discussion-examples.html" class="card-title">Five things tables can't describe well →</a>
+      <p>Protein assemblies, chemical reactions, frame semantics, multi-species coevolution, multi-party treaties — side-by-side with their SQL shape.</p>
+    </div>
+
+    <div class="card">
+      <a href="/repo.html" class="card-title">Run it locally →</a>
+      <p>Clone, build, run. The 30-second tour, current release status, and what's coming next.</p>
+    </div>
+
+  </div>
+
+</main>
+
+<footer class="site-foot">
+  <p>nDB is open-source under MIT. <a href="https://github.com/goldrag1/nDB" target="_blank" rel="noreferrer">github.com/goldrag1/nDB</a></p>
+  <p class="mono">ndb.nextstar-erp.com · knowledge site v0.1</p>
+</footer>
+
+</body>
+</html>

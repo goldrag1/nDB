@@ -1,0 +1,2662 @@
+{
+  "schema_note": "exoplanet_ndb seed v1. NASA Exoplanet Archive snapshot 2026-05-28. See tools/exoplanet/build_seed.py.",
+  "counts": {
+    "planets": 91,
+    "stars": 40,
+    "methods": 11,
+    "missions": 21,
+    "systems": 40,
+    "discoveries": 91,
+    "hz_groups": 9
+  },
+  "stars": [
+    {
+      "name": "PSR B1257+12",
+      "ra": 195.0149029,
+      "dec": 12.6823534,
+      "distance_pc": 600.0,
+      "teff_k": null,
+      "mass_msun": 1.4,
+      "radius_rsun": null,
+      "age_gyr": 3.0
+    },
+    {
+      "name": "PSR B1620-26",
+      "ra": 245.9092617,
+      "dec": -26.5315944,
+      "distance_pc": null,
+      "teff_k": null,
+      "mass_msun": 1.35,
+      "radius_rsun": null,
+      "age_gyr": null
+    },
+    {
+      "name": "51 Peg",
+      "ra": 344.3675399,
+      "dec": 20.7690958,
+      "distance_pc": 15.4614,
+      "teff_k": 5758.0,
+      "mass_msun": 1.03,
+      "radius_rsun": 1.17561,
+      "age_gyr": null
+    },
+    {
+      "name": "HD 209458",
+      "ra": 330.7950219,
+      "dec": 18.8842419,
+      "distance_pc": 48.3016,
+      "teff_k": 6091.0,
+      "mass_msun": 1.23,
+      "radius_rsun": 1.19,
+      "age_gyr": null
+    },
+    {
+      "name": "HD 189733",
+      "ra": 300.1821223,
+      "dec": 22.7097759,
+      "distance_pc": 19.7638,
+      "teff_k": 5052.0,
+      "mass_msun": 0.79,
+      "radius_rsun": 0.75,
+      "age_gyr": null
+    },
+    {
+      "name": "HD 80606",
+      "ra": 140.6569501,
+      "dec": 50.6037764,
+      "distance_pc": 66.4711,
+      "teff_k": 5565.0,
+      "mass_msun": 1.05,
+      "radius_rsun": 1.05,
+      "age_gyr": null
+    },
+    {
+      "name": "55 Cnc",
+      "ra": 133.1468373,
+      "dec": 28.3298154,
+      "distance_pc": 12.5855,
+      "teff_k": 5198.0,
+      "mass_msun": 1.015,
+      "radius_rsun": 0.98,
+      "age_gyr": 10.0
+    },
+    {
+      "name": "HD 10180",
+      "ra": 24.4731133,
+      "dec": -60.5114881,
+      "distance_pc": 38.9607,
+      "teff_k": 5911.0,
+      "mass_msun": 1.06,
+      "radius_rsun": 1.109,
+      "age_gyr": null
+    },
+    {
+      "name": "tau Cet",
+      "ra": 26.0093029,
+      "dec": -15.9337987,
+      "distance_pc": 3.60304,
+      "teff_k": null,
+      "mass_msun": 0.783,
+      "radius_rsun": null,
+      "age_gyr": null
+    },
+    {
+      "name": "Proxima Cen",
+      "ra": 217.3934657,
+      "dec": -62.6761821,
+      "distance_pc": 1.30119,
+      "teff_k": 2900.0,
+      "mass_msun": 0.1221,
+      "radius_rsun": 0.141,
+      "age_gyr": null
+    },
+    {
+      "name": "Kepler-22",
+      "ra": 289.2172051,
+      "dec": 47.8841427,
+      "distance_pc": 194.642,
+      "teff_k": 5596.0,
+      "mass_msun": 0.857,
+      "radius_rsun": 0.869,
+      "age_gyr": 7.0
+    },
+    {
+      "name": "Kepler-186",
+      "ra": 298.652736,
+      "dec": 43.9549884,
+      "distance_pc": 177.594,
+      "teff_k": 3755.0,
+      "mass_msun": 0.544,
+      "radius_rsun": 0.523,
+      "age_gyr": 4.0
+    },
+    {
+      "name": "Kepler-1649",
+      "ra": 292.5029676,
+      "dec": 41.8299933,
+      "distance_pc": 92.1913,
+      "teff_k": 3240.0,
+      "mass_msun": 0.1977,
+      "radius_rsun": 0.2317,
+      "age_gyr": null
+    },
+    {
+      "name": "Kepler-19",
+      "ra": 290.4209694,
+      "dec": 37.8516556,
+      "distance_pc": 218.562,
+      "teff_k": 5544.0,
+      "mass_msun": 0.936,
+      "radius_rsun": 0.859,
+      "age_gyr": 1.9
+    },
+    {
+      "name": "Kepler-51",
+      "ra": 296.4797624,
+      "dec": 49.9376486,
+      "distance_pc": 783.831,
+      "teff_k": 6018.0,
+      "mass_msun": 1.04,
+      "radius_rsun": 0.94,
+      "age_gyr": 0.3
+    },
+    {
+      "name": "GJ 1214",
+      "ra": 258.8313991,
+      "dec": 4.9606795,
+      "distance_pc": 14.6427,
+      "teff_k": 3101.0,
+      "mass_msun": 0.182,
+      "radius_rsun": 0.2162,
+      "age_gyr": null
+    },
+    {
+      "name": "GJ 9827",
+      "ra": 351.7717763,
+      "dec": -1.2853435,
+      "distance_pc": 29.661,
+      "teff_k": 4236.0,
+      "mass_msun": 0.62,
+      "radius_rsun": 0.58,
+      "age_gyr": 5.465
+    },
+    {
+      "name": "WASP-12",
+      "ra": 97.636645,
+      "dec": 29.6722662,
+      "distance_pc": 427.246,
+      "teff_k": 6265.0,
+      "mass_msun": 1.325,
+      "radius_rsun": 1.69,
+      "age_gyr": 3.05
+    },
+    {
+      "name": "WASP-121",
+      "ra": 107.6002312,
+      "dec": -39.0972705,
+      "distance_pc": 269.898,
+      "teff_k": 6628.0,
+      "mass_msun": 1.33,
+      "radius_rsun": 1.461,
+      "age_gyr": 1.11
+    },
+    {
+      "name": "WASP-189",
+      "ra": 225.686732,
+      "dec": -3.0314874,
+      "distance_pc": 99.731,
+      "teff_k": 8000.0,
+      "mass_msun": 2.03,
+      "radius_rsun": 2.36,
+      "age_gyr": 0.73
+    },
+    {
+      "name": "WASP-107",
+      "ra": 188.3864277,
+      "dec": -10.1462141,
+      "distance_pc": 64.7414,
+      "teff_k": null,
+      "mass_msun": null,
+      "radius_rsun": null,
+      "age_gyr": null
+    },
+    {
+      "name": "KELT-9",
+      "ra": 307.8598998,
+      "dec": 39.9389161,
+      "distance_pc": 204.455,
+      "teff_k": 10170.0,
+      "mass_msun": 2.52,
+      "radius_rsun": 2.362,
+      "age_gyr": 0.3
+    },
+    {
+      "name": "TRAPPIST-1",
+      "ra": 346.6263919,
+      "dec": -5.0434618,
+      "distance_pc": null,
+      "teff_k": 2566.0,
+      "mass_msun": 0.0898,
+      "radius_rsun": 0.1192,
+      "age_gyr": null
+    },
+    {
+      "name": "KOI-351",
+      "ra": 284.4334642,
+      "dec": 49.3051239,
+      "distance_pc": 848.254,
+      "teff_k": 6080.0,
+      "mass_msun": 1.2,
+      "radius_rsun": 1.2,
+      "age_gyr": null
+    },
+    {
+      "name": "TOI-178",
+      "ra": 7.3020115,
+      "dec": -30.4541159,
+      "distance_pc": 62.699,
+      "teff_k": 4316.0,
+      "mass_msun": 0.647,
+      "radius_rsun": 0.662,
+      "age_gyr": 6.0
+    },
+    {
+      "name": "HD 110067",
+      "ra": 189.8392243,
+      "dec": 20.0273377,
+      "distance_pc": 32.1585,
+      "teff_k": 5266.0,
+      "mass_msun": 0.798,
+      "radius_rsun": 0.788,
+      "age_gyr": 8.1
+    },
+    {
+      "name": "TOI-700",
+      "ra": 97.0957165,
+      "dec": -65.5786149,
+      "distance_pc": 31.1265,
+      "teff_k": 3459.0,
+      "mass_msun": 0.415,
+      "radius_rsun": 0.421,
+      "age_gyr": null
+    },
+    {
+      "name": "LHS 1140",
+      "ra": 11.248632,
+      "dec": -15.2741085,
+      "distance_pc": 14.9861,
+      "teff_k": 3096.0,
+      "mass_msun": 0.1844,
+      "radius_rsun": 0.2159,
+      "age_gyr": 5.0
+    },
+    {
+      "name": "K2-18",
+      "ra": 172.560141,
+      "dec": 7.5878315,
+      "distance_pc": 38.0266,
+      "teff_k": 3457.0,
+      "mass_msun": 0.359,
+      "radius_rsun": 0.411,
+      "age_gyr": null
+    },
+    {
+      "name": "OGLE-2005-BLG-390L",
+      "ra": 268.579958,
+      "dec": -30.3773056,
+      "distance_pc": 6600.0,
+      "teff_k": null,
+      "mass_msun": 0.22,
+      "radius_rsun": null,
+      "age_gyr": null
+    },
+    {
+      "name": "2MASS J12073346-3932539",
+      "ra": 181.8890906,
+      "dec": -39.5484399,
+      "distance_pc": 64.308,
+      "teff_k": null,
+      "mass_msun": null,
+      "radius_rsun": null,
+      "age_gyr": 0.01
+    },
+    {
+      "name": "HR 8799",
+      "ra": 346.8701486,
+      "dec": 21.1340376,
+      "distance_pc": 41.2441,
+      "teff_k": null,
+      "mass_msun": 1.5,
+      "radius_rsun": null,
+      "age_gyr": 0.06
+    },
+    {
+      "name": "Gaia-4",
+      "ra": 209.5063762,
+      "dec": 31.6954898,
+      "distance_pc": 73.4829,
+      "teff_k": 4034.0,
+      "mass_msun": 0.644,
+      "radius_rsun": 0.624,
+      "age_gyr": 6.8
+    },
+    {
+      "name": "HD 128717",
+      "ra": 219.0881687,
+      "dec": 57.5609512,
+      "distance_pc": 73.636,
+      "teff_k": 6210.0,
+      "mass_msun": 1.212,
+      "radius_rsun": 1.248,
+      "age_gyr": 1.4
+    },
+    {
+      "name": "HD 97048",
+      "ra": 167.0133422,
+      "dec": -77.654853,
+      "distance_pc": 183.857,
+      "teff_k": 10000.0,
+      "mass_msun": 2.4,
+      "radius_rsun": 2.25,
+      "age_gyr": 0.003
+    },
+    {
+      "name": "V0391 Peg",
+      "ra": 331.0504119,
+      "dec": 26.4188227,
+      "distance_pc": 1195.98,
+      "teff_k": 29300.0,
+      "mass_msun": 0.5,
+      "radius_rsun": 0.23,
+      "age_gyr": 10.0
+    },
+    {
+      "name": "KIC 7917485",
+      "ra": 299.4346094,
+      "dec": 43.6326069,
+      "distance_pc": 1382.89,
+      "teff_k": 7067.0,
+      "mass_msun": 1.63,
+      "radius_rsun": null,
+      "age_gyr": null
+    },
+    {
+      "name": "Kepler-76",
+      "ra": 294.1921185,
+      "dec": 39.6189727,
+      "distance_pc": 822.96,
+      "teff_k": 6409.0,
+      "mass_msun": 1.2,
+      "radius_rsun": 1.32,
+      "age_gyr": null
+    },
+    {
+      "name": "KOI-55",
+      "ra": 296.3561853,
+      "dec": 41.0927315,
+      "distance_pc": 1231.02,
+      "teff_k": 27730.0,
+      "mass_msun": 0.496,
+      "radius_rsun": 0.203,
+      "age_gyr": null
+    },
+    {
+      "name": "NN Ser",
+      "ra": 238.2337015,
+      "dec": 12.9120871,
+      "distance_pc": 515.818,
+      "teff_k": null,
+      "mass_msun": 0.535,
+      "radius_rsun": null,
+      "age_gyr": null
+    }
+  ],
+  "methods": [
+    {
+      "name": "Pulsar Timing"
+    },
+    {
+      "name": "Radial Velocity"
+    },
+    {
+      "name": "Transit"
+    },
+    {
+      "name": "Transit Timing Variations"
+    },
+    {
+      "name": "Microlensing"
+    },
+    {
+      "name": "Imaging"
+    },
+    {
+      "name": "Astrometry"
+    },
+    {
+      "name": "Disk Kinematics"
+    },
+    {
+      "name": "Pulsation Timing Variations"
+    },
+    {
+      "name": "Orbital Brightness Modulation"
+    },
+    {
+      "name": "Eclipse Timing Variations"
+    }
+  ],
+  "missions": [
+    {
+      "short": "Arecibo",
+      "full": "Arecibo Observatory"
+    },
+    {
+      "short": "Hubble",
+      "full": "Hubble Space Telescope"
+    },
+    {
+      "short": "OHP",
+      "full": "Haute-Provence Observatory"
+    },
+    {
+      "short": "Keck",
+      "full": "W. M. Keck Observatory"
+    },
+    {
+      "short": "Multiple",
+      "full": "Multiple Observatories"
+    },
+    {
+      "short": "Lick Observatory",
+      "full": "Lick Observatory"
+    },
+    {
+      "short": "McDonald",
+      "full": "McDonald Observatory"
+    },
+    {
+      "short": "La Silla",
+      "full": "La Silla Observatory"
+    },
+    {
+      "short": "European Southern Observatory",
+      "full": "European Southern Observatory"
+    },
+    {
+      "short": "Kepler",
+      "full": "Kepler"
+    },
+    {
+      "short": "MEarth Project",
+      "full": "MEarth Project"
+    },
+    {
+      "short": "K2",
+      "full": "K2"
+    },
+    {
+      "short": "WASP",
+      "full": "SuperWASP"
+    },
+    {
+      "short": "CHEOPS",
+      "full": "CHaracterising ExOPlanets Satellite (CHEOPS)"
+    },
+    {
+      "short": "KELT",
+      "full": "KELT-North"
+    },
+    {
+      "short": "TESS",
+      "full": "Transiting Exoplanet Survey Satellite (TESS)"
+    },
+    {
+      "short": "OGLE",
+      "full": "OGLE"
+    },
+    {
+      "short": "VLT",
+      "full": "Paranal Observatory"
+    },
+    {
+      "short": "Gemini",
+      "full": "Gemini Observatory"
+    },
+    {
+      "short": "Gaia",
+      "full": "European Space Agency (ESA) Gaia Satellite"
+    },
+    {
+      "short": "ALMA",
+      "full": "Atacama Large Millimeter Array (ALMA)"
+    }
+  ],
+  "planets": [
+    {
+      "name": "PSR B1257+12 b",
+      "host": "PSR B1257+12",
+      "radius_re": null,
+      "mass_me": 0.02,
+      "orbital_period": 25.262,
+      "semi_major_au": 0.19,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "PSR B1257+12 c",
+      "host": "PSR B1257+12",
+      "radius_re": null,
+      "mass_me": 4.3,
+      "orbital_period": 66.5419,
+      "semi_major_au": 0.36,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "PSR B1257+12 d",
+      "host": "PSR B1257+12",
+      "radius_re": null,
+      "mass_me": 3.9,
+      "orbital_period": 98.2114,
+      "semi_major_au": 0.46,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "PSR B1620-26 b",
+      "host": "PSR B1620-26",
+      "radius_re": null,
+      "mass_me": 794.575,
+      "orbital_period": null,
+      "semi_major_au": 23.0,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "51 Peg b",
+      "host": "51 Peg",
+      "radius_re": null,
+      "mass_me": 150.009,
+      "orbital_period": 4.230785,
+      "semi_major_au": 0.0527,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "HD 209458 b",
+      "host": "HD 209458",
+      "radius_re": 15.58051,
+      "mass_me": 232.0159,
+      "orbital_period": 3.52474859,
+      "semi_major_au": null,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "HD 189733 b",
+      "host": "HD 189733",
+      "radius_re": 12.66617,
+      "mass_me": 359.1479,
+      "orbital_period": 2.21857567,
+      "semi_major_au": null,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "HD 80606 b",
+      "host": "HD 80606",
+      "radius_re": 11.56766808,
+      "mass_me": 1323.46926959,
+      "orbital_period": 111.436765,
+      "semi_major_au": 0.4603,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "55 Cnc b",
+      "host": "55 Cnc",
+      "radius_re": null,
+      "mass_me": 276.0,
+      "orbital_period": 14.651552,
+      "semi_major_au": 0.118,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "55 Cnc c",
+      "host": "55 Cnc",
+      "radius_re": null,
+      "mass_me": 56.6,
+      "orbital_period": 44.3936,
+      "semi_major_au": 0.247,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "55 Cnc d",
+      "host": "55 Cnc",
+      "radius_re": null,
+      "mass_me": 1214.10451474,
+      "orbital_period": 4799.0,
+      "semi_major_au": 5.6,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "55 Cnc e",
+      "host": "55 Cnc",
+      "radius_re": 1.875,
+      "mass_me": 7.99,
+      "orbital_period": 0.7365474,
+      "semi_major_au": 0.01544,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "55 Cnc f",
+      "host": "55 Cnc",
+      "radius_re": null,
+      "mass_me": 48.5,
+      "orbital_period": 260.58,
+      "semi_major_au": 0.802,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "HD 10180 c",
+      "host": "HD 10180",
+      "radius_re": null,
+      "mass_me": 13.221728,
+      "orbital_period": 5.75969,
+      "semi_major_au": 0.06412,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "HD 10180 d",
+      "host": "HD 10180",
+      "radius_re": null,
+      "mass_me": 12.013974,
+      "orbital_period": 16.357,
+      "semi_major_au": 0.12859,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "HD 10180 e",
+      "host": "HD 10180",
+      "radius_re": null,
+      "mass_me": 25.585315,
+      "orbital_period": 49.748,
+      "semi_major_au": 0.2699,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "HD 10180 f",
+      "host": "HD 10180",
+      "radius_re": null,
+      "mass_me": 22.947326,
+      "orbital_period": 122.744,
+      "semi_major_au": 0.4929,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "HD 10180 g",
+      "host": "HD 10180",
+      "radius_re": null,
+      "mass_me": 23.265156,
+      "orbital_period": 604.67,
+      "semi_major_au": 1.427,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "HD 10180 h",
+      "host": "HD 10180",
+      "radius_re": null,
+      "mass_me": 65.663678,
+      "orbital_period": 2205.0,
+      "semi_major_au": 3.381,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "tau Cet f",
+      "host": "tau Cet",
+      "radius_re": null,
+      "mass_me": 3.93,
+      "orbital_period": 636.13,
+      "semi_major_au": 1.334,
+      "eq_temp_k": null,
+      "habitable": true
+    },
+    {
+      "name": "tau Cet g",
+      "host": "tau Cet",
+      "radius_re": null,
+      "mass_me": 1.75,
+      "orbital_period": 20.0,
+      "semi_major_au": 0.133,
+      "eq_temp_k": null,
+      "habitable": true
+    },
+    {
+      "name": "tau Cet h",
+      "host": "tau Cet",
+      "radius_re": null,
+      "mass_me": 1.83,
+      "orbital_period": 49.41,
+      "semi_major_au": 0.243,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "Proxima Cen b",
+      "host": "Proxima Cen",
+      "radius_re": null,
+      "mass_me": 1.055,
+      "orbital_period": 11.18465,
+      "semi_major_au": 0.04848,
+      "eq_temp_k": 218.0,
+      "habitable": true
+    },
+    {
+      "name": "Proxima Cen d",
+      "host": "Proxima Cen",
+      "radius_re": null,
+      "mass_me": 0.26,
+      "orbital_period": 5.12338,
+      "semi_major_au": 0.02881,
+      "eq_temp_k": 282.0,
+      "habitable": false
+    },
+    {
+      "name": "Kepler-22 b",
+      "host": "Kepler-22",
+      "radius_re": 2.1,
+      "mass_me": 9.1,
+      "orbital_period": 289.863876,
+      "semi_major_au": 0.812,
+      "eq_temp_k": 279.0,
+      "habitable": true
+    },
+    {
+      "name": "Kepler-186 f",
+      "host": "Kepler-186",
+      "radius_re": 1.17,
+      "mass_me": null,
+      "orbital_period": 129.9441,
+      "semi_major_au": 0.432,
+      "eq_temp_k": null,
+      "habitable": true
+    },
+    {
+      "name": "Kepler-1649 c",
+      "host": "Kepler-1649",
+      "radius_re": 1.06,
+      "mass_me": null,
+      "orbital_period": 19.53527,
+      "semi_major_au": null,
+      "eq_temp_k": 234.0,
+      "habitable": true
+    },
+    {
+      "name": "Kepler-19 c",
+      "host": "Kepler-19",
+      "radius_re": null,
+      "mass_me": 13.1,
+      "orbital_period": 28.731,
+      "semi_major_au": null,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "Kepler-51 b",
+      "host": "Kepler-51",
+      "radius_re": 7.1,
+      "mass_me": 2.1,
+      "orbital_period": 45.154,
+      "semi_major_au": 0.2514,
+      "eq_temp_k": 543.0,
+      "habitable": false
+    },
+    {
+      "name": "Kepler-51 c",
+      "host": "Kepler-51",
+      "radius_re": 9.0,
+      "mass_me": 4.0,
+      "orbital_period": 85.312,
+      "semi_major_au": 0.384,
+      "eq_temp_k": 439.0,
+      "habitable": false
+    },
+    {
+      "name": "Kepler-51 d",
+      "host": "Kepler-51",
+      "radius_re": 9.7,
+      "mass_me": 7.6,
+      "orbital_period": 130.194,
+      "semi_major_au": 0.509,
+      "eq_temp_k": 381.0,
+      "habitable": false
+    },
+    {
+      "name": "GJ 1214 b",
+      "host": "GJ 1214",
+      "radius_re": 2.733,
+      "mass_me": 8.41,
+      "orbital_period": 1.580404531,
+      "semi_major_au": 0.01505,
+      "eq_temp_k": 567.0,
+      "habitable": false
+    },
+    {
+      "name": "GJ 9827 b",
+      "host": "GJ 9827",
+      "radius_re": 1.44,
+      "mass_me": 4.28,
+      "orbital_period": 1.208974,
+      "semi_major_au": 0.0189,
+      "eq_temp_k": 1035.01,
+      "habitable": false
+    },
+    {
+      "name": "GJ 9827 c",
+      "host": "GJ 9827",
+      "radius_re": 1.13,
+      "mass_me": 1.86,
+      "orbital_period": 3.648103,
+      "semi_major_au": 0.0395,
+      "eq_temp_k": 715.94,
+      "habitable": false
+    },
+    {
+      "name": "GJ 9827 d",
+      "host": "GJ 9827",
+      "radius_re": 1.98,
+      "mass_me": 3.02,
+      "orbital_period": 6.20183,
+      "semi_major_au": 0.053,
+      "eq_temp_k": 675.0,
+      "habitable": false
+    },
+    {
+      "name": "WASP-12 b",
+      "host": "WASP-12",
+      "radius_re": 22.02564708,
+      "mass_me": null,
+      "orbital_period": 1.091418901,
+      "semi_major_au": 0.0234,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "WASP-121 b",
+      "host": "WASP-121",
+      "radius_re": 19.52604438,
+      "mass_me": 371.85923619,
+      "orbital_period": 1.27492504,
+      "semi_major_au": 0.02571,
+      "eq_temp_k": 2409.0,
+      "habitable": false
+    },
+    {
+      "name": "WASP-189 b",
+      "host": "WASP-189",
+      "radius_re": 18.14733975,
+      "mass_me": 632.47852993,
+      "orbital_period": 2.724033,
+      "semi_major_au": 0.05053,
+      "eq_temp_k": 3353.0,
+      "habitable": false
+    },
+    {
+      "name": "WASP-107 b",
+      "host": "WASP-107",
+      "radius_re": null,
+      "mass_me": 30.51152707,
+      "orbital_period": 5.7214876,
+      "semi_major_au": null,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "KELT-9 b",
+      "host": "KELT-9",
+      "radius_re": 21.196219,
+      "mass_me": 915.3504,
+      "orbital_period": 1.4811235,
+      "semi_major_au": 0.03462,
+      "eq_temp_k": 4050.0,
+      "habitable": false
+    },
+    {
+      "name": "TRAPPIST-1 b",
+      "host": "TRAPPIST-1",
+      "radius_re": 1.116,
+      "mass_me": 1.374,
+      "orbital_period": 1.510826,
+      "semi_major_au": 0.01154,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "TRAPPIST-1 c",
+      "host": "TRAPPIST-1",
+      "radius_re": 1.097,
+      "mass_me": 1.308,
+      "orbital_period": 2.421937,
+      "semi_major_au": 0.0158,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "TRAPPIST-1 d",
+      "host": "TRAPPIST-1",
+      "radius_re": 0.788,
+      "mass_me": 0.388,
+      "orbital_period": 4.049219,
+      "semi_major_au": 0.02227,
+      "eq_temp_k": null,
+      "habitable": true
+    },
+    {
+      "name": "TRAPPIST-1 e",
+      "host": "TRAPPIST-1",
+      "radius_re": 0.92,
+      "mass_me": 0.692,
+      "orbital_period": 6.101013,
+      "semi_major_au": 0.02925,
+      "eq_temp_k": null,
+      "habitable": true
+    },
+    {
+      "name": "TRAPPIST-1 f",
+      "host": "TRAPPIST-1",
+      "radius_re": 1.045,
+      "mass_me": 1.039,
+      "orbital_period": 9.20754,
+      "semi_major_au": 0.03849,
+      "eq_temp_k": null,
+      "habitable": true
+    },
+    {
+      "name": "TRAPPIST-1 g",
+      "host": "TRAPPIST-1",
+      "radius_re": 1.129,
+      "mass_me": 1.321,
+      "orbital_period": 12.352446,
+      "semi_major_au": 0.04683,
+      "eq_temp_k": null,
+      "habitable": true
+    },
+    {
+      "name": "TRAPPIST-1 h",
+      "host": "TRAPPIST-1",
+      "radius_re": 0.755,
+      "mass_me": 0.326,
+      "orbital_period": 18.772866,
+      "semi_major_au": 0.06189,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "KOI-351 b",
+      "host": "KOI-351",
+      "radius_re": 1.31,
+      "mass_me": null,
+      "orbital_period": 7.008151,
+      "semi_major_au": 0.074,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "KOI-351 c",
+      "host": "KOI-351",
+      "radius_re": 1.19,
+      "mass_me": null,
+      "orbital_period": 8.719375,
+      "semi_major_au": 0.089,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "Kepler-90 i",
+      "host": "KOI-351",
+      "radius_re": 1.32,
+      "mass_me": null,
+      "orbital_period": 14.44912,
+      "semi_major_au": null,
+      "eq_temp_k": 709.0,
+      "habitable": false
+    },
+    {
+      "name": "KOI-351 d",
+      "host": "KOI-351",
+      "radius_re": 2.87,
+      "mass_me": null,
+      "orbital_period": 59.73667,
+      "semi_major_au": 0.32,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "KOI-351 e",
+      "host": "KOI-351",
+      "radius_re": 2.66,
+      "mass_me": null,
+      "orbital_period": 91.93913,
+      "semi_major_au": 0.42,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "KOI-351 f",
+      "host": "KOI-351",
+      "radius_re": 2.88,
+      "mass_me": null,
+      "orbital_period": 124.9144,
+      "semi_major_au": 0.48,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "KOI-351 g",
+      "host": "KOI-351",
+      "radius_re": null,
+      "mass_me": 15.0,
+      "orbital_period": 210.73514,
+      "semi_major_au": null,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "KOI-351 h",
+      "host": "KOI-351",
+      "radius_re": null,
+      "mass_me": 203.0,
+      "orbital_period": 331.60296,
+      "semi_major_au": null,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "TOI-178 b",
+      "host": "TOI-178",
+      "radius_re": 1.2,
+      "mass_me": 0.96,
+      "orbital_period": 1.9145601,
+      "semi_major_au": null,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "TOI-178 c",
+      "host": "TOI-178",
+      "radius_re": 1.754,
+      "mass_me": 4.64,
+      "orbital_period": 3.238486,
+      "semi_major_au": null,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "TOI-178 d",
+      "host": "TOI-178",
+      "radius_re": 2.695,
+      "mass_me": 5.2,
+      "orbital_period": 6.557569,
+      "semi_major_au": null,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "TOI-178 e",
+      "host": "TOI-178",
+      "radius_re": 2.301,
+      "mass_me": 3.48,
+      "orbital_period": 9.96318,
+      "semi_major_au": null,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "TOI-178 f",
+      "host": "TOI-178",
+      "radius_re": 2.417,
+      "mass_me": 5.63,
+      "orbital_period": 15.23335,
+      "semi_major_au": null,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "TOI-178 g",
+      "host": "TOI-178",
+      "radius_re": 2.939,
+      "mass_me": 4.4,
+      "orbital_period": 20.71663,
+      "semi_major_au": null,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "HD 110067 b",
+      "host": "HD 110067",
+      "radius_re": 2.2,
+      "mass_me": 5.69,
+      "orbital_period": 9.113678,
+      "semi_major_au": 0.0793,
+      "eq_temp_k": 800.0,
+      "habitable": false
+    },
+    {
+      "name": "HD 110067 c",
+      "host": "HD 110067",
+      "radius_re": 2.388,
+      "mass_me": 6.3,
+      "orbital_period": 13.673694,
+      "semi_major_au": 0.1039,
+      "eq_temp_k": 699.0,
+      "habitable": false
+    },
+    {
+      "name": "HD 110067 d",
+      "host": "HD 110067",
+      "radius_re": 2.852,
+      "mass_me": 8.52,
+      "orbital_period": 20.519617,
+      "semi_major_au": 0.1362,
+      "eq_temp_k": 602.0,
+      "habitable": false
+    },
+    {
+      "name": "HD 110067 e",
+      "host": "HD 110067",
+      "radius_re": 1.94,
+      "mass_me": 3.9,
+      "orbital_period": 30.793091,
+      "semi_major_au": 0.1785,
+      "eq_temp_k": 533.0,
+      "habitable": false
+    },
+    {
+      "name": "HD 110067 f",
+      "host": "HD 110067",
+      "radius_re": 2.601,
+      "mass_me": 5.04,
+      "orbital_period": 41.05854,
+      "semi_major_au": 0.2163,
+      "eq_temp_k": 489.0,
+      "habitable": false
+    },
+    {
+      "name": "HD 110067 g",
+      "host": "HD 110067",
+      "radius_re": 2.607,
+      "mass_me": 8.4,
+      "orbital_period": 54.76992,
+      "semi_major_au": 0.2621,
+      "eq_temp_k": 440.0,
+      "habitable": false
+    },
+    {
+      "name": "TOI-700 b",
+      "host": "TOI-700",
+      "radius_re": 0.914,
+      "mass_me": null,
+      "orbital_period": 9.977219,
+      "semi_major_au": 0.0677,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "TOI-700 c",
+      "host": "TOI-700",
+      "radius_re": 2.6,
+      "mass_me": null,
+      "orbital_period": 16.051137,
+      "semi_major_au": 0.0929,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "TOI-700 d",
+      "host": "TOI-700",
+      "radius_re": 1.073,
+      "mass_me": null,
+      "orbital_period": 37.42396,
+      "semi_major_au": 0.1633,
+      "eq_temp_k": null,
+      "habitable": true
+    },
+    {
+      "name": "TOI-700 e",
+      "host": "TOI-700",
+      "radius_re": 0.953,
+      "mass_me": null,
+      "orbital_period": 27.80978,
+      "semi_major_au": 0.134,
+      "eq_temp_k": null,
+      "habitable": true
+    },
+    {
+      "name": "LHS 1140 b",
+      "host": "LHS 1140",
+      "radius_re": 1.73,
+      "mass_me": 5.6,
+      "orbital_period": 24.73723,
+      "semi_major_au": 0.0946,
+      "eq_temp_k": 226.0,
+      "habitable": true
+    },
+    {
+      "name": "LHS 1140 c",
+      "host": "LHS 1140",
+      "radius_re": 1.272,
+      "mass_me": 1.91,
+      "orbital_period": 3.77794,
+      "semi_major_au": 0.027,
+      "eq_temp_k": 422.0,
+      "habitable": false
+    },
+    {
+      "name": "K2-18 b",
+      "host": "K2-18",
+      "radius_re": 2.37,
+      "mass_me": 8.92,
+      "orbital_period": 32.939623,
+      "semi_major_au": 0.1429,
+      "eq_temp_k": 284.0,
+      "habitable": true
+    },
+    {
+      "name": "K2-18 c",
+      "host": "K2-18",
+      "radius_re": null,
+      "mass_me": 7.51,
+      "orbital_period": 8.962,
+      "semi_major_au": 0.06,
+      "eq_temp_k": 363.0,
+      "habitable": false
+    },
+    {
+      "name": "OGLE-2005-BLG-390L b",
+      "host": "OGLE-2005-BLG-390L",
+      "radius_re": null,
+      "mass_me": 5.5,
+      "orbital_period": 3285.0,
+      "semi_major_au": 2.6,
+      "eq_temp_k": 50.0,
+      "habitable": false
+    },
+    {
+      "name": "2MASS J12073346-3932539 b",
+      "host": "2MASS J12073346-3932539",
+      "radius_re": 15.69257298,
+      "mass_me": 1652.7077164,
+      "orbital_period": null,
+      "semi_major_au": null,
+      "eq_temp_k": 1163.0,
+      "habitable": false
+    },
+    {
+      "name": "HR 8799 b",
+      "host": "HR 8799",
+      "radius_re": 13.0,
+      "mass_me": 2000.0,
+      "orbital_period": 170000.0,
+      "semi_major_au": 68.0,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "HR 8799 c",
+      "host": "HR 8799",
+      "radius_re": 13.0,
+      "mass_me": 3000.0,
+      "orbital_period": 69000.0,
+      "semi_major_au": 38.0,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "HR 8799 d",
+      "host": "HR 8799",
+      "radius_re": 13.0,
+      "mass_me": 3000.0,
+      "orbital_period": 37000.0,
+      "semi_major_au": 24.0,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "HR 8799 e",
+      "host": "HR 8799",
+      "radius_re": 13.11453,
+      "mass_me": 3178.3,
+      "orbital_period": null,
+      "semi_major_au": 16.4,
+      "eq_temp_k": 1150.0,
+      "habitable": false
+    },
+    {
+      "name": "Gaia-4 b",
+      "host": "Gaia-4",
+      "radius_re": null,
+      "mass_me": 3750.3752026,
+      "orbital_period": 571.3,
+      "semi_major_au": null,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "HD 128717 b",
+      "host": "HD 128717",
+      "radius_re": null,
+      "mass_me": 6293.0024586,
+      "orbital_period": 3420.0,
+      "semi_major_au": 4.85,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "HD 97048 b",
+      "host": "HD 97048",
+      "radius_re": null,
+      "mass_me": 794.575,
+      "orbital_period": null,
+      "semi_major_au": 130.0,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "V0391 Peg b",
+      "host": "V0391 Peg",
+      "radius_re": null,
+      "mass_me": 1017.056,
+      "orbital_period": 1170.0,
+      "semi_major_au": 1.7,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "KIC 7917485 b",
+      "host": "KIC 7917485",
+      "radius_re": null,
+      "mass_me": 3750.394,
+      "orbital_period": 840.0,
+      "semi_major_au": null,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "Kepler-76 b",
+      "host": "Kepler-76",
+      "radius_re": 15.24424,
+      "mass_me": 638.8383,
+      "orbital_period": 1.5449298,
+      "semi_major_au": 0.0274,
+      "eq_temp_k": 2140.0,
+      "habitable": false
+    },
+    {
+      "name": "KOI-55 b",
+      "host": "KOI-55",
+      "radius_re": 0.759,
+      "mass_me": 0.44,
+      "orbital_period": 0.240104,
+      "semi_major_au": 0.006,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "KOI-55 c",
+      "host": "KOI-55",
+      "radius_re": 0.867,
+      "mass_me": 0.655,
+      "orbital_period": 0.342887,
+      "semi_major_au": 0.0076,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "NN Ser c",
+      "host": "NN Ser",
+      "radius_re": null,
+      "mass_me": 3086.11383197,
+      "orbital_period": 6987.0,
+      "semi_major_au": null,
+      "eq_temp_k": null,
+      "habitable": false
+    },
+    {
+      "name": "NN Ser d",
+      "host": "NN Ser",
+      "radius_re": null,
+      "mass_me": 696.04421133,
+      "orbital_period": 2880.0,
+      "semi_major_au": null,
+      "eq_temp_k": null,
+      "habitable": false
+    }
+  ],
+  "discoveries": [
+    {
+      "planet": "PSR B1257+12 b",
+      "star": "PSR B1257+12",
+      "method": "Pulsar Timing",
+      "mission": "Arecibo",
+      "year": 1994,
+      "facility": "Arecibo Observatory",
+      "telescope": "305 m Arecibo Radio Telescope"
+    },
+    {
+      "planet": "PSR B1257+12 c",
+      "star": "PSR B1257+12",
+      "method": "Pulsar Timing",
+      "mission": "Arecibo",
+      "year": 1992,
+      "facility": "Arecibo Observatory",
+      "telescope": "305 m Arecibo Radio Telescope"
+    },
+    {
+      "planet": "PSR B1257+12 d",
+      "star": "PSR B1257+12",
+      "method": "Pulsar Timing",
+      "mission": "Arecibo",
+      "year": 1992,
+      "facility": "Arecibo Observatory",
+      "telescope": "305 m Arecibo Radio Telescope"
+    },
+    {
+      "planet": "PSR B1620-26 b",
+      "star": "PSR B1620-26",
+      "method": "Pulsar Timing",
+      "mission": "Hubble",
+      "year": 2003,
+      "facility": "Hubble Space Telescope",
+      "telescope": "2.4 m Hubble Space Telescope"
+    },
+    {
+      "planet": "51 Peg b",
+      "star": "51 Peg",
+      "method": "Radial Velocity",
+      "mission": "OHP",
+      "year": 1995,
+      "facility": "Haute-Provence Observatory",
+      "telescope": "1.93 m Telescope"
+    },
+    {
+      "planet": "HD 209458 b",
+      "star": "HD 209458",
+      "method": "Radial Velocity",
+      "mission": "Keck",
+      "year": 1999,
+      "facility": "W. M. Keck Observatory",
+      "telescope": "10 m Keck I Telescope"
+    },
+    {
+      "planet": "HD 189733 b",
+      "star": "HD 189733",
+      "method": "Radial Velocity",
+      "mission": "OHP",
+      "year": 2005,
+      "facility": "Haute-Provence Observatory",
+      "telescope": "1.93 m Telescope"
+    },
+    {
+      "planet": "HD 80606 b",
+      "star": "HD 80606",
+      "method": "Radial Velocity",
+      "mission": "Multiple",
+      "year": 2001,
+      "facility": "Multiple Observatories",
+      "telescope": "Multiple Telescopes"
+    },
+    {
+      "planet": "55 Cnc b",
+      "star": "55 Cnc",
+      "method": "Radial Velocity",
+      "mission": "Lick Observatory",
+      "year": 1996,
+      "facility": "Lick Observatory",
+      "telescope": "3.0 m C. Donald Shane Telescope"
+    },
+    {
+      "planet": "55 Cnc c",
+      "star": "55 Cnc",
+      "method": "Radial Velocity",
+      "mission": "McDonald",
+      "year": 2004,
+      "facility": "McDonald Observatory",
+      "telescope": "9.2 m Hobby-Eberly Telescope"
+    },
+    {
+      "planet": "55 Cnc d",
+      "star": "55 Cnc",
+      "method": "Radial Velocity",
+      "mission": "Lick Observatory",
+      "year": 2002,
+      "facility": "Lick Observatory",
+      "telescope": "3.0 m C. Donald Shane Telescope"
+    },
+    {
+      "planet": "55 Cnc e",
+      "star": "55 Cnc",
+      "method": "Radial Velocity",
+      "mission": "McDonald",
+      "year": 2004,
+      "facility": "McDonald Observatory",
+      "telescope": "9.2 m Hobby-Eberly Telescope"
+    },
+    {
+      "planet": "55 Cnc f",
+      "star": "55 Cnc",
+      "method": "Radial Velocity",
+      "mission": "Multiple",
+      "year": 2007,
+      "facility": "Multiple Observatories",
+      "telescope": "Multiple Telescopes"
+    },
+    {
+      "planet": "HD 10180 c",
+      "star": "HD 10180",
+      "method": "Radial Velocity",
+      "mission": "La Silla",
+      "year": 2010,
+      "facility": "La Silla Observatory",
+      "telescope": "3.6 m ESO Telescope"
+    },
+    {
+      "planet": "HD 10180 d",
+      "star": "HD 10180",
+      "method": "Radial Velocity",
+      "mission": "La Silla",
+      "year": 2010,
+      "facility": "La Silla Observatory",
+      "telescope": "3.6 m ESO Telescope"
+    },
+    {
+      "planet": "HD 10180 e",
+      "star": "HD 10180",
+      "method": "Radial Velocity",
+      "mission": "La Silla",
+      "year": 2010,
+      "facility": "La Silla Observatory",
+      "telescope": "3.6 m ESO Telescope"
+    },
+    {
+      "planet": "HD 10180 f",
+      "star": "HD 10180",
+      "method": "Radial Velocity",
+      "mission": "La Silla",
+      "year": 2010,
+      "facility": "La Silla Observatory",
+      "telescope": "3.6 m ESO Telescope"
+    },
+    {
+      "planet": "HD 10180 g",
+      "star": "HD 10180",
+      "method": "Radial Velocity",
+      "mission": "La Silla",
+      "year": 2010,
+      "facility": "La Silla Observatory",
+      "telescope": "3.6 m ESO Telescope"
+    },
+    {
+      "planet": "HD 10180 h",
+      "star": "HD 10180",
+      "method": "Radial Velocity",
+      "mission": "La Silla",
+      "year": 2010,
+      "facility": "La Silla Observatory",
+      "telescope": "3.6 m ESO Telescope"
+    },
+    {
+      "planet": "tau Cet f",
+      "star": "tau Cet",
+      "method": "Radial Velocity",
+      "mission": "Multiple",
+      "year": 2017,
+      "facility": "Multiple Observatories",
+      "telescope": "Multiple Telescopes"
+    },
+    {
+      "planet": "tau Cet g",
+      "star": "tau Cet",
+      "method": "Radial Velocity",
+      "mission": "Multiple",
+      "year": 2017,
+      "facility": "Multiple Observatories",
+      "telescope": "Multiple Telescopes"
+    },
+    {
+      "planet": "tau Cet h",
+      "star": "tau Cet",
+      "method": "Radial Velocity",
+      "mission": "Multiple",
+      "year": 2017,
+      "facility": "Multiple Observatories",
+      "telescope": "Multiple Telescopes"
+    },
+    {
+      "planet": "Proxima Cen b",
+      "star": "Proxima Cen",
+      "method": "Radial Velocity",
+      "mission": "European Southern Observatory",
+      "year": 2016,
+      "facility": "European Southern Observatory",
+      "telescope": "Multiple Telescopes"
+    },
+    {
+      "planet": "Proxima Cen d",
+      "star": "Proxima Cen",
+      "method": "Radial Velocity",
+      "mission": "La Silla",
+      "year": 2025,
+      "facility": "La Silla Observatory",
+      "telescope": "3.6 m ESO Telescope"
+    },
+    {
+      "planet": "Kepler-22 b",
+      "star": "Kepler-22",
+      "method": "Transit",
+      "mission": "Kepler",
+      "year": 2011,
+      "facility": "Kepler",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "Kepler-186 f",
+      "star": "Kepler-186",
+      "method": "Transit",
+      "mission": "Kepler",
+      "year": 2014,
+      "facility": "Kepler",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "Kepler-1649 c",
+      "star": "Kepler-1649",
+      "method": "Transit",
+      "mission": "Kepler",
+      "year": 2020,
+      "facility": "Kepler",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "Kepler-19 c",
+      "star": "Kepler-19",
+      "method": "Transit Timing Variations",
+      "mission": "Kepler",
+      "year": 2011,
+      "facility": "Kepler",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "Kepler-51 b",
+      "star": "Kepler-51",
+      "method": "Transit",
+      "mission": "Kepler",
+      "year": 2012,
+      "facility": "Kepler",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "Kepler-51 c",
+      "star": "Kepler-51",
+      "method": "Transit",
+      "mission": "Kepler",
+      "year": 2012,
+      "facility": "Kepler",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "Kepler-51 d",
+      "star": "Kepler-51",
+      "method": "Transit",
+      "mission": "Kepler",
+      "year": 2014,
+      "facility": "Kepler",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "GJ 1214 b",
+      "star": "GJ 1214",
+      "method": "Transit",
+      "mission": "MEarth Project",
+      "year": 2009,
+      "facility": "MEarth Project",
+      "telescope": "0.4 m MEarth Telescope"
+    },
+    {
+      "planet": "GJ 9827 b",
+      "star": "GJ 9827",
+      "method": "Transit",
+      "mission": "K2",
+      "year": 2017,
+      "facility": "K2",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "GJ 9827 c",
+      "star": "GJ 9827",
+      "method": "Transit",
+      "mission": "K2",
+      "year": 2017,
+      "facility": "K2",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "GJ 9827 d",
+      "star": "GJ 9827",
+      "method": "Transit",
+      "mission": "K2",
+      "year": 2017,
+      "facility": "K2",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "WASP-12 b",
+      "star": "WASP-12",
+      "method": "Transit",
+      "mission": "WASP",
+      "year": 2008,
+      "facility": "SuperWASP",
+      "telescope": "Canon 200mm f/1.8L"
+    },
+    {
+      "planet": "WASP-121 b",
+      "star": "WASP-121",
+      "method": "Transit",
+      "mission": "WASP",
+      "year": 2016,
+      "facility": "SuperWASP",
+      "telescope": "Canon 200mm f/1.8L"
+    },
+    {
+      "planet": "WASP-189 b",
+      "star": "WASP-189",
+      "method": "Transit",
+      "mission": "CHEOPS",
+      "year": 2020,
+      "facility": "CHaracterising ExOPlanets Satellite (CHEOPS)",
+      "telescope": "0.3 m Ritchey-Chretien Telescope"
+    },
+    {
+      "planet": "WASP-107 b",
+      "star": "WASP-107",
+      "method": "Transit",
+      "mission": "WASP",
+      "year": 2017,
+      "facility": "SuperWASP-South",
+      "telescope": "Canon 200mm f/1.8L"
+    },
+    {
+      "planet": "KELT-9 b",
+      "star": "KELT-9",
+      "method": "Transit",
+      "mission": "KELT",
+      "year": 2017,
+      "facility": "KELT-North",
+      "telescope": "Mamiya 645 80mm f/1.9"
+    },
+    {
+      "planet": "TRAPPIST-1 b",
+      "star": "TRAPPIST-1",
+      "method": "Transit",
+      "mission": "La Silla",
+      "year": 2016,
+      "facility": "La Silla Observatory",
+      "telescope": "0.60 m Transiting Planets and Planetesimals Small Telescope"
+    },
+    {
+      "planet": "TRAPPIST-1 c",
+      "star": "TRAPPIST-1",
+      "method": "Transit",
+      "mission": "La Silla",
+      "year": 2016,
+      "facility": "La Silla Observatory",
+      "telescope": "0.60 m Transiting Planets and Planetesimals Small Telescope"
+    },
+    {
+      "planet": "TRAPPIST-1 d",
+      "star": "TRAPPIST-1",
+      "method": "Transit",
+      "mission": "La Silla",
+      "year": 2016,
+      "facility": "La Silla Observatory",
+      "telescope": "0.60 m Transiting Planets and Planetesimals Small Telescope"
+    },
+    {
+      "planet": "TRAPPIST-1 e",
+      "star": "TRAPPIST-1",
+      "method": "Transit",
+      "mission": "Multiple",
+      "year": 2017,
+      "facility": "Multiple Observatories",
+      "telescope": "Multiple Telescopes"
+    },
+    {
+      "planet": "TRAPPIST-1 f",
+      "star": "TRAPPIST-1",
+      "method": "Transit",
+      "mission": "Multiple",
+      "year": 2017,
+      "facility": "Multiple Observatories",
+      "telescope": "Multiple Telescopes"
+    },
+    {
+      "planet": "TRAPPIST-1 g",
+      "star": "TRAPPIST-1",
+      "method": "Transit",
+      "mission": "Multiple",
+      "year": 2017,
+      "facility": "Multiple Observatories",
+      "telescope": "Multiple Telescopes"
+    },
+    {
+      "planet": "TRAPPIST-1 h",
+      "star": "TRAPPIST-1",
+      "method": "Transit",
+      "mission": "Multiple",
+      "year": 2017,
+      "facility": "Multiple Observatories",
+      "telescope": "Multiple Telescopes"
+    },
+    {
+      "planet": "KOI-351 b",
+      "star": "KOI-351",
+      "method": "Transit",
+      "mission": "Kepler",
+      "year": 2013,
+      "facility": "Kepler",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "KOI-351 c",
+      "star": "KOI-351",
+      "method": "Transit",
+      "mission": "Kepler",
+      "year": 2013,
+      "facility": "Kepler",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "Kepler-90 i",
+      "star": "KOI-351",
+      "method": "Transit",
+      "mission": "Kepler",
+      "year": 2017,
+      "facility": "Kepler",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "KOI-351 d",
+      "star": "KOI-351",
+      "method": "Transit",
+      "mission": "Kepler",
+      "year": 2013,
+      "facility": "Kepler",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "KOI-351 e",
+      "star": "KOI-351",
+      "method": "Transit",
+      "mission": "Kepler",
+      "year": 2013,
+      "facility": "Kepler",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "KOI-351 f",
+      "star": "KOI-351",
+      "method": "Transit",
+      "mission": "Kepler",
+      "year": 2013,
+      "facility": "Kepler",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "KOI-351 g",
+      "star": "KOI-351",
+      "method": "Transit",
+      "mission": "Kepler",
+      "year": 2013,
+      "facility": "Kepler",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "KOI-351 h",
+      "star": "KOI-351",
+      "method": "Transit",
+      "mission": "Kepler",
+      "year": 2013,
+      "facility": "Kepler",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "TOI-178 b",
+      "star": "TOI-178",
+      "method": "Transit",
+      "mission": "TESS",
+      "year": 2021,
+      "facility": "Transiting Exoplanet Survey Satellite (TESS)",
+      "telescope": "0.1 m TESS Telescope"
+    },
+    {
+      "planet": "TOI-178 c",
+      "star": "TOI-178",
+      "method": "Transit",
+      "mission": "TESS",
+      "year": 2021,
+      "facility": "Transiting Exoplanet Survey Satellite (TESS)",
+      "telescope": "0.1 m TESS Telescope"
+    },
+    {
+      "planet": "TOI-178 d",
+      "star": "TOI-178",
+      "method": "Transit",
+      "mission": "TESS",
+      "year": 2021,
+      "facility": "Transiting Exoplanet Survey Satellite (TESS)",
+      "telescope": "0.1 m TESS Telescope"
+    },
+    {
+      "planet": "TOI-178 e",
+      "star": "TOI-178",
+      "method": "Transit",
+      "mission": "TESS",
+      "year": 2021,
+      "facility": "Transiting Exoplanet Survey Satellite (TESS)",
+      "telescope": "0.1 m TESS Telescope"
+    },
+    {
+      "planet": "TOI-178 f",
+      "star": "TOI-178",
+      "method": "Transit",
+      "mission": "Multiple",
+      "year": 2021,
+      "facility": "Multiple Observatories",
+      "telescope": "Multiple Telescopes"
+    },
+    {
+      "planet": "TOI-178 g",
+      "star": "TOI-178",
+      "method": "Transit",
+      "mission": "TESS",
+      "year": 2021,
+      "facility": "Transiting Exoplanet Survey Satellite (TESS)",
+      "telescope": "0.1 m TESS Telescope"
+    },
+    {
+      "planet": "HD 110067 b",
+      "star": "HD 110067",
+      "method": "Transit",
+      "mission": "Multiple",
+      "year": 2023,
+      "facility": "Multiple Observatories",
+      "telescope": "Multiple Telescopes"
+    },
+    {
+      "planet": "HD 110067 c",
+      "star": "HD 110067",
+      "method": "Transit",
+      "mission": "Multiple",
+      "year": 2023,
+      "facility": "Multiple Observatories",
+      "telescope": "Multiple Telescopes"
+    },
+    {
+      "planet": "HD 110067 d",
+      "star": "HD 110067",
+      "method": "Transit",
+      "mission": "Multiple",
+      "year": 2023,
+      "facility": "Multiple Observatories",
+      "telescope": "Multiple Telescopes"
+    },
+    {
+      "planet": "HD 110067 e",
+      "star": "HD 110067",
+      "method": "Transit",
+      "mission": "Multiple",
+      "year": 2023,
+      "facility": "Multiple Observatories",
+      "telescope": "Multiple Telescopes"
+    },
+    {
+      "planet": "HD 110067 f",
+      "star": "HD 110067",
+      "method": "Transit",
+      "mission": "Multiple",
+      "year": 2023,
+      "facility": "Multiple Observatories",
+      "telescope": "Multiple Telescopes"
+    },
+    {
+      "planet": "HD 110067 g",
+      "star": "HD 110067",
+      "method": "Transit",
+      "mission": "Multiple",
+      "year": 2023,
+      "facility": "Multiple Observatories",
+      "telescope": "Multiple Telescopes"
+    },
+    {
+      "planet": "TOI-700 b",
+      "star": "TOI-700",
+      "method": "Transit",
+      "mission": "TESS",
+      "year": 2020,
+      "facility": "Transiting Exoplanet Survey Satellite (TESS)",
+      "telescope": "0.1 m TESS Telescope"
+    },
+    {
+      "planet": "TOI-700 c",
+      "star": "TOI-700",
+      "method": "Transit",
+      "mission": "TESS",
+      "year": 2020,
+      "facility": "Transiting Exoplanet Survey Satellite (TESS)",
+      "telescope": "0.1 m TESS Telescope"
+    },
+    {
+      "planet": "TOI-700 d",
+      "star": "TOI-700",
+      "method": "Transit",
+      "mission": "TESS",
+      "year": 2020,
+      "facility": "Transiting Exoplanet Survey Satellite (TESS)",
+      "telescope": "0.1 m TESS Telescope"
+    },
+    {
+      "planet": "TOI-700 e",
+      "star": "TOI-700",
+      "method": "Transit",
+      "mission": "TESS",
+      "year": 2023,
+      "facility": "Transiting Exoplanet Survey Satellite (TESS)",
+      "telescope": "0.1 m TESS Telescope"
+    },
+    {
+      "planet": "LHS 1140 b",
+      "star": "LHS 1140",
+      "method": "Transit",
+      "mission": "MEarth Project",
+      "year": 2017,
+      "facility": "MEarth Project",
+      "telescope": "0.4 m MEarth Telescope"
+    },
+    {
+      "planet": "LHS 1140 c",
+      "star": "LHS 1140",
+      "method": "Transit",
+      "mission": "Multiple",
+      "year": 2018,
+      "facility": "Multiple Observatories",
+      "telescope": "Multiple Telescopes"
+    },
+    {
+      "planet": "K2-18 b",
+      "star": "K2-18",
+      "method": "Transit",
+      "mission": "K2",
+      "year": 2015,
+      "facility": "K2",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "K2-18 c",
+      "star": "K2-18",
+      "method": "Radial Velocity",
+      "mission": "La Silla",
+      "year": 2017,
+      "facility": "La Silla Observatory",
+      "telescope": "3.6 m ESO Telescope"
+    },
+    {
+      "planet": "OGLE-2005-BLG-390L b",
+      "star": "OGLE-2005-BLG-390L",
+      "method": "Microlensing",
+      "mission": "OGLE",
+      "year": 2005,
+      "facility": "OGLE",
+      "telescope": "1.3 m Warsaw University Telescope"
+    },
+    {
+      "planet": "2MASS J12073346-3932539 b",
+      "star": "2MASS J12073346-3932539",
+      "method": "Imaging",
+      "mission": "VLT",
+      "year": 2004,
+      "facility": "Paranal Observatory",
+      "telescope": "8.2 m ESO VLT UT4 Yepun Telescope"
+    },
+    {
+      "planet": "HR 8799 b",
+      "star": "HR 8799",
+      "method": "Imaging",
+      "mission": "Gemini",
+      "year": 2008,
+      "facility": "Gemini Observatory",
+      "telescope": "8.19 m Gemini North Telescope"
+    },
+    {
+      "planet": "HR 8799 c",
+      "star": "HR 8799",
+      "method": "Imaging",
+      "mission": "Gemini",
+      "year": 2008,
+      "facility": "Gemini Observatory",
+      "telescope": "8.19 m Gemini North Telescope"
+    },
+    {
+      "planet": "HR 8799 d",
+      "star": "HR 8799",
+      "method": "Imaging",
+      "mission": "Keck",
+      "year": 2008,
+      "facility": "W. M. Keck Observatory",
+      "telescope": "10 m Keck II Telescope"
+    },
+    {
+      "planet": "HR 8799 e",
+      "star": "HR 8799",
+      "method": "Imaging",
+      "mission": "Keck",
+      "year": 2010,
+      "facility": "W. M. Keck Observatory",
+      "telescope": "10 m Keck II Telescope"
+    },
+    {
+      "planet": "Gaia-4 b",
+      "star": "Gaia-4",
+      "method": "Astrometry",
+      "mission": "Gaia",
+      "year": 2025,
+      "facility": "European Space Agency (ESA) Gaia Satellite",
+      "telescope": "1.45 m x 0.5 m Telescope"
+    },
+    {
+      "planet": "HD 128717 b",
+      "star": "HD 128717",
+      "method": "Astrometry",
+      "mission": "Gaia",
+      "year": 2025,
+      "facility": "European Space Agency (ESA) Gaia Satellite",
+      "telescope": "1.45 m x 0.5 m Telescope"
+    },
+    {
+      "planet": "HD 97048 b",
+      "star": "HD 97048",
+      "method": "Disk Kinematics",
+      "mission": "ALMA",
+      "year": 2019,
+      "facility": "Atacama Large Millimeter Array (ALMA)",
+      "telescope": "Atacama Large Millimeter Array (ALMA)"
+    },
+    {
+      "planet": "V0391 Peg b",
+      "star": "V0391 Peg",
+      "method": "Pulsation Timing Variations",
+      "mission": "Multiple",
+      "year": 2007,
+      "facility": "Multiple Observatories",
+      "telescope": "Multiple Telescopes"
+    },
+    {
+      "planet": "KIC 7917485 b",
+      "star": "KIC 7917485",
+      "method": "Pulsation Timing Variations",
+      "mission": "Kepler",
+      "year": 2016,
+      "facility": "Kepler",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "Kepler-76 b",
+      "star": "Kepler-76",
+      "method": "Orbital Brightness Modulation",
+      "mission": "Kepler",
+      "year": 2013,
+      "facility": "Kepler",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "KOI-55 b",
+      "star": "KOI-55",
+      "method": "Orbital Brightness Modulation",
+      "mission": "Kepler",
+      "year": 2011,
+      "facility": "Kepler",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "KOI-55 c",
+      "star": "KOI-55",
+      "method": "Orbital Brightness Modulation",
+      "mission": "Kepler",
+      "year": 2011,
+      "facility": "Kepler",
+      "telescope": "0.95 m Kepler Telescope"
+    },
+    {
+      "planet": "NN Ser c",
+      "star": "NN Ser",
+      "method": "Eclipse Timing Variations",
+      "mission": "Multiple",
+      "year": 2010,
+      "facility": "Multiple Observatories",
+      "telescope": "Multiple Telescopes"
+    },
+    {
+      "planet": "NN Ser d",
+      "star": "NN Ser",
+      "method": "Eclipse Timing Variations",
+      "mission": "Multiple",
+      "year": 2010,
+      "facility": "Multiple Observatories",
+      "telescope": "Multiple Telescopes"
+    }
+  ],
+  "systems": [
+    {
+      "host": "PSR B1257+12",
+      "planets": [
+        "PSR B1257+12 b",
+        "PSR B1257+12 c",
+        "PSR B1257+12 d"
+      ],
+      "n": 3
+    },
+    {
+      "host": "PSR B1620-26",
+      "planets": [
+        "PSR B1620-26 b"
+      ],
+      "n": 1
+    },
+    {
+      "host": "51 Peg",
+      "planets": [
+        "51 Peg b"
+      ],
+      "n": 1
+    },
+    {
+      "host": "HD 209458",
+      "planets": [
+        "HD 209458 b"
+      ],
+      "n": 1
+    },
+    {
+      "host": "HD 189733",
+      "planets": [
+        "HD 189733 b"
+      ],
+      "n": 1
+    },
+    {
+      "host": "HD 80606",
+      "planets": [
+        "HD 80606 b"
+      ],
+      "n": 1
+    },
+    {
+      "host": "55 Cnc",
+      "planets": [
+        "55 Cnc e",
+        "55 Cnc b",
+        "55 Cnc c",
+        "55 Cnc f",
+        "55 Cnc d"
+      ],
+      "n": 5
+    },
+    {
+      "host": "HD 10180",
+      "planets": [
+        "HD 10180 c",
+        "HD 10180 d",
+        "HD 10180 e",
+        "HD 10180 f",
+        "HD 10180 g",
+        "HD 10180 h"
+      ],
+      "n": 6
+    },
+    {
+      "host": "tau Cet",
+      "planets": [
+        "tau Cet g",
+        "tau Cet h",
+        "tau Cet f"
+      ],
+      "n": 3
+    },
+    {
+      "host": "Proxima Cen",
+      "planets": [
+        "Proxima Cen d",
+        "Proxima Cen b"
+      ],
+      "n": 2
+    },
+    {
+      "host": "Kepler-22",
+      "planets": [
+        "Kepler-22 b"
+      ],
+      "n": 1
+    },
+    {
+      "host": "Kepler-186",
+      "planets": [
+        "Kepler-186 f"
+      ],
+      "n": 1
+    },
+    {
+      "host": "Kepler-1649",
+      "planets": [
+        "Kepler-1649 c"
+      ],
+      "n": 1
+    },
+    {
+      "host": "Kepler-19",
+      "planets": [
+        "Kepler-19 c"
+      ],
+      "n": 1
+    },
+    {
+      "host": "Kepler-51",
+      "planets": [
+        "Kepler-51 b",
+        "Kepler-51 c",
+        "Kepler-51 d"
+      ],
+      "n": 3
+    },
+    {
+      "host": "GJ 1214",
+      "planets": [
+        "GJ 1214 b"
+      ],
+      "n": 1
+    },
+    {
+      "host": "GJ 9827",
+      "planets": [
+        "GJ 9827 b",
+        "GJ 9827 c",
+        "GJ 9827 d"
+      ],
+      "n": 3
+    },
+    {
+      "host": "WASP-12",
+      "planets": [
+        "WASP-12 b"
+      ],
+      "n": 1
+    },
+    {
+      "host": "WASP-121",
+      "planets": [
+        "WASP-121 b"
+      ],
+      "n": 1
+    },
+    {
+      "host": "WASP-189",
+      "planets": [
+        "WASP-189 b"
+      ],
+      "n": 1
+    },
+    {
+      "host": "WASP-107",
+      "planets": [
+        "WASP-107 b"
+      ],
+      "n": 1
+    },
+    {
+      "host": "KELT-9",
+      "planets": [
+        "KELT-9 b"
+      ],
+      "n": 1
+    },
+    {
+      "host": "TRAPPIST-1",
+      "planets": [
+        "TRAPPIST-1 b",
+        "TRAPPIST-1 c",
+        "TRAPPIST-1 d",
+        "TRAPPIST-1 e",
+        "TRAPPIST-1 f",
+        "TRAPPIST-1 g",
+        "TRAPPIST-1 h"
+      ],
+      "n": 7
+    },
+    {
+      "host": "KOI-351",
+      "planets": [
+        "KOI-351 b",
+        "KOI-351 c",
+        "Kepler-90 i",
+        "KOI-351 d",
+        "KOI-351 e",
+        "KOI-351 f",
+        "KOI-351 g",
+        "KOI-351 h"
+      ],
+      "n": 8
+    },
+    {
+      "host": "TOI-178",
+      "planets": [
+        "TOI-178 b",
+        "TOI-178 c",
+        "TOI-178 d",
+        "TOI-178 e",
+        "TOI-178 f",
+        "TOI-178 g"
+      ],
+      "n": 6
+    },
+    {
+      "host": "HD 110067",
+      "planets": [
+        "HD 110067 b",
+        "HD 110067 c",
+        "HD 110067 d",
+        "HD 110067 e",
+        "HD 110067 f",
+        "HD 110067 g"
+      ],
+      "n": 6
+    },
+    {
+      "host": "TOI-700",
+      "planets": [
+        "TOI-700 b",
+        "TOI-700 c",
+        "TOI-700 e",
+        "TOI-700 d"
+      ],
+      "n": 4
+    },
+    {
+      "host": "LHS 1140",
+      "planets": [
+        "LHS 1140 c",
+        "LHS 1140 b"
+      ],
+      "n": 2
+    },
+    {
+      "host": "K2-18",
+      "planets": [
+        "K2-18 c",
+        "K2-18 b"
+      ],
+      "n": 2
+    },
+    {
+      "host": "OGLE-2005-BLG-390L",
+      "planets": [
+        "OGLE-2005-BLG-390L b"
+      ],
+      "n": 1
+    },
+    {
+      "host": "2MASS J12073346-3932539",
+      "planets": [
+        "2MASS J12073346-3932539 b"
+      ],
+      "n": 1
+    },
+    {
+      "host": "HR 8799",
+      "planets": [
+        "HR 8799 d",
+        "HR 8799 c",
+        "HR 8799 b",
+        "HR 8799 e"
+      ],
+      "n": 4
+    },
+    {
+      "host": "Gaia-4",
+      "planets": [
+        "Gaia-4 b"
+      ],
+      "n": 1
+    },
+    {
+      "host": "HD 128717",
+      "planets": [
+        "HD 128717 b"
+      ],
+      "n": 1
+    },
+    {
+      "host": "HD 97048",
+      "planets": [
+        "HD 97048 b"
+      ],
+      "n": 1
+    },
+    {
+      "host": "V0391 Peg",
+      "planets": [
+        "V0391 Peg b"
+      ],
+      "n": 1
+    },
+    {
+      "host": "KIC 7917485",
+      "planets": [
+        "KIC 7917485 b"
+      ],
+      "n": 1
+    },
+    {
+      "host": "Kepler-76",
+      "planets": [
+        "Kepler-76 b"
+      ],
+      "n": 1
+    },
+    {
+      "host": "KOI-55",
+      "planets": [
+        "KOI-55 b",
+        "KOI-55 c"
+      ],
+      "n": 2
+    },
+    {
+      "host": "NN Ser",
+      "planets": [
+        "NN Ser d",
+        "NN Ser c"
+      ],
+      "n": 2
+    }
+  ],
+  "hz_groups": [
+    {
+      "host": "tau Cet",
+      "planets": [
+        "tau Cet g",
+        "tau Cet f"
+      ]
+    },
+    {
+      "host": "Proxima Cen",
+      "planets": [
+        "Proxima Cen b"
+      ]
+    },
+    {
+      "host": "Kepler-22",
+      "planets": [
+        "Kepler-22 b"
+      ]
+    },
+    {
+      "host": "Kepler-186",
+      "planets": [
+        "Kepler-186 f"
+      ]
+    },
+    {
+      "host": "Kepler-1649",
+      "planets": [
+        "Kepler-1649 c"
+      ]
+    },
+    {
+      "host": "TRAPPIST-1",
+      "planets": [
+        "TRAPPIST-1 d",
+        "TRAPPIST-1 e",
+        "TRAPPIST-1 f",
+        "TRAPPIST-1 g"
+      ]
+    },
+    {
+      "host": "TOI-700",
+      "planets": [
+        "TOI-700 e",
+        "TOI-700 d"
+      ]
+    },
+    {
+      "host": "LHS 1140",
+      "planets": [
+        "LHS 1140 b"
+      ]
+    },
+    {
+      "host": "K2-18",
+      "planets": [
+        "K2-18 b"
+      ]
+    }
+  ]
+}

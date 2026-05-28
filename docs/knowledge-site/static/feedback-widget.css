@@ -1,0 +1,131 @@
+/* nDB feedback widget — small floating button bottom-right that opens a
+   modal. Styled to match the dark explorer palette. Namespaced under
+   .ndb-fb so it can't bleed into the proxied alphafold_ndb demo HTML. */
+
+.ndb-fb-fab {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 9000;
+  background: #4a90e2;
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 999px;
+  padding: 9px 14px 9px 12px;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.4);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.ndb-fb-fab:hover { background: #5aa0f2; }
+
+.ndb-fb-fab svg {
+  width: 14px; height: 14px;
+  fill: currentColor;
+}
+
+.ndb-fb-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(10,10,16,0.55);
+  z-index: 9100;
+  display: none;
+  align-items: center; justify-content: center;
+}
+.ndb-fb-backdrop.open { display: flex; }
+
+.ndb-fb-modal {
+  width: min(420px, calc(100vw - 32px));
+  background: #1c1c24;
+  color: #e8e8ec;
+  border: 1px solid #2b2b36;
+  border-radius: 8px;
+  padding: 18px 20px 16px;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+}
+.ndb-fb-modal h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  color: #fff;
+  font-weight: 600;
+}
+.ndb-fb-modal .ndb-fb-sub {
+  font-size: 12px;
+  color: #888;
+  margin: 0 0 14px;
+  line-height: 1.5;
+}
+.ndb-fb-modal label {
+  display: block;
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 8px 0 4px;
+}
+.ndb-fb-modal input,
+.ndb-fb-modal textarea {
+  width: 100%;
+  background: #14141a;
+  border: 1px solid #303040;
+  border-radius: 4px;
+  color: #fff;
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+.ndb-fb-modal input:focus,
+.ndb-fb-modal textarea:focus {
+  outline: none;
+  border-color: #4a90e2;
+}
+.ndb-fb-modal textarea {
+  min-height: 100px;
+  resize: vertical;
+}
+.ndb-fb-modal .ndb-fb-row {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 14px;
+  align-items: center;
+}
+.ndb-fb-modal .ndb-fb-status {
+  flex: 1;
+  font-size: 12px;
+  color: #888;
+  text-align: left;
+}
+.ndb-fb-modal .ndb-fb-status.err  { color: #ff7070; }
+.ndb-fb-modal .ndb-fb-status.ok   { color: #7ed321; }
+
+.ndb-fb-btn {
+  background: #4a90e2;
+  color: #fff;
+  border: none;
+  padding: 7px 14px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  font-weight: 500;
+}
+.ndb-fb-btn:hover { background: #5aa0f2; }
+.ndb-fb-btn:disabled { background: #2d4a6a; cursor: not-allowed; }
+.ndb-fb-btn.ghost {
+  background: #2d2d3a; color: #cfcfd6;
+}
+.ndb-fb-btn.ghost:hover { background: #38384a; }
+
+.ndb-fb-foot {
+  margin-top: 12px;
+  font-size: 11px;
+  color: #666;
+  text-align: center;
+  line-height: 1.5;
+}
+.ndb-fb-foot a { color: #888; }

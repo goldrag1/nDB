@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>alphafold_ndb · Demo · nDB</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">nDB <span class="sub">N-dimensional database</span></div>
+  <nav>
+    <a href="/">Home</a>
+    <a href="/whitepaper.html">Whitepaper</a>
+    <a href="/discussion.html">Discussion</a>
+    <a href="/demos.html" class="active">Demos</a>
+    <a href="/repo.html">Repo</a>
+  </nav>
+  <div class="right">v2.3.0 · 488 tests</div>
+</header>
+
+<main class="page">
+
+  <h1>alphafold_ndb</h1>
+  <p class="lede">
+    A hyperedge-native protein-structure database, browsed in 3D. 20 cancer
+    / autophagy / mTOR-signalling proteins seeded with real AlphaFold pLDDT
+    values. 5 showcase proteins with per-residue + per-atom entities and
+    structural-motif hyperedges. Bidirectional click sync between the 3D
+    structure and the hypergraph.
+  </p>
+
+  <div class="btn-row">
+    <a href="/alphafold_ndb/" class="btn">Launch live demo →</a>
+    <a href="https://github.com/goldrag1/nDB/tree/main/docs/alphafold_nDB" class="btn secondary" target="_blank" rel="noreferrer">Source narrative on GitHub</a>
+  </div>
+
+  <p style="font-size: 13px; color: var(--text-muted);">
+    ⚠ Research prototype. Data is curated for demonstration; the engine is real and tested.
+  </p>
+
+  <img class="screenshot" src="/static/images/explorer-v2-2-a-b.png" alt="Explorer overview — AlphaFold pLDDT overlay + AF fetch">
+  <p class="caption">Explorer overview — proteins sized by AlphaFold pLDDT confidence, AF fetch in the sidebar.</p>
+
+  <h2>What this is</h2>
+
+  <p>A single-page web app that lets you walk through structural biology the way the database actually stores it:</p>
+
+  <ul>
+    <li><strong>20 cancer / autophagy / mTOR signalling proteins</strong> seeded with real pLDDT confidence values fetched from <a href="https://alphafold.ebi.ac.uk" target="_blank" rel="noreferrer">AlphaFold-DB</a>.</li>
+    <li><strong>5 "showcase" small proteins</strong> (trypsin, TFIIIA, insulin, myoglobin, GFP) with <strong>per-residue entities</strong> and <strong>structural-motif hyperedges</strong> — catalytic triads, zinc fingers, disulfide bonds, α-helices, β-sheet pairs.</li>
+    <li><strong>Live AlphaFold-DB fetch</strong> in the sidebar — paste any UniProt accession (e.g. <code>P38398</code> for BRCA1) and the entity lands in the graph with its real pLDDT.</li>
+    <li><strong>AlphaFold 3D viewer</strong> on the right (NGL Viewer + the canonical AF-DB palette) with <strong>bidirectional click sync</strong> to the hypergraph.</li>
+  </ul>
+
+  <p>
+    Click a catalytic-triad hyperedge in the graph → the three residues
+    glow in the 3D structure. Click a residue in the 3D canvas → that
+    residue's nDB entity is selected back in the hypergraph and signal-
+    flow particles light up through every motif it participates in.
+  </p>
+
+  <h2>The 30-second tour</h2>
+
+  <ol>
+    <li><strong>Drag</strong> to rotate the 3D hypergraph. The 20 proteins are colored by their AlphaFold pLDDT bucket — dark blue = very high confidence (KRAS, PIK3CA, LC3 — small structured domains), orange = very low (BRCA1's disordered N-terminus drags the whole-chain score to 41).</li>
+    <li><strong>Click any protein</strong>. The sidebar shows its UniProt accession, gene, organism, sequence length, pLDDT mean, and which complexes and pathways it participates in.</li>
+    <li><strong>Hit "Load AlphaFold 3D structure"</strong>. The right pane splits — the CIF loads from <code>alphafold.ebi.ac.uk</code> directly (no proxy, no account), coloured by per-residue pLDDT in the same palette.</li>
+    <li><strong>Toggle "Show residues + structural motifs"</strong> in the sidebar. The graph grows by ~78 residue entities + 8 motif hyperedges. Click the trypsin <code>catalytic_triad</code> node — the three residues Ser195, His57, Asp102 glow as ball+stick in the 3D structure simultaneously.</li>
+    <li><strong>Open the "What does nDB store for this protein?" pane</strong> at the bottom-right of the 3D view. It shows the actual entity + hyperedge records nDB is holding for this protein, with real wire-format JSON.</li>
+  </ol>
+
+  <img class="screenshot" src="/static/images/explorer-v2-2-d-trypsin-triad.png" alt="Trypsin catalytic triad — hyperedge click → 3D ball+stick">
+  <p class="caption">Click the catalytic_triad hyperedge in the graph → Ser195 / His57 / Asp102 glow as ball+stick.</p>
+
+  <h2>Why "N-dimensional database"</h2>
+
+  <p>Most graph databases connect two things at a time (a binary edge with a type). Structural biology rarely fits that shape:</p>
+
+  <table>
+    <thead><tr><th>Phenomenon</th><th>True arity</th><th>What a binary-edge DB has to invent</th></tr></thead>
+    <tbody>
+      <tr><td>Catalytic triad</td><td><strong>3</strong></td><td>Reify a "triad" dummy node + 3 edges</td></tr>
+      <tr><td>C2H2 zinc finger</td><td><strong>4</strong></td><td>Reify a "finger" node + 4 edges</td></tr>
+      <tr><td>Disulfide bond</td><td>2</td><td>(fine in both models)</td></tr>
+      <tr><td>α-helix (15 residues)</td><td><strong>15</strong></td><td>Reify a "helix" node + 15 edges</td></tr>
+      <tr><td>β-sheet pair</td><td><strong>20</strong></td><td>Reify a "sheet" node + 20 edges</td></tr>
+      <tr><td>Protein complex of N</td><td><strong>N</strong></td><td>Reify a "complex" node + N edges</td></tr>
+      <tr><td>Protein → atoms (v2.3)</td><td><strong>1518</strong> (KRAS)</td><td>Reify a "protein" node + 1517 atom-of edges</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    In nDB you don't reify. The relationship <strong>is</strong> the record. A <code>catalytic_triad</code> hyperedge has type <code>catalytic_triad</code>, arity 3, and role-fillers <code>[Ser195, His57, Asp102]</code> — that's the whole story. The 3D explorer surfaces this directly: every hyperedge centroid in the viz IS the database row, no decoder ring required.
+  </p>
+
+  <h2>What v2.3 brought</h2>
+
+  <table>
+    <thead><tr><th>Concern</th><th>Before (v2.2)</th><th>After (v2.3)</th></tr></thead>
+    <tbody>
+      <tr><td>Hyperedge arity encoding</td><td>u8 (max 255)</td><td>u32 (max 4.3B)</td></tr>
+      <tr><td>Atomic coordinates</td><td>CIF blob on protein entity</td><td>N atom entities + 1 N-ary contains hyperedge</td></tr>
+      <tr><td>1-to-N containment</td><td>N binary <code>atom_of</code> edges</td><td>1 arity-(N+1) <code>protein_atoms</code> edge</td></tr>
+      <tr><td>DB persistence</td><td>Wiped on every program start</td><td>Survives restarts; seeds only when empty</td></tr>
+      <tr><td>Rendering source</td><td>NGL reads CIF blob from nDB</td><td>NGL reads PDB reconstructed in memory from atom entities</td></tr>
+    </tbody>
+  </table>
+
+  <img class="screenshot" src="/static/images/explorer-v2-2-atoms-in-ndb.png" alt="Atoms ARE first-class nDB data">
+  <p class="caption">Atoms are first-class nDB entities. The protein → atoms relationship is one arity-1518 hyperedge.</p>
+
+  <h2>Data provenance</h2>
+
+  <p>Every number in this demo can be traced back to a primary source.</p>
+
+  <table>
+    <thead><tr><th>Item</th><th>Source</th></tr></thead>
+    <tbody>
+      <tr><td>Mean pLDDT values for the 20 seeded proteins</td><td><code>alphafold.ebi.ac.uk/api/prediction/&lt;acc&gt;</code> field <code>globalMetricValue</code> (model_v6)</td></tr>
+      <tr><td>Trypsin catalytic triad Ser195-His57-Asp102</td><td>Hedstrom L. 2002. <em>Chem. Rev.</em> 102:4501.</td></tr>
+      <tr><td>TFIIIA finger-1 C2H2 (Cys6-Cys11-His24-His28)</td><td>Brown R.S. 2005. <em>FEBS Lett.</em> 579:1.</td></tr>
+      <tr><td>Insulin disulfide bonds A6-A11, A7-B7, A20-B19</td><td>Steiner D.F. 1967. <em>PNAS</em> 57:473.</td></tr>
+      <tr><td>Myoglobin F-helix (residues 80-95)</td><td>Phillips S.E.V. 1980. <em>J. Mol. Biol.</em> 142:531.</td></tr>
+      <tr><td>GFP β-barrel + chromophore Thr65-Tyr66-Gly67</td><td>Ormö M. et al. 1996. <em>Science</em> 273:1392. PDB 1EMA.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>What this is not</h2>
+
+  <ul>
+    <li><strong>Not a replacement for the PDB or AF-DB.</strong> Treat the local nDB as a working set you stage data into, not as a primary source of record.</li>
+    <li><strong>Not full-proteome.</strong> The curated set is ~20 proteins by design, to keep the demo legible. The live-fetch form lets you grow it arbitrarily; the engine scales to millions of entities.</li>
+    <li><strong>Not multimer-aware.</strong> Complex hyperedges treat proteins as monomeric subunits. AlphaFold-Multimer's ipTM scores aren't loaded — we use a <code>0.8 × mean + 0.2 × min</code> proxy from per-chain pLDDT.</li>
+    <li><strong>Not validated for clinical or production use.</strong> Research prototype, period.</li>
+  </ul>
+
+  <h2>Where the code lives</h2>
+
+  <table>
+    <thead><tr><th>Component</th><th>Path</th></tr></thead>
+    <tbody>
+      <tr><td>Rust seed binary (engine setup + servers)</td><td><code>crates/ndb-renderer/examples/v22_explorer/main.rs</code></td></tr>
+      <tr><td>Curated residue + motif dataset</td><td><code>crates/ndb-renderer/examples/v22_explorer/residues.rs</code></td></tr>
+      <tr><td>Web app (hypergraph + NGL + model pane)</td><td><code>docs/explorer/index.html</code></td></tr>
+      <tr><td>nDB engine (storage, MVCC, query, indexes)</td><td><code>crates/ndb-engine/</code></td></tr>
+    </tbody>
+  </table>
+
+  <p>The web app is intentionally a single HTML file — no npm, no bundler, no build step. CDN imports for <code>3d-force-graph</code> and NGL Viewer.</p>
+
+  <h2>Run it yourself</h2>
+
+<pre><code>git clone https://github.com/goldrag1/nDB
+cd nDB
+cargo run -p ndb-renderer --example v22_explorer
+# then open http://127.0.0.1:9876/</code></pre>
+
+  <p>
+    The engine state lives at <code>&lt;workspace&gt;/.demo-data/alphafold-ndb</code> (project-local, gitignored). Data committed on previous runs stays on disk — including any CIFs cached by "Warm cache", atom entities the SPA wrote back, and any proteins added via the Fetch form.
+  </p>
+
+  <h2>Citation</h2>
+
+  <p>If this demo is useful in your work, please cite the underlying AlphaFold paper for the structures, plus this repository for the hyperedge data model:</p>
+
+  <ul>
+    <li>Jumper J. et al. 2021. <em>Nature</em> 596:583. (AlphaFold)</li>
+    <li>Varadi M. et al. 2024. <em>Nucleic Acids Research</em> 52:D368. (AlphaFold-DB)</li>
+    <li>nDB: <a href="https://github.com/goldrag1/nDB" target="_blank" rel="noreferrer">github.com/goldrag1/nDB</a></li>
+  </ul>
+
+  <div class="btn-row" style="margin-top: 36px;">
+    <a href="/alphafold_ndb/" class="btn">Launch live demo →</a>
+    <a href="/demos.html" class="btn secondary">Other demos</a>
+  </div>
+
+</main>
+
+<footer class="site-foot">
+  <p>nDB is open-source under MIT. <a href="https://github.com/goldrag1/nDB" target="_blank" rel="noreferrer">github.com/goldrag1/nDB</a></p>
+</footer>
+
+</body>
+</html>

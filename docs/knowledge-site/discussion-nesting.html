@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How many ways to declare nested entities · nDB</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">nDB <span class="sub">N-dimensional database</span></div>
+  <nav>
+    <a href="/">Home</a>
+    <a href="/whitepaper.html">Whitepaper</a>
+    <a href="/discussion.html" class="active">Discussion</a>
+    <a href="/demos.html">Demos</a>
+    <a href="/repo.html">Repo</a>
+  </nav>
+  <div class="right">v2.3.0 · 488 tests</div>
+</header>
+
+<main class="page">
+
+  <h1>How many ways are there to declare nested entities?</h1>
+  <p class="lede">
+    nDB has no literal "nested" record type. There is only
+    <span class="pill entity">Entity</span>,
+    <span class="pill relation">HyperEdge</span>, and
+    <span class="pill property">Property</span>. "Nesting" is always
+    modeled. Three fundamental mechanisms combine into six distinct
+    patterns you actually see in practice.
+  </p>
+
+  <h2>The three fundamental mechanisms</h2>
+  <ol>
+    <li><strong>HyperEdge</strong> — a record that names a set of entities together (arity 2 → ∞).</li>
+    <li><strong>Property on the child</strong> — child entity stores an attribute referencing the parent (by id, name, or position).</li>
+    <li><strong>Type + convention</strong> — implicit grouping (all entities of type T with prop X = Y belong together), no stored link.</li>
+  </ol>
+  <p>Everything else is a combination.</p>
+
+  <h2>The six patterns for "X contains Y"</h2>
+
+  <h3>1. N-ary contains hyperedge (v2.3 canonical)</h3>
+  <p>One hyperedge of arity N+1: <code>[container, member₁, …, memberₙ]</code>. Roles distinguish the container slot from member slots.</p>
+  <ul>
+    <li><strong>Example:</strong> <code>protein_atoms</code> arity 1518 = 1 protein + 1517 atoms.</li>
+    <li><strong>Best for:</strong> true 1-to-N containment where the set is the unit of meaning.</li>
+    <li><strong>Cost:</strong> one record, one variable-length id list.</li>
+  </ul>
+
+  <h3>2. Binary "X_of" edges (v2.2 — now an anti-pattern)</h3>
+  <p>N separate binary hyperedges, each <code>[child, parent]</code> with role tags.</p>
+  <ul>
+    <li><strong>Example:</strong> 1517 <code>atom_of</code> edges instead of one <code>protein_atoms</code>.</li>
+    <li><strong>Pays for:</strong> per-edge id duplication of the parent, N records instead of 1.</li>
+    <li><strong>The whole reason nDB exists</strong> is to replace this with #1. Still legal, just wasteful.</li>
+  </ul>
+
+  <h3>3. Property-as-foreign-key (lightweight link)</h3>
+  <p>Child stores <code>PROP_PARENT_ID = &lt;entity_id&gt;</code> directly. No edge record.</p>
+  <ul>
+    <li><strong>Example:</strong> an atom could carry <code>PROP_RESIDUE_ID</code> pointing to a residue entity.</li>
+    <li><strong>Best for:</strong> uniform 1-to-1 parent-child where you'd never query "list all children of P" without already touching the child.</li>
+    <li><strong>Cost:</strong> zero edges, but no first-class "the set" record to attach properties to — no confidence score on the grouping, no role tags.</li>
+  </ul>
+
+  <h3>4. Property-as-logical-coordinate (convention link)</h3>
+  <p>Child stores attributes that <em>describe</em> the parent without referencing its id. Reader resolves via query.</p>
+  <ul>
+    <li><strong>Example:</strong> an atom carries <code>PROP_ATOM_RES_POS = 42</code> + <code>PROP_ATOM_RES_NAME = "GLY"</code> — no link to a residue entity, just enough info to reconstruct "which residue" by convention.</li>
+    <li><strong>Best for:</strong> when the parent might not have its own entity (residues exist only logically in PDB-flat data).</li>
+    <li><strong>Cost:</strong> no integrity guarantee; rename breaks the link.</li>
+  </ul>
+
+  <h3>5. Multi-level hyperedge composition (skip-level + per-level)</h3>
+  <p>Two or more hyperedges at different granularities for the same hierarchy.</p>
+  <ul>
+    <li><strong>Example:</strong> <code>protein_residues</code> (arity 45) AND <code>protein_atoms</code> (arity 1518) on the same protein — skips the residue → atom level.</li>
+    <li><strong>Or:</strong> <code>protein_residues</code> + per-residue <code>residue_atoms</code> edges — fully hierarchical.</li>
+    <li><strong>Best for:</strong> when both "all atoms of protein P" and "all residues of protein P" are hot queries. Skipping a level avoids a JOIN-equivalent traversal.</li>
+  </ul>
+
+  <h3>6. Motif hyperedge (peer-group, parent implied)</h3>
+  <p>A hyperedge over peer children where the parent isn't a slot — parent is inferred because all members share it.</p>
+  <ul>
+    <li><strong>Example:</strong> <code>catalytic_triad</code> arity 3 = 3 residues, all belonging to the same protein but the protein isn't in the edge.</li>
+    <li><code>alpha_helix</code> arity 16 = 16 ordered residues.</li>
+    <li><strong>Best for:</strong> functional groupings where the parent is recoverable from members and the grouping itself has meaning ("these 3 residues are a catalytic triad" is the fact).</li>
+  </ul>
+
+  <h2>How to choose</h2>
+
+  <table>
+    <thead><tr><th>Question</th><th>Answer points to</th></tr></thead>
+    <tbody>
+      <tr><td>Is the <em>set</em> a named thing with its own properties (confidence, role)?</td><td>#1 N-ary contains</td></tr>
+      <tr><td>Is the child meaningful without the parent?</td><td>#3 or #4 (property link)</td></tr>
+      <tr><td>Does the parent have its own entity record?</td><td>yes → #1 / #3; no → #4</td></tr>
+      <tr><td>Are there multiple useful granularities of containment?</td><td>#5 (multi-level)</td></tr>
+      <tr><td>Is the grouping a peer-relation, not container-relation?</td><td>#6 (motif)</td></tr>
+      <tr><td>Are you writing N records for what is conceptually one fact?</td><td>#2 — stop, refactor to #1</td></tr>
+    </tbody>
+  </table>
+
+  <h2>The underlying principle</h2>
+
+  <p>
+    The v2.2 → v2.3 rewrite (binary <code>atom_of</code> edges → one <code>protein_atoms</code> hyperedge) is the canonical lesson:
+  </p>
+
+  <blockquote>
+    "Nested" should be one record per containment fact, not N records reifying the same fact N times.
+  </blockquote>
+
+  <p>
+    The arity-N hyperedge is what makes nDB structurally different from a graph DB that only has binary edges — that's the whole pitch.
+  </p>
+
+  <p>
+    Patterns #2 and #4 still exist as escape hatches, but if you reach for them, you're either modeling something genuinely binary (#2: a single foreign-key relation between exactly two entities) or accepting that the parent doesn't deserve its own entity (#4).
+  </p>
+
+  <div class="btn-row" style="margin-top: 36px;">
+    <a href="/discussion-examples.html" class="btn secondary">Next: five things tables can't describe well →</a>
+    <a href="/alphafold_ndb/" class="btn">See containment in the live demo</a>
+  </div>
+
+</main>
+
+<footer class="site-foot">
+  <p>nDB is open-source under MIT. <a href="https://github.com/goldrag1/nDB" target="_blank" rel="noreferrer">github.com/goldrag1/nDB</a></p>
+</footer>
+
+</body>
+</html>

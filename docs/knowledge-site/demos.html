@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demos · nDB</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">nDB <span class="sub">N-dimensional database</span></div>
+  <nav>
+    <a href="/">Home</a>
+    <a href="/whitepaper.html">Whitepaper</a>
+    <a href="/discussion.html">Discussion</a>
+    <a href="/demos.html" class="active">Demos</a>
+    <a href="/repo.html">Repo</a>
+  </nav>
+  <div class="right">v2.3.0 · 488 tests</div>
+</header>
+
+<main class="page">
+
+  <h1>Demos</h1>
+  <p class="lede">
+    Live, interactive demonstrations of nDB. Each demo gets its own URL
+    path under this domain and its own narrative page explaining the
+    data model it exercises.
+  </p>
+
+  <h2>Available now</h2>
+
+  <div class="card-grid">
+
+    <div class="card">
+      <a href="/demos-alphafold_ndb.html" class="card-title">alphafold_ndb — structural biology browser</a>
+      <p>
+        20 cancer / autophagy / mTOR-signalling proteins seeded with real
+        AlphaFold pLDDT values. 5 showcase proteins with per-residue +
+        per-atom entities and structural-motif hyperedges (catalytic
+        triads, zinc fingers, disulfide bonds, α-helices, β-sheet pairs).
+        Bidirectional click sync between the 3D structure and the nDB
+        hypergraph. Live AlphaFold-DB fetch — paste any UniProt accession.
+      </p>
+      <p style="margin-top: 10px;">
+        <a href="/demos-alphafold_ndb.html" class="btn secondary">Read about it</a>
+        &nbsp;
+        <a href="/alphafold_ndb/" class="btn">Launch live</a>
+      </p>
+    </div>
+
+    <div class="card">
+      <a href="/demos-exoplanet_ndb.html" class="card-title">exoplanet_ndb — N-ary discovery facts</a>
+      <p>
+        91 confirmed exoplanets from NASA Exoplanet Archive across all 11
+        recognised detection methods (pulsar timing 1992 → Gaia
+        astrometry 2025) and 40 stellar systems. Every discovery is one
+        arity-4 hyperedge <code>[star, planet, method, mission]</code>.
+        Every system is one arity-(N+1) hyperedge: TRAPPIST-1 = arity 8,
+        Kepler-90 = arity 9. Live NASA TAP fetch — type a planet name
+        to add it.
+      </p>
+      <p style="margin-top: 10px;">
+        <a href="/demos-exoplanet_ndb.html" class="btn secondary">Read about it</a>
+        &nbsp;
+        <a href="/exoplanet_ndb/" class="btn">Launch live</a>
+      </p>
+    </div>
+
+  </div>
+
+  <h2>Naming convention</h2>
+
+  <p>
+    Each demo lives at <code>ndb.nextstar-erp.com/&lt;demo_name&gt;/</code>.
+    Its narrative page lives at
+    <code>ndb.nextstar-erp.com/demos-&lt;demo_name&gt;.html</code>. Demos
+    are independent — each can be running, paused, or replaced without
+    affecting the knowledge site or other demos.
+  </p>
+
+  <h2>Planned</h2>
+
+  <div class="card-grid">
+
+    <div class="card">
+      <a class="card-title" style="color: var(--text-muted); cursor: default;">seismic_ndb — earthquake + fault sequences (planned)</a>
+      <p>
+        Live USGS feed. Aftershock cascades as N-ary hyperedges (one mainshock
+        + N aftershocks within a window). Globe view with time slider; click
+        an event to see its sequence highlight.
+      </p>
+    </div>
+
+    <div class="card">
+      <a class="card-title" style="color: var(--text-muted); cursor: default;">erp_ndb — three-way invoice match (planned)</a>
+      <p>
+        PO + GRN + Invoice as one hyperedge instead of three tables plus a
+        match table. Multi-tenant defaults, per-period accounting, time-travel
+        for audit. Exercises the multi-party operational workload.
+      </p>
+    </div>
+
+    <div class="card">
+      <a class="card-title" style="color: var(--text-muted); cursor: default;">graphrag_ndb — LLM knowledge graph (planned)</a>
+      <p>
+        Ingest a PubMed slice, let an LLM extract N-ary facts directly into
+        nDB without reification. Vector index plugin alongside structured
+        pattern queries. Exercises the AI-extraction workload.
+      </p>
+    </div>
+
+  </div>
+
+</main>
+
+<footer class="site-foot">
+  <p>nDB is open-source under MIT. <a href="https://github.com/goldrag1/nDB" target="_blank" rel="noreferrer">github.com/goldrag1/nDB</a></p>
+</footer>
+
+</body>
+</html>

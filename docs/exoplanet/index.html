@@ -1,0 +1,907 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>exoplanet_ndb — N-ary discovery facts in nDB</title>
+<style>
+/* Palette + fonts borrowed from docs/explorer/ so alphafold_ndb,
+   this demo, and the knowledge site read as one product. */
+:root {
+  --bg:           #14141a;
+  --surface:      #1c1c24;
+  --surface-2:    #0a0a10;
+  --border:       #2b2b36;
+  --border-soft:  #2d2d3a;
+  --text:         #e8e8ec;
+  --text-strong:  #ffffff;
+  --text-muted:   #888;
+  --accent:       #4a90e2;
+  --entity:       #65CBF3;   /* planets — cyan */
+  --star:         #f5a623;   /* stars — orange */
+  --method:       #7ed321;   /* methods — green */
+  --mission:      #ff5e8a;   /* missions — pink */
+  --hz:           #ffd84a;   /* habitable zone — yellow */
+  --font-ui:   system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; font-family: var(--font-ui); color: var(--text); background: var(--bg); font-size: 14px; }
+
+#app {
+  display: grid; grid-template-rows: 56px 1fr;
+  grid-template-columns: 340px 1fr 380px;
+  grid-template-areas: "top top top" "left centre right";
+  height: 100vh;
+}
+
+#topbar {
+  grid-area: top; background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 14px; padding: 0 18px;
+}
+#topbar h1 { font-size: 14px; margin: 0; letter-spacing: 0.02em; color: #fff; white-space: nowrap; font-weight: 600; }
+#topbar h1 .sub { color: var(--text-muted); font-weight: 400; margin-left: 6px; font-size: 12px; }
+#topbar .sep { width: 1px; height: 24px; background: var(--border); }
+#topbar .chip { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 4px 9px; font-size: 11.5px; color: #cfcfd6; font-family: var(--font-mono); white-space: nowrap; }
+#topbar .grow { flex: 1; }
+#topbar select, #topbar input { background: var(--bg); border: 1px solid #303040; border-radius: 4px; color: #fff; padding: 5px 8px; font-family: inherit; font-size: 12px; min-width: 0; }
+#topbar a { color: var(--accent); font-size: 12px; text-decoration: none; }
+#topbar a:hover { color: #5aa0f2; text-decoration: underline; }
+
+#sidebar     { grid-area: left;  background: var(--surface); border-right: 1px solid var(--border); padding: 14px 14px 20px; overflow-y: auto; }
+#right-pane  { grid-area: right; background: var(--surface); border-left: 1px solid var(--border); padding: 14px 14px 20px; overflow-y: auto; }
+#centre      { grid-area: centre; background: var(--surface-2); position: relative; overflow: hidden; }
+
+h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); margin: 16px 0 6px; font-weight: 600; }
+h2:first-child { margin-top: 0; }
+
+.stat { display: flex; justify-content: space-between; font-size: 13px; padding: 2px 0; color: #cfcfd6; }
+.stat span:last-child { font-variant-numeric: tabular-nums; color: #fff; font-family: var(--font-mono); font-size: 12.5px; }
+
+.type-row { display: flex; align-items: center; font-size: 13px; padding: 2px 0; gap: 8px; cursor: pointer; user-select: none; }
+.type-row.muted { opacity: 0.4; }
+.type-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.type-row .count { margin-left: auto; font-size: 11.5px; color: var(--text-muted); font-family: var(--font-mono); }
+
+.form { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 12px; }
+.form label { font-size: 11px; color: #999; text-transform: uppercase; letter-spacing: 0.05em; }
+.form input { background: var(--bg); border: 1px solid #303040; border-radius: 4px; color: #fff; padding: 6px 8px; font-family: inherit; font-size: 13px; }
+.form input:focus { outline: none; border-color: var(--accent); }
+.btn { background: var(--accent); color: #fff; border: none; padding: 7px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 500; }
+.btn:hover { background: #5aa0f2; }
+.btn:disabled { background: #2d4a6a; cursor: not-allowed; }
+
+.hint { font-size: 11.5px; color: var(--text-muted); line-height: 1.55; margin: 6px 0; }
+.hint code { color: var(--entity); font-family: var(--font-mono); font-size: 11px; background: var(--surface-2); padding: 1px 5px; border-radius: 3px; }
+
+#scatter-wrap { position: absolute; inset: 0; padding: 24px 28px; }
+#scatter-svg  { width: 100%; height: 100%; }
+.scatter-grid line { stroke: #1f1f29; stroke-width: 1; }
+.scatter-axis line, .scatter-axis path { stroke: #555; fill: none; }
+.scatter-axis text, .axis-label { fill: #888; font-size: 11px; font-family: var(--font-mono); }
+.axis-label.bold { fill: #fff; font-family: var(--font-ui); font-weight: 600; font-size: 12px; }
+.scatter-dot { stroke: rgba(0,0,0,0.4); stroke-width: 0.5; cursor: pointer; transition: r 0.12s, opacity 0.12s; }
+.scatter-dot:hover { stroke: #fff; stroke-width: 1.5; }
+.scatter-dot.selected { stroke: #fff; stroke-width: 2; }
+.scatter-dot.dim { opacity: 0.1; }
+.scatter-band { fill: #f5a623; opacity: 0.07; }
+.scatter-band-label { fill: #f5a623; font-size: 10.5px; font-family: var(--font-mono); opacity: 0.7; }
+
+#tooltip {
+  position: absolute; background: rgba(20,20,26,0.96); color: #fff;
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 6px 10px; font-size: 12px; pointer-events: none;
+  font-family: var(--font-mono); line-height: 1.5;
+  opacity: 0; transition: opacity 0.08s;
+  z-index: 50; max-width: 280px;
+}
+#tooltip.show { opacity: 1; }
+#tooltip b { color: var(--entity); }
+#tooltip .small { color: var(--text-muted); font-size: 11px; }
+
+#mode-toggle {
+  position: absolute; top: 16px; right: 16px;
+  background: rgba(28,28,36,0.85); border: 1px solid var(--border);
+  border-radius: 4px; display: flex; overflow: hidden; z-index: 10;
+}
+#mode-toggle button {
+  background: transparent; color: #cfcfd6; border: none;
+  padding: 5px 12px; font: inherit; font-size: 12px; cursor: pointer;
+}
+#mode-toggle button.active { background: var(--accent); color: #fff; }
+
+.db-section { background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: 9px 11px; margin-bottom: 10px; font-size: 12px; line-height: 1.5; }
+.db-section h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin: 0 0 6px; font-weight: 600; }
+.db-row { display: flex; justify-content: space-between; gap: 8px; padding: 1px 0; }
+.db-row .k { color: #888; font-family: var(--font-mono); font-size: 11px; flex-shrink: 0; }
+.db-row .v { color: #fff; text-align: right; font-family: var(--font-mono); font-size: 11px; word-break: break-all; }
+
+.role-chip { display: inline-block; padding: 1px 6px; margin: 2px 4px 2px 0; border-radius: 3px; background: var(--border-soft); font-size: 11px; font-family: var(--font-mono); cursor: pointer; }
+.role-chip.star    { color: var(--star);    }
+.role-chip.planet  { color: var(--entity);  }
+.role-chip.method  { color: var(--method);  }
+.role-chip.mission { color: var(--mission); }
+.role-chip.hz      { color: var(--hz);      }
+.role-chip:hover   { background: #38384a;   }
+.role-label { color: #888; font-size: 10.5px; font-family: var(--font-mono); margin-right: 4px; display: inline-block; min-width: 56px; }
+
+.db-section pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: 3px; padding: 7px; margin: 5px 0 0; font-size: 10.5px; line-height: 1.4; overflow-x: auto; max-height: 220px; color: #cfcfd6; }
+
+.empty { background: var(--bg); border: 1px dashed var(--border-soft); border-radius: 5px; padding: 24px; text-align: center; color: #666; font-size: 12.5px; font-style: italic; }
+
+#orbital-pane { background: var(--bg); border: 1px solid var(--border); border-radius: 5px; margin-bottom: 10px; padding: 8px; }
+#orbital-pane h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin: 0 0 4px; font-weight: 600; padding: 0 3px; }
+#orbital-svg { width: 100%; height: 220px; display: block; }
+.orbit-track { fill: none; stroke: #2b2b36; stroke-width: 0.8; }
+.orbit-track.hz { stroke: var(--hz); opacity: 0.5; stroke-dasharray: 2 2; }
+.orbit-planet { stroke: rgba(0,0,0,0.4); stroke-width: 0.5; }
+.orbit-planet.selected { stroke: #fff; stroke-width: 1.5; }
+.orbit-star { fill: var(--star); }
+.orbit-glow { fill: var(--star); opacity: 0.18; }
+.orbit-label { fill: #cfcfd6; font-size: 9.5px; font-family: var(--font-mono); text-anchor: start; pointer-events: none; }
+
+.pill { display: inline-block; padding: 1px 6px; border-radius: 3px; background: var(--border-soft); font-family: var(--font-mono); font-size: 11px; }
+.pill.hz { background: rgba(245,166,35,0.18); color: var(--hz); }
+
+a { color: var(--accent); }
+a:hover { color: #5aa0f2; }
+</style>
+</head>
+<body>
+
+<div id="app">
+
+  <header id="topbar">
+    <h1>exoplanet_ndb <span class="sub">demo #2 — N-ary discovery facts</span></h1>
+    <div class="sep"></div>
+    <span style="font-size:11px;color:#888">SYSTEM</span>
+    <select id="system-picker"><option>(loading)</option></select>
+    <span id="entity-chip" class="chip">— records loading…</span>
+    <div class="grow"></div>
+    <a href="/" target="_blank" rel="noreferrer">knowledge site →</a>
+  </header>
+
+  <aside id="sidebar">
+
+    <h2>Engine</h2>
+    <div class="stat"><span>entities</span><span id="stat-entities">—</span></div>
+    <div class="stat"><span>hyperedges</span><span id="stat-edges">—</span></div>
+    <div class="stat"><span>max arity</span><span id="stat-arity">—</span></div>
+    <div class="stat"><span>API</span><span id="stat-api">—</span></div>
+
+    <h2>Entity types</h2>
+    <div id="entity-legend"></div>
+
+    <h2>Filter by method (click to mute)</h2>
+    <div id="method-legend"></div>
+
+    <h2>Add a planet</h2>
+    <div class="form">
+      <label for="fetch-input">name (NASA Archive)</label>
+      <input id="fetch-input" placeholder="e.g. WASP-39 b" autocomplete="off">
+      <button id="fetch-go" class="btn">Fetch &amp; add to nDB</button>
+    </div>
+    <p class="hint">
+      Hits the NASA Exoplanet Archive TAP service for one row, then commits one PLANET entity + one arity-4 DISCOVERY hyperedge. Star, method, mission entities are reused if already present.
+    </p>
+
+    <h2>What the demo proves</h2>
+    <p class="hint">
+      Every dot in the scatter is one PLANET entity. Every discovery is <em>one arity-4 hyperedge</em>: <code>[star, planet, method, mission]</code>. Every multi-planet system is <em>one arity-(N+1) hyperedge</em>. Kepler-90 = arity <b>9</b>. TRAPPIST-1 = arity <b>8</b>. Inspect the right pane to see them as real nDB records.
+    </p>
+
+  </aside>
+
+  <main id="centre">
+    <div id="mode-toggle">
+      <button data-mode="scatter" class="active">Mass-Radius</button>
+      <button data-mode="year">Discovery year</button>
+    </div>
+    <div id="scatter-wrap"><svg id="scatter-svg"></svg></div>
+    <div id="tooltip"></div>
+  </main>
+
+  <aside id="right-pane">
+    <div id="selected-host"></div>
+  </aside>
+
+</div>
+
+<script>
+"use strict";
+
+// API base resolution.
+// Direct dev (cargo run … exoplanet_explorer): http://127.0.0.1:9877/ → API at :8745
+// Tunneled (/exoplanet_ndb/): same-origin → /exoplanet_ndb/api
+const API_URL = (() => {
+  if (location.port === "9877" || location.hostname === "127.0.0.1" || location.hostname === "localhost") {
+    return "http://127.0.0.1:8745";
+  }
+  return location.origin + location.pathname.replace(/\/$/, "") + "/api";
+})();
+document.getElementById("stat-api").textContent = API_URL.replace(/^https?:\/\//, "");
+
+const T_STAR = 1, T_PLANET = 2, T_METHOD = 3, T_MISSION = 4;
+const T_DISCOVERY = 100, T_SYSTEM = 101, T_HABITABLE_ZONE = 102;
+const ROLE_STAR = 10, ROLE_PLANET = 11, ROLE_METHOD = 12, ROLE_MISSION = 13, ROLE_HZ_PLANET = 14;
+
+const PROP = {
+  NAME: 30,
+  STAR_RA: 31, STAR_DEC: 32, STAR_DIST_PC: 33, STAR_TEFF: 34,
+  STAR_MASS_MSUN: 35, STAR_RADIUS_RSUN: 36, STAR_AGE_GYR: 37,
+  PL_RADIUS_RE: 40, PL_MASS_ME: 41, PL_ORBITAL_PERIOD: 42,
+  PL_SEMI_MAJOR_AU: 43, PL_EQ_TEMP_K: 44, PL_HABITABLE: 45, PL_HOST_NAME: 46,
+  MISSION_FULL_NAME: 50,
+  DISC_YEAR: 60, DISC_FACILITY: 61, DISC_TELESCOPE: 62,
+  SYSTEM_HOST: 70, PLANET_COUNT: 71,
+};
+
+const TYPE_COLORS = {
+  [T_STAR]:    { name: "star",    color: "var(--star)"    },
+  [T_PLANET]:  { name: "planet",  color: "var(--entity)"  },
+  [T_METHOD]:  { name: "method",  color: "var(--method)"  },
+  [T_MISSION]: { name: "mission", color: "var(--mission)" },
+};
+const METHOD_COLOR = {
+  "Transit":                       "#65CBF3",
+  "Radial Velocity":               "#f5a623",
+  "Microlensing":                  "#b388ff",
+  "Imaging":                       "#ff9554",
+  "Astrometry":                    "#7ed321",
+  "Pulsar Timing":                 "#ff5e8a",
+  "Transit Timing Variations":     "#ffd84a",
+  "Eclipse Timing Variations":     "#ffb84a",
+  "Pulsation Timing Variations":   "#d088ff",
+  "Orbital Brightness Modulation": "#54d2ff",
+  "Disk Kinematics":               "#88ff7e",
+};
+const METHOD_FALLBACK = "#888";
+
+const STATE = {
+  entities: new Map(),
+  edges:    [],
+  byName:   new Map(),
+  selected: null,
+  mutedMethods: new Set(),
+  mode: "scatter",
+};
+
+const $ = (sel) => document.querySelector(sel);
+const fmt = (v, digits = 2) =>
+  (v == null || Number.isNaN(v))
+    ? "—"
+    : ((Math.abs(v) >= 1000 || (Math.abs(v) > 0 && Math.abs(v) < 0.01))
+        ? Number(v).toExponential(digits)
+        : Number(v).toFixed(digits));
+const escapeHtml = (s) => (s == null ? "" : String(s).replace(/[&<>"']/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])));
+
+async function loadAll() {
+  const r = await fetch(API_URL + "/iter");
+  if (!r.ok) throw new Error("/iter " + r.status);
+  const txt = await r.text();
+  for (const line of txt.split("\n")) {
+    if (!line.trim()) continue;
+    let rec; try { rec = JSON.parse(line); } catch { continue; }
+    if (rec.kind === "entity") {
+      const props = recProps(rec);
+      const e = { kind: "entity", id: rec.entity_id, type_id: rec.type_id, props, raw: rec };
+      STATE.entities.set(rec.entity_id, e);
+      const nm = props[PROP.NAME];
+      if (nm) STATE.byName.set(nm, e);
+    } else if (rec.kind === "hyper_edge") {
+      STATE.edges.push({ kind: "hyper_edge", id: rec.hyperedge_id, type_id: rec.type_id, roles: rec.roles || [], props: recProps(rec), raw: rec });
+    }
+  }
+}
+function recProps(rec) {
+  const out = {};
+  for (const p of (rec.properties || [])) {
+    out[p.prop_id] = (p.value && p.value.value !== undefined) ? p.value.value : p.value;
+  }
+  return out;
+}
+
+function planetsOnly() {
+  return [...STATE.entities.values()].filter(e => e.type_id === T_PLANET);
+}
+function systemsByHost() {
+  const out = new Map();
+  for (const e of STATE.edges) if (e.type_id === T_SYSTEM) out.set(e.props[PROP.SYSTEM_HOST], e);
+  return out;
+}
+function hzByHost() {
+  const out = new Map();
+  for (const e of STATE.edges) if (e.type_id === T_HABITABLE_ZONE) out.set(e.props[PROP.SYSTEM_HOST], e);
+  return out;
+}
+function discoveryFor(planetId) {
+  return STATE.edges.find(e =>
+    e.type_id === T_DISCOVERY &&
+    e.roles.some(r => r.role_id === ROLE_PLANET && r.entity_id === planetId));
+}
+function entityNameByRole(edge, roleId) {
+  const slot = edge.roles.find(r => r.role_id === roleId);
+  if (!slot) return null;
+  const e = STATE.entities.get(slot.entity_id);
+  return e ? e.props[PROP.NAME] : null;
+}
+
+function refreshStats() {
+  $("#stat-entities").textContent = STATE.entities.size;
+  $("#stat-edges").textContent = STATE.edges.length;
+  const maxArity = Math.max(0, ...STATE.edges.map(e => (e.roles || []).length));
+  $("#stat-arity").textContent = maxArity;
+  $("#entity-chip").textContent = STATE.entities.size + " entities · " + STATE.edges.length + " hyperedges";
+
+  const types = new Map();
+  for (const e of STATE.entities.values()) types.set(e.type_id, (types.get(e.type_id) || 0) + 1);
+  const legend = $("#entity-legend");
+  legend.innerHTML = "";
+  [T_PLANET, T_STAR, T_MISSION, T_METHOD].forEach(t => {
+    if (!types.has(t)) return;
+    const div = document.createElement("div"); div.className = "type-row";
+    const dot = document.createElement("span"); dot.className = "type-dot";
+    dot.style.background = TYPE_COLORS[t].color;
+    div.appendChild(dot);
+    div.appendChild(document.createTextNode(TYPE_COLORS[t].name));
+    const ct = document.createElement("span"); ct.className = "count"; ct.textContent = types.get(t);
+    div.appendChild(ct);
+    legend.appendChild(div);
+  });
+
+  const methodCounts = new Map();
+  for (const e of STATE.edges) {
+    if (e.type_id !== T_DISCOVERY) continue;
+    const methName = entityNameByRole(e, ROLE_METHOD);
+    if (!methName) continue;
+    methodCounts.set(methName, (methodCounts.get(methName) || 0) + 1);
+  }
+  const ml = $("#method-legend"); ml.innerHTML = "";
+  [...methodCounts.entries()].sort((a, b) => b[1] - a[1]).forEach(([name, n]) => {
+    const div = document.createElement("div");
+    div.className = "type-row" + (STATE.mutedMethods.has(name) ? " muted" : "");
+    const dot = document.createElement("span"); dot.className = "type-dot";
+    dot.style.background = METHOD_COLOR[name] || METHOD_FALLBACK;
+    div.appendChild(dot);
+    div.appendChild(document.createTextNode(name));
+    const ct = document.createElement("span"); ct.className = "count"; ct.textContent = n;
+    div.appendChild(ct);
+    div.addEventListener("click", () => {
+      if (STATE.mutedMethods.has(name)) STATE.mutedMethods.delete(name);
+      else STATE.mutedMethods.add(name);
+      refreshStats(); render();
+    });
+    ml.appendChild(div);
+  });
+}
+
+function refreshSystemPicker() {
+  const sel = $("#system-picker"); sel.innerHTML = "";
+  const empty = document.createElement("option");
+  empty.value = ""; empty.textContent = "— pick a system —";
+  sel.appendChild(empty);
+  const systems = [...systemsByHost().entries()]
+    .sort((a, b) => (b[1].roles.length - a[1].roles.length) || a[0].localeCompare(b[0]));
+  for (const [host, edge] of systems) {
+    const n = edge.roles.length - 1;
+    const opt = document.createElement("option");
+    opt.value = host;
+    opt.textContent = host + "  (" + n + " planet" + (n === 1 ? "" : "s") + ")";
+    sel.appendChild(opt);
+  }
+  sel.onchange = () => {
+    const host = sel.value; if (!host) return;
+    const edge = systemsByHost().get(host); if (!edge) return;
+    const planetRole = edge.roles.find(r => r.role_id === ROLE_PLANET);
+    if (planetRole) selectPlanet(planetRole.entity_id);
+  };
+}
+
+function render() {
+  const svg = $("#scatter-svg");
+  const wrap = $("#scatter-wrap");
+  const W = wrap.clientWidth, H = wrap.clientHeight;
+  if (W < 40 || H < 40) { setTimeout(render, 100); return; }
+  svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+  svg.innerHTML = "";
+  if (STATE.mode === "scatter") renderScatter(svg, W, H);
+  else                          renderYearChart(svg, W, H);
+}
+
+function renderScatter(svg, W, H) {
+  const PAD = { l: 60, r: 30, t: 20, b: 50 };
+  const xRange = [-2, 4], yRange = [-2, 4];
+  const xPx = lr => PAD.l + (lr - xRange[0]) / (xRange[1] - xRange[0]) * (W - PAD.l - PAD.r);
+  const yPx = lm => H - PAD.b - (lm - yRange[0]) / (yRange[1] - yRange[0]) * (H - PAD.t - PAD.b);
+
+  const grid = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  grid.setAttribute("class", "scatter-grid");
+  for (let lx = xRange[0]; lx <= xRange[1]; lx++) {
+    const x = xPx(lx);
+    grid.innerHTML += '<line x1="' + x + '" x2="' + x + '" y1="' + PAD.t + '" y2="' + (H - PAD.b) + '"/>';
+  }
+  for (let ly = yRange[0]; ly <= yRange[1]; ly++) {
+    const y = yPx(ly);
+    grid.innerHTML += '<line x1="' + PAD.l + '" x2="' + (W - PAD.r) + '" y1="' + y + '" y2="' + y + '"/>';
+  }
+  svg.appendChild(grid);
+
+  const refs = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  refs.innerHTML =
+    '<rect class="scatter-band" x="' + xPx(Math.log10(0.8)) + '" y="' + yPx(Math.log10(2)) +
+    '" width="' + (xPx(Math.log10(1.6)) - xPx(Math.log10(0.8))) +
+    '" height="' + (yPx(Math.log10(0.5)) - yPx(Math.log10(2))) + '"/>' +
+    '<text class="scatter-band-label" x="' + (xPx(Math.log10(1.0)) + 4) + '" y="' + yPx(Math.log10(0.6)) + '">Earth-like</text>' +
+    '<rect class="scatter-band" x="' + xPx(Math.log10(8)) + '" y="' + yPx(Math.log10(600)) +
+    '" width="' + (xPx(Math.log10(16)) - xPx(Math.log10(8))) +
+    '" height="' + (yPx(Math.log10(100)) - yPx(Math.log10(600))) + '"/>' +
+    '<text class="scatter-band-label" x="' + (xPx(Math.log10(8)) + 4) + '" y="' + yPx(Math.log10(130)) + '">Jupiter-like</text>';
+  svg.appendChild(refs);
+
+  const ax = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  ax.setAttribute("class", "scatter-axis");
+  ax.innerHTML =
+    '<line x1="' + PAD.l + '" x2="' + (W - PAD.r) + '" y1="' + (H - PAD.b) + '" y2="' + (H - PAD.b) + '"/>' +
+    '<line x1="' + PAD.l + '" x2="' + PAD.l + '" y1="' + PAD.t + '" y2="' + (H - PAD.b) + '"/>';
+  for (let lx = xRange[0]; lx <= xRange[1]; lx++) {
+    const x = xPx(lx);
+    ax.innerHTML += '<text x="' + x + '" y="' + (H - PAD.b + 14) + '" text-anchor="middle">10^' + lx + '</text>';
+  }
+  for (let ly = yRange[0]; ly <= yRange[1]; ly++) {
+    const y = yPx(ly);
+    ax.innerHTML += '<text x="' + (PAD.l - 8) + '" y="' + (y + 3) + '" text-anchor="end">10^' + ly + '</text>';
+  }
+  ax.innerHTML +=
+    '<text class="axis-label bold" x="' + (W / 2) + '" y="' + (H - 10) + '" text-anchor="middle">planet radius (R⊕)</text>' +
+    '<text class="axis-label bold" transform="translate(15 ' + (H / 2) + ') rotate(-90)" text-anchor="middle">planet mass (M⊕)</text>';
+  svg.appendChild(ax);
+
+  const ns = "http://www.w3.org/2000/svg";
+  for (const p of planetsOnly()) {
+    const R = p.props[PROP.PL_RADIUS_RE];
+    const M = p.props[PROP.PL_MASS_ME];
+    if (R == null || M == null) continue;
+    const disc = discoveryFor(p.id);
+    const meth = disc ? entityNameByRole(disc, ROLE_METHOD) : null;
+    const isHz = (p.props[PROP.PL_HABITABLE] === "yes");
+    const muted = meth && STATE.mutedMethods.has(meth);
+    const cx = xPx(Math.log10(R));
+    const cy = yPx(Math.log10(M));
+    const c = document.createElementNS(ns, "circle");
+    c.setAttribute("cx", cx); c.setAttribute("cy", cy);
+    c.setAttribute("r", isHz ? 6.5 : 4.5);
+    c.setAttribute("fill", METHOD_COLOR[meth] || METHOD_FALLBACK);
+    c.setAttribute("class", "scatter-dot" + (STATE.selected === p.id ? " selected" : "") + (muted ? " dim" : ""));
+    if (isHz) { c.setAttribute("stroke", "var(--hz)"); c.setAttribute("stroke-width", "2"); }
+    c.dataset.id = p.id;
+    c.addEventListener("mouseenter", e => showTip(e, p, meth, isHz));
+    c.addEventListener("mouseleave", hideTip);
+    c.addEventListener("mousemove",  e => moveTip(e));
+    c.addEventListener("click", () => selectPlanet(p.id));
+    svg.appendChild(c);
+  }
+}
+
+function renderYearChart(svg, W, H) {
+  const PAD = { l: 60, r: 30, t: 20, b: 50 };
+  const byYear = new Map();
+  for (const e of STATE.edges) {
+    if (e.type_id !== T_DISCOVERY) continue;
+    const y = e.props[PROP.DISC_YEAR];
+    if (y == null) continue;
+    const m = entityNameByRole(e, ROLE_METHOD) || "Unknown";
+    if (!byYear.has(y)) byYear.set(y, new Map());
+    byYear.get(y).set(m, (byYear.get(y).get(m) || 0) + 1);
+  }
+  const years = [...byYear.keys()].sort((a, b) => a - b);
+  if (!years.length) return;
+  const ymin = years[0], ymax = years[years.length - 1];
+  const cmax = Math.max(...years.map(y => [...byYear.get(y).values()].reduce((a, b) => a + b, 0)));
+  const xPx = year => PAD.l + (year - ymin) / Math.max(1, ymax - ymin) * (W - PAD.l - PAD.r);
+  const yPx = c    => H - PAD.b - (c / cmax) * (H - PAD.t - PAD.b);
+
+  for (const y of years) {
+    const counts = byYear.get(y);
+    const ordered = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+    let yCursor = H - PAD.b;
+    const w = Math.max(4, (W - PAD.l - PAD.r) / (ymax - ymin + 1) - 1);
+    for (const [meth, n] of ordered) {
+      if (STATE.mutedMethods.has(meth)) continue;
+      const h = ((H - PAD.t - PAD.b) / cmax) * n;
+      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      rect.setAttribute("x", xPx(y) - w / 2);
+      rect.setAttribute("y", yCursor - h);
+      rect.setAttribute("width", w);
+      rect.setAttribute("height", h);
+      rect.setAttribute("fill", METHOD_COLOR[meth] || METHOD_FALLBACK);
+      rect.setAttribute("opacity", "0.85");
+      svg.appendChild(rect);
+      yCursor -= h;
+    }
+  }
+  const ax = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  ax.setAttribute("class", "scatter-axis");
+  ax.innerHTML =
+    '<line x1="' + PAD.l + '" x2="' + (W - PAD.r) + '" y1="' + (H - PAD.b) + '" y2="' + (H - PAD.b) + '"/>' +
+    '<line x1="' + PAD.l + '" x2="' + PAD.l + '" y1="' + PAD.t + '" y2="' + (H - PAD.b) + '"/>';
+  for (let y = ymin; y <= ymax; y += Math.max(1, Math.ceil((ymax - ymin) / 12))) {
+    ax.innerHTML += '<text x="' + xPx(y) + '" y="' + (H - PAD.b + 14) + '" text-anchor="middle">' + y + '</text>';
+  }
+  for (let i = 0; i <= 4; i++) {
+    const c = Math.round(cmax * i / 4);
+    ax.innerHTML += '<text x="' + (PAD.l - 8) + '" y="' + (yPx(c) + 3) + '" text-anchor="end">' + c + '</text>';
+  }
+  ax.innerHTML +=
+    '<text class="axis-label bold" x="' + (W / 2) + '" y="' + (H - 10) + '" text-anchor="middle">discovery year</text>' +
+    '<text class="axis-label bold" transform="translate(15 ' + (H / 2) + ') rotate(-90)" text-anchor="middle"># planets (this curated set)</text>';
+  svg.appendChild(ax);
+}
+
+function showTip(evt, planet, method, isHz) {
+  const tip = $("#tooltip");
+  const R = planet.props[PROP.PL_RADIUS_RE];
+  const M = planet.props[PROP.PL_MASS_ME];
+  const P = planet.props[PROP.PL_ORBITAL_PERIOD];
+  tip.innerHTML =
+    "<b>" + escapeHtml(planet.props[PROP.NAME]) + "</b>" +
+    (isHz ? ' <span class="pill hz">HZ</span>' : "") +
+    "<br>R = " + fmt(R) + " R⊕ &nbsp; M = " + fmt(M) + " M⊕" +
+    (P != null ? "<br>P = " + fmt(P) + " d" : "") +
+    (method ? '<br><span class="small">' + escapeHtml(method) + "</span>" : "");
+  moveTip(evt);
+  tip.classList.add("show");
+}
+function moveTip(evt) {
+  const tip = $("#tooltip");
+  tip.style.left = (evt.clientX + 14) + "px";
+  tip.style.top  = (evt.clientY + 12) + "px";
+}
+function hideTip() { $("#tooltip").classList.remove("show"); }
+
+function selectPlanet(id) {
+  STATE.selected = id;
+  render();
+  refreshRightPane();
+}
+
+function refreshRightPane() {
+  const root = $("#selected-host");
+  if (!STATE.selected) {
+    root.innerHTML =
+      '<div class="empty">Click any dot in the scatter to inspect the underlying nDB records<br><br>Or pick a system from the top bar.</div>' +
+      '<h2 style="margin-top:18px">Engine schema</h2>' +
+      '<div class="db-section">' +
+        '<div class="db-row"><span class="k">entity types</span><span class="v">5</span></div>' +
+        '<div class="db-row"><span class="k">hyperedge types</span><span class="v">3</span></div>' +
+        '<div class="db-row"><span class="k">DISCOVERY arity</span><span class="v">4</span></div>' +
+        '<div class="db-row"><span class="k">SYSTEM arity</span><span class="v">2..9</span></div>' +
+        '<div class="db-row"><span class="k">port</span><span class="v">8745</span></div>' +
+      '</div>';
+    return;
+  }
+  const planet = STATE.entities.get(STATE.selected);
+  if (!planet) return;
+
+  const host = planet.props[PROP.PL_HOST_NAME];
+  const starEnt = STATE.byName.get(host);
+  const sys = systemsByHost().get(host);
+  const hz = hzByHost().get(host);
+  const disc = discoveryFor(planet.id);
+  const methName = disc ? entityNameByRole(disc, ROLE_METHOD) : null;
+  const missName = disc ? entityNameByRole(disc, ROLE_MISSION) : null;
+  const year = disc ? disc.props[PROP.DISC_YEAR] : null;
+  const fac  = disc ? disc.props[PROP.DISC_FACILITY] : null;
+  const tele = disc ? disc.props[PROP.DISC_TELESCOPE] : null;
+
+  let orbitalHtml = "";
+  if (sys) orbitalHtml = renderOrbital(starEnt, sys, hz, planet);
+
+  let html = orbitalHtml;
+  html +=
+    '<div class="db-section">' +
+      '<h3>Selected planet' + (planet.props[PROP.PL_HABITABLE] === "yes" ? ' <span class="pill hz" style="float:right">HZ</span>' : '') + '</h3>' +
+      '<div class="db-row"><span class="k">PROP_NAME (30)</span><span class="v">' + escapeHtml(planet.props[PROP.NAME]) + '</span></div>' +
+      '<div class="db-row"><span class="k">host (46)</span><span class="v">' + escapeHtml(host) + '</span></div>' +
+      '<div class="db-row"><span class="k">radius (40, R⊕)</span><span class="v">' + fmt(planet.props[PROP.PL_RADIUS_RE]) + '</span></div>' +
+      '<div class="db-row"><span class="k">mass (41, M⊕)</span><span class="v">' + fmt(planet.props[PROP.PL_MASS_ME]) + '</span></div>' +
+      '<div class="db-row"><span class="k">period (42, d)</span><span class="v">' + fmt(planet.props[PROP.PL_ORBITAL_PERIOD]) + '</span></div>' +
+      '<div class="db-row"><span class="k">semi-maj (43, AU)</span><span class="v">' + fmt(planet.props[PROP.PL_SEMI_MAJOR_AU], 3) + '</span></div>' +
+      '<div class="db-row"><span class="k">eq temp (44, K)</span><span class="v">' + fmt(planet.props[PROP.PL_EQ_TEMP_K], 0) + '</span></div>' +
+      '<div class="db-row"><span class="k">entity_id</span><span class="v" style="font-size:10px">' + planet.id.slice(0, 18) + '…</span></div>' +
+    '</div>';
+
+  if (starEnt) {
+    html +=
+      '<div class="db-section">' +
+        '<h3>Host star</h3>' +
+        '<div class="db-row"><span class="k">PROP_NAME</span><span class="v">' + escapeHtml(starEnt.props[PROP.NAME]) + '</span></div>' +
+        '<div class="db-row"><span class="k">T_eff (K)</span><span class="v">' + fmt(starEnt.props[PROP.STAR_TEFF], 0) + '</span></div>' +
+        '<div class="db-row"><span class="k">mass (M☉)</span><span class="v">' + fmt(starEnt.props[PROP.STAR_MASS_MSUN]) + '</span></div>' +
+        '<div class="db-row"><span class="k">radius (R☉)</span><span class="v">' + fmt(starEnt.props[PROP.STAR_RADIUS_RSUN]) + '</span></div>' +
+        '<div class="db-row"><span class="k">distance (pc)</span><span class="v">' + fmt(starEnt.props[PROP.STAR_DIST_PC], 1) + '</span></div>' +
+        '<div class="db-row"><span class="k">RA / Dec (deg)</span><span class="v">' + fmt(starEnt.props[PROP.STAR_RA], 2) + ' / ' + fmt(starEnt.props[PROP.STAR_DEC], 2) + '</span></div>' +
+      '</div>';
+  }
+
+  if (disc) {
+    html +=
+      '<div class="db-section">' +
+        '<h3>Discovery hyperedge <span class="pill" style="float:right">arity ' + disc.roles.length + '</span></h3>' +
+        '<div class="role-chip star"><span class="role-label">STAR</span>' + escapeHtml(host) + '</div>' +
+        '<div class="role-chip planet"><span class="role-label">PLANET</span>' + escapeHtml(planet.props[PROP.NAME]) + '</div>' +
+        '<div class="role-chip method"><span class="role-label">METHOD</span>' + escapeHtml(methName) + '</div>' +
+        '<div class="role-chip mission"><span class="role-label">MISSION</span>' + escapeHtml(missName) + '</div>' +
+        '<div class="db-row" style="margin-top:6px"><span class="k">year</span><span class="v">' + (year || '—') + '</span></div>' +
+        '<div class="db-row"><span class="k">facility</span><span class="v">' + escapeHtml(fac || '—') + '</span></div>' +
+        '<div class="db-row"><span class="k">telescope</span><span class="v">' + escapeHtml(tele || '—') + '</span></div>' +
+        '<p class="hint" style="margin:6px 0 0">One record. The same fact in SQL would be a join across <code>discovery</code> + <code>discovery_method</code> + <code>discovery_mission</code> tables.</p>' +
+      '</div>';
+  }
+
+  if (sys) {
+    let body = '<div class="role-chip star"><span class="role-label">STAR</span>' + escapeHtml(host) + '</div>';
+    sys.roles.filter(r => r.role_id === ROLE_PLANET).forEach(r => {
+      const e = STATE.entities.get(r.entity_id); if (!e) return;
+      const sel = (e.id === planet.id) ? ' style="outline:1px solid var(--accent)"' : '';
+      body += '<div class="role-chip planet"' + sel + ' data-id="' + e.id + '"><span class="role-label">PLANET</span>' + escapeHtml(e.props[PROP.NAME]) + '</div>';
+    });
+    html +=
+      '<div class="db-section">' +
+        '<h3>System hyperedge <span class="pill" style="float:right">arity ' + sys.roles.length + '</span></h3>' +
+        body +
+        '<p class="hint" style="margin:6px 0 0">One record holds the whole system. Kepler-90\'s record has arity <b>9</b>; TRAPPIST-1\'s has arity <b>8</b>.</p>' +
+      '</div>';
+  }
+
+  if (hz) {
+    let body = '<div class="role-chip star"><span class="role-label">STAR</span>' + escapeHtml(host) + '</div>';
+    hz.roles.filter(r => r.role_id === ROLE_HZ_PLANET).forEach(r => {
+      const e = STATE.entities.get(r.entity_id);
+      if (e) body += '<div class="role-chip hz" data-id="' + e.id + '"><span class="role-label">HZ</span>' + escapeHtml(e.props[PROP.NAME]) + '</div>';
+    });
+    html +=
+      '<div class="db-section" style="border-color: rgba(245,166,35,0.4)">' +
+        '<h3 style="color: var(--hz)">Habitable-zone hyperedge <span class="pill hz" style="float:right">arity ' + hz.roles.length + '</span></h3>' +
+        body +
+      '</div>';
+  }
+
+  html +=
+    '<details class="db-section">' +
+      '<summary style="cursor:pointer;font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em">What does nDB store? (raw wire JSON)</summary>' +
+      '<h3 style="margin-top:8px">PLANET entity</h3>' +
+      '<pre>' + escapeHtml(JSON.stringify(planet.raw, null, 1)) + '</pre>' +
+      (disc ? '<h3>DISCOVERY hyperedge</h3><pre>' + escapeHtml(JSON.stringify(disc.raw, null, 1)) + '</pre>' : '') +
+    '</details>';
+
+  root.innerHTML = html;
+  root.querySelectorAll(".role-chip[data-id]").forEach(el => {
+    el.style.cursor = "pointer";
+    el.addEventListener("click", () => selectPlanet(el.dataset.id));
+  });
+}
+
+function renderOrbital(starEnt, sys, hz, selPlanet) {
+  const planets = sys.roles.filter(r => r.role_id === ROLE_PLANET)
+    .map(r => STATE.entities.get(r.entity_id)).filter(Boolean);
+  const aValues = planets.map(p => p.props[PROP.PL_SEMI_MAJOR_AU]).filter(a => a != null && a > 0);
+  if (!aValues.length) return '<div id="orbital-pane"><h3>Orbital diagram — no semi-major axis data</h3></div>';
+  const amax = Math.max(...aValues), amin = Math.min(...aValues);
+  const W = 360, H = 220, CX = W / 2, CY = H / 2;
+  const Rmax = Math.min(CX, CY) - 14, Rmin = 18;
+  const scale = (a) => {
+    if (amin === amax) return Rmax * 0.7;
+    const lo = Math.log10(amin * 0.7), hi = Math.log10(amax);
+    return Rmin + (Math.log10(a) - lo) / (hi - lo) * (Rmax - Rmin);
+  };
+  const hzNames = new Set();
+  if (hz) hz.roles.filter(r => r.role_id === ROLE_HZ_PLANET).forEach(r => {
+    const e = STATE.entities.get(r.entity_id); if (e) hzNames.add(e.props[PROP.NAME]);
+  });
+
+  let tracks = "", labels = "", dots = "", styles = "";
+  planets.forEach((p, i) => {
+    const a = p.props[PROP.PL_SEMI_MAJOR_AU];
+    if (a == null || a <= 0) return;
+    const r = scale(a);
+    const isHz = hzNames.has(p.props[PROP.NAME]);
+    tracks += '<circle class="orbit-track' + (isHz ? ' hz' : '') + '" cx="' + CX + '" cy="' + CY + '" r="' + r.toFixed(1) + '"/>';
+    const P = p.props[PROP.PL_ORBITAL_PERIOD] || (a * 365);
+    const duration = Math.max(2, Math.min(30, Math.log10(P + 1) * 8));
+    const offset = (i * 47) % 360;
+    const pxR = p.props[PROP.PL_RADIUS_RE] || 1;
+    const dotR = Math.min(7, Math.max(2.5, 2 + Math.log10(Math.max(pxR, 0.3))));
+    const isSel = p.id === selPlanet.id;
+    styles += "@keyframes orbit-" + i + " { from { transform: rotate(" + offset + "deg); } to { transform: rotate(" + (offset + 360) + "deg); } } ";
+    styles += ".orbit-anim-" + i + " { transform-origin: " + CX + "px " + CY + "px; transform-box: fill-box; animation: orbit-" + i + " " + duration + "s linear infinite; transform: rotate(" + offset + "deg); }";
+    dots +=
+      '<g class="orbit-anim-' + i + '" style="transform-origin:' + CX + 'px ' + CY + 'px;">' +
+        '<circle class="orbit-planet' + (isSel ? ' selected' : '') + '" cx="' + (CX + r).toFixed(1) + '" cy="' + CY + '" r="' + dotR.toFixed(1) + '" fill="' + (isHz ? 'var(--hz)' : 'var(--entity)') + '"/>' +
+      '</g>';
+    if (isSel) labels += '<text class="orbit-label" x="' + (CX + r + 6).toFixed(1) + '" y="' + (CY - 6) + '">' + escapeHtml(p.props[PROP.NAME]) + '</text>';
+  });
+
+  const starRad = Math.min(8, 4 + ((starEnt && starEnt.props[PROP.STAR_RADIUS_RSUN]) ?
+    Math.log10(starEnt.props[PROP.STAR_RADIUS_RSUN] + 0.1) * 4 : 2));
+
+  return '' +
+    '<div id="orbital-pane">' +
+      '<h3>Orbital diagram — ' + escapeHtml(sys.props[PROP.SYSTEM_HOST]) + ' (' + planets.length + ' planets, log-scaled)</h3>' +
+      '<svg id="orbital-svg" viewBox="0 0 ' + W + ' ' + H + '">' +
+        '<style>' + styles + '</style>' +
+        tracks +
+        '<circle class="orbit-glow" cx="' + CX + '" cy="' + CY + '" r="' + (starRad + 5) + '"/>' +
+        '<circle class="orbit-star" cx="' + CX + '" cy="' + CY + '" r="' + starRad + '"/>' +
+        dots +
+        labels +
+      '</svg>' +
+    '</div>';
+}
+
+async function fetchPlanetByName(name) {
+  const q = "SELECT pl_name,hostname,sy_pnum,discoverymethod,disc_year,disc_facility,disc_telescope,pl_orbper,pl_orbsmax,pl_rade,pl_bmasse,pl_eqt,sy_dist,ra,dec,st_teff,st_mass,st_rad,st_age FROM ps WHERE default_flag=1 AND pl_name='" + name.replace(/'/g, "''") + "'";
+  const url = "https://exoplanetarchive.ipac.caltech.edu/TAP/sync?query=" + encodeURIComponent(q) + "&format=json";
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("TAP " + r.status);
+  const rows = await r.json();
+  if (!rows.length) throw new Error("'" + name + "' not in NASA Exoplanet Archive (default_flag=1)");
+  return rows[0];
+}
+
+function newUuid() {
+  return (window.crypto && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : "00000000-0000-4000-8000-000000000000".replace(/[018]/g, c =>
+        (Number(c) ^ (Math.random() * 16) & 15 >> Number(c) / 4).toString(16));
+}
+
+async function commit(records) {
+  const r = await fetch(API_URL + "/commit", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ records }),
+  });
+  if (!r.ok) throw new Error("/commit " + r.status + " " + await r.text());
+  return r.json();
+}
+
+function shortenFacility(f) {
+  if (!f) return "Unknown";
+  const SHORT = [
+    ["Transiting Exoplanet Survey Satellite", "TESS"],
+    ["Kepler", "Kepler"], ["K2", "K2"], ["CHEOPS", "CHEOPS"],
+    ["James Webb", "JWST"], ["Hubble Space Telescope", "Hubble"],
+    ["Spitzer", "Spitzer"], ["Atacama Large Millimeter", "ALMA"],
+    ["Very Large Array", "VLA"], ["CoRoT", "CoRoT"],
+    ["Gaia", "Gaia"], ["Keck", "Keck"], ["Gemini", "Gemini"],
+    ["Subaru", "Subaru"], ["La Silla", "La Silla"], ["Paranal", "VLT"],
+    ["OGLE", "OGLE"], ["HATNet", "HATNet"], ["WASP", "WASP"],
+    ["KELT", "KELT"], ["Haute-Provence", "OHP"], ["Arecibo", "Arecibo"],
+    ["Parkes", "Parkes"], ["McDonald", "McDonald"],
+  ];
+  for (const [needle, short] of SHORT) if (f.toLowerCase().includes(needle.toLowerCase())) return short;
+  return f;
+}
+
+async function addPlanet(row) {
+  const records = [];
+  let starEnt = STATE.byName.get(row.hostname);
+  const starId = starEnt ? starEnt.id : newUuid();
+  if (!starEnt) {
+    const props = [{ prop_id: PROP.NAME, value: { tag: "string", value: row.hostname } }];
+    if (row.ra      != null) props.push({ prop_id: PROP.STAR_RA,          value: { tag: "f64", value: +row.ra } });
+    if (row.dec     != null) props.push({ prop_id: PROP.STAR_DEC,         value: { tag: "f64", value: +row.dec } });
+    if (row.sy_dist != null) props.push({ prop_id: PROP.STAR_DIST_PC,     value: { tag: "f64", value: +row.sy_dist } });
+    if (row.st_teff != null) props.push({ prop_id: PROP.STAR_TEFF,        value: { tag: "f64", value: +row.st_teff } });
+    if (row.st_mass != null) props.push({ prop_id: PROP.STAR_MASS_MSUN,   value: { tag: "f64", value: +row.st_mass } });
+    if (row.st_rad  != null) props.push({ prop_id: PROP.STAR_RADIUS_RSUN, value: { tag: "f64", value: +row.st_rad } });
+    if (row.st_age  != null) props.push({ prop_id: PROP.STAR_AGE_GYR,     value: { tag: "f64", value: +row.st_age } });
+    records.push({ kind: "entity", entity_id: starId, type_id: T_STAR, tx_id_assert: 0, tx_id_supersede: "active", properties: props });
+  }
+
+  let methodEnt = STATE.byName.get(row.discoverymethod);
+  const methodId = methodEnt ? methodEnt.id : newUuid();
+  if (!methodEnt) {
+    records.push({ kind: "entity", entity_id: methodId, type_id: T_METHOD, tx_id_assert: 0, tx_id_supersede: "active",
+      properties: [{ prop_id: PROP.NAME, value: { tag: "string", value: row.discoverymethod } }] });
+  }
+
+  const missionShort = shortenFacility(row.disc_facility || "");
+  let missionEnt = STATE.byName.get(missionShort);
+  const missionId = missionEnt ? missionEnt.id : newUuid();
+  if (!missionEnt) {
+    records.push({ kind: "entity", entity_id: missionId, type_id: T_MISSION, tx_id_assert: 0, tx_id_supersede: "active",
+      properties: [
+        { prop_id: PROP.NAME, value: { tag: "string", value: missionShort } },
+        { prop_id: PROP.MISSION_FULL_NAME, value: { tag: "string", value: row.disc_facility || missionShort } },
+      ] });
+  }
+
+  const planetId = newUuid();
+  const pprops = [
+    { prop_id: PROP.NAME, value: { tag: "string", value: row.pl_name } },
+    { prop_id: PROP.PL_HOST_NAME, value: { tag: "string", value: row.hostname } },
+    { prop_id: PROP.PL_HABITABLE, value: { tag: "string", value: "no" } },
+  ];
+  if (row.pl_rade   != null) pprops.push({ prop_id: PROP.PL_RADIUS_RE,      value: { tag: "f64", value: +row.pl_rade } });
+  if (row.pl_bmasse != null) pprops.push({ prop_id: PROP.PL_MASS_ME,        value: { tag: "f64", value: +row.pl_bmasse } });
+  if (row.pl_orbper != null) pprops.push({ prop_id: PROP.PL_ORBITAL_PERIOD, value: { tag: "f64", value: +row.pl_orbper } });
+  if (row.pl_orbsmax!= null) pprops.push({ prop_id: PROP.PL_SEMI_MAJOR_AU,  value: { tag: "f64", value: +row.pl_orbsmax } });
+  if (row.pl_eqt    != null) pprops.push({ prop_id: PROP.PL_EQ_TEMP_K,      value: { tag: "f64", value: +row.pl_eqt } });
+  records.push({ kind: "entity", entity_id: planetId, type_id: T_PLANET, tx_id_assert: 0, tx_id_supersede: "active", properties: pprops });
+
+  const dprops = [];
+  if (row.disc_year      != null) dprops.push({ prop_id: PROP.DISC_YEAR,     value: { tag: "i64", value: +row.disc_year } });
+  if (row.disc_facility)          dprops.push({ prop_id: PROP.DISC_FACILITY,  value: { tag: "string", value: row.disc_facility } });
+  if (row.disc_telescope)         dprops.push({ prop_id: PROP.DISC_TELESCOPE, value: { tag: "string", value: row.disc_telescope } });
+  records.push({
+    kind: "hyper_edge", hyperedge_id: newUuid(), type_id: T_DISCOVERY,
+    tx_id_assert: 0, tx_id_supersede: "active",
+    roles: [
+      { role_id: ROLE_STAR,    entity_id: starId },
+      { role_id: ROLE_PLANET,  entity_id: planetId },
+      { role_id: ROLE_METHOD,  entity_id: methodId },
+      { role_id: ROLE_MISSION, entity_id: missionId },
+    ],
+    properties: dprops,
+  });
+
+  await commit(records);
+
+  STATE.entities.clear();
+  STATE.edges.length = 0;
+  STATE.byName.clear();
+  await loadAll();
+  refreshStats();
+  refreshSystemPicker();
+  render();
+  selectPlanet(planetId);
+}
+
+document.querySelectorAll("#mode-toggle button").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("#mode-toggle button").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    STATE.mode = btn.dataset.mode;
+    render();
+  });
+});
+
+$("#fetch-go").addEventListener("click", async () => {
+  const inp = $("#fetch-input"); const name = inp.value.trim();
+  if (!name) return;
+  const btn = $("#fetch-go");
+  btn.disabled = true; btn.textContent = "Fetching…";
+  try {
+    const row = await fetchPlanetByName(name);
+    btn.textContent = "Committing…";
+    await addPlanet(row);
+    inp.value = "";
+    btn.textContent = "Fetched ✓";
+    setTimeout(() => { btn.textContent = "Fetch & add to nDB"; btn.disabled = false; }, 1200);
+  } catch (e) {
+    alert(String(e));
+    btn.textContent = "Fetch & add to nDB"; btn.disabled = false;
+  }
+});
+$("#fetch-input").addEventListener("keydown", e => { if (e.key === "Enter") $("#fetch-go").click(); });
+
+window.addEventListener("resize", render);
+
+(async () => {
+  try {
+    await loadAll();
+    refreshStats();
+    refreshSystemPicker();
+    refreshRightPane();
+    render();
+  } catch (e) {
+    document.getElementById("centre").innerHTML =
+      '<div style="padding:24px;color:#ff7070">Could not load nDB: ' + escapeHtml(String(e)) + '<br><br>' +
+      'Make sure the explorer is running:<br><code>cargo run -p ndb-renderer --example exoplanet_explorer</code></div>';
+  }
+})();
+</script>
+</body>
+</html>
