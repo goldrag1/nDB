@@ -38,6 +38,13 @@ pub struct NameQuery {
     /// a `match` pattern. Executed BEFORE `create` so a single query
     /// can replace data atomically.
     pub deletes: Vec<NameDelete>,
+    /// `set` assignments, in source order. Variables MUST be bound by
+    /// a `match` pattern. Each `set` reads the current record, writes
+    /// a new assertion with the named property replaced.
+    pub sets: Vec<NameSet>,
+    /// `merge` clauses (upsert). In source order. Resolved AFTER
+    /// `match` so merge bindings can reference earlier `?vars`.
+    pub merges: Vec<NameMerge>,
     /// Overall span of the query (start of first token through end of last).
     pub span: Span,
 }
@@ -218,6 +225,39 @@ pub struct NameCreate {
     pub span: Span,
 }
 
+/// A `set ?v.property = term` assignment within a `set` clause.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NameSet {
+    /// Variable name (without the `?`) — must be bound by a preceding `match`.
+    pub variable: String,
+    /// Property name (the part after `.`).
+    pub property: String,
+    /// Term to assign.
+    pub term: NameTerm,
+    /// Span of the entire assignment.
+    pub span: Span,
+}
+
+/// A `merge type(prop: val, ...) [as ?v]` clause — upsert.
+///
+/// Looks up an entity (or hyperedge) where every binding's value
+/// matches the record's existing property value. If found, the
+/// variable binds to the first match. If not found, creates a new
+/// record with the bindings as properties and binds to the new record.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NameMerge {
+    /// Type name (resolver maps → type_id, decides entity vs hyperedge).
+    pub type_name: String,
+    /// Source span of the type name token.
+    pub type_span: Span,
+    /// Bindings — used for BOTH match-criteria and create-properties.
+    pub bindings: Vec<NameBinding>,
+    /// Optional `as ?v` capture.
+    pub self_var: Option<String>,
+    /// Whole-clause span.
+    pub span: Span,
+}
+
 /// A `delete ?v` clause.
 ///
 /// The variable MUST be bound by a preceding `match`. The executor
@@ -247,17 +287,63 @@ pub struct NameOrderKey {
 
 /// One entry in the `return` list.
 ///
-/// - `?v` — `property` is `None`. Projects the variable's bound value
-///   (UUID for self-bound entities / hyperedges, scalar for role
-///   bindings).
-/// - `?v.name` — `property` is `Some("name")`. Follows the bound UUID
-///   to its record and projects the named property's value.
+/// - `?v` — `property` is `None`, `aggregate` is `None`. Projects the variable's bound value.
+/// - `?v.name` — `property = Some("name")`. UUID → record → property value.
+/// - `count()` — `aggregate = Some(Count)`, `name = ""`, no `property`. Counts rows per group.
+/// - `sum(?v.prop)` — `aggregate = Some(Sum)`, `name = "v"`, `property = Some("prop")`.
+///
+/// When ANY entry in the return list has an aggregate, the executor
+/// implicitly groups by every non-aggregate entry — Cypher semantics.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NameReturn {
-    /// Variable name (without the `?`).
+    /// Variable name (without the `?`). May be empty for `count()`.
     pub name: String,
     /// Optional property name following a `.` (e.g. `?p.season_from`).
     pub property: Option<String>,
-    /// Source location spanning the whole `?v[.prop]` projection.
+    /// Optional aggregate function wrapping this projection.
+    pub aggregate: Option<AggregateFn>,
+    /// Source location spanning the whole entry.
     pub span: Span,
+}
+
+/// Aggregate functions supported in the `return` list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AggregateFn {
+    /// `count()` (no argument) — counts rows per group.
+    Count,
+    /// `sum(?v.prop)` — numeric sum across the group.
+    Sum,
+    /// `avg(?v.prop)` — arithmetic mean across the group.
+    Avg,
+    /// `min(?v.prop)` — minimum across the group (string-aware).
+    Min,
+    /// `max(?v.prop)` — maximum across the group (string-aware).
+    Max,
+}
+
+impl AggregateFn {
+    /// Parse from an identifier; returns `None` if not a recognised name.
+    #[must_use]
+    pub fn from_ident(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "count" => Some(Self::Count),
+            "sum"   => Some(Self::Sum),
+            "avg"   => Some(Self::Avg),
+            "min"   => Some(Self::Min),
+            "max"   => Some(Self::Max),
+            _ => None,
+        }
+    }
+
+    /// Lower-case function name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Count => "count",
+            Self::Sum   => "sum",
+            Self::Avg   => "avg",
+            Self::Min   => "min",
+            Self::Max   => "max",
+        }
+    }
 }

@@ -28,7 +28,7 @@
 use ndb_engine::JsonValue;
 
 use crate::ast::{
-    NameAsOf, NameBinding, NameCmpOp, NameCreate, NameDelete, NameExpr, NameOrderKey, NamePattern, NameQuery, NameRecursion, NameReturn,
+    NameAsOf, NameBinding, NameCmpOp, NameCreate, NameDelete, NameExpr, NameMerge, NameOrderKey, NamePattern, NameQuery, NameRecursion, NameReturn, NameSet,
     NameTerm,
 };
 use crate::error::{ParseError, Span};
@@ -155,6 +155,18 @@ impl Parser {
             }
         }
 
+        // Optional `set ?v.prop = term[, ...]` — requires preceding match.
+        let mut sets = Vec::new();
+        if self.eat(&TokKind::Set).is_some() {
+            if patterns.is_empty() {
+                return Err(self.unexpected("`set` requires a preceding `match` clause"));
+            }
+            sets.push(self.parse_set_one()?);
+            while self.eat(&TokKind::Comma).is_some() {
+                sets.push(self.parse_set_one()?);
+            }
+        }
+
         // Optional one-or-more `create type(...) [as ?v]` clauses.
         let mut creates = Vec::new();
         while self.check(&TokKind::Create) {
@@ -162,9 +174,17 @@ impl Parser {
             creates.push(self.parse_create_one()?);
         }
 
-        // A query must have at least one of match / create / delete.
-        if patterns.is_empty() && creates.is_empty() && deletes.is_empty() {
-            return Err(self.unexpected("`match`, `create`, or `delete`"));
+        // Optional `merge type(...) [as ?v]` clauses.
+        let mut merges = Vec::new();
+        while self.check(&TokKind::Merge) {
+            self.advance();
+            merges.push(self.parse_merge_one()?);
+        }
+
+        // A query must have at least one of match / create / merge / delete / set.
+        if patterns.is_empty() && creates.is_empty() && merges.is_empty()
+           && deletes.is_empty() && sets.is_empty() {
+            return Err(self.unexpected("`match`, `create`, `merge`, `delete`, or `set`"));
         }
 
         // `return` is optional for write-only queries.
@@ -174,11 +194,10 @@ impl Parser {
             Vec::new()
         };
 
-        // A query must do SOMETHING — either project results, create
-        // records, or tombstone matched records. A pure `match` with
-        // no action is pointless syntax.
-        if returns.is_empty() && creates.is_empty() && deletes.is_empty() {
-            return Err(self.unexpected("`return`, `create`, or `delete`"));
+        // A query must do SOMETHING — either project, write, or tombstone.
+        if returns.is_empty() && creates.is_empty() && merges.is_empty()
+           && deletes.is_empty() && sets.is_empty() {
+            return Err(self.unexpected("`return`, `create`, `merge`, `delete`, or `set`"));
         }
 
         // Optional `order by key [asc|desc], key [asc|desc], ...`
@@ -220,7 +239,80 @@ impl Parser {
             limit,
             creates,
             deletes,
+            sets,
+            merges,
             span: Span::range(start, end),
+        })
+    }
+
+    /// Parse one `?var.property = term` set assignment.
+    fn parse_set_one(&mut self) -> Result<NameSet, ParseError> {
+        let var_tok = self.advance();
+        let variable = match var_tok.kind {
+            TokKind::Var(s) => s,
+            other => return Err(ParseError::Unexpected {
+                expected: "variable in `set` clause".into(),
+                found: other.describe(),
+                span: var_tok.span,
+            }),
+        };
+        self.expect(&TokKind::Dot, "`.`")?;
+        let prop_tok = self.advance();
+        let property = match prop_tok.kind {
+            TokKind::Ident(s) => s,
+            other => return Err(ParseError::Unexpected {
+                expected: "property name after `.`".into(),
+                found: other.describe(),
+                span: prop_tok.span,
+            }),
+        };
+        self.expect(&TokKind::Eq, "`=`")?;
+        let term = self.parse_term()?;
+        let end = term.span().end();
+        Ok(NameSet {
+            variable, property, term,
+            span: crate::error::Span::range(var_tok.span.start, end),
+        })
+    }
+
+    /// Parse one `merge type(prop: val, ...) [as ?v]` — keyword already consumed.
+    fn parse_merge_one(&mut self) -> Result<NameMerge, ParseError> {
+        let type_tok = self.advance();
+        let (type_name, type_span) = match type_tok.kind {
+            TokKind::Ident(s) => (s, type_tok.span),
+            other => return Err(ParseError::Unexpected {
+                expected: "type identifier after `merge`".into(),
+                found: other.describe(),
+                span: type_tok.span,
+            }),
+        };
+        let start = type_span.start;
+        self.expect(&TokKind::LParen, "`(`")?;
+        let bindings = if matches!(self.peek_kind(), TokKind::RParen) {
+            Vec::new()
+        } else {
+            self.parse_binding_list()?
+        };
+        let rparen = self.expect(&TokKind::RParen, "`)`")?;
+        let mut end = rparen.span.end();
+        let self_var = if self.check(&TokKind::As) {
+            let save = self.pos;
+            self.advance();
+            if let TokKind::Var(name) = self.peek_kind() {
+                let name = name.clone();
+                let vtok = self.advance();
+                end = vtok.span.end();
+                Some(name)
+            } else {
+                self.pos = save;
+                None
+            }
+        } else {
+            None
+        };
+        Ok(NameMerge {
+            type_name, type_span, bindings, self_var,
+            span: crate::error::Span::range(start, end),
         })
     }
 
@@ -651,6 +743,49 @@ impl Parser {
     }
 
     fn parse_return_one(&mut self) -> Result<NameReturn, ParseError> {
+        // Aggregate call: `count()` / `sum(?v.x)` / `avg(?v.x)` /
+        // `min(?v.x)` / `max(?v.x)`. Identified by an Ident followed
+        // immediately by `(`.
+        if let TokKind::Ident(name) = self.peek_kind()
+            && let Some(agg) = crate::ast::AggregateFn::from_ident(name)
+            && matches!(self.peek2_kind(), TokKind::LParen)
+        {
+            let agg_tok = self.advance(); // consume the identifier
+            self.expect(&TokKind::LParen, "`(`")?;
+            let (var_name, prop_name) = if matches!(self.peek_kind(), TokKind::RParen) {
+                (String::new(), None)
+            } else {
+                let v_tok = self.advance();
+                let v = match v_tok.kind {
+                    TokKind::Var(s) => s,
+                    other => return Err(ParseError::Unexpected {
+                        expected: "variable inside aggregate call".into(),
+                        found: other.describe(),
+                        span: v_tok.span,
+                    }),
+                };
+                let p = if self.eat(&TokKind::Dot).is_some() {
+                    let pt = self.advance();
+                    match pt.kind {
+                        TokKind::Ident(s) => Some(s),
+                        other => return Err(ParseError::Unexpected {
+                            expected: "property name after `.`".into(),
+                            found: other.describe(),
+                            span: pt.span,
+                        }),
+                    }
+                } else { None };
+                (v, p)
+            };
+            let rparen = self.expect(&TokKind::RParen, "`)`")?;
+            return Ok(NameReturn {
+                name: var_name,
+                property: prop_name,
+                aggregate: Some(agg),
+                span: crate::error::Span::range(agg_tok.span.start, rparen.span.end()),
+            });
+        }
+
         let t = self.advance();
         let name = match t.kind {
             TokKind::Var(name) => name,
@@ -660,7 +795,6 @@ impl Parser {
                 span: t.span,
             }),
         };
-        // Optional `.identifier` property projection.
         let (property, end_span) = if self.eat(&TokKind::Dot).is_some() {
             let prop_tok = self.advance();
             match prop_tok.kind {
@@ -674,9 +808,14 @@ impl Parser {
         } else {
             (None, t.span)
         };
-        // Span covers `?v` through the optional `.prop`.
         let combined_span = crate::error::Span::range(t.span.start, end_span.end());
-        Ok(NameReturn { name, property, span: combined_span })
+        Ok(NameReturn { name, property, aggregate: None, span: combined_span })
+    }
+
+    /// Peek the SECOND token from `self.pos` without consuming.
+    fn peek2_kind(&self) -> &TokKind {
+        let idx = (self.pos + 1).min(self.toks.len().saturating_sub(1));
+        &self.toks[idx].kind
     }
 }
 

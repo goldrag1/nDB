@@ -151,7 +151,8 @@ pub fn execute(engine: &mut Engine, req: QueryRequest) -> Result<QueryResponse, 
     // Deletes first (so create can "replace" an old record cleanly in
     // the same query), then creates. Both share a single write txn
     // when there's anything to do — the engine handles MVCC.
-    let has_writes = !req.deletes.is_empty() || !req.creates.is_empty();
+    let has_writes = !req.deletes.is_empty() || !req.creates.is_empty()
+                     || !req.sets.is_empty() || !req.merges.is_empty();
     let mut projection_snapshot = snapshot;
     if has_writes {
         // Deletes: tombstone every UUID bound by each variable across
@@ -173,6 +174,191 @@ pub fn execute(engine: &mut Engine, req: QueryRequest) -> Result<QueryResponse, 
                     target_id: *uuid,
                     tx_id_supersede: tx_id,
                 }));
+            }
+            txn.commit().map_err(QueryError::Engine)?;
+        }
+
+        // SETs: read the current record, build a new assertion with the
+        // named property replaced (or appended), commit. One write txn
+        // per row × clause group for atomicity. Each (variable, uuid)
+        // is processed at most once even if it appears across multiple
+        // matched rows.
+        if !req.sets.is_empty() {
+            let mut updates: std::collections::HashMap<uuid::Uuid, Vec<&crate::wire_query::SetClause>> =
+                std::collections::HashMap::new();
+            for r in &rows {
+                for s in &req.sets {
+                    if let Some(Value::EntityRef(eid)) = r.get(&s.variable) {
+                        updates.entry(eid.into_uuid()).or_default().push(s);
+                    }
+                }
+            }
+            if !updates.is_empty() {
+                let row_ctx: Bindings = rows.first().cloned().unwrap_or_default();
+                // Pass 1: read every current record (immutable borrow) + compute
+                // the new property list. Collect everything we'll write.
+                #[allow(clippy::type_complexity)]
+                let mut pending: Vec<crate::record::Record> = Vec::with_capacity(updates.len());
+                for (uuid, clauses) in updates {
+                    let record = match engine.snapshot_read(&uuid, snapshot)
+                        .map_err(QueryError::Engine)?
+                    {
+                        Resolved::Live(r) => r,
+                        _ => continue,
+                    };
+                    let replaced: HashSet<u32> = clauses.iter().map(|c| c.property).collect();
+                    match record {
+                        crate::record::Record::Entity(e) => {
+                            let mut new_props: Vec<(PropertyId, Value)> = e.properties
+                                .into_iter()
+                                .filter(|(p, _)| !replaced.contains(&p.get()))
+                                .collect();
+                            for c in &clauses {
+                                let v = resolve_create_term(&c.term, &row_ctx)?;
+                                new_props.push((PropertyId::new(c.property), v));
+                            }
+                            pending.push(crate::record::Record::Entity(crate::record::EntityRecord {
+                                entity_id: e.entity_id,
+                                type_id: e.type_id,
+                                tx_id_assert: TxId::ACTIVE,  // overwritten by txn at commit
+                                tx_id_supersede: TxId::ACTIVE,
+                                properties: new_props,
+                            }));
+                        }
+                        crate::record::Record::HyperEdge(h) => {
+                            let mut new_props: Vec<(PropertyId, Value)> = h.properties
+                                .into_iter()
+                                .filter(|(p, _)| !replaced.contains(&p.get()))
+                                .collect();
+                            for c in &clauses {
+                                let v = resolve_create_term(&c.term, &row_ctx)?;
+                                new_props.push((PropertyId::new(c.property), v));
+                            }
+                            pending.push(crate::record::Record::HyperEdge(crate::record::HyperEdgeRecord {
+                                hyperedge_id: h.hyperedge_id,
+                                type_id: h.type_id,
+                                tx_id_assert: TxId::ACTIVE,
+                                tx_id_supersede: TxId::ACTIVE,
+                                roles: h.roles,
+                                properties: new_props,
+                            }));
+                        }
+                        _ => {}
+                    }
+                }
+                // Pass 2: open write txn + put_raw every new assertion. The
+                // engine fills in tx_id_assert from the txn.
+                let mut txn = engine.begin_write();
+                let tx_id = txn.tx_id();
+                for rec in pending {
+                    match rec {
+                        crate::record::Record::Entity(mut e) => {
+                            e.tx_id_assert = tx_id;
+                            txn.put_entity(e);
+                        }
+                        crate::record::Record::HyperEdge(mut h) => {
+                            h.tx_id_assert = tx_id;
+                            txn.put_hyperedge(h);
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                txn.commit().map_err(QueryError::Engine)?;
+            }
+        }
+
+        // MERGEs: lookup-or-create. Two passes to dodge the borrow
+        // checker — first an immutable scan to decide existing-vs-new
+        // per clause, then one write txn for the new records.
+        if !req.merges.is_empty() {
+            let row_ctx: Bindings = rows.first().cloned().unwrap_or_default();
+
+            // Pass 1: for each merge clause, resolve all binding terms
+            // to concrete Values + decide whether a matching record exists.
+            #[allow(clippy::type_complexity)]
+            let mut decisions: Vec<(
+                &crate::wire_query::MergeClause,
+                Vec<(PropertyId, Value)>,    // prop_values
+                Vec<(RoleId, EntityId)>,     // role_values
+                Option<uuid::Uuid>,          // existing match, if any
+            )> = Vec::with_capacity(req.merges.len());
+
+            for m in &req.merges {
+                let mut prop_values: Vec<(PropertyId, Value)> = Vec::with_capacity(m.properties.len());
+                for cb in &m.properties {
+                    let v = resolve_create_term(&cb.term, &row_ctx)?;
+                    prop_values.push((PropertyId::new(cb.property_id), v));
+                }
+                let mut role_values: Vec<(RoleId, EntityId)> = Vec::with_capacity(m.role_bindings.len());
+                for rb in &m.role_bindings {
+                    let v = resolve_create_term(&rb.term, &row_ctx)?;
+                    let Value::EntityRef(eid) = v else {
+                        return Err(QueryError::RecursionConfigInvalid {
+                            reason: format!("merge role {} expected an entity UUID", rb.role_id),
+                        });
+                    };
+                    role_values.push((RoleId::new(rb.role_id), eid));
+                }
+                let target_type = TypeId::new(m.type_id);
+                let found: Option<uuid::Uuid> = engine
+                    .snapshot_iter_streaming(snapshot)
+                    .filter_map(Result::ok)
+                    .find_map(|rec| match (&rec, m.is_hyperedge) {
+                        (crate::record::Record::Entity(e), false) if e.type_id == target_type => {
+                            if prop_values.iter().all(|(p, v)|
+                                e.properties.iter().any(|(ep, ev)| ep == p && ev == v))
+                            { Some(e.entity_id.into_uuid()) } else { None }
+                        }
+                        (crate::record::Record::HyperEdge(h), true) if h.type_id == target_type => {
+                            let props_ok = prop_values.iter().all(|(p, v)|
+                                h.properties.iter().any(|(ep, ev)| ep == p && ev == v));
+                            let roles_ok = role_values.iter().all(|(r, e)|
+                                h.roles.iter().any(|(rr, er)| rr == r && er == e));
+                            if props_ok && roles_ok { Some(h.hyperedge_id.into_uuid()) } else { None }
+                        }
+                        _ => None,
+                    });
+                decisions.push((m, prop_values, role_values, found));
+            }
+
+            // Pass 2: open one write txn, mint new records where needed,
+            // bind self_var on every clause.
+            let mut txn = engine.begin_write();
+            let tx_id = txn.tx_id();
+            for (m, prop_values, role_values, found) in decisions {
+                let bound_uuid = if let Some(u) = found {
+                    u
+                } else if m.is_hyperedge {
+                    let hid = HyperedgeId::now_v7();
+                    txn.put_hyperedge(crate::record::HyperEdgeRecord {
+                        hyperedge_id: hid,
+                        type_id: TypeId::new(m.type_id),
+                        tx_id_assert: tx_id,
+                        tx_id_supersede: TxId::ACTIVE,
+                        roles: role_values,
+                        properties: prop_values,
+                    });
+                    hid.into_uuid()
+                } else {
+                    let eid = EntityId::now_v7();
+                    txn.put_entity(crate::record::EntityRecord {
+                        entity_id: eid,
+                        type_id: TypeId::new(m.type_id),
+                        tx_id_assert: tx_id,
+                        tx_id_supersede: TxId::ACTIVE,
+                        properties: prop_values,
+                    });
+                    eid.into_uuid()
+                };
+                if let Some(v) = m.self_var.as_deref() {
+                    let eref = EntityId::from_uuid(bound_uuid);
+                    for r in &mut rows { r.insert(v.to_string(), Value::EntityRef(eref)); }
+                    if rows.is_empty() {
+                        let mut b = Bindings::new();
+                        b.insert(v.to_string(), Value::EntityRef(eref));
+                        rows.push(b);
+                    }
+                }
             }
             txn.commit().map_err(QueryError::Engine)?;
         }
@@ -266,14 +452,21 @@ pub fn execute(engine: &mut Engine, req: QueryRequest) -> Result<QueryResponse, 
     // don't have to recompute per row).
     let columns: Vec<String> = req.returns.iter().map(ReturnItem::column_name).collect();
 
-    let response_rows: Vec<Vec<JsonValue>> = rows
-        .into_iter()
-        .map(|r| {
-            req.returns.iter()
-                .map(|item| project_item(engine, projection_snapshot, item, &r))
-                .collect()
-        })
-        .collect();
+    // Aggregate path: if ANY return item is an aggregate, the executor
+    // implicitly groups by every non-aggregate item (Cypher semantics)
+    // and produces one row per group. Otherwise: per-row projection.
+    let has_aggregate = req.returns.iter().any(ReturnItem::is_aggregate);
+    let response_rows: Vec<Vec<JsonValue>> = if has_aggregate {
+        aggregate_rows(engine, projection_snapshot, &req.returns, rows)
+    } else {
+        rows.into_iter()
+            .map(|r| {
+                req.returns.iter()
+                    .map(|item| project_item(engine, projection_snapshot, item, &r))
+                    .collect()
+            })
+            .collect()
+    };
 
     Ok(QueryResponse {
         columns,
@@ -371,6 +564,140 @@ fn compare_values(a: Option<&Value>, b: Option<&Value>) -> std::cmp::Ordering {
     }
 }
 
+/// Implicit-GROUP-BY aggregation pass.
+///
+/// Cypher-style semantics: every non-aggregate return item is part of
+/// the group key. For each group, emit one row whose columns are
+/// (group-key projections in order) interleaved with (aggregate values
+/// in order). Numeric aggregates (`sum`/`avg`/`min`/`max`) silently
+/// skip non-numeric values; `count()` counts all rows in the group;
+/// `count(?v)` counts rows where `?v` is bound.
+fn aggregate_rows(
+    engine: &mut Engine,
+    snapshot: TxId,
+    returns: &[ReturnItem],
+    rows: Vec<Bindings>,
+) -> Vec<Vec<JsonValue>> {
+    // Project the key for each row (non-aggregate columns), bucket.
+    use std::collections::BTreeMap;
+    // BTreeMap with Vec<JsonValue> key requires the values to be Ord. JsonValue
+    // doesn't implement Ord, so encode the key as a stable JSON string.
+    let mut groups: BTreeMap<String, (Vec<JsonValue>, Vec<Bindings>)> = BTreeMap::new();
+
+    for row in rows {
+        let mut key_cells: Vec<JsonValue> = Vec::new();
+        for item in returns {
+            if !item.is_aggregate() {
+                key_cells.push(project_item(engine, snapshot, item, &row));
+            }
+        }
+        let key_str = serde_json::to_string(&key_cells).unwrap_or_default();
+        groups.entry(key_str).or_insert_with(|| (key_cells, Vec::new())).1.push(row);
+    }
+
+    // Compute one output row per group.
+    let mut out: Vec<Vec<JsonValue>> = Vec::with_capacity(groups.len());
+    for (_, (key_cells, group_rows)) in groups {
+        let mut row_out: Vec<JsonValue> = Vec::with_capacity(returns.len());
+        let mut key_iter = key_cells.into_iter();
+        for item in returns {
+            if !item.is_aggregate() {
+                row_out.push(key_iter.next().unwrap_or(JsonValue::Null));
+                continue;
+            }
+            let ReturnItem::Aggregate { func, variable, property, .. } = item else { unreachable!() };
+            let agg_val = compute_aggregate(engine, snapshot, func, variable.as_deref(), *property, &group_rows);
+            row_out.push(agg_val);
+        }
+        out.push(row_out);
+    }
+    out
+}
+
+/// Compute one aggregate value over a group's rows.
+fn compute_aggregate(
+    engine: &mut Engine,
+    snapshot: TxId,
+    func: &str,
+    variable: Option<&str>,
+    property: Option<u32>,
+    group_rows: &[Bindings],
+) -> JsonValue {
+    // count() / count(?v) — integer count.
+    if func == "count" {
+        let n: i64 = if let Some(v) = variable {
+            group_rows.iter().filter(|r| r.get(v).is_some()).count() as i64
+        } else {
+            group_rows.len() as i64
+        };
+        return JsonValue::I64 { value: n };
+    }
+
+    // Numeric aggregates need a value per row. Collect them.
+    let values: Vec<JsonValue> = group_rows.iter()
+        .filter_map(|r| {
+            let v = variable?;
+            let bound = r.get(v)?;
+            match property {
+                None => Some((&bound.clone()).into()),
+                Some(pid) => {
+                    let Value::EntityRef(eid) = bound else { return None };
+                    let uuid = eid.into_uuid();
+                    let Ok(Resolved::Live(rec)) = engine.snapshot_read(&uuid, snapshot) else { return None };
+                    let target = PropertyId::new(pid);
+                    let props: Box<dyn Iterator<Item = &(PropertyId, Value)>> = match &rec {
+                        Record::Entity(e)    => Box::new(e.properties.iter()),
+                        Record::HyperEdge(h) => Box::new(h.properties.iter()),
+                        _ => return None,
+                    };
+                    for (p, val) in props { if *p == target { return Some((&val.clone()).into()); } }
+                    None
+                }
+            }
+        })
+        .collect();
+
+    // Extract f64 (or i64 promoted) for sum/avg.
+    let floats: Vec<f64> = values.iter().filter_map(|v| match v {
+        JsonValue::I64 { value } => Some(*value as f64),
+        JsonValue::F64 { value } => Some(*value),
+        _ => None,
+    }).collect();
+
+    match func {
+        "sum" => JsonValue::F64 { value: floats.iter().copied().sum() },
+        "avg" => if floats.is_empty() {
+            JsonValue::Null
+        } else {
+            JsonValue::F64 { value: floats.iter().copied().sum::<f64>() / floats.len() as f64 }
+        },
+        "min" => values.iter().filter(|v| !matches!(v, JsonValue::Null))
+            .min_by(json_value_cmp)
+            .cloned()
+            .unwrap_or(JsonValue::Null),
+        "max" => values.iter().filter(|v| !matches!(v, JsonValue::Null))
+            .max_by(json_value_cmp)
+            .cloned()
+            .unwrap_or(JsonValue::Null),
+        _ => JsonValue::Null,
+    }
+}
+
+/// Total ordering across JsonValue for min/max. Mixed types fall back
+/// to debug-string comparison so the comparator stays total.
+fn json_value_cmp(a: &&JsonValue, b: &&JsonValue) -> std::cmp::Ordering {
+    use std::cmp::Ordering::*;
+    match (a, b) {
+        (JsonValue::String { value: a }, JsonValue::String { value: b }) => a.cmp(b),
+        (JsonValue::I64 { value: a },    JsonValue::I64 { value: b })    => a.cmp(b),
+        (JsonValue::F64 { value: a },    JsonValue::F64 { value: b })    => a.partial_cmp(b).unwrap_or(Equal),
+        (JsonValue::I64 { value: a },    JsonValue::F64 { value: b })    => (*a as f64).partial_cmp(b).unwrap_or(Equal),
+        (JsonValue::F64 { value: a },    JsonValue::I64 { value: b })    => a.partial_cmp(&(*b as f64)).unwrap_or(Equal),
+        (JsonValue::Bool { value: a },   JsonValue::Bool { value: b })   => a.cmp(b),
+        _ => format!("{a:?}").cmp(&format!("{b:?}")),
+    }
+}
+
 /// Resolve a `Term` from a `create` binding to a `Value` using the
 /// row's current bindings. Variables resolve via row.get; literals
 /// convert from the wire's `JsonValue` to the engine's `Value`.
@@ -430,6 +757,9 @@ fn project_item(
             }
             JsonValue::Null
         }
+        // Aggregates are projected by aggregate_rows(), not project_item.
+        // If one slipped through, return null to keep the pipeline safe.
+        ReturnItem::Aggregate { .. } => JsonValue::Null,
     }
 }
 
@@ -1218,6 +1548,8 @@ mod tests {
             limit: None,
             creates: Vec::new(),
             deletes: Vec::new(),
+            sets: Vec::new(),
+            merges: Vec::new(),
         };
         let resp = execute(&mut engine, req).unwrap();
         assert_eq!(resp.columns, vec!["c"]);
@@ -1251,6 +1583,8 @@ mod tests {
             limit: None,
             creates: Vec::new(),
             deletes: Vec::new(),
+            sets: Vec::new(),
+            merges: Vec::new(),
         };
         let resp = execute(&mut engine, req).unwrap();
         assert_eq!(resp.rows.len(), 2);
@@ -1313,6 +1647,8 @@ mod tests {
             limit: None,
             creates: Vec::new(),
             deletes: Vec::new(),
+            sets: Vec::new(),
+            merges: Vec::new(),
         };
         let resp = execute(&mut engine, req).unwrap();
         assert_eq!(resp.rows.len(), 2);
@@ -1362,6 +1698,8 @@ mod tests {
             limit: None,
             creates: Vec::new(),
             deletes: Vec::new(),
+            sets: Vec::new(),
+            merges: Vec::new(),
         };
         let resp = execute(&mut engine, req).unwrap();
         assert_eq!(resp.rows.len(), 1);
@@ -1383,6 +1721,8 @@ mod tests {
             limit: Some(2),
             creates: Vec::new(),
             deletes: Vec::new(),
+            sets: Vec::new(),
+            merges: Vec::new(),
         };
         let resp = execute(&mut engine, req).unwrap();
         assert_eq!(resp.rows.len(), 2);
@@ -1402,6 +1742,8 @@ mod tests {
             limit: None,
             creates: Vec::new(),
             deletes: Vec::new(),
+            sets: Vec::new(),
+            merges: Vec::new(),
         };
         let resp = execute(&mut engine, req).unwrap();
         assert_eq!(resp.rows.len(), 0);
@@ -1426,6 +1768,8 @@ mod tests {
             limit: None,
             creates: Vec::new(),
             deletes: Vec::new(),
+            sets: Vec::new(),
+            merges: Vec::new(),
         };
         let err = execute(&mut engine, req).unwrap_err();
         assert!(matches!(err, QueryError::RecursionConfigInvalid { .. }));
@@ -1515,6 +1859,8 @@ mod tests {
             limit: None,
             creates: Vec::new(),
             deletes: Vec::new(),
+            sets: Vec::new(),
+            merges: Vec::new(),
         };
         let resp = execute(&mut engine, req).unwrap();
         // 4 rows: body itself (0-step), organ, tissue, cell.
@@ -1560,6 +1906,8 @@ mod tests {
             limit: None,
             creates: Vec::new(),
             deletes: Vec::new(),
+            sets: Vec::new(),
+            merges: Vec::new(),
         };
         let resp = execute(&mut engine, req).unwrap();
         // 2 rows: organ, cell. body excluded.
@@ -1605,6 +1953,8 @@ mod tests {
             limit: None,
             creates: Vec::new(),
             deletes: Vec::new(),
+            sets: Vec::new(),
+            merges: Vec::new(),
         };
         let resp = execute(&mut engine, req).unwrap();
         assert_eq!(resp.rows.len(), 1);
@@ -1634,6 +1984,8 @@ mod tests {
             limit: None,
             creates: Vec::new(),
             deletes: Vec::new(),
+            sets: Vec::new(),
+            merges: Vec::new(),
         };
         let resp = execute(&mut engine, req).unwrap();
         // 3 unique entities: a (0-step), b, c.
@@ -1674,6 +2026,8 @@ mod tests {
             limit: None,
             creates: Vec::new(),
             deletes: Vec::new(),
+            sets: Vec::new(),
+            merges: Vec::new(),
         };
         let err = execute(&mut engine, req).unwrap_err();
         assert!(matches!(
@@ -1696,6 +2050,8 @@ mod tests {
             limit: None,
             creates: Vec::new(),
             deletes: Vec::new(),
+            sets: Vec::new(),
+            merges: Vec::new(),
         };
         let err = execute(&mut engine, req).unwrap_err();
         assert!(matches!(err, QueryError::TimestampUnavailable { .. }));
@@ -1727,6 +2083,8 @@ mod tests {
             limit: None,
             creates: Vec::new(),
             deletes: Vec::new(),
+            sets: Vec::new(),
+            merges: Vec::new(),
         };
         let resp = execute(&mut engine, req).unwrap();
         assert_eq!(resp.rows.len(), 1, "only Alice should be visible at t=1.5s");

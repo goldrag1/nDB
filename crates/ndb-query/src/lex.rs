@@ -45,6 +45,12 @@ pub enum TokKind {
     Create,
     /// `delete` keyword — tombstone via self-bind variable.
     Delete,
+    /// `set` keyword — property update via supersede.
+    Set,
+    /// `merge` keyword — upsert.
+    Merge,
+    /// `group` keyword — start of `group by` (currently unused; aggregations grouping is implicit).
+    Group,
     // Reserved words (case-insensitive on input)
     /// `match`
     Match,
@@ -143,6 +149,9 @@ impl TokKind {
             Self::Desc  => "`desc`".into(),
             Self::Create => "`create`".into(),
             Self::Delete => "`delete`".into(),
+            Self::Set    => "`set`".into(),
+            Self::Merge  => "`merge`".into(),
+            Self::Group  => "`group`".into(),
             Self::As => "`as`".into(),
             Self::Of => "`of`".into(),
             Self::And => "`and`".into(),
@@ -529,6 +538,9 @@ fn lex_ident_or_uuid(source: &str, start: usize) -> Result<(Tok, usize), ParseEr
         "desc"  => TokKind::Desc,
         "create" => TokKind::Create,
         "delete" => TokKind::Delete,
+        "set"    => TokKind::Set,
+        "merge"  => TokKind::Merge,
+        "group"  => TokKind::Group,
         "as" => TokKind::As,
         "of" => TokKind::Of,
         "and" => TokKind::And,

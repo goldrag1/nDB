@@ -108,6 +108,6 @@ pub use wire::{
 };
 pub use wire_query::{
     AsOf, CmpOp, CreateBinding, CreateClause, CreateRoleBinding, DEFAULT_MAX_RECURSION_DEPTH,
-    DeleteClause, Expr, OrderKey, Pattern, PropertyFilter, QueryRequest, QueryResponse, Recursion,
-    ReturnItem, RoleBinding, Term,
+    DeleteClause, Expr, MergeClause, OrderKey, Pattern, PropertyFilter, QueryRequest,
+    QueryResponse, Recursion, ReturnItem, RoleBinding, SetClause, Term,
 };

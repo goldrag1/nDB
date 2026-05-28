@@ -229,6 +229,31 @@ pub fn resolve(query: NameQuery, dict: &Dictionaries) -> Result<QueryRequest, Re
         })
         .collect::<Result<_, _>>()?;
 
+    // sets — `?v.prop = term`. Variable must be bound; property must resolve.
+    let sets: Vec<ndb_engine::SetClause> = query
+        .sets
+        .into_iter()
+        .map(|s| {
+            if !bound.contains(&s.variable) {
+                return Err(ResolveError::UnboundVariable {
+                    name: s.variable, span: s.span,
+                });
+            }
+            let property = *dict.properties.get(&s.property).ok_or_else(||
+                ResolveError::UnknownRoleOrProperty {
+                    name: s.property.clone(), span: s.span,
+                }
+            )?;
+            let term = resolve_term(s.term, &mut bound);
+            Ok(ndb_engine::SetClause {
+                variable: s.variable,
+                property,
+                display: Some(s.property),
+                term,
+            })
+        })
+        .collect::<Result<_, _>>()?;
+
     // creates — must run BEFORE return resolution so that `create ... as ?new`
     // makes `?new` visible to the return list.
     let creates: Vec<ndb_engine::CreateClause> = query
@@ -237,10 +262,56 @@ pub fn resolve(query: NameQuery, dict: &Dictionaries) -> Result<QueryRequest, Re
         .map(|c| resolve_create(c, dict, &mut bound))
         .collect::<Result<_, _>>()?;
 
+    // merges — upsert. Type → id, bindings → role/property.
+    let merges: Vec<ndb_engine::MergeClause> = query
+        .merges
+        .into_iter()
+        .map(|m| resolve_merge(m, dict, &mut bound))
+        .collect::<Result<_, _>>()?;
+
     let returns: Vec<ndb_engine::ReturnItem> = query
         .returns
         .into_iter()
         .map(|r| {
+            // Aggregate path. `count()` has empty name + no property;
+            // numeric aggregates require a bound variable + property.
+            if let Some(agg) = r.aggregate {
+                use crate::ast::AggregateFn::*;
+                if matches!(agg, Count) && r.name.is_empty() {
+                    return Ok(ndb_engine::ReturnItem::Aggregate {
+                        func: agg.as_str().into(),
+                        variable: None, property: None, display: None,
+                    });
+                }
+                if r.name.is_empty() {
+                    return Err(ResolveError::UnboundVariable {
+                        name: format!("{}()", agg.as_str()),
+                        span: r.span,
+                    });
+                }
+                if !bound.contains(&r.name) {
+                    return Err(ResolveError::UnboundVariable {
+                        name: r.name, span: r.span,
+                    });
+                }
+                let (property, display) = match r.property {
+                    None => (None, None),
+                    Some(p) => {
+                        let pid = *dict.properties.get(&p).ok_or_else(||
+                            ResolveError::UnknownRoleOrProperty {
+                                name: p.clone(), span: r.span,
+                            }
+                        )?;
+                        (Some(pid), Some(p))
+                    }
+                };
+                return Ok(ndb_engine::ReturnItem::Aggregate {
+                    func: agg.as_str().into(),
+                    variable: Some(r.name),
+                    property, display,
+                });
+            }
+            // Regular projection.
             if !bound.contains(&r.name) {
                 return Err(ResolveError::UnboundVariable {
                     name: r.name,
@@ -306,6 +377,54 @@ pub fn resolve(query: NameQuery, dict: &Dictionaries) -> Result<QueryRequest, Re
         limit: query.limit,
         creates,
         deletes,
+        sets,
+        merges,
+    })
+}
+
+fn resolve_merge(
+    m: crate::ast::NameMerge,
+    dict: &Dictionaries,
+    bound: &mut HashSet<String>,
+) -> Result<ndb_engine::MergeClause, ResolveError> {
+    use crate::resolve::TypeKindObserved::*;
+    let type_id = *dict.types.get(&m.type_name).ok_or_else(||
+        ResolveError::UnknownType { name: m.type_name.clone(), span: m.type_span }
+    )?;
+    let observed = dict.type_kinds.get(&type_id).copied();
+    let is_hyperedge = matches!(observed, Some(Hyperedge))
+        || (matches!(observed, Some(Both) | None)
+            && m.bindings.iter().any(|b| dict.roles.contains_key(&b.name)));
+
+    let mut roles: Vec<ndb_engine::CreateRoleBinding> = Vec::new();
+    let mut props: Vec<ndb_engine::CreateBinding>     = Vec::new();
+    for b in m.bindings {
+        let is_role = dict.roles.contains_key(&b.name);
+        let is_prop = dict.properties.contains_key(&b.name);
+        if is_role && is_prop {
+            return Err(ResolveError::AmbiguousName { name: b.name, span: b.name_span });
+        }
+        if !is_role && !is_prop {
+            return Err(ResolveError::UnknownRoleOrProperty {
+                name: b.name.clone(), span: b.name_span,
+            });
+        }
+        let term = resolve_term(b.term, &mut *bound);
+        if is_role {
+            roles.push(ndb_engine::CreateRoleBinding { role_id: dict.roles[&b.name], term });
+        } else {
+            props.push(ndb_engine::CreateBinding { property_id: dict.properties[&b.name], term });
+        }
+    }
+    if let Some(ref v) = m.self_var {
+        bound.insert(v.clone());
+    }
+    Ok(ndb_engine::MergeClause {
+        type_id,
+        is_hyperedge,
+        properties: props,
+        role_bindings: roles,
+        self_var: m.self_var,
     })
 }
 
@@ -871,6 +990,7 @@ mod tests {
         let names: Vec<String> = q.returns.iter().map(|r| match r {
             ndb_engine::ReturnItem::Variable(n) => n.clone(),
             ndb_engine::ReturnItem::Path { variable, .. } => variable.clone(),
+            ndb_engine::ReturnItem::Aggregate { .. } => "<agg>".into(),
         }).collect();
         assert_eq!(names, vec!["c", "n", "a"]);
         assert_eq!(q.limit, Some(100));

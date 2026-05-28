@@ -56,6 +56,8 @@ pub const DEFAULT_MAX_RECURSION_DEPTH: u32 = 64;
 ///     limit: Some(10),
 ///     creates: vec![],
 ///     deletes: vec![],
+///     sets: vec![],
+///     merges: vec![],
 /// };
 /// let s = serde_json::to_string(&q).unwrap();
 /// let parsed: QueryRequest = serde_json::from_str(&s).unwrap();
@@ -112,6 +114,55 @@ pub struct QueryRequest {
     /// the UUID points at.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deletes: Vec<DeleteClause>,
+
+    /// Optional `set` assignments. Each writes a new assertion with
+    /// the same entity/hyperedge id, all original properties carried
+    /// forward, and the named property replaced.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sets: Vec<SetClause>,
+
+    /// Optional `merge` clauses (upsert).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub merges: Vec<MergeClause>,
+}
+
+/// One `set ?v.property = term` assignment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SetClause {
+    /// Bound variable name (without the `?`).
+    pub variable: String,
+    /// Resolved property id.
+    pub property: u32,
+    /// Display name — diagnostic only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
+    /// Term to assign — literal or variable.
+    pub term: Term,
+}
+
+/// One `merge` clause — upsert by binding values.
+///
+/// At execution time the engine searches for a record of `type_id`
+/// where every binding's property/role equals the supplied term. If
+/// such a record exists, the optional `self_var` binds to it. If not,
+/// a new record is created with those bindings as initial properties /
+/// role-fillers and `self_var` binds to the new record.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MergeClause {
+    /// Type dictionary id. The executor checks whether the type was
+    /// observed as entity or hyperedge to decide what to create.
+    pub type_id: u32,
+    /// `true` if the type's dictionary kind is hyperedge; `false` for entity.
+    pub is_hyperedge: bool,
+    /// Property bindings (used for both match-criteria and create-properties).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub properties: Vec<CreateBinding>,
+    /// Role bindings (hyperedges only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub role_bindings: Vec<CreateRoleBinding>,
+    /// Optional `as ?v` capture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub self_var: Option<String>,
 }
 
 /// One `create` clause. See [`QueryRequest::creates`].
@@ -223,6 +274,22 @@ pub enum ReturnItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         display: Option<String>,
     },
+    /// `count()`, `sum(?v.x)`, `avg(?v.x)`, `min(?v.x)`, `max(?v.x)`.
+    /// When any return item is `Aggregate`, the executor implicitly
+    /// groups rows by every non-aggregate return item.
+    Aggregate {
+        /// Function name — `"count"`, `"sum"`, `"avg"`, `"min"`, `"max"`.
+        func: String,
+        /// Optional argument variable (None for `count()` with no args).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        variable: Option<String>,
+        /// Optional resolved property id on the argument.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        property: Option<u32>,
+        /// Optional diagnostic display name for the property.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display: Option<String>,
+    },
 }
 
 impl ReturnItem {
@@ -235,16 +302,29 @@ impl ReturnItem {
                 Some(d) => format!("{variable}.{d}"),
                 None    => format!("{variable}.{property}"),
             },
+            Self::Aggregate { func, variable, display, .. } => match (variable, display) {
+                (None, _)                  => format!("{func}()"),
+                (Some(v), Some(d))         => format!("{func}({v}.{d})"),
+                (Some(v), None)            => format!("{func}({v})"),
+            },
         }
     }
 
-    /// Variable this item refers to.
+    /// Variable this item refers to. None for `count()`.
     #[must_use]
-    pub fn variable_name(&self) -> &str {
+    pub fn variable_name(&self) -> Option<&str> {
         match self {
-            Self::Variable(name) => name,
-            Self::Path { variable, .. } => variable,
+            Self::Variable(name) => Some(name),
+            Self::Path { variable, .. } => Some(variable),
+            Self::Aggregate { variable, .. } => variable.as_deref(),
         }
+    }
+
+    /// True when this item is an aggregate (any non-aggregate return
+    /// item becomes part of the implicit GROUP BY key).
+    #[must_use]
+    pub fn is_aggregate(&self) -> bool {
+        matches!(self, Self::Aggregate { .. })
     }
 }
 
@@ -825,6 +905,8 @@ mod tests {
             limit: Some(100),
             creates: Vec::new(),
             deletes: Vec::new(),
+            sets: Vec::new(),
+            merges: Vec::new(),
         };
         assert_eq!(round_trip(q.clone()), q);
     }
@@ -840,6 +922,8 @@ mod tests {
             limit: None,
             creates: Vec::new(),
             deletes: Vec::new(),
+            sets: Vec::new(),
+            merges: Vec::new(),
         };
         let s = serde_json::to_string(&q).unwrap();
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();

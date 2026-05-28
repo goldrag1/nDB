@@ -233,6 +233,12 @@ limit 10"></textarea>
         <dd>Declarative insert. New entity or hyperedge gets a fresh UUID, optionally bound to <code>?new</code> for downstream return.</dd>
         <dt>match … delete ?v</dt>
         <dd>Tombstone every bound entity / hyperedge. The old record stays visible via <code>as of</code>.</dd>
+        <dt>match … set ?v.prop = term[, …]</dt>
+        <dd>Update via supersede — read the record, write a new assertion with the named property replaced.</dd>
+        <dt>merge type(prop: val, …) [as ?v]</dt>
+        <dd>Upsert. If a record with all the binding values exists, bind to it; else create + bind.</dd>
+        <dt>count() · sum(?v.prop) · avg / min / max</dt>
+        <dd>Aggregates. When any return item is an aggregate, every non-aggregate return becomes an implicit GROUP BY key.</dd>
       </dl>
     </aside>
   </div>
@@ -260,8 +266,8 @@ limit 10"></textarea>
 where ?sf &lt;= 6 and ?st &gt;= 6
 return ?sf, ?st</code></pre>
     </li>
-    <li><strong>Aggregations (<code>count()</code>, <code>sum()</code>, <code>group by</code>)</strong> aren't in the query language proper — they live in <code>ndb-slicer</code> and aren't wired to <code>/query/text</code> yet.</li>
     <li><strong>No subqueries / CTEs</strong> — queries are flat. Use <code>limit</code> if a single pattern's cardinality is too high.</li>
+    <li><strong>SET on roles is not supported</strong> — only on properties. Changing a hyperedge's role-filler requires delete + create.</li>
   </ul>
 
 </main>
@@ -394,6 +400,47 @@ return ?q.scientific_name`,
 create pollination(plant: ?tree, pollinator: ?bee, region: ?region,
                     season_from: 3, season_to: 4, obligate: false) as ?new
 return ?new`,
+  },
+  {
+    title: "17. SET — change a property in place",
+    blurb: "Updates via supersede. Adds a Test quoll, changes its life_form, returns the new value.",
+    query: `create species(common_name: "Test quoll",
+               scientific_name: "Dasyurus testus",
+               life_form: "animal",
+               kingdom: "Animalia",
+               family: "Dasyuridae") as ?q
+return ?q.life_form`,
+  },
+  {
+    title: "18. SET — update the Test quoll's life_form",
+    blurb: "Run 17 first, then this — same record, supersede property to 'mammal'.",
+    query: `match species(common_name: "Test quoll") as ?q
+set ?q.life_form = "mammal", ?q.scientific_name = "Dasyurus updatus"
+return ?q.common_name, ?q.life_form, ?q.scientific_name`,
+  },
+  {
+    title: "19. MERGE — upsert by binding values",
+    blurb: "First run creates it; second run finds the existing one and binds to it. Idempotent.",
+    query: `merge species(common_name: "Merge test",
+               scientific_name: "Mergus testus",
+               life_form: "animal",
+               kingdom: "Animalia",
+               family: "Mergidae") as ?m
+return ?m.common_name, ?m.scientific_name`,
+  },
+  {
+    title: "20. count() — species per kingdom",
+    blurb: "Aggregate. Implicit GROUP BY on every non-aggregate return item.",
+    query: `match species() as ?s
+return ?s.kingdom, count()
+order by ?s.kingdom asc`,
+  },
+  {
+    title: "21. count() — interactions per region",
+    blurb: "GROUP BY via the implicit non-aggregate column.",
+    query: `match predation(predator: ?pr, prey: ?py, region: ?r)
+return ?r.name, count()
+order by ?r.name asc`,
   },
 ];
 
