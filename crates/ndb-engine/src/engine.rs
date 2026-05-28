@@ -767,16 +767,24 @@ impl Engine {
     ) -> Result<Resolved<Record>, EngineError> {
         let mut candidates: Vec<Record> = Vec::new();
 
+        // One key allocation, reused across all (kind, layer) probes by
+        // mutating only the `kind` discriminant — the 16-byte primary is
+        // identical for the three kinds, so allocating it per kind/per
+        // SSTable (the old `uuid.as_bytes().to_vec()` in each loop body)
+        // was pure waste. At 64 threads this also cuts allocator-lock
+        // pressure, which is what bites concurrent point/pattern lookups.
+        let mut key = SSTableKey {
+            kind: 0,
+            primary: uuid.as_bytes().to_vec(),
+        };
+
         // Memtable first.
         for kind in [
             crate::record::RecordKind::Entity,
             crate::record::RecordKind::HyperEdge,
             crate::record::RecordKind::Tombstone,
         ] {
-            let key = SSTableKey {
-                kind: kind.as_byte(),
-                primary: uuid.as_bytes().to_vec(),
-            };
+            key.kind = kind.as_byte();
             if let Some(vs) = self.memtable.versions(&key) {
                 candidates.extend(vs.iter().cloned());
             }
@@ -796,10 +804,7 @@ impl Engine {
                 crate::record::RecordKind::HyperEdge,
                 crate::record::RecordKind::Tombstone,
             ] {
-                let key = SSTableKey {
-                    kind: kind.as_byte(),
-                    primary: uuid.as_bytes().to_vec(),
-                };
+                key.kind = kind.as_byte();
                 candidates.extend(sst.find_all(&key)?);
             }
         }
