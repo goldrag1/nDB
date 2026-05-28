@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>seismic_ndb · Demo · nDB</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">nDB <span class="sub">N-dimensional database</span></div>
+  <nav>
+    <a href="/">Home</a>
+    <a href="/whitepaper.html">Whitepaper</a>
+    <a href="/discussion.html">Discussion</a>
+    <a href="/demos.html" class="active">Demos</a>
+    <a href="/repo.html">Repo</a>
+  </nav>
+  <div class="right">v2.3.0 · 488 tests</div>
+</header>
+
+<main class="page">
+
+  <h1>seismic_ndb</h1>
+  <p class="lede">
+    Earthquakes from the USGS Earthquake Catalog, with every aftershock
+    sequence stored as <em>one</em> arity-(N+1) hyperedge. The 2010 Maule
+    (Chile) sequence — mainshock plus 999 aftershocks — lives as a single
+    record of arity <strong>1000</strong>. Across the three shipped demos,
+    that's the highest single-record arity in nDB.
+  </p>
+
+  <div class="btn-row">
+    <a href="/seismic_ndb/" class="btn">Launch live demo →</a>
+    <a href="https://earthquake.usgs.gov/" class="btn secondary" target="_blank" rel="noreferrer">USGS Earthquake Catalog</a>
+  </div>
+
+  <p style="font-size: 13px; color: var(--text-muted);">
+    ⚠ The 4,774-event seed combines a 30-day live USGS snapshot with 13
+    curated historic mega-quake windows. The "live feed" button in the
+    sidebar polls USGS's past-hour endpoint and commits any new events
+    on the fly.
+  </p>
+
+  <h2>What this is</h2>
+
+  <p>A single-page web app that lets you walk the world's seismicity the way nDB stores it:</p>
+
+  <ul>
+    <li><strong>4,774 earthquake entities</strong> across two sources:
+      <ul>
+        <li>The 30-day USGS live feed (<code>all_month.geojson</code>) filtered to M ≥ 2.5 — the events of the current month.</li>
+        <li>13 curated historic mega-quake aftershock windows (1989 Loma Prieta, 1995 Kobe, 2004 Sumatra-Andaman M9.1, 2008 Sichuan, 2010 Haiti, 2010 Maule, 2011 Tōhoku M9.1, 2015 Gorkha, 2017 Puebla, 2018 Anchorage, 2019 Ridgecrest, 2023 Türkiye-Syria, 2025 Myanmar Sagaing fault).</li>
+      </ul>
+    </li>
+    <li><strong>17 <code>AFTERSHOCK_SEQUENCE</code> hyperedges</strong>:
+      4 detected algorithmically in the live feed (any M ≥ 6.0 event triggers
+      grouping lower-magnitude events within 30 days + 200 km), 13 curated
+      directly from the historic windows. Maule 2010's record has arity
+      1000; Tōhoku 2011's has arity 620; Sumatra 2004's has arity 453.</li>
+    <li><strong>14 major fault systems</strong> hand-curated with polyline
+      traces: San Andreas, Hayward, Cascadia, Sumatran, Sunda, Japan Trench,
+      Median Tectonic Line, North + East Anatolian, Dead Sea Transform,
+      Alpine, Sagaing, Main Himalayan Thrust, East African Rift.</li>
+    <li><strong>108 <code>ON_FAULT</code> hyperedges</strong> linking events
+      within ~30 km of a fault trace. Binary edges (the relation IS binary
+      in this case — "this event happened on that fault") — proves nDB
+      doesn't force every relation to be N-ary; arity follows the data.</li>
+  </ul>
+
+  <h2>The 30-second tour</h2>
+
+  <ol>
+    <li>The map opens with all 4,774 events plotted on an equirectangular world projection. <strong>Color = depth</strong> (orange-red shallow → blue deep); <strong>radius = magnitude</strong>. The Pacific Ring of Fire appears immediately without any continents drawn — the dots are the structure.</li>
+    <li><strong>Drag the magnitude slider</strong> in the left sidebar. M ≥ 2.5 shows everything; M ≥ 6 reduces to ~30 globally-significant events of the month.</li>
+    <li><strong>Click any dot</strong>. The right pane shows the EARTHQUAKE entity, its AFTERSHOCK_SEQUENCE hyperedge (if it belongs to one), and the ON_FAULT hyperedge (if it's near a curated fault).</li>
+    <li><strong>Double-click a dot</strong> to jump the time window to its sequence's date range and select the mainshock. Useful for the historic mega-quakes — double-click any orange-outlined dot to focus that sequence.</li>
+    <li><strong>Pick a sequence from the top-bar dropdown.</strong> Sorted by arity descending — Maule 2010 (arity 1000) is at the top. Selecting it focuses the right pane on its mainshock and dims every other dot.</li>
+    <li><strong>Drag the time-window handles</strong> at the bottom to scrub through 1989–2026. The histogram shows event density; yellow bars are historic mega-quakes.</li>
+    <li><strong>Hit "Poll USGS"</strong> to fetch new events from the past hour. New events land as PLANET-style entities, the engine persists them, and the page refreshes.</li>
+  </ol>
+
+  <h2>Why "N-dimensional database" for this dataset</h2>
+
+  <p>Earthquake sequences are a textbook N-ary fact. One mainshock spawns dozens to thousands of aftershocks, all sharing the same fault rupture, same time window, same epicentral region. A SQL representation would need:</p>
+
+  <table>
+    <thead><tr><th>Table</th><th>Rows</th></tr></thead>
+    <tbody>
+      <tr><td><code>sequence(id, name, mainshock_event_id, window_days, radius_km, ...)</code></td><td>1 per sequence</td></tr>
+      <tr><td><code>sequence_member(sequence_id, event_id, role)</code></td><td>1000 for Maule alone</td></tr>
+      <tr><td><code>event(id, mag, depth, lat, lon, time, ...)</code></td><td>1 per event</td></tr>
+    </tbody>
+  </table>
+
+  <p>Querying "the Maule sequence" is a three-way JOIN; the relation between the mainshock and any individual aftershock is encoded as <em>two</em> rows in the junction table (one for mainshock, one for aftershock). In nDB, the sequence <em>is</em> the record. <code>seq.roles</code> is a flat list of 1,000 entries — 1 mainshock + 999 aftershocks — with role tags distinguishing the two. One read, no JOIN.</p>
+
+  <h2>Schema</h2>
+
+  <h3>Entity types</h3>
+  <ul>
+    <li><code>T_EARTHQUAKE = 1</code> — 4,774 events with lat/lon/time/mag/depth/place + USGS catalogue id</li>
+    <li><code>T_FAULT = 2</code> — 14 curated faults with polyline trace stored as JSON</li>
+    <li><code>T_AGENCY = 3</code> — 14 reporting networks (us, ci, nc, ak, hv, …)</li>
+  </ul>
+
+  <h3>Hyperedge types</h3>
+  <ul>
+    <li><code>T_AFTERSHOCK_SEQUENCE = 100</code> — arity 2–1000: <code>[mainshock, aftershock₁, …, aftershockₙ]</code></li>
+    <li><code>T_ON_FAULT = 101</code> — arity 2: <code>[event, fault]</code>, with distance-to-fault as edge property</li>
+    <li><code>T_HISTORIC_EVENT = 102</code> — arity 1: <code>[event]</code>; a marker so the UI can filter "show only mega-quakes" without trawling every entity</li>
+  </ul>
+
+  <h2>Data provenance</h2>
+
+  <p>Every event is identified by its USGS catalogue id (e.g. <code>official20110311054624120_30</code> for Tōhoku) and traces back to the original USGS Comcat record. The 30-day live snapshot was pulled from <code>earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_month.geojson</code>; the historic windows from the FDSN event query API at <code>earthquake.usgs.gov/fdsnws/event/1/query</code>.</p>
+
+  <p>The aftershock-grouping heuristic for the live feed (M ≥ 6.0 → group lower-magnitude events within 30 days + 200 km) is approximate — published sequence boundaries from individual papers would be more precise, but the heuristic catches the dominant patterns and lets the demo extend to any new significant event automatically.</p>
+
+  <h2>Where the code lives</h2>
+
+  <table>
+    <thead><tr><th>Component</th><th>Path</th></tr></thead>
+    <tbody>
+      <tr><td>Rust binary (engine + ndb-server + static)</td><td><code>crates/ndb-renderer/examples/seismic_explorer/main.rs</code></td></tr>
+      <tr><td>Curated seed (JSON, generated by Python)</td><td><code>crates/ndb-renderer/examples/seismic_explorer/seed.json</code></td></tr>
+      <tr><td>USGS fetcher (historic mega-quakes)</td><td><code>tools/seismic/fetch_historic.py</code></td></tr>
+      <tr><td>Seed builder (aftershock grouping + fault linking)</td><td><code>tools/seismic/build_seed.py</code></td></tr>
+      <tr><td>Web app (world map + time slider + nDB inspector)</td><td><code>docs/seismic/index.html</code></td></tr>
+    </tbody>
+  </table>
+
+  <h2>What this is not</h2>
+
+  <ul>
+    <li><strong>Not a replacement for the USGS Catalog.</strong> Treat nDB as a working set; the catalog is the source of record.</li>
+    <li><strong>Not full-catalogue.</strong> 4.7k events sampled to tell a story. The engine itself scales to millions; the SPA's SVG rendering would not — that's a visualisation limit, not an engine limit.</li>
+    <li><strong>Not real-time streaming.</strong> "Live fetch" polls on demand, doesn't push.</li>
+    <li><strong>Not seismically authoritative on aftershock grouping.</strong> The 30-day / 200-km heuristic mirrors what's published in declustered catalogues but ignores Omori decay subtleties.</li>
+  </ul>
+
+  <h2>Run it yourself</h2>
+
+<pre><code>git clone https://github.com/goldrag1/nDB
+cd nDB
+
+# Regenerate the seed (re-fetches from USGS):
+python3 tools/seismic/fetch_historic.py
+curl -fsSL https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_month.geojson \
+  -o .demo-data/source-data/seismic/all_month.geojson
+python3 tools/seismic/build_seed.py
+
+# Launch:
+cargo run -p ndb-renderer --example seismic_explorer
+# then open http://127.0.0.1:9878/
+</code></pre>
+
+  <p>The engine state lives at <code>&lt;workspace&gt;/.demo-data/seismic-ndb</code> (project-local, gitignored). Events you add via the live-fetch button persist between runs.</p>
+
+  <h2>Across the three demos</h2>
+
+  <table>
+    <thead><tr><th>Demo</th><th>Max single-record arity</th><th>What that arity holds</th></tr></thead>
+    <tbody>
+      <tr><td><a href="/alphafold_ndb/">alphafold_ndb</a></td><td>1518</td><td>KRAS protein-atoms (1 protein + 1517 atom entities)</td></tr>
+      <tr><td><a href="/exoplanet_ndb/">exoplanet_ndb</a></td><td>9</td><td>Kepler-90 system (1 star + 8 planets)</td></tr>
+      <tr><td><a href="/seismic_ndb/"><strong>seismic_ndb</strong></a></td><td><strong>1000</strong></td><td>Maule 2010 aftershock sequence (1 mainshock + 999 aftershocks)</td></tr>
+    </tbody>
+  </table>
+
+  <p>One engine, three radically different scientific domains, three radically different visualisations — and in every case the natural unit of meaning becomes <em>one nDB record</em> instead of a JOIN graph across multiple tables.</p>
+
+  <div class="btn-row" style="margin-top: 36px;">
+    <a href="/seismic_ndb/" class="btn">Launch live demo →</a>
+    <a href="/demos.html" class="btn secondary">Other demos</a>
+  </div>
+
+</main>
+
+<footer class="site-foot">
+  <p>nDB is open-source under MIT. <a href="https://github.com/goldrag1/nDB" target="_blank" rel="noreferrer">github.com/goldrag1/nDB</a></p>
+</footer>
+
+</body>
+</html>

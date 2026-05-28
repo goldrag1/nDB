@@ -68,6 +68,25 @@
       </p>
     </div>
 
+    <div class="card">
+      <a href="/demos-seismic_ndb.html" class="card-title">seismic_ndb — aftershock sequences</a>
+      <p>
+        4,774 earthquakes from USGS: a 30-day live snapshot plus 13
+        curated historic mega-quake aftershock windows (1989 Loma Prieta
+        through 2025 Myanmar). Each aftershock sequence is <em>one
+        arity-(N+1) hyperedge</em> — the 2010 Maule (Chile) sequence
+        holds <strong>1,000 events</strong> in a single record. 14
+        major fault systems mapped, with binary <code>ON_FAULT</code>
+        hyperedges linking events to their nearest fault. Live polling
+        of the USGS past-hour feed.
+      </p>
+      <p style="margin-top: 10px;">
+        <a href="/demos-seismic_ndb.html" class="btn secondary">Read about it</a>
+        &nbsp;
+        <a href="/seismic_ndb/" class="btn">Launch live</a>
+      </p>
+    </div>
+
   </div>
 
   <h2>Naming convention</h2>
@@ -83,15 +102,6 @@
   <h2>Planned</h2>
 
   <div class="card-grid">
-
-    <div class="card">
-      <a class="card-title" style="color: var(--text-muted); cursor: default;">seismic_ndb — earthquake + fault sequences (planned)</a>
-      <p>
-        Live USGS feed. Aftershock cascades as N-ary hyperedges (one mainshock
-        + N aftershocks within a window). Globe view with time slider; click
-        an event to see its sequence highlight.
-      </p>
-    </div>
 
     <div class="card">
       <a class="card-title" style="color: var(--text-muted); cursor: default;">erp_ndb — three-way invoice match (planned)</a>

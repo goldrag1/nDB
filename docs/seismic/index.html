@@ -1,0 +1,1031 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>seismic_ndb — earthquake aftershock sequences in nDB</title>
+<style>
+:root {
+  --bg:           #14141a;
+  --surface:      #1c1c24;
+  --surface-2:    #0a0a10;
+  --border:       #2b2b36;
+  --border-soft:  #2d2d3a;
+  --text:         #e8e8ec;
+  --text-strong:  #ffffff;
+  --text-muted:   #888;
+  --accent:       #4a90e2;
+  --entity:       #65CBF3;
+  --quake-shallow:#ff5e3a;
+  --quake-medium: #f5a623;
+  --quake-deep:   #4a90e2;
+  --fault:        #b388ff;
+  --hist:         #ffd84a;
+  --font-ui:   system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; font-family: var(--font-ui); color: var(--text); background: var(--bg); font-size: 14px; }
+
+#app {
+  display: grid;
+  grid-template-rows: 56px 1fr;
+  grid-template-columns: 320px 1fr 380px;
+  grid-template-areas: "top top top" "left centre right";
+  height: 100vh;
+}
+
+#topbar {
+  grid-area: top; background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 12px; padding: 0 18px;
+}
+#topbar h1 { font-size: 14px; margin: 0; font-weight: 600; color: #fff; white-space: nowrap; }
+#topbar h1 .sub { color: var(--text-muted); font-weight: 400; margin-left: 6px; font-size: 12px; }
+#topbar .sep { width: 1px; height: 24px; background: var(--border); }
+#topbar select, #topbar input { background: var(--bg); border: 1px solid #303040; border-radius: 4px; color: #fff; padding: 5px 8px; font-family: inherit; font-size: 12px; }
+#topbar .chip { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 4px 9px; font-size: 11.5px; color: #cfcfd6; font-family: var(--font-mono); white-space: nowrap; }
+#topbar .grow { flex: 1; }
+#topbar a { color: var(--accent); font-size: 12px; text-decoration: none; }
+#topbar a:hover { color: #5aa0f2; text-decoration: underline; }
+
+#sidebar    { grid-area: left;  background: var(--surface); border-right: 1px solid var(--border); padding: 14px 14px 20px; overflow-y: auto; }
+#right-pane { grid-area: right; background: var(--surface); border-left: 1px solid var(--border); padding: 14px 14px 20px; overflow-y: auto; }
+#centre     { grid-area: centre; background: var(--surface-2); position: relative; overflow: hidden; display: flex; flex-direction: column; }
+
+h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); margin: 16px 0 6px; font-weight: 600; }
+h2:first-child { margin-top: 0; }
+
+.stat { display: flex; justify-content: space-between; font-size: 13px; padding: 2px 0; color: #cfcfd6; }
+.stat span:last-child { color: #fff; font-family: var(--font-mono); font-size: 12.5px; }
+
+.type-row { display: flex; align-items: center; font-size: 13px; padding: 2px 0; gap: 8px; cursor: pointer; user-select: none; }
+.type-row.muted { opacity: 0.35; }
+.type-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; border: 1px solid rgba(255,255,255,0.2); }
+.type-row .count { margin-left: auto; font-size: 11.5px; color: var(--text-muted); font-family: var(--font-mono); }
+
+.hint { font-size: 11.5px; color: var(--text-muted); line-height: 1.55; margin: 6px 0; }
+.hint code { color: var(--entity); font-family: var(--font-mono); font-size: 11px; background: var(--surface-2); padding: 1px 5px; border-radius: 3px; }
+.hint b { color: #fff; }
+
+.btn { background: var(--accent); color: #fff; border: none; padding: 7px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 500; }
+.btn:hover { background: #5aa0f2; }
+.btn:disabled { background: #2d4a6a; cursor: not-allowed; }
+.btn.secondary { background: var(--border-soft); color: var(--text); }
+.btn.secondary:hover { background: #38384a; }
+
+/* ── map ────────────────────────────────────────────────────── */
+#map-wrap { flex: 1; position: relative; overflow: hidden; }
+#map-svg { width: 100%; height: 100%; cursor: grab; }
+#map-svg:active { cursor: grabbing; }
+.continent { fill: #1c1c24; stroke: #2b2b36; stroke-width: 0.4; opacity: 0.95; }
+.graticule { fill: none; stroke: #1a1a22; stroke-width: 0.4; }
+.fault-line { fill: none; stroke: var(--fault); stroke-width: 1.4; opacity: 0.55; }
+.fault-line:hover { opacity: 1; }
+.fault-line.highlighted { opacity: 1; stroke-width: 2.2; }
+.event-dot { stroke: rgba(0,0,0,0.55); stroke-width: 0.5; cursor: pointer; transition: r 0.1s, opacity 0.1s; }
+.event-dot:hover { stroke: #fff; stroke-width: 1.4; }
+.event-dot.selected { stroke: #fff; stroke-width: 1.8; }
+.event-dot.historic { stroke: var(--hist); stroke-width: 1.4; }
+.event-dot.dim { opacity: 0.05; }
+.event-dot.in-sequence { stroke: #fff; stroke-width: 1; opacity: 1; }
+
+#tooltip {
+  position: absolute; background: rgba(20,20,26,0.96); color: #fff;
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 6px 10px; font-size: 12px; pointer-events: none;
+  font-family: var(--font-mono); line-height: 1.5;
+  opacity: 0; transition: opacity 0.08s; z-index: 50; max-width: 280px;
+}
+#tooltip.show { opacity: 1; }
+#tooltip b { color: var(--entity); }
+#tooltip .small { color: var(--text-muted); font-size: 11px; }
+
+/* ── time slider ────────────────────────────────────────────── */
+#timeline-host {
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding: 10px 18px 14px;
+  flex-shrink: 0;
+}
+.timeline-row { display: flex; align-items: center; gap: 10px; font-size: 11.5px; color: var(--text-muted); font-family: var(--font-mono); margin-bottom: 6px; }
+#timeline-svg { width: 100%; height: 38px; display: block; cursor: pointer; }
+.tl-track { fill: var(--bg); stroke: var(--border); stroke-width: 1; }
+.tl-window { fill: var(--accent); opacity: 0.22; }
+.tl-handle { fill: var(--accent); cursor: ew-resize; }
+.tl-tick { stroke: #2b2b36; stroke-width: 1; }
+.tl-label { fill: var(--text-muted); font-size: 9.5px; font-family: var(--font-mono); }
+.tl-bar { fill: var(--quake-shallow); opacity: 0.55; }
+.tl-bar.in-window { opacity: 0.9; }
+.tl-bar.historic { fill: var(--hist); }
+
+/* ── right-pane records ─────────────────────────────────────── */
+.db-section { background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: 9px 11px; margin-bottom: 10px; font-size: 12px; line-height: 1.5; }
+.db-section h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin: 0 0 6px; font-weight: 600; }
+.db-row { display: flex; justify-content: space-between; gap: 8px; padding: 1px 0; }
+.db-row .k { color: #888; font-family: var(--font-mono); font-size: 11px; flex-shrink: 0; }
+.db-row .v { color: #fff; text-align: right; font-family: var(--font-mono); font-size: 11px; word-break: break-all; }
+
+.role-chip { display: inline-block; padding: 1px 6px; margin: 2px 4px 2px 0; border-radius: 3px; background: var(--border-soft); font-size: 11px; font-family: var(--font-mono); cursor: pointer; }
+.role-chip.main    { color: var(--quake-shallow); font-weight: 600; }
+.role-chip.after   { color: var(--entity); }
+.role-chip.fault   { color: var(--fault); }
+.role-chip:hover   { background: #38384a; }
+.role-label { color: #888; font-size: 10.5px; font-family: var(--font-mono); margin-right: 4px; display: inline-block; min-width: 80px; }
+
+.db-section pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: 3px; padding: 7px; margin: 5px 0 0; font-size: 10.5px; line-height: 1.4; overflow-x: auto; max-height: 220px; color: #cfcfd6; }
+
+.empty { background: var(--bg); border: 1px dashed var(--border-soft); border-radius: 5px; padding: 24px; text-align: center; color: #666; font-size: 12.5px; font-style: italic; }
+
+.pill { display: inline-block; padding: 1px 6px; border-radius: 3px; background: var(--border-soft); font-family: var(--font-mono); font-size: 11px; }
+.pill.historic { background: rgba(255,216,74,0.18); color: var(--hist); }
+
+a { color: var(--accent); }
+a:hover { color: #5aa0f2; }
+</style>
+</head>
+<body>
+
+<div id="app">
+
+  <header id="topbar">
+    <h1>seismic_ndb <span class="sub">demo #3 — aftershock sequences as N-ary hyperedges</span></h1>
+    <div class="sep"></div>
+    <span style="font-size:11px;color:#888">SEQUENCE</span>
+    <select id="seq-picker"><option>(loading…)</option></select>
+    <span id="counts-chip" class="chip">— loading nDB…</span>
+    <div class="grow"></div>
+    <a href="/" target="_blank" rel="noreferrer">knowledge site →</a>
+  </header>
+
+  <aside id="sidebar">
+    <h2>Engine</h2>
+    <div class="stat"><span>events</span><span id="stat-events">—</span></div>
+    <div class="stat"><span>faults</span><span id="stat-faults">—</span></div>
+    <div class="stat"><span>sequences</span><span id="stat-seqs">—</span></div>
+    <div class="stat"><span>max arity</span><span id="stat-arity">—</span></div>
+    <div class="stat"><span>API</span><span id="stat-api">—</span></div>
+
+    <h2>Magnitude filter</h2>
+    <input id="mag-filter" type="range" min="2.5" max="9" step="0.1" value="2.5" style="width:100%">
+    <div style="font-size:11.5px;color:var(--text-muted);font-family:var(--font-mono);margin-top:2px">
+      M ≥ <span id="mag-val">2.5</span> &nbsp;·&nbsp; <span id="mag-count">—</span> events shown
+    </div>
+
+    <h2>Overlays</h2>
+    <label class="type-row" id="toggle-faults" style="cursor:pointer">
+      <span class="type-dot" style="background:var(--fault)"></span>
+      Fault lines
+      <span class="count" id="fault-count">—</span>
+    </label>
+    <label class="type-row" id="toggle-historic" style="cursor:pointer">
+      <span class="type-dot" style="background:var(--hist)"></span>
+      Historic mega-quakes only
+      <span class="count" id="hist-count">—</span>
+    </label>
+
+    <h2>Depth (shallow → deep)</h2>
+    <div style="display:flex;gap:0;height:14px;border-radius:3px;overflow:hidden;border:1px solid var(--border);">
+      <div style="flex:1;background:var(--quake-shallow)" title="0-70 km (shallow)"></div>
+      <div style="flex:1;background:var(--quake-medium)" title="70-300 km (intermediate)"></div>
+      <div style="flex:1;background:var(--quake-deep)" title="300+ km (deep)"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted);margin-top:2px;font-family:var(--font-mono)">
+      <span>0 km</span><span>70</span><span>300</span><span>700+</span>
+    </div>
+
+    <h2>Live feed</h2>
+    <button id="live-fetch" class="btn">↻ Poll USGS (past hour)</button>
+    <p class="hint">
+      Pulls the past-hour feed from USGS, commits any new event entities.
+      Source: <code>earthquake.usgs.gov/.../all_hour.geojson</code>.
+    </p>
+
+    <h2>What the demo proves</h2>
+    <p class="hint">
+      Every dot is one EARTHQUAKE entity. Each aftershock sequence is
+      <em>one arity-(N+1) hyperedge</em> — Maule 2010 holds <b>1000</b>
+      events in a single record. ON_FAULT is a binary hyperedge linking
+      each event to its nearest curated fault.
+    </p>
+  </aside>
+
+  <main id="centre">
+    <div id="map-wrap">
+      <svg id="map-svg" viewBox="0 0 1000 500" preserveAspectRatio="xMidYMid meet">
+        <g id="map-graticule"></g>
+        <g id="map-continents"></g>
+        <g id="map-faults"></g>
+        <g id="map-events"></g>
+      </svg>
+      <div id="tooltip"></div>
+    </div>
+    <div id="timeline-host">
+      <div class="timeline-row">
+        <span>TIME WINDOW</span>
+        <span id="tl-start">—</span>
+        <span style="color:#444">→</span>
+        <span id="tl-end">—</span>
+        <span style="margin-left:auto" id="tl-window-count">—</span>
+        <button id="tl-reset" class="btn secondary" style="padding:3px 8px;font-size:11px">reset</button>
+      </div>
+      <svg id="timeline-svg" viewBox="0 0 1000 38" preserveAspectRatio="none"></svg>
+    </div>
+  </main>
+
+  <aside id="right-pane">
+    <div id="selected-host"></div>
+  </aside>
+
+</div>
+
+<script type="module">
+"use strict";
+
+// ── API base resolution ──────────────────────────────────────────────
+// Direct dev (cargo run … seismic_explorer): http://127.0.0.1:9878/ → API at :8746
+// Tunneled (/seismic_ndb/): same-origin → /seismic_ndb/api
+const API_URL = (() => {
+  if (location.port === "9878" || location.hostname === "127.0.0.1" || location.hostname === "localhost") {
+    return "http://127.0.0.1:8746";
+  }
+  return location.origin + location.pathname.replace(/\/$/, "") + "/api";
+})();
+document.getElementById("stat-api").textContent = API_URL.replace(/^https?:\/\//, "");
+
+// ── Schema (in lockstep with crates/.../seismic_explorer/main.rs) ──
+const T_EARTHQUAKE = 1, T_FAULT = 2, T_AGENCY = 3;
+const T_AFTERSHOCK_SEQUENCE = 100, T_ON_FAULT = 101, T_HISTORIC_EVENT = 102;
+const ROLE_MAINSHOCK = 10, ROLE_AFTERSHOCK = 11, ROLE_EVENT = 12, ROLE_FAULT = 13;
+
+const PROP = {
+  NAME: 30,
+  USGS_ID: 31, MAGNITUDE: 32, MAG_TYPE: 33, PLACE: 34, TIME_MS: 35,
+  LAT: 36, LON: 37, DEPTH_KM: 38, TSUNAMI: 39, FELT: 40, SIG: 41,
+  NET: 42, ALERT: 43, SOURCE: 44,
+  FAULT_TYPE: 50, FAULT_COUNTRY: 51, FAULT_TRACE_JSON: 52,
+  FAULT_DISTANCE_KM: 55,
+  SEQ_WINDOW_DAYS: 60, SEQ_RADIUS_KM: 61, SEQ_HISTORIC: 62,
+  AGENCY_CODE: 70,
+};
+
+// ── State ───────────────────────────────────────────────────────────
+const STATE = {
+  events:    [],   // [{ id, type_id, props, raw, ts, lat, lon, mag, depth }]
+  faults:    [],
+  sequences: [],   // hyperedges of type 100
+  onFault:   [],   // hyperedges of type 101
+  historic:  new Set(),  // entity_ids that are historic mainshocks
+  byId:      new Map(),  // entity_id → event record
+  selected:  null,
+  showFaults:   true,
+  showHistOnly: false,
+  magMin:    2.5,
+  // Time window: defaults to "everything", clamped after load to actual data range.
+  tWindow: { start: -Infinity, end: Infinity, dataStart: 0, dataEnd: 0 },
+};
+
+const $ = (sel) => document.querySelector(sel);
+const fmt = (v, d = 2) => (v == null || Number.isNaN(v)) ? "—" :
+  (Math.abs(v) >= 1000 || (Math.abs(v) > 0 && Math.abs(v) < 0.01)
+    ? Number(v).toExponential(d) : Number(v).toFixed(d));
+const escapeHtml = (s) => (s == null ? "" : String(s).replace(/[&<>"']/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])));
+
+// ── Projection ──────────────────────────────────────────────────────
+const MAP_W = 1000, MAP_H = 500;
+function project(lat, lon) {
+  // Equirectangular. Cap lon to [-180, 180].
+  const x = (lon + 180) / 360 * MAP_W;
+  const y = (90 - lat) / 180 * MAP_H;
+  return [x, y];
+}
+
+// ── Depth-to-color ──────────────────────────────────────────────────
+function depthColor(d) {
+  if (d == null) return "#888";
+  if (d <= 70)   return getComputedStyle(document.documentElement).getPropertyValue("--quake-shallow").trim();
+  if (d <= 300)  return getComputedStyle(document.documentElement).getPropertyValue("--quake-medium").trim();
+  return getComputedStyle(document.documentElement).getPropertyValue("--quake-deep").trim();
+}
+const SHALLOW = "#ff5e3a", MEDIUM = "#f5a623", DEEP = "#4a90e2";
+function depthColorCached(d) {
+  if (d == null) return "#888";
+  if (d <= 70)  return SHALLOW;
+  if (d <= 300) return MEDIUM;
+  return DEEP;
+}
+function magRadius(m) {
+  if (m == null) return 1.5;
+  // Log-ish scale: M2 → ~1.2, M6 → ~3.5, M9 → ~7.5.
+  return Math.max(1, Math.min(8, 0.6 + (m - 2) * 0.75));
+}
+
+// ── Load nDB ────────────────────────────────────────────────────────
+async function loadAll() {
+  const r = await fetch(API_URL + "/iter");
+  if (!r.ok) throw new Error("/iter " + r.status);
+  const txt = await r.text();
+  for (const line of txt.split("\n")) {
+    if (!line.trim()) continue;
+    let rec; try { rec = JSON.parse(line); } catch { continue; }
+    if (rec.kind === "entity") {
+      const props = recProps(rec);
+      if (rec.type_id === T_EARTHQUAKE) {
+        const e = {
+          id:    rec.entity_id,
+          props,
+          raw:   rec,
+          mag:   props[PROP.MAGNITUDE],
+          ts:    props[PROP.TIME_MS],
+          lat:   props[PROP.LAT],
+          lon:   props[PROP.LON],
+          depth: props[PROP.DEPTH_KM],
+        };
+        STATE.events.push(e);
+        STATE.byId.set(rec.entity_id, e);
+      } else if (rec.type_id === T_FAULT) {
+        STATE.faults.push({ id: rec.entity_id, props, raw: rec });
+      }
+    } else if (rec.kind === "hyper_edge") {
+      const e = {
+        id: rec.hyperedge_id,
+        type_id: rec.type_id,
+        roles: rec.roles || [],
+        props: recProps(rec),
+        raw: rec,
+      };
+      if (rec.type_id === T_AFTERSHOCK_SEQUENCE) {
+        STATE.sequences.push(e);
+      } else if (rec.type_id === T_ON_FAULT) {
+        STATE.onFault.push(e);
+      } else if (rec.type_id === T_HISTORIC_EVENT) {
+        const slot = e.roles.find(r => r.role_id === ROLE_EVENT);
+        if (slot) STATE.historic.add(slot.entity_id);
+      }
+    }
+  }
+  // Time bounds — clamp on the actual data range so the slider isn't
+  // wider than the visible histogram.
+  const ts = STATE.events.map(e => e.ts).filter(t => t != null).sort((a, b) => a - b);
+  if (ts.length) {
+    STATE.tWindow.dataStart = ts[0];
+    STATE.tWindow.dataEnd   = ts[ts.length - 1];
+    STATE.tWindow.start = STATE.tWindow.dataStart;
+    STATE.tWindow.end   = STATE.tWindow.dataEnd;
+  }
+}
+
+function recProps(rec) {
+  const out = {};
+  for (const p of (rec.properties || [])) {
+    out[p.prop_id] = (p.value && p.value.value !== undefined) ? p.value.value : p.value;
+  }
+  return out;
+}
+
+// ── Continents (TopoJSON from world-atlas via jsdelivr) ─────────────
+async function loadContinents() {
+  try {
+    const [topo, topojson] = await Promise.all([
+      fetch("https://cdn.jsdelivr.net/npm/world-atlas@2/land-110m.json").then(r => r.json()),
+      import("https://cdn.jsdelivr.net/npm/topojson-client@3/+esm"),
+    ]);
+    const land = topojson.feature(topo, topo.objects.land);
+    const ns = "http://www.w3.org/2000/svg";
+    const g = $("#map-continents");
+    g.innerHTML = "";
+    for (const f of land.features) {
+      const path = document.createElementNS(ns, "path");
+      path.setAttribute("class", "continent");
+      path.setAttribute("d", featureToPath(f));
+      g.appendChild(path);
+    }
+  } catch (e) {
+    // Network failure — log + leave the map empty of continents.
+    // The dots still tell the Pacific Ring of Fire story by themselves.
+    console.warn("continent load failed:", e);
+  }
+}
+
+// Hand-rolled GeoJSON → SVG path via our own equirectangular project().
+function featureToPath(feature) {
+  const geom = feature.geometry;
+  const parts = [];
+  function ring(coords) {
+    let s = "";
+    for (let i = 0; i < coords.length; i++) {
+      const [lon, lat] = coords[i];
+      const [x, y] = project(lat, lon);
+      s += (i === 0 ? "M" : "L") + x.toFixed(1) + "," + y.toFixed(1);
+    }
+    parts.push(s + "Z");
+  }
+  function poly(coords) { coords.forEach(ring); }
+  if (geom.type === "Polygon") poly(geom.coordinates);
+  else if (geom.type === "MultiPolygon") geom.coordinates.forEach(poly);
+  return parts.join(" ");
+}
+
+// ── Graticule (faint 30° lat/lon grid) ───────────────────────────
+function drawGraticule() {
+  const ns = "http://www.w3.org/2000/svg";
+  const g = $("#map-graticule");
+  g.innerHTML = "";
+  for (let lon = -180; lon <= 180; lon += 30) {
+    const [x] = project(0, lon);
+    const ln = document.createElementNS(ns, "line");
+    ln.setAttribute("class", "graticule");
+    ln.setAttribute("x1", x); ln.setAttribute("x2", x);
+    ln.setAttribute("y1", 0); ln.setAttribute("y2", MAP_H);
+    g.appendChild(ln);
+  }
+  for (let lat = -60; lat <= 60; lat += 30) {
+    const [, y] = project(lat, 0);
+    const ln = document.createElementNS(ns, "line");
+    ln.setAttribute("class", "graticule");
+    ln.setAttribute("x1", 0); ln.setAttribute("x2", MAP_W);
+    ln.setAttribute("y1", y); ln.setAttribute("y2", y);
+    g.appendChild(ln);
+  }
+}
+
+// ── Render events ───────────────────────────────────────────────────
+function renderEvents() {
+  const ns = "http://www.w3.org/2000/svg";
+  const g = $("#map-events");
+  g.innerHTML = "";
+
+  const sel = STATE.selected;
+  const seqHighlight = sel ? sequencePartnersFor(sel) : null;
+
+  let visible = 0;
+  for (const e of STATE.events) {
+    if (e.lat == null || e.lon == null) continue;
+    if ((e.mag || 0) < STATE.magMin) continue;
+    if (e.ts != null && (e.ts < STATE.tWindow.start || e.ts > STATE.tWindow.end)) continue;
+    if (STATE.showHistOnly && !STATE.historic.has(e.id)) continue;
+    visible++;
+
+    const [x, y] = project(e.lat, e.lon);
+    const r = magRadius(e.mag);
+    const c = document.createElementNS(ns, "circle");
+    c.setAttribute("cx", x.toFixed(1));
+    c.setAttribute("cy", y.toFixed(1));
+    c.setAttribute("r", r.toFixed(1));
+    c.setAttribute("fill", depthColorCached(e.depth));
+    let cls = "event-dot";
+    if (e.id === sel) cls += " selected";
+    if (STATE.historic.has(e.id)) cls += " historic";
+    if (seqHighlight) {
+      if (seqHighlight.has(e.id)) cls += " in-sequence";
+      else if (e.id !== sel)      cls += " dim";
+    }
+    c.setAttribute("class", cls);
+    c.dataset.id = e.id;
+    c.addEventListener("mouseenter", (evt) => showTip(evt, e));
+    c.addEventListener("mouseleave", hideTip);
+    c.addEventListener("mousemove",  moveTip);
+    c.addEventListener("click",      () => selectEvent(e.id));
+    c.addEventListener("dblclick",   () => focusSequence(e.id));
+    g.appendChild(c);
+  }
+  $("#mag-count").textContent = visible;
+}
+
+function sequencePartnersFor(eventId) {
+  // Find any AFTERSHOCK_SEQUENCE this event participates in (as mainshock
+  // OR aftershock). Returns a Set of event ids in that sequence, or null.
+  for (const s of STATE.sequences) {
+    if (s.roles.some(r => r.entity_id === eventId)) {
+      return new Set(s.roles.map(r => r.entity_id));
+    }
+  }
+  return null;
+}
+
+function focusSequence(eventId) {
+  // Find the sequence containing this event, jump time-window to its
+  // start..end, select the mainshock.
+  for (const s of STATE.sequences) {
+    if (!s.roles.some(r => r.entity_id === eventId)) continue;
+    const ms = s.roles.find(r => r.role_id === ROLE_MAINSHOCK);
+    const memberTs = s.roles
+      .map(r => STATE.byId.get(r.entity_id))
+      .filter(Boolean).map(e => e.ts).filter(t => t != null);
+    if (memberTs.length) {
+      const lo = Math.min(...memberTs), hi = Math.max(...memberTs);
+      STATE.tWindow.start = lo - 86400 * 1000;
+      STATE.tWindow.end   = hi + 86400 * 1000;
+      renderTimeline();
+    }
+    if (ms) selectEvent(ms.entity_id);
+    return;
+  }
+  selectEvent(eventId);
+}
+
+// ── Render faults ───────────────────────────────────────────────────
+function renderFaults() {
+  const ns = "http://www.w3.org/2000/svg";
+  const g = $("#map-faults");
+  g.innerHTML = "";
+  if (!STATE.showFaults) return;
+  for (const f of STATE.faults) {
+    let trace = [];
+    try { trace = JSON.parse(f.props[PROP.FAULT_TRACE_JSON] || "[]"); } catch {}
+    if (!trace.length) continue;
+    let d = "";
+    for (let i = 0; i < trace.length; i++) {
+      const [lat, lon] = trace[i];
+      const [x, y] = project(lat, lon);
+      d += (i === 0 ? "M" : "L") + x.toFixed(1) + "," + y.toFixed(1);
+    }
+    const path = document.createElementNS(ns, "path");
+    path.setAttribute("class", "fault-line");
+    path.setAttribute("d", d);
+    path.dataset.faultName = f.props[PROP.NAME];
+    path.addEventListener("click", () => selectFault(f.id));
+    g.appendChild(path);
+  }
+}
+
+// ── Tooltip ─────────────────────────────────────────────────────────
+function showTip(evt, e) {
+  const tip = $("#tooltip");
+  const fault = onFaultName(e.id);
+  tip.innerHTML =
+    "<b>M" + fmt(e.mag, 1) + "</b> &nbsp;" + escapeHtml(e.props[PROP.PLACE] || "—") + "<br>" +
+    "depth: " + fmt(e.depth, 0) + " km" +
+    (e.ts ? "  ·  " + new Date(e.ts).toISOString().slice(0, 16).replace("T", " ") + "Z" : "") +
+    (fault ? '<br><span class="small">fault: ' + escapeHtml(fault) + "</span>" : "") +
+    (STATE.historic.has(e.id) ? '<br><span class="small" style="color:var(--hist)">historic mega-quake</span>' : "");
+  moveTip(evt);
+  tip.classList.add("show");
+}
+function moveTip(evt) {
+  const tip = $("#tooltip");
+  tip.style.left = (evt.clientX + 14) + "px";
+  tip.style.top  = (evt.clientY + 12) + "px";
+}
+function hideTip() { $("#tooltip").classList.remove("show"); }
+
+function onFaultName(eventId) {
+  for (const of_ of STATE.onFault) {
+    if (of_.roles.some(r => r.role_id === ROLE_EVENT && r.entity_id === eventId)) {
+      const fSlot = of_.roles.find(r => r.role_id === ROLE_FAULT);
+      if (fSlot) {
+        const f = STATE.faults.find(x => x.id === fSlot.entity_id);
+        return f ? f.props[PROP.NAME] : null;
+      }
+    }
+  }
+  return null;
+}
+
+// ── Selection + right pane ──────────────────────────────────────────
+function selectEvent(id) {
+  STATE.selected = id;
+  renderEvents();
+  refreshRightPane();
+}
+
+function selectFault(faultId) {
+  STATE.selected = faultId;
+  refreshRightPane();
+  document.querySelectorAll(".fault-line").forEach(p => {
+    p.classList.toggle("highlighted", p.dataset.faultName === STATE.faults.find(f => f.id === faultId).props[PROP.NAME]);
+  });
+}
+
+function refreshRightPane() {
+  const root = $("#selected-host");
+  if (!STATE.selected) {
+    root.innerHTML =
+      '<div class="empty">Click any dot on the map to inspect its nDB record.<br><br>' +
+      'Double-click a dot to jump the time window to its aftershock sequence.</div>' +
+      '<h2 style="margin-top:18px">Engine schema</h2>' +
+      '<div class="db-section">' +
+        '<div class="db-row"><span class="k">entity types</span><span class="v">3</span></div>' +
+        '<div class="db-row"><span class="k">hyperedge types</span><span class="v">3</span></div>' +
+        '<div class="db-row"><span class="k">SEQ arity</span><span class="v">2..1000</span></div>' +
+        '<div class="db-row"><span class="k">ON_FAULT arity</span><span class="v">2</span></div>' +
+        '<div class="db-row"><span class="k">port</span><span class="v">8746</span></div>' +
+      '</div>';
+    return;
+  }
+  const e = STATE.byId.get(STATE.selected);
+  if (!e) {
+    // Fault was selected.
+    const f = STATE.faults.find(x => x.id === STATE.selected);
+    if (f) return renderFaultPane(f);
+    root.innerHTML = '<div class="empty">selection lost</div>';
+    return;
+  }
+  renderEventPane(e);
+}
+
+function renderEventPane(e) {
+  const root = $("#selected-host");
+  const seq = STATE.sequences.find(s =>
+    s.roles.some(r => r.entity_id === e.id));
+  const isMainshock = seq && seq.roles.some(r =>
+    r.role_id === ROLE_MAINSHOCK && r.entity_id === e.id);
+  const fault = onFaultName(e.id);
+  const fSlot = (() => {
+    for (const of_ of STATE.onFault) {
+      if (of_.roles.some(r => r.role_id === ROLE_EVENT && r.entity_id === e.id)) {
+        const fF = of_.roles.find(r => r.role_id === ROLE_FAULT);
+        return { edge: of_, faultId: fF ? fF.entity_id : null };
+      }
+    }
+    return null;
+  })();
+
+  let html = "";
+  html +=
+    '<div class="db-section">' +
+      '<h3>Selected event' + (STATE.historic.has(e.id) ? ' <span class="pill historic" style="float:right">historic</span>' : '') + '</h3>' +
+      '<div class="db-row"><span class="k">PROP_NAME (30)</span><span class="v">M' + fmt(e.mag, 1) + '</span></div>' +
+      '<div class="db-row"><span class="k">place (34)</span><span class="v">' + escapeHtml(e.props[PROP.PLACE] || '—') + '</span></div>' +
+      '<div class="db-row"><span class="k">USGS id (31)</span><span class="v" style="font-size:10px">' + escapeHtml(e.props[PROP.USGS_ID] || '—') + '</span></div>' +
+      '<div class="db-row"><span class="k">mag / type</span><span class="v">' + fmt(e.mag, 1) + ' ' + escapeHtml(e.props[PROP.MAG_TYPE] || '') + '</span></div>' +
+      '<div class="db-row"><span class="k">time (35)</span><span class="v">' + (e.ts ? new Date(e.ts).toISOString().slice(0, 19).replace('T', ' ') + 'Z' : '—') + '</span></div>' +
+      '<div class="db-row"><span class="k">lat / lon</span><span class="v">' + fmt(e.lat, 3) + ', ' + fmt(e.lon, 3) + '</span></div>' +
+      '<div class="db-row"><span class="k">depth (38)</span><span class="v">' + fmt(e.depth, 1) + ' km</span></div>' +
+      (e.props[PROP.TSUNAMI] === 'yes' ? '<div class="db-row"><span class="k">tsunami</span><span class="v">⚠ yes</span></div>' : '') +
+      (e.props[PROP.FELT] ? '<div class="db-row"><span class="k">felt reports</span><span class="v">' + e.props[PROP.FELT] + '</span></div>' : '') +
+      '<div class="db-row"><span class="k">net (42)</span><span class="v">' + escapeHtml(e.props[PROP.NET] || '—') + '</span></div>' +
+      '<div class="db-row"><span class="k">source (44)</span><span class="v">' + escapeHtml(e.props[PROP.SOURCE] || '—') + '</span></div>' +
+    '</div>';
+
+  if (seq) {
+    const members = seq.roles.map(r => ({
+      role: r.role_id, ent: STATE.byId.get(r.entity_id),
+    })).filter(m => m.ent);
+    const mainshock = members.find(m => m.role === ROLE_MAINSHOCK);
+    const afters = members.filter(m => m.role === ROLE_AFTERSHOCK);
+    const isHistoric = (seq.props[PROP.SEQ_HISTORIC] === 'yes');
+    html += '<div class="db-section" style="' + (isHistoric ? 'border-color:rgba(255,216,74,0.4)' : '') + '">' +
+      '<h3 style="' + (isHistoric ? 'color:var(--hist)' : '') + '">Aftershock-sequence hyperedge <span class="pill" style="float:right">arity ' + seq.roles.length + '</span></h3>' +
+      '<div class="db-row"><span class="k">name</span><span class="v">' + escapeHtml(seq.props[PROP.NAME] || '') + '</span></div>' +
+      '<div class="db-row"><span class="k">window</span><span class="v">' + (seq.props[PROP.SEQ_WINDOW_DAYS] || '?') + ' days · ' + (seq.props[PROP.SEQ_RADIUS_KM] || '?') + ' km</span></div>' +
+      (mainshock ?
+        '<div style="margin-top:6px"><div class="role-chip main" data-id="' + mainshock.ent.id + '">' +
+        '<span class="role-label">MAINSHOCK</span>M' + fmt(mainshock.ent.mag, 1) + '</div></div>' : '') +
+      '<div style="margin-top:4px;max-height:160px;overflow-y:auto">' +
+      afters.slice(0, 50).map(a =>
+        '<span class="role-chip after" data-id="' + a.ent.id + '">M' + fmt(a.ent.mag, 1) + '</span>'
+      ).join('') +
+      (afters.length > 50 ? '<span class="pill" style="margin-left:6px">+' + (afters.length - 50) + ' more</span>' : '') +
+      '</div>' +
+      '<p class="hint" style="margin:8px 0 0">One record. The same fact in SQL would be a junction table — <b>' + (afters.length + 1) + '</b> rows of <code>(sequence_id, event_id, role)</code> plus a parent <code>sequence</code> row.</p>' +
+    '</div>';
+  }
+
+  if (fSlot) {
+    html += '<div class="db-section">' +
+      '<h3>On-fault hyperedge <span class="pill" style="float:right">arity 2</span></h3>' +
+      '<div class="role-chip after"><span class="role-label">EVENT</span>M' + fmt(e.mag, 1) + '</div>' +
+      '<div class="role-chip fault" data-id="' + fSlot.faultId + '"><span class="role-label">FAULT</span>' + escapeHtml(fault || '—') + '</div>' +
+      '<div class="db-row" style="margin-top:6px"><span class="k">distance</span><span class="v">' +
+        fmt(fSlot.edge.props[PROP.FAULT_DISTANCE_KM], 1) + ' km</span></div>' +
+    '</div>';
+  }
+
+  html +=
+    '<details class="db-section">' +
+      '<summary style="cursor:pointer;font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em">What does nDB store? (raw wire JSON)</summary>' +
+      '<h3 style="margin-top:8px">EARTHQUAKE entity</h3>' +
+      '<pre>' + escapeHtml(JSON.stringify(e.raw, null, 1)) + '</pre>' +
+      (seq ? '<h3>AFTERSHOCK_SEQUENCE hyperedge</h3><pre>' + escapeHtml(JSON.stringify(seq.raw, null, 1)) + '</pre>' : '') +
+    '</details>';
+
+  root.innerHTML = html;
+  root.querySelectorAll('.role-chip[data-id]').forEach(el => {
+    el.style.cursor = 'pointer';
+    el.addEventListener('click', () => {
+      const target = el.dataset.id;
+      if (STATE.byId.has(target)) selectEvent(target);
+      else if (STATE.faults.some(f => f.id === target)) selectFault(target);
+    });
+  });
+}
+
+function renderFaultPane(f) {
+  const root = $("#selected-host");
+  const linkedEvents = STATE.onFault
+    .filter(of_ => of_.roles.some(r => r.role_id === ROLE_FAULT && r.entity_id === f.id))
+    .map(of_ => {
+      const slot = of_.roles.find(r => r.role_id === ROLE_EVENT);
+      return slot ? STATE.byId.get(slot.entity_id) : null;
+    })
+    .filter(Boolean);
+
+  let html = '<div class="db-section">' +
+    '<h3>Selected fault</h3>' +
+    '<div class="db-row"><span class="k">PROP_NAME</span><span class="v">' + escapeHtml(f.props[PROP.NAME]) + '</span></div>' +
+    '<div class="db-row"><span class="k">type</span><span class="v">' + escapeHtml(f.props[PROP.FAULT_TYPE] || '—') + '</span></div>' +
+    '<div class="db-row"><span class="k">country</span><span class="v">' + escapeHtml(f.props[PROP.FAULT_COUNTRY] || '—') + '</span></div>' +
+    '<div class="db-row"><span class="k">linked events</span><span class="v">' + linkedEvents.length + '</span></div>' +
+  '</div>';
+
+  if (linkedEvents.length) {
+    linkedEvents.sort((a, b) => (b.mag || 0) - (a.mag || 0));
+    html += '<div class="db-section">' +
+      '<h3>Linked events (top 20 by magnitude)</h3>' +
+      '<div style="max-height:300px;overflow-y:auto">' +
+      linkedEvents.slice(0, 20).map(e =>
+        '<div class="role-chip after" data-id="' + e.id + '">M' + fmt(e.mag, 1) + ' &nbsp;' + escapeHtml((e.props[PROP.PLACE] || '').slice(0, 38)) + '</div>'
+      ).join('') +
+      '</div>' +
+    '</div>';
+  }
+
+  root.innerHTML = html;
+  root.querySelectorAll('.role-chip[data-id]').forEach(el => {
+    el.style.cursor = 'pointer';
+    el.addEventListener('click', () => selectEvent(el.dataset.id));
+  });
+}
+
+// ── Stats / counts ──────────────────────────────────────────────────
+function refreshStats() {
+  $("#stat-events").textContent = STATE.events.length;
+  $("#stat-faults").textContent = STATE.faults.length;
+  $("#stat-seqs").textContent = STATE.sequences.length;
+  const maxArity = Math.max(0, ...STATE.sequences.map(s => s.roles.length));
+  $("#stat-arity").textContent = maxArity;
+  $("#counts-chip").textContent = STATE.events.length + " events · " + STATE.sequences.length + " sequences · arity ≤ " + maxArity;
+  $("#fault-count").textContent = STATE.faults.length;
+  $("#hist-count").textContent = STATE.historic.size;
+}
+
+// ── Sequence picker (top bar dropdown) ──────────────────────────────
+function refreshSeqPicker() {
+  const sel = $("#seq-picker");
+  sel.innerHTML = "";
+  const blank = document.createElement("option");
+  blank.value = ""; blank.textContent = "— pick a sequence —";
+  sel.appendChild(blank);
+  const seqs = STATE.sequences.slice().sort((a, b) => b.roles.length - a.roles.length);
+  for (const s of seqs) {
+    const opt = document.createElement("option");
+    opt.value = s.id;
+    opt.textContent = s.props[PROP.NAME] + "  (arity " + s.roles.length + ")";
+    sel.appendChild(opt);
+  }
+  sel.onchange = () => {
+    const id = sel.value; if (!id) return;
+    const seq = STATE.sequences.find(s => s.id === id);
+    if (!seq) return;
+    const ms = seq.roles.find(r => r.role_id === ROLE_MAINSHOCK);
+    if (ms) focusSequence(ms.entity_id);
+  };
+}
+
+// ── Time slider (dual handle) ───────────────────────────────────────
+function renderTimeline() {
+  const svg = $("#timeline-svg");
+  svg.innerHTML = "";
+  const ns = "http://www.w3.org/2000/svg";
+  const W = svg.viewBox.baseVal.width, H = svg.viewBox.baseVal.height;
+  const { dataStart, dataEnd } = STATE.tWindow;
+  if (dataEnd <= dataStart) return;
+
+  // Track
+  const track = document.createElementNS(ns, "rect");
+  track.setAttribute("class", "tl-track");
+  track.setAttribute("x", 8); track.setAttribute("y", 18);
+  track.setAttribute("width", W - 16); track.setAttribute("height", H - 26);
+  track.setAttribute("rx", 3);
+  svg.appendChild(track);
+
+  // Histogram of event counts per ~1% bucket of the data range.
+  const buckets = 100;
+  const counts = new Array(buckets).fill(0);
+  const isHist = new Array(buckets).fill(false);
+  for (const e of STATE.events) {
+    if (e.ts == null || (e.mag || 0) < STATE.magMin) continue;
+    const f = (e.ts - dataStart) / (dataEnd - dataStart);
+    const b = Math.max(0, Math.min(buckets - 1, Math.floor(f * buckets)));
+    counts[b]++;
+    if (STATE.historic.has(e.id)) isHist[b] = true;
+  }
+  const cmax = Math.max(1, ...counts);
+  for (let i = 0; i < buckets; i++) {
+    if (!counts[i]) continue;
+    const x = 8 + (i / buckets) * (W - 16);
+    const w = (W - 16) / buckets;
+    const h = (H - 28) * (counts[i] / cmax);
+    const bar = document.createElementNS(ns, "rect");
+    bar.setAttribute("class", "tl-bar" + (isHist[i] ? " historic" : ""));
+    bar.setAttribute("x", x); bar.setAttribute("y", H - 6 - h);
+    bar.setAttribute("width", w); bar.setAttribute("height", h);
+    svg.appendChild(bar);
+  }
+
+  // Selected window
+  const fStart = (STATE.tWindow.start - dataStart) / (dataEnd - dataStart);
+  const fEnd   = (STATE.tWindow.end   - dataStart) / (dataEnd - dataStart);
+  const xS = 8 + Math.max(0, Math.min(1, fStart)) * (W - 16);
+  const xE = 8 + Math.max(0, Math.min(1, fEnd))   * (W - 16);
+  const win = document.createElementNS(ns, "rect");
+  win.setAttribute("class", "tl-window");
+  win.setAttribute("x", xS); win.setAttribute("y", 18);
+  win.setAttribute("width", Math.max(2, xE - xS)); win.setAttribute("height", H - 26);
+  svg.appendChild(win);
+
+  // Handles
+  for (const [side, x] of [["start", xS], ["end", xE]]) {
+    const h = document.createElementNS(ns, "rect");
+    h.setAttribute("class", "tl-handle");
+    h.setAttribute("x", x - 3); h.setAttribute("y", 14);
+    h.setAttribute("width", 6); h.setAttribute("height", H - 18);
+    h.setAttribute("rx", 2);
+    h.dataset.side = side;
+    h.addEventListener("mousedown", startDragHandle);
+    svg.appendChild(h);
+  }
+
+  // Labels
+  $("#tl-start").textContent = new Date(STATE.tWindow.start).toISOString().slice(0, 10);
+  $("#tl-end").textContent   = new Date(STATE.tWindow.end).toISOString().slice(0, 10);
+  $("#tl-window-count").textContent =
+    STATE.events.filter(e => e.ts != null && e.ts >= STATE.tWindow.start && e.ts <= STATE.tWindow.end).length +
+    " events in window";
+
+  // Year ticks
+  const startYear = new Date(dataStart).getFullYear();
+  const endYear   = new Date(dataEnd).getFullYear();
+  for (let y = startYear; y <= endYear; y++) {
+    const t = new Date(y, 0, 1).getTime();
+    if (t < dataStart || t > dataEnd) continue;
+    const fx = 8 + (t - dataStart) / (dataEnd - dataStart) * (W - 16);
+    const tk = document.createElementNS(ns, "line");
+    tk.setAttribute("class", "tl-tick");
+    tk.setAttribute("x1", fx); tk.setAttribute("x2", fx);
+    tk.setAttribute("y1", 18); tk.setAttribute("y2", 22);
+    svg.appendChild(tk);
+    const lb = document.createElementNS(ns, "text");
+    lb.setAttribute("class", "tl-label");
+    lb.setAttribute("x", fx + 2); lb.setAttribute("y", 12);
+    lb.textContent = y;
+    svg.appendChild(lb);
+  }
+}
+
+function startDragHandle(e) {
+  e.preventDefault();
+  const side = e.target.dataset.side;
+  const svg = $("#timeline-svg");
+  const rect = svg.getBoundingClientRect();
+  const W = svg.viewBox.baseVal.width;
+  function frac(x) { return Math.max(0, Math.min(1, (x - rect.left) / rect.width * (W - 16) / (W - 16))); }
+  function tFromX(clientX) {
+    const f = Math.max(0, Math.min(1, (clientX - rect.left - 8 * rect.width / W) / (rect.width * (W - 16) / W)));
+    return STATE.tWindow.dataStart + f * (STATE.tWindow.dataEnd - STATE.tWindow.dataStart);
+  }
+  function onMove(ev) {
+    const t = tFromX(ev.clientX);
+    if (side === "start") STATE.tWindow.start = Math.min(t, STATE.tWindow.end - 86400 * 1000);
+    else                  STATE.tWindow.end   = Math.max(t, STATE.tWindow.start + 86400 * 1000);
+    renderTimeline();
+    renderEvents();
+  }
+  function onUp() {
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+  }
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+}
+
+// ── Magnitude filter ────────────────────────────────────────────────
+$("#mag-filter").addEventListener("input", (e) => {
+  STATE.magMin = parseFloat(e.target.value);
+  $("#mag-val").textContent = STATE.magMin.toFixed(1);
+  renderEvents();
+  renderTimeline();
+});
+
+// ── Overlay toggles ─────────────────────────────────────────────────
+$("#toggle-faults").addEventListener("click", () => {
+  STATE.showFaults = !STATE.showFaults;
+  $("#toggle-faults").classList.toggle("muted", !STATE.showFaults);
+  renderFaults();
+});
+$("#toggle-historic").addEventListener("click", () => {
+  STATE.showHistOnly = !STATE.showHistOnly;
+  $("#toggle-historic").classList.toggle("muted", !STATE.showHistOnly);
+  renderEvents();
+});
+
+// ── Timeline reset ──────────────────────────────────────────────────
+$("#tl-reset").addEventListener("click", () => {
+  STATE.tWindow.start = STATE.tWindow.dataStart;
+  STATE.tWindow.end   = STATE.tWindow.dataEnd;
+  renderTimeline();
+  renderEvents();
+});
+
+// ── Live fetch (USGS past hour) ─────────────────────────────────────
+async function fetchLive() {
+  const btn = $("#live-fetch");
+  btn.disabled = true; btn.textContent = "Fetching…";
+  try {
+    const r = await fetch("https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson");
+    const d = await r.json();
+    let added = 0;
+    const records = [];
+    for (const f of d.features) {
+      const p = f.properties || {};
+      const id = f.id;
+      const coords = (f.geometry || {}).coordinates || [];
+      const lon = coords[0], lat = coords[1], depth = coords[2];
+      if (lat == null || lon == null) continue;
+      // Skip if we've already got this USGS id.
+      let already = false;
+      for (const e of STATE.events) {
+        if (e.props[PROP.USGS_ID] === id) { already = true; break; }
+      }
+      if (already) continue;
+      const props = [
+        { prop_id: PROP.USGS_ID,   value: { tag: "string", value: id } },
+        { prop_id: PROP.NAME,      value: { tag: "string", value: p.place || id } },
+        { prop_id: PROP.LAT,       value: { tag: "f64",    value: +lat } },
+        { prop_id: PROP.LON,       value: { tag: "f64",    value: +lon } },
+        { prop_id: PROP.SOURCE,    value: { tag: "string", value: "live30d" } },
+      ];
+      if (p.mag    != null) props.push({ prop_id: PROP.MAGNITUDE, value: { tag: "f64", value: +p.mag } });
+      if (depth    != null) props.push({ prop_id: PROP.DEPTH_KM,  value: { tag: "f64", value: +depth } });
+      if (p.place)          props.push({ prop_id: PROP.PLACE,     value: { tag: "string", value: p.place } });
+      if (p.time != null)   props.push({ prop_id: PROP.TIME_MS,   value: { tag: "i64", value: +p.time } });
+      if (p.magType)        props.push({ prop_id: PROP.MAG_TYPE,  value: { tag: "string", value: p.magType } });
+      if (p.net)            props.push({ prop_id: PROP.NET,       value: { tag: "string", value: p.net } });
+      records.push({
+        kind: "entity",
+        entity_id: crypto.randomUUID(),
+        type_id: T_EARTHQUAKE,
+        tx_id_assert: 0,
+        tx_id_supersede: "active",
+        properties: props,
+      });
+      added++;
+    }
+    if (records.length) {
+      const cr = await fetch(API_URL + "/commit", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ records }),
+      });
+      if (!cr.ok) throw new Error("/commit " + cr.status);
+    }
+    btn.textContent = added ? ("+ " + added + " new events ✓") : "No new events";
+    setTimeout(async () => {
+      STATE.events.length = 0;
+      STATE.byId.clear();
+      STATE.faults.length = 0;
+      STATE.sequences.length = 0;
+      STATE.onFault.length = 0;
+      STATE.historic.clear();
+      await loadAll();
+      refreshStats();
+      refreshSeqPicker();
+      renderEvents();
+      renderTimeline();
+      btn.disabled = false;
+      btn.textContent = "↻ Poll USGS (past hour)";
+    }, 1500);
+  } catch (e) {
+    alert("Live fetch failed: " + e);
+    btn.disabled = false;
+    btn.textContent = "↻ Poll USGS (past hour)";
+  }
+}
+$("#live-fetch").addEventListener("click", fetchLive);
+
+// ── Boot ────────────────────────────────────────────────────────────
+window.addEventListener("resize", () => { renderEvents(); renderTimeline(); });
+
+(async () => {
+  drawGraticule();
+  try {
+    await loadAll();
+    refreshStats();
+    refreshSeqPicker();
+    refreshRightPane();
+    renderFaults();
+    renderEvents();
+    renderTimeline();
+    // Continents load async — fine to render dots first; continents
+    // will paint underneath once the TopoJSON arrives.
+    loadContinents();
+  } catch (e) {
+    document.getElementById("centre").innerHTML =
+      '<div style="padding:24px;color:#ff7070">Could not load nDB: ' + escapeHtml(String(e)) + '<br><br>' +
+      'Make sure the explorer is running:<br><code>cargo run -p ndb-renderer --example seismic_explorer</code></div>';
+  }
+})();
+</script>
+</body>
+</html>
