@@ -163,7 +163,12 @@ def build() -> dict:
             "season_from": sf, "season_to": st, "note": note,
         })
     for fw in FOOD_WEBS:
-        seed["food_webs"].append(fw)
+        # Preserve trophic_edges (list of [predator, prey] sci-name pairs).
+        # Default to [] for back-compat with any food-web entry missing it.
+        seed["food_webs"].append({
+            **fw,
+            "trophic_edges": fw.get("trophic_edges", []),
+        })
 
     return seed
 

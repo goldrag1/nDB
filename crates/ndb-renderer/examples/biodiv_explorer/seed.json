@@ -1934,23 +1934,111 @@
       "name": "Yellowstone food web",
       "ecosystem": "yellowstone",
       "members": [
-        "Canis lupus",
-        "Cervus canadensis",
-        "Castor canadensis",
         "Salix exigua",
-        "Ursus arctos horribilis",
-        "Oncorhynchus nerka",
-        "Aquila chrysaetos",
-        "Bison bison",
-        "Canis latrans",
-        "Antilocapra americana",
-        "Vulpes vulpes",
-        "Corvus corax",
         "Pinus contorta",
         "Bouteloua gracilis",
+        "Cervus canadensis",
+        "Bison bison",
+        "Antilocapra americana",
         "Odocoileus virginianus",
-        "Ixodes scapularis",
-        "Ursus maritimus"
+        "Castor canadensis",
+        "Canis lupus",
+        "Canis latrans",
+        "Ursus arctos horribilis",
+        "Vulpes vulpes",
+        "Aquila chrysaetos",
+        "Corvus corax",
+        "Oncorhynchus nerka"
+      ],
+      "trophic_edges": [
+        [
+          "Cervus canadensis",
+          "Salix exigua"
+        ],
+        [
+          "Cervus canadensis",
+          "Pinus contorta"
+        ],
+        [
+          "Cervus canadensis",
+          "Bouteloua gracilis"
+        ],
+        [
+          "Bison bison",
+          "Bouteloua gracilis"
+        ],
+        [
+          "Bison bison",
+          "Salix exigua"
+        ],
+        [
+          "Antilocapra americana",
+          "Bouteloua gracilis"
+        ],
+        [
+          "Odocoileus virginianus",
+          "Salix exigua"
+        ],
+        [
+          "Odocoileus virginianus",
+          "Bouteloua gracilis"
+        ],
+        [
+          "Castor canadensis",
+          "Salix exigua"
+        ],
+        [
+          "Canis lupus",
+          "Cervus canadensis"
+        ],
+        [
+          "Canis lupus",
+          "Bison bison"
+        ],
+        [
+          "Canis lupus",
+          "Castor canadensis"
+        ],
+        [
+          "Canis latrans",
+          "Antilocapra americana"
+        ],
+        [
+          "Canis latrans",
+          "Odocoileus virginianus"
+        ],
+        [
+          "Canis latrans",
+          "Castor canadensis"
+        ],
+        [
+          "Ursus arctos horribilis",
+          "Oncorhynchus nerka"
+        ],
+        [
+          "Ursus arctos horribilis",
+          "Cervus canadensis"
+        ],
+        [
+          "Ursus arctos horribilis",
+          "Salix exigua"
+        ],
+        [
+          "Aquila chrysaetos",
+          "Antilocapra americana"
+        ],
+        [
+          "Aquila chrysaetos",
+          "Vulpes vulpes"
+        ],
+        [
+          "Vulpes vulpes",
+          "Castor canadensis"
+        ],
+        [
+          "Corvus corax",
+          "Oncorhynchus nerka"
+        ]
       ],
       "note": "1995 wolf reintroduction is the canonical trophic-cascade story: wolves cut elk browsing, willows recovered, beavers returned."
     },
@@ -1970,6 +2058,72 @@
         "Carcharodon carcharias",
         "Orcinus orca",
         "Octopus vulgaris"
+      ],
+      "trophic_edges": [
+        [
+          "Strongylocentrotus purpuratus",
+          "Macrocystis pyrifera"
+        ],
+        [
+          "Haliotis rufescens",
+          "Macrocystis pyrifera"
+        ],
+        [
+          "Pugettia producta",
+          "Macrocystis pyrifera"
+        ],
+        [
+          "Hypsypops rubicundus",
+          "Pugettia producta"
+        ],
+        [
+          "Enhydra lutris",
+          "Strongylocentrotus purpuratus"
+        ],
+        [
+          "Enhydra lutris",
+          "Haliotis rufescens"
+        ],
+        [
+          "Enhydra lutris",
+          "Pugettia producta"
+        ],
+        [
+          "Pycnopodia helianthoides",
+          "Strongylocentrotus purpuratus"
+        ],
+        [
+          "Octopus vulgaris",
+          "Pugettia producta"
+        ],
+        [
+          "Triakis semifasciata",
+          "Octopus vulgaris"
+        ],
+        [
+          "Triakis semifasciata",
+          "Hypsypops rubicundus"
+        ],
+        [
+          "Carcharodon carcharias",
+          "Zalophus californianus"
+        ],
+        [
+          "Carcharodon carcharias",
+          "Triakis semifasciata"
+        ],
+        [
+          "Carcharodon carcharias",
+          "Enhydra lutris"
+        ],
+        [
+          "Orcinus orca",
+          "Zalophus californianus"
+        ],
+        [
+          "Orcinus orca",
+          "Carcharodon carcharias"
+        ]
       ],
       "note": "Keystone trio: kelp (producer), urchin (herbivore), otter (predator). Remove the otter, urchins explode, kelp vanishes."
     },
@@ -1994,6 +2148,80 @@
         "Ceratotherium simum",
         "Pseudomyrmex ferruginea"
       ],
+      "trophic_edges": [
+        [
+          "Connochaetes taurinus",
+          "Bouteloua gracilis"
+        ],
+        [
+          "Equus quagga",
+          "Bouteloua gracilis"
+        ],
+        [
+          "Eudorcas thomsonii",
+          "Bouteloua gracilis"
+        ],
+        [
+          "Ceratotherium simum",
+          "Vachellia drepanolobium"
+        ],
+        [
+          "Papio anubis",
+          "Bouteloua gracilis"
+        ],
+        [
+          "Pseudomyrmex ferruginea",
+          "Vachellia drepanolobium"
+        ],
+        [
+          "Panthera leo",
+          "Connochaetes taurinus"
+        ],
+        [
+          "Panthera leo",
+          "Equus quagga"
+        ],
+        [
+          "Panthera leo",
+          "Eudorcas thomsonii"
+        ],
+        [
+          "Acinonyx jubatus",
+          "Eudorcas thomsonii"
+        ],
+        [
+          "Panthera pardus",
+          "Eudorcas thomsonii"
+        ],
+        [
+          "Panthera pardus",
+          "Papio anubis"
+        ],
+        [
+          "Crocuta crocuta",
+          "Connochaetes taurinus"
+        ],
+        [
+          "Crocuta crocuta",
+          "Eudorcas thomsonii"
+        ],
+        [
+          "Crocodylus niloticus",
+          "Connochaetes taurinus"
+        ],
+        [
+          "Crocodylus niloticus",
+          "Equus quagga"
+        ],
+        [
+          "Gyps africanus",
+          "Panthera leo"
+        ],
+        [
+          "Gyps africanus",
+          "Crocuta crocuta"
+        ]
+      ],
       "note": "Great Migration: ~1.5M wildebeest move clockwise around the ecosystem each year, predator densities track them."
     },
     {
@@ -2015,6 +2243,68 @@
         "Heteractis magnifica",
         "Odontodactylus scyllarus"
       ],
+      "trophic_edges": [
+        [
+          "Acropora millepora",
+          "Symbiodinium microadriaticum"
+        ],
+        [
+          "Scarus guacamaia",
+          "Acropora millepora"
+        ],
+        [
+          "Strongylocentrotus purpuratus",
+          "Acropora millepora"
+        ],
+        [
+          "Odontodactylus scyllarus",
+          "Strongylocentrotus purpuratus"
+        ],
+        [
+          "Octopus vulgaris",
+          "Odontodactylus scyllarus"
+        ],
+        [
+          "Gymnothorax javanicus",
+          "Octopus vulgaris"
+        ],
+        [
+          "Gymnothorax javanicus",
+          "Lutjanus kasmira"
+        ],
+        [
+          "Epinephelus tukula",
+          "Lutjanus kasmira"
+        ],
+        [
+          "Epinephelus tukula",
+          "Scarus guacamaia"
+        ],
+        [
+          "Carcharhinus melanopterus",
+          "Lutjanus kasmira"
+        ],
+        [
+          "Carcharhinus melanopterus",
+          "Epinephelus tukula"
+        ],
+        [
+          "Carcharhinus melanopterus",
+          "Gymnothorax javanicus"
+        ],
+        [
+          "Manta birostris",
+          "Symbiodinium microadriaticum"
+        ],
+        [
+          "Amphiprion ocellaris",
+          "Heteractis magnifica"
+        ],
+        [
+          "Labroides dimidiatus",
+          "Epinephelus tukula"
+        ]
+      ],
       "note": "Zooxanthellae make this whole ecosystem possible: 90% of the coral's energy is photosynthate from the algal symbiont."
     },
     {
@@ -2031,6 +2321,52 @@
         "Dicrostonyx groenlandicus",
         "Vulpes lagopus",
         "Orcinus orca"
+      ],
+      "trophic_edges": [
+        [
+          "Boreogadus saida",
+          "Calanus glacialis"
+        ],
+        [
+          "Pusa hispida",
+          "Boreogadus saida"
+        ],
+        [
+          "Monodon monoceros",
+          "Boreogadus saida"
+        ],
+        [
+          "Delphinapterus leucas",
+          "Boreogadus saida"
+        ],
+        [
+          "Ursus maritimus",
+          "Pusa hispida"
+        ],
+        [
+          "Vulpes lagopus",
+          "Pusa hispida"
+        ],
+        [
+          "Vulpes lagopus",
+          "Dicrostonyx groenlandicus"
+        ],
+        [
+          "Bubo scandiacus",
+          "Dicrostonyx groenlandicus"
+        ],
+        [
+          "Orcinus orca",
+          "Pusa hispida"
+        ],
+        [
+          "Orcinus orca",
+          "Monodon monoceros"
+        ],
+        [
+          "Orcinus orca",
+          "Delphinapterus leucas"
+        ]
       ],
       "note": "Sea ice is the keystone HABITAT — every node here is being squeezed by its retreat."
     },
@@ -2051,6 +2387,68 @@
         "Heliconia rostrata",
         "Trochilus polytmus",
         "Danaus plexippus"
+      ],
+      "trophic_edges": [
+        [
+          "Bradypus variegatus",
+          "Ficus aurea"
+        ],
+        [
+          "Bradypus variegatus",
+          "Heliconia rostrata"
+        ],
+        [
+          "Dasyprocta leporina",
+          "Bertholletia excelsa"
+        ],
+        [
+          "Hydrochoerus hydrochaeris",
+          "Heliconia rostrata"
+        ],
+        [
+          "Ara macao",
+          "Bertholletia excelsa"
+        ],
+        [
+          "Danaus plexippus",
+          "Heliconia rostrata"
+        ],
+        [
+          "Trochilus polytmus",
+          "Heliconia rostrata"
+        ],
+        [
+          "Panthera onca",
+          "Hydrochoerus hydrochaeris"
+        ],
+        [
+          "Panthera onca",
+          "Dasyprocta leporina"
+        ],
+        [
+          "Panthera onca",
+          "Bradypus variegatus"
+        ],
+        [
+          "Harpia harpyja",
+          "Bradypus variegatus"
+        ],
+        [
+          "Harpia harpyja",
+          "Ara macao"
+        ],
+        [
+          "Eunectes murinus",
+          "Hydrochoerus hydrochaeris"
+        ],
+        [
+          "Eunectes murinus",
+          "Pygocentrus nattereri"
+        ],
+        [
+          "Pygocentrus nattereri",
+          "Dasyprocta leporina"
+        ]
       ],
       "note": "Brazil nut tree depends on agouti (only mammal that can crack its pod) AND on a specific orchid bee for pollination — three-way mutualism."
     }

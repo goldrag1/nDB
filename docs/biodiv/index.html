@@ -55,7 +55,8 @@
     padding: 4px 10px; font-size: 12.5px; cursor: pointer;
   }
   .modes button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .modes button:hover:not(.active) { color: var(--text); border-color: var(--border-soft); }
+  .modes button:hover:not(.active):not(:disabled) { color: var(--text); border-color: var(--border-soft); }
+  .modes button:disabled { opacity: 0.4; cursor: not-allowed; }
   .search { margin-left: auto; }
   .search input {
     background: var(--surface-2); color: var(--text);
@@ -151,6 +152,79 @@
     font-size: 9px; fill: var(--text-muted);
     pointer-events: none; font-family: var(--font-mono);
   }
+
+  /* ── Force-directed graph view (food web + species network) ── */
+  .graph-wrap {
+    display: flex; flex-direction: column;
+    height: 100%; overflow: hidden;
+  }
+  .graph-svg {
+    flex: 1; width: 100%; background: var(--surface-2);
+    cursor: grab; user-select: none;
+  }
+  .graph-svg.dragging { cursor: grabbing; }
+  .graph-svg .edge { stroke-width: 1.4; fill: none; opacity: 0.85; }
+  .graph-svg .edge.muted { opacity: 0.18; }
+  .graph-svg .edge.highlight { stroke-width: 2.4; opacity: 1; }
+  .graph-svg .edge-poll  { stroke: var(--c-poll); stroke-dasharray: 3 3; }
+  .graph-svg .edge-mut   { stroke: var(--c-mut); }
+  .graph-svg .edge-par   { stroke: var(--c-par); stroke-dasharray: 4 2; }
+  .graph-svg .edge-pred  { stroke: var(--c-pred); }
+  .graph-svg .edge-troph { stroke: #888; opacity: 0.55; }
+  .graph-svg .edge-mut.edge-troph { stroke: var(--c-mut); opacity: 0.7; }
+
+  .graph-svg .node-photo { stroke: var(--border); stroke-width: 1.2; cursor: pointer;
+                            transition: stroke 0.12s, stroke-width 0.12s; }
+  .graph-svg .node-photo:hover { stroke: var(--accent); stroke-width: 2.2; }
+  .graph-svg .node-photo.selected { stroke: var(--accent); stroke-width: 3; }
+  .graph-svg .node-photo.center    { stroke: var(--accent-hover); stroke-width: 3; }
+  .graph-svg .node-label {
+    font-size: 9.5px; fill: var(--text); text-anchor: middle;
+    pointer-events: none; paint-order: stroke;
+    stroke: var(--surface-2); stroke-width: 3px; stroke-linejoin: round;
+  }
+  .graph-svg .level-line {
+    stroke: var(--border-soft); stroke-width: 0.5; stroke-dasharray: 2 4;
+    fill: none; opacity: 0.55;
+  }
+  .graph-svg .level-label {
+    font-size: 9.5px; fill: var(--text-muted); font-family: var(--font-mono);
+    text-transform: uppercase; letter-spacing: 0.05em;
+    pointer-events: none;
+  }
+  .graph-svg .hub {
+    fill: rgba(74,144,226,0.18); stroke: var(--accent); stroke-width: 1.3;
+    pointer-events: none;
+  }
+
+  .graph-header {
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  .graph-title {
+    color: var(--text-strong); font-weight: 600; font-size: 14px;
+  }
+  .graph-title-sub {
+    color: var(--text-muted); font-size: 12px;
+  }
+  .graph-back-btn {
+    background: var(--surface-2); border: 1px solid var(--border);
+    color: var(--text); padding: 4px 10px; border-radius: 3px;
+    font-size: 11.5px; cursor: pointer;
+  }
+  .graph-back-btn:hover { border-color: var(--accent); color: var(--accent-hover); }
+  .graph-legend {
+    display: flex; gap: 10px; margin-left: auto;
+    font-size: 11px; color: var(--text-muted);
+  }
+  .graph-legend .item { display: flex; align-items: center; gap: 4px; }
+  .graph-legend .swatch { width: 16px; height: 2px; }
+
+  .graph-footer {
+    padding: 8px 14px; color: var(--text-muted); font-size: 12px;
+    border-top: 1px solid var(--border-soft);
+  }
+  .graph-footer strong { color: var(--text); }
 
   /* Food-web view */
   .fw-picker {
@@ -294,6 +368,7 @@
   <div class="brand">biodiv_ndb <span class="sub">N-ary ecology</span></div>
   <div class="modes" id="modes">
     <button data-mode="grid"   class="active">Species</button>
+    <button data-mode="network" disabled title="Click a species in the grid to enter the network view">Network</button>
     <button data-mode="map">Map</button>
     <button data-mode="webs">Food webs</button>
   </div>
@@ -362,7 +437,7 @@ const PROP = {
   NAME: 30, SCI: 31, COMMON: 32, KINGDOM: 33, FAMILY: 34, LIFE: 35,
   PHOTO: 36, WIKI: 37, REGION_KIND: 38, LAT: 39, LON: 40, REGION_KEY: 41,
   SEASON_FROM: 50, SEASON_TO: 51, OBLIGATE: 52, SUBTYPE: 53,
-  TRANSMISSION: 54, NOTE: 55, FW_NAME: 56, KIND: 57,
+  TRANSMISSION: 54, NOTE: 55, FW_NAME: 56, KIND: 57, TROPHIC_JSON: 58,
 };
 const KIND_OF_TYPE = {
   [T_POLLINATION]: "pollination",
@@ -486,6 +561,11 @@ async function loadAll() {
       interaction.subtype     = valStr(propVal(obj, PROP.SUBTYPE));
       interaction.transmission = valStr(propVal(obj, PROP.TRANSMISSION));
       interaction.fw_name     = valStr(propVal(obj, PROP.FW_NAME));
+      const trophicJson       = valStr(propVal(obj, PROP.TROPHIC_JSON));
+      if (trophicJson) {
+        try { interaction.trophic_edges = JSON.parse(trophicJson); }
+        catch (_) { interaction.trophic_edges = []; }
+      }
       state.interactions.push(interaction);
     }
   }
@@ -591,12 +671,24 @@ function interactionsForSpecies(eid) {
 
 // ─── Render dispatch ───────────────────────────────────────────────────
 function render() {
+  // Stop any running force simulation before swapping the DOM.
+  if (state.activeGraph) { state.activeGraph.stop(); state.activeGraph = null; }
   const pane = document.getElementById("pane");
   pane.innerHTML = "";
   if (state.mode === "grid") renderGrid(pane);
+  else if (state.mode === "network") renderSpeciesNetwork(pane);
   else if (state.mode === "map") renderMap(pane);
   else if (state.mode === "webs") renderFoodWebs(pane);
   renderInspector();
+  // Sync the Network mode button — disabled until a species is picked.
+  const netBtn = document.querySelector('#modes button[data-mode="network"]');
+  if (netBtn) {
+    const sp = state.selectedEntityId && state.speciesById.get(state.selectedEntityId);
+    netBtn.disabled = !sp;
+    netBtn.title = sp
+      ? `Show the interaction network around ${sp.common}`
+      : "Click a species in the grid to enter the network view";
+  }
 }
 
 // ── Species grid ──────────────────────────────────────────────────────
@@ -629,6 +721,10 @@ function renderGrid(pane) {
       card.addEventListener("click", () => {
         state.selectedEntityId = sp.eid;
         state.selectedHyperedgeId = null;
+        state.mode = "network";    // auto-switch to the ego-graph view
+        // Update mode buttons to reflect the new active mode
+        document.querySelectorAll('#modes button').forEach(b =>
+          b.classList.toggle("active", b.dataset.mode === "network"));
         render();
       });
       grid.appendChild(card);
@@ -711,11 +807,274 @@ function renderMap(pane) {
   });
 }
 
-// ── Food-web view ─────────────────────────────────────────────────────
+// ── Force-directed graph engine ──────────────────────────────────────
+// Minimal in-house simulation — repulsion + spring + optional Y-by-level.
+// Tuned for N=10–25 nodes (food webs + ego graphs); fine without Barnes-Hut.
+class ForceGraph {
+  constructor(svg, opts) {
+    this.svg     = svg;
+    this.W       = opts.width;
+    this.H       = opts.height;
+    this.nodes   = opts.nodes;    // {id, photo, label, x, y, vx, vy, fx?, fy?, level?, kind, size}
+    this.edges   = opts.edges;    // {source: idx, target: idx, kind, directed, label}
+    this.linkDist = opts.linkDistance || 80;
+    this.charge   = opts.charge   || 1300;
+    this.layered  = opts.layered  || null;   // {maxLevel, levelY(l)}
+    this.alpha = 1.0;
+    this.alphaDecay = 0.022;
+    this.running = false;
+    this.onNodeClick = opts.onNodeClick || (() => {});
+    this.centerNodeId = opts.centerNodeId || null;
+    this._domNodes = [];
+    this._domEdges = [];
+    this._highlightedNode = null;
+    this._initialRender();
+  }
+
+  start() {
+    if (this.running) return;
+    this.running = true;
+    const tick = () => {
+      if (!this.running) return;
+      this._simulate();
+      this._updateDom();
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+  stop() { this.running = false; }
+  reheat(a = 0.5) { this.alpha = Math.max(this.alpha, a); }
+
+  _simulate() {
+    if (this.alpha < 0.003) return;
+    const N = this.nodes.length;
+    // Repulsion (O(N²) is fine here)
+    for (let i = 0; i < N; i++) {
+      const a = this.nodes[i];
+      if (a.fx !== undefined) continue;
+      for (let j = 0; j < N; j++) {
+        if (i === j) continue;
+        const b = this.nodes[j];
+        const dx = a.x - b.x, dy = a.y - b.y;
+        const d2 = dx*dx + dy*dy + 1;
+        const d = Math.sqrt(d2);
+        const force = this.charge / d2;
+        a.vx += (dx / d) * force * this.alpha;
+        a.vy += (dy / d) * force * this.alpha;
+      }
+    }
+    // Attraction along edges
+    for (const e of this.edges) {
+      const a = this.nodes[e.source];
+      const b = this.nodes[e.target];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const d = Math.sqrt(dx*dx + dy*dy) + 0.01;
+      const stiff = (d - this.linkDist) * 0.06 * this.alpha;
+      const fx = (dx / d) * stiff;
+      const fy = (dy / d) * stiff;
+      if (a.fx === undefined) { a.vx += fx; a.vy += fy; }
+      if (b.fx === undefined) { b.vx -= fx; b.vy -= fy; }
+    }
+    // Layered Y pull
+    if (this.layered) {
+      for (const n of this.nodes) {
+        if (n.fx !== undefined) continue;
+        const targetY = this.layered.levelY(n.level);
+        n.vy += (targetY - n.y) * 0.20;
+      }
+    } else {
+      // Soft centering
+      for (const n of this.nodes) {
+        if (n.fx !== undefined) continue;
+        n.vx += (this.W / 2 - n.x) * 0.004 * this.alpha;
+        n.vy += (this.H / 2 - n.y) * 0.004 * this.alpha;
+      }
+    }
+    // Integrate + damping + clamp
+    for (const n of this.nodes) {
+      if (n.fx !== undefined) {
+        n.x = n.fx; n.y = n.fy; n.vx = 0; n.vy = 0; continue;
+      }
+      n.vx *= 0.55; n.vy *= 0.55;
+      n.x += n.vx; n.y += n.vy;
+      const pad = (n.size || 24) + 6;
+      n.x = Math.max(pad, Math.min(this.W - pad, n.x));
+      n.y = Math.max(pad, Math.min(this.H - pad, n.y));
+    }
+    this.alpha *= (1 - this.alphaDecay);
+  }
+
+  _initialRender() {
+    const ns = "http://www.w3.org/2000/svg";
+    this.svg.innerHTML = "";
+
+    // Defs: arrowheads + photo clip-paths
+    const defs = document.createElementNS(ns, "defs");
+    for (const color of ["pred", "par", "troph"]) {
+      const c = color === "pred" ? "var(--c-pred)"
+              : color === "par"  ? "var(--c-par)"
+                                  : "#888";
+      defs.insertAdjacentHTML("beforeend",
+        `<marker id="ar-${color}" viewBox="0 0 10 10" refX="9" refY="5"
+                 markerWidth="6" markerHeight="6" orient="auto" markerUnits="userSpaceOnUse">
+           <path d="M0,0 L10,5 L0,10 z" fill="${c}"/>
+         </marker>`);
+    }
+    for (const n of this.nodes) {
+      const r = (n.size || 24);
+      defs.insertAdjacentHTML("beforeend",
+        `<clipPath id="clip-${n.id}"><circle cx="0" cy="0" r="${r}"/></clipPath>`);
+    }
+    this.svg.appendChild(defs);
+
+    // Layered level guides (drawn first so they sit behind everything)
+    if (this.layered) {
+      for (let l = 1; l <= this.layered.maxLevel; l++) {
+        const y = this.layered.levelY(l);
+        this.svg.insertAdjacentHTML("beforeend",
+          `<line class="level-line" x1="20" y1="${y}" x2="${this.W - 20}" y2="${y}"/>` +
+          `<text class="level-label" x="22" y="${y - 4}">${this.layered.label(l)}</text>`);
+      }
+    }
+
+    // Edges first (so nodes sit above)
+    for (const e of this.edges) {
+      const path = document.createElementNS(ns, "path");
+      let cls = "edge";
+      if      (e.kind === "pollination") cls += " edge-poll";
+      else if (e.kind === "mutualism")   cls += " edge-mut";
+      else if (e.kind === "parasitism")  cls += " edge-par";
+      else if (e.kind === "predation")   cls += " edge-pred";
+      else if (e.kind === "trophic")     cls += " edge-troph";
+      else if (e.kind === "trophic-mut") cls += " edge-mut edge-troph";
+      path.setAttribute("class", cls);
+      if (e.directed) {
+        const arrowColor = e.kind === "parasitism" ? "par"
+                         : e.kind === "predation"  ? "pred" : "troph";
+        path.setAttribute("marker-end", `url(#ar-${arrowColor})`);
+      }
+      if (e.label) {
+        const title = document.createElementNS(ns, "title");
+        title.textContent = e.label;
+        path.appendChild(title);
+      }
+      this.svg.appendChild(path);
+      this._domEdges.push(path);
+    }
+
+    // Nodes
+    for (const n of this.nodes) {
+      const g = document.createElementNS(ns, "g");
+      g.setAttribute("data-id", n.id);
+      g.style.cursor = "pointer";
+
+      const r = n.size || 24;
+      const img = document.createElementNS(ns, "image");
+      img.setAttribute("href", n.photo || "");
+      img.setAttribute("x", -r);
+      img.setAttribute("y", -r);
+      img.setAttribute("width", r * 2);
+      img.setAttribute("height", r * 2);
+      img.setAttribute("preserveAspectRatio", "xMidYMid slice");
+      img.setAttribute("clip-path", `url(#clip-${n.id})`);
+      img.style.pointerEvents = "none";
+      g.appendChild(img);
+
+      const circle = document.createElementNS(ns, "circle");
+      circle.setAttribute("class", "node-photo" + (n.id === this.centerNodeId ? " center" : ""));
+      circle.setAttribute("r", r);
+      circle.setAttribute("fill", "transparent");
+      g.appendChild(circle);
+
+      const label = document.createElementNS(ns, "text");
+      label.setAttribute("class", "node-label");
+      label.setAttribute("y", r + 11);
+      label.textContent = n.label || "";
+      g.appendChild(label);
+
+      const titleEl = document.createElementNS(ns, "title");
+      titleEl.textContent = `${n.label || n.id}${n.sci ? ` (${n.sci})` : ''}`;
+      g.appendChild(titleEl);
+
+      g.addEventListener("click", (ev) => { ev.stopPropagation(); this.onNodeClick(n.id); });
+      g.addEventListener("mouseenter", () => this._highlightEdgesFor(n.id));
+      g.addEventListener("mouseleave", () => this._highlightEdgesFor(null));
+
+      this.svg.appendChild(g);
+      this._domNodes.push(g);
+    }
+  }
+
+  _updateDom() {
+    // Update edge paths
+    for (let i = 0; i < this.edges.length; i++) {
+      const e = this.edges[i];
+      const a = this.nodes[e.source];
+      const b = this.nodes[e.target];
+      // Shorten the line so the arrowhead doesn't bury inside the target photo
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const d = Math.sqrt(dx*dx + dy*dy) || 1;
+      const back = (b.size || 24) + 2;
+      const tx = b.x - (dx / d) * back;
+      const ty = b.y - (dy / d) * back;
+      // Slight curve for visual readability between same-pair edges
+      const mx = (a.x + tx) / 2;
+      const my = (a.y + ty) / 2;
+      this._domEdges[i].setAttribute("d", `M${a.x},${a.y} Q${mx},${my} ${tx},${ty}`);
+    }
+    // Update node positions
+    for (let i = 0; i < this.nodes.length; i++) {
+      const n = this.nodes[i];
+      this._domNodes[i].setAttribute("transform", `translate(${n.x},${n.y})`);
+    }
+  }
+
+  _highlightEdgesFor(nodeId) {
+    for (let i = 0; i < this.edges.length; i++) {
+      const e = this.edges[i];
+      const involved = nodeId !== null
+        && (this.nodes[e.source].id === nodeId || this.nodes[e.target].id === nodeId);
+      const el = this._domEdges[i];
+      el.classList.toggle("highlight", involved);
+      el.classList.toggle("muted", nodeId !== null && !involved);
+    }
+  }
+}
+
+// Compute trophic levels: level(s) = 1 + max(level(prey)).
+// Members with no outgoing prey edges are producers (level 1).
+function computeTrophicLevels(members, edges) {
+  const memberSet = new Set(members);
+  const preyOf = new Map();    // species → list of species it eats (intersected with members)
+  for (const m of members) preyOf.set(m, []);
+  for (const [pred, prey] of edges) {
+    if (memberSet.has(pred) && memberSet.has(prey)) preyOf.get(pred).push(prey);
+  }
+  const levels = new Map();
+  const visiting = new Set();
+  function lvl(sp, depth = 0) {
+    if (levels.has(sp)) return levels.get(sp);
+    if (visiting.has(sp) || depth > 50) { levels.set(sp, 1); return 1; }  // cycle break
+    visiting.add(sp);
+    const prey = preyOf.get(sp) || [];
+    let v = 1;
+    if (prey.length) v = 1 + Math.max(...prey.map(p => lvl(p, depth + 1)));
+    visiting.delete(sp);
+    levels.set(sp, v);
+    return v;
+  }
+  for (const m of members) lvl(m);
+  return levels;
+}
+
+const LEVEL_LABELS = ["?", "Producers", "Primary consumers", "Secondary", "Tertiary", "Apex"];
+
+// ── Food-web view (real interconnected graph) ────────────────────────
 function renderFoodWebs(pane) {
   const fws = state.interactions.filter(it => it.kind === "food_web");
   if (!state.selectedFoodWeb && fws.length) state.selectedFoodWeb = fws[0].id;
   const current = fws.find(it => it.id === state.selectedFoodWeb) || fws[0];
+  if (!current) return;
 
   const picker = document.createElement("div");
   picker.className = "fw-picker";
@@ -730,74 +1089,265 @@ function renderFoodWebs(pane) {
     render();
   }));
 
-  if (!current) return;
-  const canvasWrap = document.createElement("div");
-  canvasWrap.className = "fw-canvas-wrap";
-
-  const ecosystemRole = current.roles.find(r => r.rid === ROLE.ECOSYSTEM);
   const memberRoles = current.roles.filter(r => r.rid === ROLE.MEMBER);
-  const ecosystem = state.regionById.get(ecosystemRole.eid);
+  const memberSpecies = memberRoles.map(r => state.speciesById.get(r.eid)).filter(Boolean);
+  const trophicEdges = current.trophic_edges || [];
 
-  // Lay out members in a circle
-  const W = 900, H = 540;
-  const cx = W / 2, cy = H / 2;
-  const photoSize = 56;
-  const radius = Math.min(W, H) / 2 - photoSize - 30;
-  const N = memberRoles.length;
+  // Compute trophic levels per member (by scientific name)
+  const memberSciNames = memberSpecies.map(s => s.sci);
+  const levels = computeTrophicLevels(memberSciNames, trophicEdges);
+  const maxLevel = Math.max(...Array.from(levels.values()));
 
-  let nodes = "";
-  let spokes = "";
-  let labels = "";
-  memberRoles.forEach((r, i) => {
-    const angle = (i / N) * Math.PI * 2 - Math.PI / 2;
-    const x = cx + radius * Math.cos(angle);
-    const y = cy + radius * Math.sin(angle);
-    const sp = state.speciesById.get(r.eid);
-    if (!sp) return;
-    spokes += `<line class="spoke" x1="${cx}" y1="${cy}" x2="${x}" y2="${y}"/>`;
-    // clipPath circle for the photo
-    nodes += `
-      <defs><clipPath id="clip-${i}"><circle cx="${x}" cy="${y}" r="${photoSize/2}"/></clipPath></defs>
-      <image href="${sp.photo}" x="${x - photoSize/2}" y="${y - photoSize/2}"
-             width="${photoSize}" height="${photoSize}"
-             preserveAspectRatio="xMidYMid slice"
-             clip-path="url(#clip-${i})"/>
-      <circle class="node-photo" cx="${x}" cy="${y}" r="${photoSize/2}"
-              fill="transparent" data-eid="${r.eid}"/>`;
-    // Label below
-    const ly = y + photoSize/2 + 12;
-    const isOuter = Math.abs(angle) > Math.PI/2;
-    labels += `<text class="node-label" x="${x}" y="${ly}">${sp.common}</text>`;
-  });
+  // Build graph nodes — slot members by their trophic level
+  const nodesPerLevel = new Map();
+  for (const sp of memberSpecies) {
+    const lvl = levels.get(sp.sci) || 1;
+    if (!nodesPerLevel.has(lvl)) nodesPerLevel.set(lvl, []);
+    nodesPerLevel.get(lvl).push(sp);
+  }
 
-  const hubR = 56;
-  canvasWrap.innerHTML = `
-    <svg class="fw-svg" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
-      <circle class="ring" cx="${cx}" cy="${cy}" r="${radius}"/>
-      ${spokes}
-      ${nodes}
-      ${labels}
-      <circle class="hub-bg" cx="${cx}" cy="${cy}" r="${hubR}"/>
-      <text class="hub-label" x="${cx}" y="${cy - 4}">${ecosystem ? ecosystem.name : '?'}</text>
-      <text class="hub-label" x="${cx}" y="${cy + 12}" style="font-size:9px; opacity:0.85;">arity = ${current.roles.length}</text>
-    </svg>
-    <div class="fw-meta">
-      <strong>One nDB record.</strong> ${current.note || ""}
-    </div>`;
-  pane.appendChild(canvasWrap);
+  // Layout dims — fill the available pane area
+  const pane_rect = pane.getBoundingClientRect();
+  const W = Math.max(700, pane_rect.width - 20);
+  const H = Math.max(540, pane_rect.height - 140);
+  const padding = 60;
+  const levelY = (l) => padding + (maxLevel - l) * ((H - 2 * padding) / Math.max(1, maxLevel - 1));
 
-  canvasWrap.querySelectorAll('.node-photo').forEach(n => {
-    n.addEventListener("click", () => {
-      state.selectedEntityId = n.dataset.eid;
-      state.selectedHyperedgeId = current.id;
-      render();
+  // Initial X-spread by level — even slots across the width
+  const nodes = [];
+  const idToIndex = new Map();
+  for (const [lvl, list] of nodesPerLevel) {
+    list.forEach((sp, i) => {
+      const x = (W * (i + 1)) / (list.length + 1);
+      const y = levelY(lvl);
+      idToIndex.set(sp.eid, nodes.length);
+      nodes.push({
+        id: sp.eid, sci: sp.sci, label: sp.common, photo: sp.photo,
+        x, y, vx: 0, vy: 0, level: lvl, size: 26,
+      });
     });
-  });
+  }
 
-  // Auto-select the food-web hyperedge in inspector if nothing else is selected
+  // Build directed edges (kind = "trophic"; mutualism gets a green edge below)
+  // The mutualism + cleaning + housing interactions among members get edge-mut.
+  const sciToIdx = new Map();
+  nodes.forEach((n, i) => sciToIdx.set(n.sci, i));
+
+  const mutualistPairs = new Set();
+  for (const it of state.interactions.filter(x => x.kind === "mutualism")) {
+    const partners = it.roles.filter(r => r.rid !== ROLE.REGION).map(r => state.speciesById.get(r.eid)?.sci).filter(Boolean);
+    if (partners.length === 2 && sciToIdx.has(partners[0]) && sciToIdx.has(partners[1])) {
+      mutualistPairs.add([partners[0], partners[1]].sort().join("|"));
+    }
+  }
+
+  const edges = [];
+  for (const [pred, prey] of trophicEdges) {
+    const si = sciToIdx.get(pred), ti = sciToIdx.get(prey);
+    if (si === undefined || ti === undefined) continue;
+    const pairKey = [pred, prey].sort().join("|");
+    const isMutualism = mutualistPairs.has(pairKey);
+    edges.push({
+      source: si, target: ti,
+      kind: isMutualism ? "trophic-mut" : "trophic",
+      directed: !isMutualism,
+      label: isMutualism ? `${pred} ↔ ${prey} (mutualism)` : `${pred} → ${prey}`,
+    });
+  }
+
+  // SVG container
+  const wrap = document.createElement("div");
+  wrap.className = "graph-wrap";
+  wrap.innerHTML = `
+    <div class="graph-header">
+      <span class="graph-title">${current.fw_name}</span>
+      <span class="graph-title-sub">· ${memberSpecies.length} members · ${edges.length} trophic edges · arity ${current.roles.length}</span>
+      <div class="graph-legend">
+        <span class="item"><span class="swatch" style="background:#888"></span> eats</span>
+        <span class="item"><span class="swatch" style="background:var(--c-mut)"></span> mutualism</span>
+      </div>
+    </div>
+    <svg class="graph-svg" viewBox="0 0 ${W} ${H}"></svg>
+    <div class="graph-footer"><strong>One nDB record.</strong> ${current.note || ""}</div>`;
+  pane.appendChild(wrap);
+
+  const svg = wrap.querySelector("svg.graph-svg");
+  const fg = new ForceGraph(svg, {
+    width: W, height: H,
+    nodes, edges,
+    linkDistance: 95,
+    charge: 1200,
+    layered: {
+      maxLevel,
+      levelY,
+      label: (l) => LEVEL_LABELS[l] || `Level ${l}`,
+    },
+    onNodeClick: (eid) => {
+      state.selectedEntityId = eid;
+      state.selectedHyperedgeId = current.id;
+      renderInspector();
+    },
+  });
+  fg.start();
+  state.activeGraph = fg;
+
+  // Default-select the food-web hyperedge in inspector
   if (!state.selectedEntityId && state.selectedHyperedgeId !== current.id) {
     state.selectedHyperedgeId = current.id;
   }
+}
+
+// ── Species ego-network view ─────────────────────────────────────────
+// Center = selected species. Around it = every species it interacts with,
+// connected by edges colored by interaction kind.
+function renderSpeciesNetwork(pane) {
+  const focal = state.selectedEntityId && state.speciesById.get(state.selectedEntityId);
+  if (!focal) {
+    pane.innerHTML = `<div style="padding:60px 18px; text-align:center; color:var(--text-muted);">
+      Pick a species from the <strong style="color:var(--text);">Species</strong> grid to enter the network view.
+    </div>`;
+    return;
+  }
+
+  // Collect direct interactions touching `focal`
+  const involved = state.interactions.filter(it =>
+    state.filterTypes.has(it.kind)
+    && it.roles.some(r => r.eid === focal.eid)
+  );
+
+  // Build neighbor set + edges
+  const neighborSet = new Map();   // sci → species
+  const ego = [];                  // edges to render
+  for (const it of involved) {
+    if (it.kind === "food_web") {
+      // For food webs, surface the trophic_edges that touch the focal species —
+      // those edges land within the ecosystem and convey who eats whom.
+      const fwSciSet = new Set(it.roles.filter(r => r.rid === ROLE.MEMBER)
+        .map(r => state.speciesById.get(r.eid)?.sci).filter(Boolean));
+      for (const [pred, prey] of (it.trophic_edges || [])) {
+        if (pred === focal.sci && fwSciSet.has(prey)) {
+          const sp = state.speciesBySci.get(prey);
+          if (sp) {
+            neighborSet.set(prey, sp);
+            ego.push({ partner: sp, kind: "predation", directed: "out",
+                       label: `${focal.sci} eats ${prey} (${it.fw_name})` });
+          }
+        } else if (prey === focal.sci && fwSciSet.has(pred)) {
+          const sp = state.speciesBySci.get(pred);
+          if (sp) {
+            neighborSet.set(pred, sp);
+            ego.push({ partner: sp, kind: "predation", directed: "in",
+                       label: `${pred} eats ${focal.sci} (${it.fw_name})` });
+          }
+        }
+      }
+      continue;
+    }
+    // Pairwise: identify the partner role-filler
+    const partnerRole = it.roles.find(r =>
+      r.rid !== ROLE.REGION && r.rid !== ROLE.ECOSYSTEM && r.eid !== focal.eid);
+    if (!partnerRole) continue;
+    const partner = state.speciesById.get(partnerRole.eid);
+    if (!partner) continue;
+    neighborSet.set(partner.sci, partner);
+
+    // For directed kinds, figure out which side our focal is on
+    let directed = false, dirOut = false;
+    if (it.kind === "predation") {
+      directed = true;
+      dirOut = it.roles.find(r => r.rid === ROLE.PREDATOR)?.eid === focal.eid;
+    } else if (it.kind === "parasitism") {
+      directed = true;
+      dirOut = it.roles.find(r => r.rid === ROLE.PARASITE)?.eid === focal.eid;
+    } else if (it.kind === "pollination") {
+      directed = true;
+      dirOut = it.roles.find(r => r.rid === ROLE.POLLINATOR)?.eid === focal.eid;
+    }
+    ego.push({
+      partner, kind: it.kind, interactionId: it.id, label: it.note,
+      directed: directed ? (dirOut ? "out" : "in") : "both",
+    });
+  }
+
+  // Build nodes — focal pinned at the centre, neighbours laid in a ring
+  const pane_rect = pane.getBoundingClientRect();
+  const W = Math.max(700, pane_rect.width - 20);
+  const H = Math.max(540, pane_rect.height - 90);
+  const cx = W / 2, cy = H / 2;
+
+  const nodes = [{
+    id: focal.eid, sci: focal.sci, label: focal.common, photo: focal.photo,
+    x: cx, y: cy, vx: 0, vy: 0, fx: cx, fy: cy, size: 42,
+  }];
+  const idToIdx = new Map();
+  idToIdx.set(focal.eid, 0);
+
+  const neighbors = Array.from(neighborSet.values());
+  const ringR = Math.min(W, H) / 2 - 100;
+  neighbors.forEach((sp, i) => {
+    const a = (i / neighbors.length) * Math.PI * 2 - Math.PI / 2;
+    nodes.push({
+      id: sp.eid, sci: sp.sci, label: sp.common, photo: sp.photo,
+      x: cx + Math.cos(a) * ringR, y: cy + Math.sin(a) * ringR,
+      vx: 0, vy: 0, size: 28,
+    });
+    idToIdx.set(sp.eid, nodes.length - 1);
+  });
+
+  const edges = ego.map(e => {
+    const partnerIdx = idToIdx.get(e.partner.eid);
+    if (e.directed === "in") {
+      return { source: partnerIdx, target: 0, kind: e.kind, directed: true, label: e.label };
+    }
+    return { source: 0, target: partnerIdx, kind: e.kind,
+             directed: e.directed === "out", label: e.label };
+  });
+
+  // Header w/ Back button + legend + title
+  const wrap = document.createElement("div");
+  wrap.className = "graph-wrap";
+  wrap.innerHTML = `
+    <div class="graph-header">
+      <button class="graph-back-btn" id="net-back">← All species</button>
+      <span class="graph-title">${focal.common}</span>
+      <span class="graph-title-sub">· <em>${focal.sci}</em> · ${neighbors.length} partner${neighbors.length === 1 ? '' : 's'}</span>
+      <div class="graph-legend">
+        <span class="item"><span class="swatch" style="background:var(--c-poll)"></span> pollination</span>
+        <span class="item"><span class="swatch" style="background:var(--c-mut)"></span> mutualism</span>
+        <span class="item"><span class="swatch" style="background:var(--c-par)"></span> parasitism</span>
+        <span class="item"><span class="swatch" style="background:var(--c-pred)"></span> predation</span>
+      </div>
+    </div>
+    <svg class="graph-svg" viewBox="0 0 ${W} ${H}"></svg>
+    <div class="graph-footer">
+      ${neighbors.length
+        ? `<strong>${neighbors.length}</strong> direct interaction partner${neighbors.length === 1 ? '' : 's'}.
+           Click any neighbour to make it the new focus, or hover an edge to see the interaction note.`
+        : `No partners in the currently-enabled interaction types — try toggling more on the sidebar.`}
+    </div>`;
+  pane.appendChild(wrap);
+
+  wrap.querySelector("#net-back").addEventListener("click", () => {
+    state.mode = "grid";
+    document.querySelectorAll('#modes button').forEach(b =>
+      b.classList.toggle("active", b.dataset.mode === "grid"));
+    render();
+  });
+
+  const svg = wrap.querySelector("svg.graph-svg");
+  const fg = new ForceGraph(svg, {
+    width: W, height: H, nodes, edges,
+    linkDistance: 130, charge: 1800,
+    centerNodeId: focal.eid,
+    onNodeClick: (eid) => {
+      if (eid === focal.eid) return;
+      state.selectedEntityId = eid;
+      state.selectedHyperedgeId = null;
+      render();  // re-focus the network on the clicked neighbour
+    },
+  });
+  fg.start();
+  state.activeGraph = fg;
 }
 
 // ── Inspector ─────────────────────────────────────────────────────────

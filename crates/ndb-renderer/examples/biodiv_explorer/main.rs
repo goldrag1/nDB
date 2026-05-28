@@ -85,6 +85,7 @@ const PROP_TRANSMISSION:        u32 = 54;
 const PROP_NOTE:                u32 = 55;
 const PROP_FOOD_WEB_NAME:       u32 = 56;
 const PROP_INTERACTION_KIND:    u32 = 57;
+const PROP_TROPHIC_EDGES_JSON:  u32 = 58;  // JSON: [[predator_sci, prey_sci], ...]
 
 const API_PORT:    u16 = 8748;
 const STATIC_PORT: u16 = 9881;
@@ -167,10 +168,12 @@ struct PredationRow {
 
 #[derive(Deserialize)]
 struct FoodWebRow {
-    name:      String,
-    ecosystem: String,
-    members:   Vec<String>,
-    note:      String,
+    name:           String,
+    ecosystem:      String,
+    members:        Vec<String>,
+    #[serde(default)]
+    trophic_edges:  Vec<(String, String)>,
+    note:           String,
 }
 
 // ─── Main ──────────────────────────────────────────────────────────────
@@ -407,11 +410,13 @@ fn seed(engine: &mut Engine) {
             }
         }
         max_arity = max_arity.max(roles.len());
+        let trophic_json = serde_json::to_string(&fw.trophic_edges).unwrap_or_else(|_| "[]".into());
         let props = vec![
-            (PROP_INTERACTION_KIND, Value::String("food_web".to_string())),
-            (PROP_FOOD_WEB_NAME,    Value::String(fw.name.clone())),
-            (PROP_NAME,             Value::String(fw.name.clone())),
-            (PROP_NOTE,             Value::String(fw.note.clone())),
+            (PROP_INTERACTION_KIND,    Value::String("food_web".to_string())),
+            (PROP_FOOD_WEB_NAME,       Value::String(fw.name.clone())),
+            (PROP_NAME,                Value::String(fw.name.clone())),
+            (PROP_NOTE,                Value::String(fw.note.clone())),
+            (PROP_TROPHIC_EDGES_JSON,  Value::String(trophic_json)),
         ];
         commit_hyperedge(engine, T_FOOD_WEB, roles, props);
         n_fw += 1;

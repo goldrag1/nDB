@@ -39,26 +39,27 @@
   </div>
 
   <figure class="hero-figure">
-    <img src="/static/images/heroes/hero-biodiv-foodweb.png" alt="Yellowstone food web rendered as a hub-spoke hyperedge in biodiv_ndb">
+    <img src="/static/images/heroes/hero-biodiv-foodweb.jpg" alt="Yellowstone food web rendered as a trophic-layered force-directed graph in biodiv_ndb">
     <figcaption>
-      <strong>One ecosystem, one record.</strong>
-      The Yellowstone food web is a single arity-18 hyperedge — Yellowstone
-      at the hub, 17 species in role-filler slots around the ring. Wolves,
-      elk, beaver, willow, grizzly, eagle, bison, coyote, pronghorn, fox,
-      raven, salmon… each photo is sourced live from the species' Wikipedia
-      page at build time.
+      <strong>One ecosystem, one record — rendered as a real web.</strong>
+      The Yellowstone food web is a single arity-16 hyperedge (1 ecosystem + 15 member species)
+      with <strong>22 trophic edges</strong> as a JSON property listing predator → prey within the ecosystem.
+      The SPA computes a trophic level for each species (1 = producer, max = apex), pins
+      each photo to its row via a force simulation, and renders the directional
+      "who eats whom" arrows between them.
     </figcaption>
   </figure>
 
   <figure class="hero-figure">
-    <img src="/static/images/heroes/hero-biodiv-yucca.jpg" alt="biodiv_ndb species grid plus inspector showing the yucca / yucca-moth obligate-pollination hyperedge">
+    <img src="/static/images/heroes/hero-biodiv-network.jpg" alt="Lion ego-network in biodiv_ndb — Panthera leo at the centre with its prey species around it, edges colored purple for predation">
     <figcaption>
-      <strong>Drilled into one hyperedge.</strong>
-      Yucca filamentosa is selected (centre grid). The inspector on the right
-      shows the underlying nDB record: three role-fillers (plant, pollinator,
-      region), a 12-month temporal-validity bar (May–July highlighted), and the
-      <code>obligate</code> badge — the moth lays its eggs in the yucca flower,
-      and the yucca cannot be pollinated by anything else.
+      <strong>Click any species, get its world.</strong>
+      The Network view puts the selected species at the centre and lays out every
+      interaction partner around it — edges colored by relationship type
+      (yellow pollination, green mutualism, red parasitism, purple predation).
+      Click a neighbour and the network re-focuses on them. The right-hand
+      inspector still surfaces the raw nDB hyperedge: role-fillers, temporal
+      validity, properties.
     </figcaption>
   </figure>
 
@@ -105,10 +106,10 @@
 
   <ol>
     <li><strong>Species mode</strong> — 145 cards, each a photo + common name + binomial + family. Filter by life form on the left; type a search term to narrow.</li>
-    <li><strong>Click any species.</strong> The right pane fills with its taxonomy, Wikipedia link, and chips for every interaction it appears in.</li>
-    <li><strong>Click an interaction chip.</strong> The inspector flips to show that hyperedge — role-fillers (with photos), temporal validity bar, the note explaining the relationship.</li>
+    <li><strong>Click any species → auto-switch to Network mode.</strong> The main pane becomes an ego-graph of the selected species: the species at the centre, every interaction partner around it, edges colored by interaction kind, arrows for the directional relations (predation, parasitism, pollination).</li>
+    <li><strong>Click a neighbour</strong> in the network to re-focus on it — the graph re-lays out, the inspector swaps to the new species and its hyperedges.</li>
     <li><strong>Map mode.</strong> 22 region pins sized by interaction count. The Indo-Pacific and Sub-Saharan Africa light up brightest — they pack the most coevolved relationships.</li>
-    <li><strong>Food-web mode.</strong> Pick an ecosystem from the chips — the central blue hub is the ecosystem entity, the photo ring is every member species in that arity-N record.</li>
+    <li><strong>Food-web mode.</strong> Pick an ecosystem from the chips — the SPA computes the trophic level of each member (producer → apex), lays photos onto rows by level, and runs a force simulation to space them out horizontally. Arrows are the predator → prey edges; a green edge marks the few mutualisms that overlap with members of the same web (clownfish ↔ anemone in the coral reef, cleaner wrasse ↔ grouper).</li>
   </ol>
 
   <h2>What this is not</h2>
