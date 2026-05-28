@@ -1049,7 +1049,52 @@ async function stressRace() {
     window.__lastStress = { ok: true, workload: w, concurrency: n, duration_ms: ms,
                             ndb: ndbBody, pg: pgBody };
   } else {
-    setStressStatus("stress race finished with errors", "err");
+    // Surface what actually went wrong instead of a vague "errors". A
+    // common failure mode here is the upstream stress run taking
+    // longer than the proxy's read timeout — usually heavy concurrency
+    // on SQLite's full-scan workload, where each per-row tuple creation
+    // serialises through the Python GIL across N workers and the total
+    // drain time blows past the 75s proxy budget.
+    const bits = [];
+    const summarizeFailure = (name, res, body) => {
+      if (res.status !== "fulfilled") {
+        bits.push(`${name}: fetch failed (${String(res.reason).slice(0, 80)})`);
+        return;
+      }
+      if (body && body._http) {
+        if (body._http === 502) {
+          bits.push(`${name}: upstream timeout — ${name} could not drain ${n} concurrent workers within 120s. This is the genuine cost of Python-wrapped SQLite under high concurrency (GIL contention on per-row tuple creation). Try a lower client count (1 or 4) or a lighter workload (point_lookup, property_lookup).`);
+        } else if (body._http === 429) {
+          bits.push(`${name}: rate-limited (try again in ${body.retry_after_s || 3}s)`);
+        } else {
+          bits.push(`${name}: HTTP ${body._http} — ${body.error || body.detail || "?"}`);
+        }
+        return;
+      }
+      if (body && body.error) {
+        bits.push(`${name}: ${body.error}${body.detail ? " — " + body.detail : ""}`);
+        return;
+      }
+      if (body && !(body.rps > 0)) {
+        bits.push(`${name}: ${body.total_ops || 0} ops completed (0 rps — workload too slow vs deadline)`);
+        return;
+      }
+      // No body and no fetch error — odd. Push a generic message.
+      if (!body) bits.push(`${name}: no response`);
+    };
+    // Only summarise the side that actually failed.
+    if (!ndbBody || ndbBody._http || ndbBody.error || !(ndbBody.rps > 0)) {
+      summarizeFailure("nDB", ndbRes, ndbBody);
+    }
+    if (!pgBody || pgBody._http || pgBody.error || !(pgBody.rps > 0)) {
+      summarizeFailure(chalName(), pgRes, pgBody);
+    }
+    if (bits.length === 0) {
+      // Both sides "succeeded" by HTTP standards but neither had rps>0
+      // — shouldn't happen given the checks above, but cover the case.
+      bits.push("race finished with no winnable result");
+    }
+    setStressStatus(bits.join(" · "), "err");
     window.__lastStress = { ok: false };
   }
   slaneNdb.classList.remove("running");

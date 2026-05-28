@@ -727,8 +727,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             value = self.headers.get(header)
             if value:
                 req.add_header(header, value)
+        # Stress runs serve back after deadline + every worker drains
+        # its in-flight op. At conc=64 on a Python-wrapped SQLite, GIL
+        # contention serialises 64 workers × 100k row-tuple creations
+        # so the server-side wall can reach ~75s even with a 5s
+        # deadline. Cap stress proxy at 120s; other routes (/run,
+        # /health, /stats, /workloads) stay snappy at 15s.
+        bench_timeout = 120 if sub == "/stress" else 15
         try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with urllib.request.urlopen(req, timeout=bench_timeout) as resp:
                 status = resp.status
                 payload = resp.read()
                 ctype = resp.headers.get("Content-Type", "application/json")
@@ -777,8 +784,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if value:
                 req.add_header(header, value)
 
+        # Stress runs serve back after deadline + every worker drains its
+        # in-flight op — at conc=64 on a Python-wrapped SQLite, GIL
+        # contention serialises 64 workers × 100k row-tuple creations
+        # so the server-side wall can reach ~75s even with a 5s
+        # deadline (measured 1.18s per worker × 64 workers serialised
+        # via GIL = 75s). Cap at 120s for /stress so the genuine
+        # measurement reaches the client; other proxied routes (/run,
+        # /health, /stats) stay on 30s.
+        sub_bare = sub.partition("?")[0]
+        upstream_timeout = 120 if sub_bare == "/stress" else 30
+
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=upstream_timeout) as resp:
                 status = resp.status
                 resp_headers = list(resp.headers.items())
                 payload = resp.read()
