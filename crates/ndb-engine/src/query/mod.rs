@@ -44,6 +44,7 @@ pub use plan::{ExplainEntry, Plan, plan as plan_query};
 use std::collections::HashSet;
 use std::io::Write as _;
 use std::sync::Arc;
+#[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::engine::{Engine, EngineError};
@@ -1012,14 +1013,35 @@ type BindingStream<'a> = Box<dyn Iterator<Item = Result<Bindings, QueryError>> +
 /// Test-only counter: incremented once per binding row that flows
 /// through `pattern_stream` (= the intermediate-bindings count the
 /// `two_pattern_join_uses_streaming_hash_join` test asserts against).
-/// Always-on but zero-cost outside of tests (relaxed atomic increment).
+#[cfg(test)]
 static STREAM_INTERMEDIATE_ROWS: AtomicUsize = AtomicUsize::new(0);
 
 /// Test-only counter: incremented for every candidate hyperedge or
 /// entity examined by `pattern_stream`'s probe side. The
 /// `limit_pushdown_short_circuits_join` test asserts that this stays
 /// well below the un-pushed-down baseline of N×M candidates.
+#[cfg(test)]
 static STREAM_PROBE_CANDIDATES: AtomicUsize = AtomicUsize::new(0);
+
+/// Record one intermediate row in the streaming pipeline. Compiles to a
+/// genuine no-op outside test builds — a global relaxed atomic increment
+/// is NOT free at scale: 64 threads CAS-incrementing one shared static
+/// ping-pongs its cache line and serialises the whole join hot loop
+/// (this was the conc=64 ceiling). The counter only feeds `#[cfg(test)]`
+/// assertions, so production pays nothing.
+#[inline(always)]
+fn count_intermediate_row() {
+    #[cfg(test)]
+    STREAM_INTERMEDIATE_ROWS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Record one probe candidate examined. No-op outside test builds (see
+/// [`count_intermediate_row`]).
+#[inline(always)]
+fn count_probe_candidate() {
+    #[cfg(test)]
+    STREAM_PROBE_CANDIDATES.fetch_add(1, Ordering::Relaxed);
+}
 
 /// Reset and read back the streaming-executor instrumentation counters.
 /// Tests only — never called by production code.
@@ -1093,13 +1115,13 @@ fn entity_pattern_step<'a>(
     property_filters: &'a [PropertyFilter],
     row: Bindings,
 ) -> BindingStream<'a> {
-    STREAM_INTERMEDIATE_ROWS.fetch_add(1, Ordering::Relaxed);
+    count_intermediate_row();
     // self_var pre-bound → single-record probe.
     if let Some(sv) = self_var
         && let Some(Value::EntityRef(eid)) = row.get(sv)
     {
         let eid = *eid;
-        STREAM_PROBE_CANDIDATES.fetch_add(1, Ordering::Relaxed);
+        count_probe_candidate();
         let rec = match entity_at(engine, snapshot, eid.into_uuid()) {
             Ok(r) => r,
             Err(e) => return Box::new(std::iter::once(Err(e))),
@@ -1121,7 +1143,7 @@ fn entity_pattern_step<'a>(
     };
     let self_var_owned: Option<String> = self_var.map(str::to_owned);
     Box::new(candidates.into_iter().filter_map(move |eid| {
-        STREAM_PROBE_CANDIDATES.fetch_add(1, Ordering::Relaxed);
+        count_probe_candidate();
         let rec = match entity_at(engine, snapshot, eid.into_uuid()) {
             Ok(Some(r)) => r,
             Ok(None) => return None,
@@ -1150,11 +1172,11 @@ fn hyperedge_pattern_step<'a>(
     property_filters: &'a [PropertyFilter],
     row: Bindings,
 ) -> BindingStream<'a> {
-    STREAM_INTERMEDIATE_ROWS.fetch_add(1, Ordering::Relaxed);
+    count_intermediate_row();
     let candidates = candidate_hyperedges(engine, type_id, role_bindings, &row);
     let self_var_owned: Option<String> = self_var.map(str::to_owned);
     Box::new(candidates.into_iter().filter_map(move |hid| {
-        STREAM_PROBE_CANDIDATES.fetch_add(1, Ordering::Relaxed);
+        count_probe_candidate();
         let rec = match hyperedge_at(engine, snapshot, hid.into_uuid()) {
             Ok(Some(r)) => r,
             Ok(None) => return None,
@@ -1193,7 +1215,7 @@ fn recursive_pattern_step<'a>(
     recursion: &Recursion,
     row: Bindings,
 ) -> BindingStream<'a> {
-    STREAM_INTERMEDIATE_ROWS.fetch_add(1, Ordering::Relaxed);
+    count_intermediate_row();
     match execute_recursive_hyperedge(
         engine, snapshot, type_id, role_bindings, property_filters, recursion, vec![row],
     ) {
