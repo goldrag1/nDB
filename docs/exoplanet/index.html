@@ -1171,23 +1171,50 @@ function ensure3DScatter() {
   const pointerNDC = new THREE.Vector2();
   let hoveredDot = null;
 
-  function onPointerMove(e) {
+  function ndcFromEvent(e) {
     const rect = renderer.domElement.getBoundingClientRect();
     pointerNDC.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     pointerNDC.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   }
+  function onPointerMove(e) { ndcFromEvent(e); }
   function onClick(e) {
+    // Re-read NDC from the click itself. pointermove may not have fired
+    // (touch device, fast double-click without movement, etc.) — the
+    // hover-driven NDC could be stale otherwise.
+    ndcFromEvent(e);
     const hit = pickDot();
     if (hit) selectPlanet(hit.userData.entity_id);
   }
   function onDoubleClick(e) {
+    ndcFromEvent(e);
     const hit = pickDot();
     if (hit) openSystemView(hit.userData.entity_id);
   }
-  function pickDot() {
-    raycaster.setFromCamera(pointerNDC, camera);
-    const hits = raycaster.intersectObjects(dotsGroup.children, false);
-    return hits.length ? hits[0].object : null;
+  // Screen-space nearest-dot picker. Sphere meshes 0.1-0.5 units across at
+  // a 30-unit camera distance are only ~2-5px wide on a 1080p canvas, which
+  // makes raycaster.intersectObjects effectively unhittable. We project each
+  // dot's centre to canvas pixels and return the nearest within `tolPx`
+  // pixels of the cursor. The hover scale (1.5×) makes selected dots more
+  // visible without needing to grow the pick target separately.
+  const _projV = new THREE.Vector3();
+  function pickDot(tolPx) {
+    if (tolPx == null) tolPx = 14;
+    const canv = renderer.domElement;
+    const halfW = canv.clientWidth / 2;
+    const halfH = canv.clientHeight / 2;
+    const px = pointerNDC.x * halfW + halfW;
+    const py = -pointerNDC.y * halfH + halfH;
+    let best = null, bestDist = tolPx;
+    for (const dot of dotsGroup.children) {
+      _projV.copy(dot.position).project(camera);
+      if (_projV.z < -1 || _projV.z > 1) continue;  // behind / past camera
+      const sx = _projV.x * halfW + halfW;
+      const sy = -_projV.y * halfH + halfH;
+      const dx = sx - px, dy = sy - py;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d < bestDist) { bestDist = d; best = dot; }
+    }
+    return best;
   }
   renderer.domElement.addEventListener("pointermove", onPointerMove);
   renderer.domElement.addEventListener("click", onClick);
