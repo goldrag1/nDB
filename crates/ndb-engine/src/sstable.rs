@@ -750,20 +750,8 @@ impl SSTableReader {
     /// Returns the first record whose [`SSTableKey`] matches `target`;
     /// returns `None` if the key isn't present.
     pub fn find(&self, target: &SSTableKey) -> Result<Option<Record>, SSTableError> {
-        let start_offset = self
-            .block_index
-            .as_ref()
-            .and_then(|idx| idx.seek_offset(target))
-            .unwrap_or(0);
-        let start_offset = usize::try_from(start_offset).unwrap_or(usize::MAX);
-        let data_end =
-            usize::try_from(self.footer.data_size).unwrap_or(usize::MAX);
-        let bytes = self.backing.as_bytes();
-        let mut iter = SSTableIter {
-            data: &bytes[..data_end],
-            pos: start_offset,
-            done: false,
-        };
+        let start_offset = self.block_index_offset(target);
+        let mut iter = self.iter_from(start_offset);
         for item in &mut iter {
             let (rec, _) = item?;
             let k = SSTableKey::for_record(&rec);
@@ -776,6 +764,51 @@ impl SSTableReader {
             }
         }
         Ok(None)
+    }
+
+    /// Like [`find`](Self::find) but returns every record whose key
+    /// matches `target` — needed by MVCC point reads, where multiple
+    /// versions of the same entity may live in one SSTable.
+    pub fn find_all(&self, target: &SSTableKey) -> Result<Vec<Record>, SSTableError> {
+        let start_offset = self.block_index_offset(target);
+        let mut out = Vec::new();
+        let mut iter = self.iter_from(start_offset);
+        for item in &mut iter {
+            let (rec, _) = item?;
+            let k = SSTableKey::for_record(&rec);
+            match k.cmp(target) {
+                std::cmp::Ordering::Less => {}
+                std::cmp::Ordering::Equal => out.push(rec),
+                std::cmp::Ordering::Greater => break,
+            }
+        }
+        Ok(out)
+    }
+
+    /// Lookup the block-index entry covering `target` and return the
+    /// byte offset to start scanning from. Falls back to 0 when no
+    /// sidecar is loaded.
+    fn block_index_offset(&self, target: &SSTableKey) -> usize {
+        let off = self
+            .block_index
+            .as_ref()
+            .and_then(|idx| idx.seek_offset(target))
+            .unwrap_or(0);
+        usize::try_from(off).unwrap_or(usize::MAX)
+    }
+
+    /// Iterator starting from an arbitrary byte offset in the data
+    /// section. Used by `find` / `find_all` after the block index
+    /// resolves the seek point.
+    fn iter_from(&self, start_offset: usize) -> SSTableIter<'_> {
+        let data_end =
+            usize::try_from(self.footer.data_size).unwrap_or(usize::MAX);
+        let bytes = self.backing.as_bytes();
+        SSTableIter {
+            data: &bytes[..data_end],
+            pos: start_offset,
+            done: false,
+        }
     }
 }
 
@@ -1081,6 +1114,50 @@ mod tests {
             }
         }
 
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn find_all_returns_every_match_for_multi_version_keys() {
+        // Build an SSTable with two records of the same SSTableKey
+        // (same kind + uuid, different tx_id_assert). find() returns
+        // only the first; find_all() must return both — this is what
+        // MVCC point reads need to resolve the correct visible record.
+        let dir = temp_dir("find_all_mvcc");
+        let path = dir.join("000001.ndb");
+        let eid = uuid::Uuid::now_v7();
+        let mut w = SSTableWriter::create(&path).unwrap();
+        // Two versions of the same entity in sorted order (the second
+        // has a higher tx_id_assert; encoder doesn't sort, so we feed
+        // them in the order they'd appear on disk).
+        w.append(&Record::Entity(EntityRecord {
+            entity_id: EntityId::from_uuid(eid),
+            type_id: TypeId::new(1),
+            tx_id_assert: TxId::new(5),
+            tx_id_supersede: TxId::ACTIVE,
+            properties: vec![(PropertyId::new(1), crate::value::Value::I64(5))],
+        })).unwrap();
+        w.append(&Record::Entity(EntityRecord {
+            entity_id: EntityId::from_uuid(eid),
+            type_id: TypeId::new(1),
+            tx_id_assert: TxId::new(10),
+            tx_id_supersede: TxId::ACTIVE,
+            properties: vec![(PropertyId::new(1), crate::value::Value::I64(10))],
+        })).unwrap();
+        w.finish().unwrap();
+
+        let r = SSTableReader::open(&path).unwrap();
+        assert!(r.has_block_index());
+        let key = SSTableKey {
+            kind: RecordKind::Entity.as_byte(),
+            primary: eid.as_bytes().to_vec(),
+        };
+        let hits = r.find_all(&key).unwrap();
+        assert_eq!(hits.len(), 2, "both versions must be returned");
+        // find() returns only the first — verify the contract still
+        // holds since snapshot_read no longer uses it.
+        let one = r.find(&key).unwrap();
+        assert!(one.is_some());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

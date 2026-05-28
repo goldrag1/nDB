@@ -30,7 +30,6 @@
 //! `&self` for reads, so the caller serialises writers itself; the data
 //! structures do not embed locks.
 
-use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
@@ -774,7 +773,10 @@ impl Engine {
             }
         }
 
-        // Each open SSTable.
+        // Each open SSTable. find_all() probes the block-index sidecar
+        // when present (O(log N) seek + ≤ block_size linear scan) and
+        // gracefully linear-scans the whole file when the sidecar is
+        // missing or unloadable.
         for sst in &mut self.sstables {
             for kind in [
                 crate::record::RecordKind::Entity,
@@ -785,19 +787,7 @@ impl Engine {
                     kind: kind.as_byte(),
                     primary: uuid.as_bytes().to_vec(),
                 };
-                // Iterate the SSTable; in v1 we don't have a block index so
-                // find() linear-scans. For multi-version-per-key correctness
-                // we collect every match (not just the first).
-                let mut iter = sst.iter();
-                for item in &mut iter {
-                    let (rec, _) = item?;
-                    let k = SSTableKey::for_record(&rec);
-                    match k.cmp(&key) {
-                        Ordering::Less => {}
-                        Ordering::Equal => candidates.push(rec),
-                        Ordering::Greater => break, // sorted file, past target
-                    }
-                }
+                candidates.extend(sst.find_all(&key)?);
             }
         }
 
