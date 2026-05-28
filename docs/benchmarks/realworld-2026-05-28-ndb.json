@@ -1,0 +1,20 @@
+{
+  "engine": "ndb 1.3.0",
+  "workload": "realworld_microbench",
+  "n_entities": 50000,
+  "n_hyperedges": 50000,
+  "load_ms": 361.3,
+  "flush_ms": 0.0,
+  "bytes_on_disk": 8304714,
+  "bytes_resident": 155332608,
+  "results": [
+    { "name": "iter_all", "iters": 5, "min_us": 20582.00, "p50_us": 20935.00, "p99_us": 26588.00, "ops_per_sec": 45.4 },
+    { "name": "point_lookup", "iters": 1000, "min_us": 0.00, "p50_us": 0.00, "p99_us": 1.00, "ops_per_sec": 953288.8 },
+    { "name": "property_lookup", "iters": 1000, "min_us": 0.00, "p50_us": 0.00, "p99_us": 1.00, "ops_per_sec": 1297016.9 },
+    { "name": "single_pattern_query", "iters": 100, "min_us": 26.00, "p50_us": 29.00, "p99_us": 80.00, "ops_per_sec": 32594.5 },
+    { "name": "two_pattern_join", "iters": 100, "min_us": 43063.00, "p50_us": 45661.00, "p99_us": 78574.00, "ops_per_sec": 21.3 },
+    { "name": "recursive_contains_depth3", "iters": 50, "min_us": 35.00, "p50_us": 37.00, "p99_us": 80.00, "ops_per_sec": 26082.4 },
+    { "name": "count_aggregate", "iters": 50, "min_us": 44341.00, "p50_us": 45661.00, "p99_us": 67000.00, "ops_per_sec": 21.3 },
+    { "name": "commits_per_sec", "iters": 1000, "min_us": 228.00, "p50_us": 339.00, "p99_us": 722.00, "ops_per_sec": 2766.6 }
+  ]
+}
