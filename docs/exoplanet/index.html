@@ -881,7 +881,12 @@ function renderOrbital(starEnt, sys, hz, selPlanet) {
     const e = STATE.entities.get(r.entity_id); if (e) hzNames.add(e.props[PROP.NAME]);
   });
 
-  let tracks = "", labels = "", dots = "", styles = "";
+  // Use SVG <animateTransform type="rotate"> for the orbiting motion.
+  // It accepts "<angle> <cx> <cy>" so we get rotation around the star
+  // without fighting CSS transform-box quirks. Each planet is a single
+  // <circle> placed at (CX+r, CY) — i.e. on the right side of its
+  // orbit track — and rotated around (CX, CY).
+  let tracks = "", labels = "", dots = "", selectedDot = "";
   planets.forEach((p, i) => {
     const a = p._a_au;
     if (a == null || a <= 0) return;
@@ -894,13 +899,24 @@ function renderOrbital(starEnt, sys, hz, selPlanet) {
     const pxR = p.props[PROP.PL_RADIUS_RE] || 1;
     const dotR = Math.min(7, Math.max(2.5, 2 + Math.log10(Math.max(pxR, 0.3))));
     const isSel = p.id === selPlanet.id;
-    styles += "@keyframes orbit-" + i + " { from { transform: rotate(" + offset + "deg); } to { transform: rotate(" + (offset + 360) + "deg); } } ";
-    styles += ".orbit-anim-" + i + " { transform-origin: " + CX + "px " + CY + "px; transform-box: fill-box; animation: orbit-" + i + " " + duration + "s linear infinite; transform: rotate(" + offset + "deg); }";
-    dots +=
-      '<g class="orbit-anim-' + i + '" style="transform-origin:' + CX + 'px ' + CY + 'px;">' +
-        '<circle class="orbit-planet' + (isSel ? ' selected' : '') + '" cx="' + (CX + r).toFixed(1) + '" cy="' + CY + '" r="' + dotR.toFixed(1) + '" fill="' + (isHz ? 'var(--hz)' : 'var(--entity)') + '"/>' +
-      '</g>';
-    if (isSel) labels += '<text class="orbit-label" x="' + (CX + r + 6).toFixed(1) + '" y="' + (CY - 6) + '">' + escapeHtml(p.props[PROP.NAME]) + '</text>';
+    const fill = isHz ? 'var(--hz)' : 'var(--entity)';
+    const planetSvg =
+      '<circle class="orbit-planet' + (isSel ? ' selected' : '') +
+      '" cx="' + (CX + r).toFixed(1) + '" cy="' + CY +
+      '" r="' + dotR.toFixed(1) + '" fill="' + fill + '" data-planet-id="' + p.id + '">' +
+        '<animateTransform attributeName="transform" type="rotate" ' +
+          'from="' + offset + ' ' + CX + ' ' + CY + '" ' +
+          'to="' + (offset + 360) + ' ' + CX + ' ' + CY + '" ' +
+          'dur="' + duration.toFixed(1) + 's" repeatCount="indefinite"/>' +
+      '</circle>';
+    dots += planetSvg;
+    if (isSel) {
+      // Label fixed to the right edge of the selected planet's orbit —
+      // it's not animated with the planet (would jitter); the planet's
+      // position on the track is just a static visual reference.
+      labels += '<text class="orbit-label" x="' + (CX + r + 6).toFixed(1) +
+        '" y="' + (CY - 6) + '">' + escapeHtml(p.props[PROP.NAME]) + '</text>';
+    }
   });
 
   const starRad = Math.min(8, 4 + ((starEnt && starEnt.props[PROP.STAR_RADIUS_RSUN]) ?
@@ -910,7 +926,6 @@ function renderOrbital(starEnt, sys, hz, selPlanet) {
     '<div id="orbital-pane">' +
       '<h3>Orbital diagram — ' + escapeHtml(sys.props[PROP.SYSTEM_HOST]) + ' (' + planets.length + ' planets, log-scaled)</h3>' +
       '<svg id="orbital-svg" viewBox="0 0 ' + W + ' ' + H + '">' +
-        '<style>' + styles + '</style>' +
         tracks +
         '<circle class="orbit-glow" cx="' + CX + '" cy="' + CY + '" r="' + (starRad + 5) + '"/>' +
         '<circle class="orbit-star" cx="' + CX + '" cy="' + CY + '" r="' + starRad + '"/>' +
