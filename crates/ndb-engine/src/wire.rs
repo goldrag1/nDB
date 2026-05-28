@@ -456,6 +456,10 @@ impl TryFrom<JsonRecord> for Record {
                         ))
                     })
                     .collect::<Result<_, _>>()?,
+                // v3 record decoder accepts this; v3-aware wire would emit
+                // a parallel `hyperedge_roles` list — JSON shape change is
+                // a follow-up so the existing JSON contract is intact.
+                hyperedge_roles: Vec::new(),
                 properties: properties
                     .into_iter()
                     .map(|p| Ok::<_, WireError>((PropertyId::new(p.prop_id), p.value.try_into()?)))
@@ -768,6 +772,7 @@ mod tests {
                 (RoleId::new(1), EntityId::now_v7()),
                 (RoleId::new(2), EntityId::now_v7()),
             ],
+            hyperedge_roles: Vec::new(),
             properties: vec![],
         });
         let j: JsonRecord = (&r).into();

@@ -296,6 +296,7 @@ fn load_sales(engine: &mut Engine, customers: &[EntityId]) -> Vec<HyperedgeId> {
             tx_id_assert: TxId::new(0),
             tx_id_supersede: TxId::ACTIVE,
             roles: vec![(RoleId::new(ROLE_BUYER), customers[cust_idx])],
+            hyperedge_roles: Vec::new(),
             properties: vec![],
         });
         ids.push(hid);
@@ -361,6 +362,7 @@ fn load_contains_chain(
                 (RoleId::new(ROLE_PARENT), parent),
                 (RoleId::new(ROLE_CHILD),  child),
             ],
+            hyperedge_roles: Vec::new(),
             properties: vec![],
         });
         if i < REGION_CONTAINS_DEPTH { roots.push(parent); }

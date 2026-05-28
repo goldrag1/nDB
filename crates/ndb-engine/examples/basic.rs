@@ -117,6 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tx_id_assert: TxId::new(0),
             tx_id_supersede: TxId::ACTIVE,
             roles: vec![(approver_role, alice), (request_role, request_42)],
+            hyperedge_roles: Vec::new(),
             properties: vec![],
         });
         let tx = txn.commit()?;

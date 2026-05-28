@@ -366,6 +366,7 @@ mod tests {
             tx_id_assert: TxId::new(1),
             tx_id_supersede: TxId::ACTIVE,
             roles: vec![(RoleId::new(1), EntityId::now_v7())],
+            hyperedge_roles: Vec::new(),
             properties: vec![],
         });
         assert!(v.check(&h).is_ok());

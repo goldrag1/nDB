@@ -383,6 +383,7 @@ fn commit_hyperedge(
         tx_id_assert: tx_id,
         tx_id_supersede: TxId::ACTIVE,
         roles,
+        hyperedge_roles: Vec::new(),
         properties: properties.into_iter().map(|(p, v)| (PropertyId::new(p), v)).collect(),
     });
     txn.commit().expect("commit hyperedge");

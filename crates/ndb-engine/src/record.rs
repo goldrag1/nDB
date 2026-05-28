@@ -27,15 +27,20 @@ use crate::value::Value;
 // ---------------------------------------------------------------------------
 
 /// Current on-disk record-layout version this build emits.
-/// v2 bumps `HyperEdgeRecord` arity from `u8` to `u32`. Required for
-/// any genuinely N-dimensional usage (a protein with ~1500 atoms blew
-/// past `u8::MAX` in v1 — see `crates/ndb-renderer/examples/v22_explorer/`).
-pub const FORMAT_VERSION: u8 = 2;
+/// v3 adds `HyperEdgeRecord.hyperedge_roles` — an additive second list of
+/// role-fillers whose target is a hyperedge (rather than an entity). This
+/// lifts the "pathways are entities" workaround documented in
+/// `docs/knowledge-site/demos-chemistry_ndb.html`: a pathway hyperedge can
+/// now hold an ordered list of reaction hyperedges as role-fillers
+/// directly, no JSON blob, no separate entity-with-children-list. The
+/// existing `roles: Vec<(RoleId, EntityId)>` field is unchanged; v2
+/// records (with empty `hyperedge_roles`) decode identically.
+pub const FORMAT_VERSION: u8 = 3;
 
 /// Highest `format_version` this build can decode. Bumped when older readers
 /// can still parse newer-version records (forward-compat); equal to
 /// `FORMAT_VERSION` otherwise.
-pub const FORMAT_VERSION_MAX_SUPPORTED: u8 = 2;
+pub const FORMAT_VERSION_MAX_SUPPORTED: u8 = 3;
 
 const SIZE_FIELD_LEN: usize = 4;
 const KIND_FIELD_LEN: usize = 1;
@@ -115,7 +120,7 @@ pub struct EntityRecord {
 }
 
 /// Assertion that the named role-players participate in this hyperedge as of
-/// `tx_id_assert`. Arity is implicit in `roles.len()`.
+/// `tx_id_assert`. Arity is implicit in `roles.len() + hyperedge_roles.len()`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HyperEdgeRecord {
     /// UUID v7 of the hyperedge.
@@ -127,9 +132,15 @@ pub struct HyperEdgeRecord {
     pub tx_id_assert: TxId,
     /// Transaction that superseded this assertion, or `TxId::ACTIVE`.
     pub tx_id_supersede: TxId,
-    /// Role bindings. `roles.len()` is the arity (must be ≥ 1). `RoleId(0)`
-    /// is rejected on encode.
+    /// Entity-kind role-fillers. `RoleId(0)` is rejected on encode.
+    /// May be empty if every role-filler is a hyperedge instead — but the
+    /// total arity (entity + hyperedge) must still be ≥ 1.
     pub roles: Vec<(RoleId, EntityId)>,
+    /// Hyperedge-kind role-fillers (v3+). Allows a hyperedge to participate
+    /// in another hyperedge's role — e.g. a `Pathway` whose role-fillers are
+    /// reaction hyperedges, no JSON-blob workaround. Empty in v2-encoded
+    /// records; the v2 decoder leaves this empty. `RoleId(0)` is rejected.
+    pub hyperedge_roles: Vec<(RoleId, HyperedgeId)>,
     /// Properties attached to the hyperedge itself.
     pub properties: Vec<(PropertyId, Value)>,
 }
@@ -359,8 +370,9 @@ struct Envelope<'a> {
     total_size: usize,
     /// Payload bytes — everything between the `format_version` byte and the CRC.
     payload: &'a [u8],
-    /// `format_version` byte. Recorded for callers that want to log it.
-    #[allow(dead_code)]
+    /// `format_version` byte. Per-record decoders read this to dispatch
+    /// between layout variants (e.g. v3 `HyperEdgeRecord` carries an extra
+    /// `hyperedge_roles` trailer that v2 doesn't have).
     format_version: u8,
 }
 
@@ -525,8 +537,19 @@ impl EntityRecord {
 
 impl HyperEdgeRecord {
     /// Encode this record onto `out`. Returns the number of bytes appended.
+    ///
+    /// Layout (v3, current):
+    /// ```text
+    ///   [envelope header] hyperedge_id type_id tx_assert tx_supersede
+    ///   entity_arity:u32  (role_id:u32, entity_uuid:16)*entity_arity
+    ///   hyperedge_arity:u32 (role_id:u32, hyperedge_uuid:16)*hyperedge_arity
+    ///   property_list
+    /// ```
+    /// Layout (v2): no `hyperedge_arity` trailer + no hyperedge-role pairs.
+    /// The decoder dispatches on the envelope's `format_version`.
     pub fn encode(&self, out: &mut Vec<u8>) -> Result<usize, EncodeError> {
-        if self.roles.is_empty() {
+        let total_arity = self.roles.len() + self.hyperedge_roles.len();
+        if total_arity == 0 {
             return Err(EncodeError::HyperEdgeZeroArity);
         }
         if self.type_id.get() == TYPE_UNTYPED {
@@ -538,21 +561,32 @@ impl HyperEdgeRecord {
         // the n-dimensional pitch at 255, which contradicts the whole
         // point of nDB. 4 bytes of header is a fine cost for arities
         // up to 4 billion.
-        let arity = u32::try_from(self.roles.len())
+        let entity_arity = u32::try_from(self.roles.len())
             .map_err(|_| EncodeError::ArityOverflow(self.roles.len()))?;
+        let hyperedge_arity = u32::try_from(self.hyperedge_roles.len())
+            .map_err(|_| EncodeError::ArityOverflow(self.hyperedge_roles.len()))?;
 
         let start = begin_record(out, RecordKind::HyperEdge);
         out.extend_from_slice(self.hyperedge_id.as_bytes());
         write_u32(out, self.type_id.get());
         write_u64(out, self.tx_id_assert.get());
         write_u64(out, self.tx_id_supersede.get());
-        write_u32(out, arity);
+        write_u32(out, entity_arity);
         for (rid, entity) in &self.roles {
             if rid.get() == 0 {
                 return Err(EncodeError::ZeroRoleId);
             }
             write_u32(out, rid.get());
             out.extend_from_slice(entity.as_bytes());
+        }
+        // v3+ trailer: second arity + hyperedge-kind role pairs.
+        write_u32(out, hyperedge_arity);
+        for (rid, hid) in &self.hyperedge_roles {
+            if rid.get() == 0 {
+                return Err(EncodeError::ZeroRoleId);
+            }
+            write_u32(out, rid.get());
+            out.extend_from_slice(hid.as_bytes());
         }
         encode_property_list(out, &self.properties)?;
         finalize_record(out, start)
@@ -561,6 +595,7 @@ impl HyperEdgeRecord {
     /// Decode the record at the start of `input`.
     pub fn decode(input: &[u8]) -> Result<(Self, usize), DecodeError> {
         let env = read_envelope(input, RecordKind::HyperEdge)?;
+        let format_version = env.format_version;
         let mut c = Cursor::new(env.payload);
         let hyperedge_id = HyperedgeId::from_bytes(c.read_array::<16>()?);
         let type_id_raw = c.read_u32()?;
@@ -572,18 +607,34 @@ impl HyperEdgeRecord {
         let type_id = TypeId::new(type_id_raw);
         let tx_id_assert = TxId::new(c.read_u64()?);
         let tx_id_supersede = TxId::new(c.read_u64()?);
-        let arity = c.read_u32()? as usize;
-        if arity == 0 {
-            return Err(DecodeError::InvalidSentinel("hyperedge arity must be ≥ 1"));
-        }
-        let mut roles = Vec::with_capacity(arity);
-        for _ in 0..arity {
+        let entity_arity = c.read_u32()? as usize;
+        // v2 used the (then-only) arity field. v3 separates entity vs
+        // hyperedge counts. If a v3 record's entity_arity is 0 AND
+        // hyperedge_arity is 0, we'll catch that below.
+        let mut roles = Vec::with_capacity(entity_arity);
+        for _ in 0..entity_arity {
             let rid = c.read_u32()?;
             if rid == 0 {
                 return Err(DecodeError::InvalidSentinel("role_id must be non-zero"));
             }
             let entity = EntityId::from_bytes(c.read_array::<16>()?);
             roles.push((RoleId(rid), entity));
+        }
+        let mut hyperedge_roles: Vec<(RoleId, HyperedgeId)> = Vec::new();
+        if format_version >= 3 {
+            let h_arity = c.read_u32()? as usize;
+            hyperedge_roles.reserve(h_arity);
+            for _ in 0..h_arity {
+                let rid = c.read_u32()?;
+                if rid == 0 {
+                    return Err(DecodeError::InvalidSentinel("role_id must be non-zero"));
+                }
+                let hid = HyperedgeId::from_bytes(c.read_array::<16>()?);
+                hyperedge_roles.push((RoleId(rid), hid));
+            }
+        }
+        if roles.is_empty() && hyperedge_roles.is_empty() {
+            return Err(DecodeError::InvalidSentinel("hyperedge arity must be ≥ 1"));
         }
         let properties = decode_property_list(&mut c)?;
         if c.remaining() != 0 {
@@ -596,6 +647,7 @@ impl HyperEdgeRecord {
                 tx_id_assert,
                 tx_id_supersede,
                 roles,
+                hyperedge_roles,
                 properties,
             },
             env.total_size,
@@ -843,6 +895,7 @@ mod tests {
                 (RoleId::new(3), EntityId::now_v7()),
                 (RoleId::new(4), EntityId::now_v7()),
             ],
+            hyperedge_roles: Vec::new(),
             properties: vec![(
                 PropertyId::new(88),
                 Value::Decimal {
@@ -902,12 +955,119 @@ mod tests {
             tx_id_assert: TxId::new(10),
             tx_id_supersede: TxId::ACTIVE,
             roles,
+            hyperedge_roles: Vec::new(),
             properties: vec![],
         };
         let mut buf = Vec::new();
         r.encode(&mut buf).unwrap();
         let (decoded, _) = HyperEdgeRecord::decode(&buf).unwrap();
         assert_eq!(decoded, r);
+    }
+
+    #[test]
+    fn hyperedge_with_hyperedge_role_fillers_round_trip() {
+        // The motivating use case for v3: a pathway whose role-fillers are
+        // reaction hyperedges. Entity-roles list is empty; hyperedge-roles
+        // list has 3 reactions. Total arity = 3.
+        let r = HyperEdgeRecord {
+            hyperedge_id: HyperedgeId::now_v7(),
+            type_id: TypeId::new(200),
+            tx_id_assert: TxId::new(7),
+            tx_id_supersede: TxId::ACTIVE,
+            roles: vec![],
+            hyperedge_roles: vec![
+                (RoleId::new(10), HyperedgeId::now_v7()),
+                (RoleId::new(10), HyperedgeId::now_v7()),
+                (RoleId::new(10), HyperedgeId::now_v7()),
+            ],
+            properties: vec![(PropertyId::new(30), Value::String("glycolysis".into()))],
+        };
+        let mut buf = Vec::new();
+        r.encode(&mut buf).unwrap();
+        let (decoded, _) = HyperEdgeRecord::decode(&buf).unwrap();
+        assert_eq!(decoded, r);
+    }
+
+    #[test]
+    fn hyperedge_mixed_entity_and_hyperedge_roles_round_trip() {
+        // Both lists populated — a hyperedge whose roles include both
+        // entity participants and hyperedge participants.
+        let r = HyperEdgeRecord {
+            hyperedge_id: HyperedgeId::now_v7(),
+            type_id: TypeId::new(201),
+            tx_id_assert: TxId::new(1),
+            tx_id_supersede: TxId::ACTIVE,
+            roles: vec![
+                (RoleId::new(1), EntityId::now_v7()),
+                (RoleId::new(2), EntityId::now_v7()),
+            ],
+            hyperedge_roles: vec![(RoleId::new(3), HyperedgeId::now_v7())],
+            properties: vec![],
+        };
+        let mut buf = Vec::new();
+        r.encode(&mut buf).unwrap();
+        let (decoded, _) = HyperEdgeRecord::decode(&buf).unwrap();
+        assert_eq!(decoded, r);
+        assert_eq!(decoded.roles.len() + decoded.hyperedge_roles.len(), 3);
+    }
+
+    #[test]
+    fn hyperedge_v2_byte_stream_decodes_with_empty_hyperedge_roles() {
+        // Build a v2-shaped byte stream by hand: same envelope layout, no
+        // hyperedge_arity trailer, format_version=2. The decoder must
+        // produce a HyperEdgeRecord with empty hyperedge_roles instead of
+        // erroring on the missing trailer.
+        let hid = HyperedgeId::now_v7();
+        let eid = EntityId::now_v7();
+        let mut payload = Vec::new();
+        payload.extend_from_slice(hid.as_bytes());
+        write_u32(&mut payload, 42);      // type_id
+        write_u64(&mut payload, 1);       // tx_assert
+        write_u64(&mut payload, TX_ACTIVE); // tx_supersede
+        write_u32(&mut payload, 1);       // arity
+        write_u32(&mut payload, 7);       // role_id
+        payload.extend_from_slice(eid.as_bytes());
+        // No second arity trailer. Then property_list — zero properties.
+        write_u16(&mut payload, 0);       // property count = 0 (u16)
+
+        // Envelope: size + kind + format_version + payload + crc
+        let body_no_size = {
+            let mut tmp = Vec::new();
+            write_u8(&mut tmp, RecordKind::HyperEdge.as_byte());
+            write_u8(&mut tmp, 2);           // format_version = 2
+            tmp.extend_from_slice(&payload);
+            tmp
+        };
+        let total_with_crc = SIZE_FIELD_LEN + body_no_size.len() + CRC_FIELD_LEN;
+        let mut buf = Vec::with_capacity(total_with_crc);
+        write_u32(&mut buf, u32::try_from(total_with_crc).unwrap());
+        buf.extend_from_slice(&body_no_size);
+        let mut h = Hasher::new();
+        h.update(&buf);
+        buf.extend_from_slice(&h.finalize().to_le_bytes());
+
+        let (decoded, _) = HyperEdgeRecord::decode(&buf).unwrap();
+        assert_eq!(decoded.hyperedge_id, hid);
+        assert_eq!(decoded.roles.len(), 1);
+        assert_eq!(decoded.hyperedge_roles.len(), 0,
+            "v2 record must decode with empty hyperedge_roles");
+    }
+
+    #[test]
+    fn hyperedge_zero_total_arity_rejected() {
+        // Even if both lists are empty, encode rejects.
+        let r = HyperEdgeRecord {
+            hyperedge_id: HyperedgeId::now_v7(),
+            type_id: TypeId::new(1),
+            tx_id_assert: TxId::new(0),
+            tx_id_supersede: TxId::ACTIVE,
+            roles: vec![],
+            hyperedge_roles: vec![],
+            properties: vec![],
+        };
+        let mut buf = Vec::new();
+        let err = r.encode(&mut buf).unwrap_err();
+        assert!(matches!(err, EncodeError::HyperEdgeZeroArity));
     }
 
     #[test]
@@ -1091,6 +1251,7 @@ mod tests {
             tx_id_assert: TxId::new(1),
             tx_id_supersede: TxId::ACTIVE,
             roles: vec![],
+            hyperedge_roles: Vec::new(),
             properties: vec![],
         };
         assert!(matches!(
@@ -1107,6 +1268,7 @@ mod tests {
             tx_id_assert: TxId::new(1),
             tx_id_supersede: TxId::ACTIVE,
             roles: vec![(RoleId::new(1), EntityId::now_v7())],
+            hyperedge_roles: Vec::new(),
             properties: vec![],
         };
         assert!(matches!(
@@ -1123,6 +1285,7 @@ mod tests {
             tx_id_assert: TxId::new(1),
             tx_id_supersede: TxId::ACTIVE,
             roles: vec![(RoleId::new(0), EntityId::now_v7())],
+            hyperedge_roles: Vec::new(),
             properties: vec![],
         };
         assert!(matches!(

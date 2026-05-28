@@ -753,6 +753,7 @@ mod tests {
             tx_id_assert: TxId::new(0),
             tx_id_supersede: TxId::ACTIVE,
             roles: vec![],
+            hyperedge_roles: Vec::new(),
             properties: vec![],
         })
     }

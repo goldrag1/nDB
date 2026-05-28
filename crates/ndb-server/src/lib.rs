@@ -363,6 +363,7 @@ fn commit_principals_to_engine(
                 tx_id_assert: tx_id,
                 tx_id_supersede: TxId::ACTIVE,
                 roles: vec![(ROLE_SUBJECT, principal_eid)],
+                hyperedge_roles: Vec::new(),
                 properties: vec![
                     (PROP_ACTION, Value::String(cap.as_action().into())),
                     (PROP_TARGET, Value::String(WILDCARD.into())),

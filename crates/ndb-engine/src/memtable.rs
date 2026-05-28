@@ -268,6 +268,7 @@ mod tests {
             tx_id_assert: TxId::new(20),
             tx_id_supersede: TxId::ACTIVE,
             roles: vec![(RoleId::new(1), EntityId::now_v7())],
+            hyperedge_roles: Vec::new(),
             properties: vec![],
         }))
         .unwrap();
@@ -324,6 +325,7 @@ mod tests {
             tx_id_assert: TxId::new(15),
             tx_id_supersede: TxId::ACTIVE,
             roles: vec![(RoleId::new(1), EntityId::now_v7())],
+            hyperedge_roles: Vec::new(),
             properties: vec![],
         }))
         .unwrap();

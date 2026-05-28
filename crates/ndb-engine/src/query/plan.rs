@@ -517,6 +517,7 @@ mod tests {
             tx_id_assert: TxId::new(0),
             tx_id_supersede: TxId::ACTIVE,
             roles: vec![(RoleId::new(R_CUSTOMER), customer)],
+            hyperedge_roles: Vec::new(),
             properties: vec![(PropertyId::new(P_AMOUNT), Value::I64(amount))],
         });
         txn.commit().unwrap();

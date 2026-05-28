@@ -765,6 +765,7 @@ mod tests {
                 (RoleId(1), ent_id(1)),
                 (RoleId(2), ent_id(2)),
             ],
+            hyperedge_roles: Vec::new(),
             properties: vec![(PropertyId(200), Value::Bool(true))],
         })];
         let batch = records_to_batch(&recs).unwrap();

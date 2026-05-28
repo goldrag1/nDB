@@ -209,6 +209,7 @@ mod tests {
             type_id: TypeId::new(100),
             tx_id_assert: txid, tx_id_supersede: TxId::ACTIVE,
             roles: vec![(RoleId::new(10), bob), (RoleId::new(11), alice)],
+            hyperedge_roles: Vec::new(),
             properties: vec![],
         });
         tx.commit().expect("commit edge");

@@ -168,6 +168,7 @@ mod tests {
                 .into_iter()
                 .map(|(r, e)| (RoleId::new(r), e))
                 .collect(),
+            hyperedge_roles: Vec::new(),
             properties: vec![],
         })
     }

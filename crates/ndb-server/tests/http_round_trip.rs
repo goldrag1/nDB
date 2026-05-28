@@ -459,6 +459,7 @@ fn traverse_route_walks_2_hops() {
                 (ndb_engine::RoleId::new(1), alice),
                 (ndb_engine::RoleId::new(2), bob),
             ],
+            hyperedge_roles: Vec::new(),
             properties: vec![],
         });
         txn.commit().unwrap();
@@ -473,6 +474,7 @@ fn traverse_route_walks_2_hops() {
                 (ndb_engine::RoleId::new(3), bob),
                 (ndb_engine::RoleId::new(4), acme),
             ],
+            hyperedge_roles: Vec::new(),
             properties: vec![],
         });
         txn.commit().unwrap();
@@ -675,6 +677,7 @@ fn query_explain_returns_plan_tree_without_executing() {
                 tx_id_assert: ndb_engine::TxId::new(0),
                 tx_id_supersede: ndb_engine::TxId::ACTIVE,
                 roles: vec![(ndb_engine::RoleId::new(ROLE_BUYER), alice)],
+                hyperedge_roles: Vec::new(),
                 properties: vec![],
             });
             tx.commit().unwrap();

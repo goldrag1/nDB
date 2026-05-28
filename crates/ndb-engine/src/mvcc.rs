@@ -306,6 +306,7 @@ mod tests {
             tx_id_assert: TxId::new(50),
             tx_id_supersede: TxId::ACTIVE,
             roles: vec![(RoleId::new(1), EntityId::now_v7())],
+            hyperedge_roles: Vec::new(),
             properties: vec![],
         });
         // A hyperedge with tx_assert=50 is invisible at snapshot 49, visible

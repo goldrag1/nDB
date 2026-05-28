@@ -296,6 +296,7 @@ mod tests {
             tx_id_assert: TxId::new(0),
             tx_id_supersede: TxId::ACTIVE,
             roles: vec![(ROLE_SUBJECT, subject)],
+            hyperedge_roles: Vec::new(),
             properties: vec![
                 (PROP_ACTION, Value::String(action.into())),
                 (PROP_TARGET, Value::String(target.into())),

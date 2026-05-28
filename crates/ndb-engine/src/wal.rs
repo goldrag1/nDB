@@ -603,6 +603,7 @@ mod tests {
                 tx_id_assert: TxId::new(11),
                 tx_id_supersede: TxId::ACTIVE,
                 roles: vec![(RoleId::new(3), EntityId::now_v7())],
+                hyperedge_roles: Vec::new(),
                 properties: vec![],
             }),
             Record::Tombstone(TombstoneRecord {

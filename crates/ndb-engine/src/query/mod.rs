@@ -240,6 +240,7 @@ pub fn execute(engine: &mut Engine, req: QueryRequest) -> Result<QueryResponse, 
                                 tx_id_assert: TxId::ACTIVE,
                                 tx_id_supersede: TxId::ACTIVE,
                                 roles: h.roles,
+                                hyperedge_roles: h.hyperedge_roles,
                                 properties: new_props,
                             }));
                         }
@@ -336,6 +337,9 @@ pub fn execute(engine: &mut Engine, req: QueryRequest) -> Result<QueryResponse, 
                         tx_id_assert: tx_id,
                         tx_id_supersede: TxId::ACTIVE,
                         roles: role_values,
+                        // merge clauses don't bind hyperedge-kind roles yet
+                        // (v3 surface; resolver follow-up). Always entity-kind.
+                        hyperedge_roles: Vec::new(),
                         properties: prop_values,
                     });
                     hid.into_uuid()
@@ -423,6 +427,10 @@ pub fn execute(engine: &mut Engine, req: QueryRequest) -> Result<QueryResponse, 
                             tx_id_assert: tx_id,
                             tx_id_supersede: TxId::ACTIVE,
                             roles,
+                            // create clause's role bindings are all
+                            // entity-kind in v3 — hyperedge-role binding
+                            // via the query language is a follow-up.
+                            hyperedge_roles: Vec::new(),
                             properties: props_v,
                         });
                         if let Some(v) = self_var.as_deref() {
@@ -1510,6 +1518,7 @@ mod tests {
             tx_id_assert: TxId::new(0),
             tx_id_supersede: TxId::ACTIVE,
             roles: vec![(RoleId::new(R_CUSTOMER), customer)],
+            hyperedge_roles: Vec::new(),
             properties: vec![(PropertyId::new(P_AMOUNT), Value::I64(amount))],
         });
         txn.commit().unwrap();
@@ -1808,6 +1817,7 @@ mod tests {
                 (RoleId::new(R_PARENT), parent),
                 (RoleId::new(R_CHILD), child),
             ],
+            hyperedge_roles: Vec::new(),
             properties: vec![],
         });
         txn.commit().unwrap();

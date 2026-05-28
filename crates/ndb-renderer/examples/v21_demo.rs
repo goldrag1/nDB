@@ -129,6 +129,7 @@ fn main() {
                 .iter()
                 .map(|name| (RoleId::new(ROLE_MEMBER), by_name(name)))
                 .collect(),
+            hyperedge_roles: Vec::new(),
             properties: vec![
                 (PropertyId::new(PROP_COMPLEX_NAME), Value::String((*cname).into())),
                 (PropertyId::new(PROP_PATHWAY), Value::String((*pathway).into())),
