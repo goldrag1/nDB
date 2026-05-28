@@ -96,7 +96,7 @@ fn iter_returns_committed_records() {
     let server = Arc::new(Server::open(&dir).unwrap());
     {
         let e = server.engine();
-        let mut e = e.lock().unwrap();
+        let mut e = e.write().unwrap();
         for i in 0..3 {
             let mut txn = e.begin_write();
             txn.put_entity(ndb_engine::EntityRecord {
@@ -129,7 +129,7 @@ fn lookup_by_key_via_indexed_route() {
     let alice = EntityId::now_v7();
     {
         let e = server.engine();
-        let mut e = e.lock().unwrap();
+        let mut e = e.write().unwrap();
         e.register_lookup_key(PropertyId::new(10));
         let mut txn = e.begin_write();
         txn.put_entity(ndb_engine::EntityRecord {
@@ -179,7 +179,7 @@ fn vector_search_route_returns_sorted_hits() {
     let b = EntityId::now_v7();
     {
         let e = server.engine();
-        let mut e = e.lock().unwrap();
+        let mut e = e.write().unwrap();
         e.register_vector_property(PropertyId::new(20));
         for (eid, v) in [(a, vec![1.0_f32, 0.0]), (b, vec![0.0_f32, 1.0])] {
             let mut txn = e.begin_write();
@@ -223,7 +223,7 @@ fn property_lookup_and_range_round_trip() {
     let bob = EntityId::now_v7();
     {
         let e = server.engine();
-        let mut e = e.lock().unwrap();
+        let mut e = e.write().unwrap();
         e.register_property_btree(TypeId::new(1), PropertyId::new(30));
         for (eid, age) in [(alice, 25_i64), (bob, 35)] {
             let mut txn = e.begin_write();
@@ -275,7 +275,7 @@ fn flush_and_compact_round_trip() {
     let server = Arc::new(Server::open(&dir).unwrap());
     {
         let e = server.engine();
-        let mut e = e.lock().unwrap();
+        let mut e = e.write().unwrap();
         let mut txn = e.begin_write();
         txn.put_entity(ndb_engine::EntityRecord {
             entity_id: EntityId::now_v7(),
@@ -312,7 +312,7 @@ fn query_round_trip_entity_pattern() {
     let server = Arc::new(Server::open(&dir).unwrap());
     {
         let e = server.engine();
-        let mut e = e.lock().unwrap();
+        let mut e = e.write().unwrap();
         for (name, region) in [
             ("Alice", "Vietnam"),
             ("Bob", "Singapore"),
@@ -411,7 +411,7 @@ fn query_text_round_trip() {
     let server = Arc::new(Server::open(&dir).unwrap());
     {
         let e = server.engine();
-        let mut e = e.lock().unwrap();
+        let mut e = e.write().unwrap();
 
         // Dictionary names — the resolver needs these to map "customer"
         // and "name" / "region" identifiers to type / property ids.

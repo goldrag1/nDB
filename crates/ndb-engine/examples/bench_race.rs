@@ -27,7 +27,8 @@
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation,
          clippy::cast_sign_loss, clippy::too_many_lines)]
 
-use ndb_engine::query::execute;
+// `ndb_engine::query::execute_read` referenced via fully-qualified path in
+// `do_one_op` / `bench_*` — no top-level import needed.
 use ndb_engine::record::Record;
 use ndb_engine::wire::JsonValue;
 use ndb_engine::wire_query::{
@@ -40,7 +41,7 @@ use ndb_engine::{
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 // ─── Schema (kept narrow + obvious) ────────────────────────────────────
@@ -113,7 +114,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let region_probes = sample_string_n(&region_codes, N_ITER_LOOKUPS, 0x517cc1b727220a95);
 
     let state = State {
-        engine: Mutex::new(engine),
+        engine: RwLock::new(engine),
         narrow_region: region_codes[0].clone(),
         lookup_uuids,
         region_probes,
@@ -148,7 +149,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 // ─── State + workload registry ────────────────────────────────────────
 
 struct State {
-    engine: Mutex<Engine>,
+    engine: RwLock<Engine>,
     narrow_region: String,
     lookup_uuids: Vec<EntityId>,
     region_probes: Vec<String>,
@@ -339,15 +340,18 @@ fn escape_json(s: &str) -> String {
 // ─── Workload execution ───────────────────────────────────────────────
 
 fn run_workload(state: &State, workload: &Workload) -> String {
-    let mut engine = state.engine.lock().unwrap();
+    // Controlled (sequential) runs use a read lock — all benched
+    // workloads are read-only. Write workloads (commits_per_sec) would
+    // take state.engine.write() instead.
+    let engine = state.engine.read().unwrap();
     let r = match workload.name {
-        "iter_all"                  => bench_iter_all(&mut engine, workload.iters),
-        "point_lookup"              => bench_point_lookup(&mut engine, &state.lookup_uuids),
-        "property_lookup"           => bench_property_lookup(&mut engine, &state.region_probes),
-        "single_pattern_query"      => bench_single_pattern_query(&mut engine, &state.narrow_region, workload.iters),
-        "two_pattern_join"          => bench_two_pattern_join(&mut engine, &state.narrow_region, workload.iters),
-        "recursive_contains_depth3" => bench_recursive_contains(&mut engine, state.chain_root, workload.iters),
-        "count_aggregate"           => bench_count_aggregate(&mut engine, workload.iters),
+        "iter_all"                  => bench_iter_all(&engine, workload.iters),
+        "point_lookup"              => bench_point_lookup(&engine, &state.lookup_uuids),
+        "property_lookup"           => bench_property_lookup(&engine, &state.region_probes),
+        "single_pattern_query"      => bench_single_pattern_query(&engine, &state.narrow_region, workload.iters),
+        "two_pattern_join"          => bench_two_pattern_join(&engine, &state.narrow_region, workload.iters),
+        "recursive_contains_depth3" => bench_recursive_contains(&engine, state.chain_root, workload.iters),
+        "count_aggregate"           => bench_count_aggregate(&engine, workload.iters),
         _ => unreachable!(),
     };
     format!(
@@ -360,11 +364,14 @@ fn run_workload(state: &State, workload: &Workload) -> String {
 // ─── Concurrent stress runner ─────────────────────────────────────────
 //
 // Spawns `concurrency` worker threads. Each thread loops until the
-// deadline expires: acquire `state.engine` mutex, run one op, record
-// latency in its local Vec. Then we merge all threads' Vecs, compute
-// percentiles + a log10 histogram. The engine mutex serialises ops
-// (v1 single-writer), so above conc=1 the lanes just queue — that's
-// the realistic v1 ceiling and we report it honestly.
+// deadline expires: acquire `state.engine` READ lock (RwLock — workers
+// parallelise on the read slot), run one op, record latency in its
+// local Vec. Then we merge all threads' Vecs, compute percentiles + a
+// log10 histogram. As of v3-final, all benched workloads are read-only
+// and route through the `&Engine` entry points (`snapshot_read`,
+// `property_lookup`, `execute_read`), so above conc=1 the lanes
+// genuinely parallelise — point-lookup throughput scales linearly with
+// thread count up to the CPU's parallel-read limit.
 
 fn run_stress(state: &Arc<State>, workload: &Workload, concurrency: usize, duration_ms: u64) -> String {
     let deadline = Instant::now() + Duration::from_millis(duration_ms);
@@ -387,8 +394,8 @@ fn run_stress(state: &Arc<State>, workload: &Workload, concurrency: usize, durat
                 let idx = idx_seed as usize;
                 let t = Instant::now();
                 let ok = {
-                    let mut engine = st.engine.lock().unwrap();
-                    do_one_op(&mut engine, &st, workload_name, idx)
+                    let engine = st.engine.read().unwrap();
+                    do_one_op(&engine, &st, workload_name, idx)
                 };
                 let us = t.elapsed().as_micros() as u64;
                 if ok { latencies.push(us); } else { errors += 1; }
@@ -450,7 +457,7 @@ fn run_stress(state: &Arc<State>, workload: &Workload, concurrency: usize, durat
 /// Run a single op of the named workload. Picks deterministic samples
 /// using `idx` (per-thread rotating seed) for the workloads that need a
 /// pool element. Returns true on success.
-fn do_one_op(engine: &mut Engine, state: &State, workload: &str, idx: usize) -> bool {
+fn do_one_op(engine: &Engine, state: &State, workload: &str, idx: usize) -> bool {
     match workload {
         "iter_all" => {
             let mut n = 0_u64;
@@ -475,19 +482,19 @@ fn do_one_op(engine: &mut Engine, state: &State, workload: &str, idx: usize) -> 
         }
         "single_pattern_query" => {
             let req = single_pattern_request(&state.narrow_region);
-            execute(engine, req).is_ok()
+            ndb_engine::query::execute_read(engine, req).is_ok()
         }
         "two_pattern_join" => {
             let req = two_pattern_request(&state.narrow_region);
-            execute(engine, req).is_ok()
+            ndb_engine::query::execute_read(engine, req).is_ok()
         }
         "recursive_contains_depth3" => {
             let req = recursive_request(state.chain_root);
-            execute(engine, req).is_ok()
+            ndb_engine::query::execute_read(engine, req).is_ok()
         }
         "count_aggregate" => {
             let req = count_request();
-            execute(engine, req).is_ok()
+            ndb_engine::query::execute_read(engine, req).is_ok()
         }
         _ => false,
     }
@@ -513,7 +520,7 @@ fn finalize(name: &'static str, samples_us: &mut [u64], total_dur_us: f64) -> Be
     BenchResult { name, iters: n, min_us: min, p50_us: p50, p99_us: p99, ops_per_sec, total_ms: total_dur_us / 1000.0 }
 }
 
-fn bench_iter_all(engine: &mut Engine, iters: usize) -> BenchResult {
+fn bench_iter_all(engine: &Engine, iters: usize) -> BenchResult {
     let mut samples = Vec::with_capacity(iters);
     let outer = Instant::now();
     for _ in 0..iters {
@@ -529,7 +536,7 @@ fn bench_iter_all(engine: &mut Engine, iters: usize) -> BenchResult {
     finalize("iter_all", &mut samples, outer.elapsed().as_micros() as f64)
 }
 
-fn bench_point_lookup(engine: &mut Engine, lookups: &[EntityId]) -> BenchResult {
+fn bench_point_lookup(engine: &Engine, lookups: &[EntityId]) -> BenchResult {
     let mut samples = Vec::with_capacity(lookups.len());
     let outer = Instant::now();
     for eid in lookups {
@@ -540,7 +547,7 @@ fn bench_point_lookup(engine: &mut Engine, lookups: &[EntityId]) -> BenchResult 
     finalize("point_lookup", &mut samples, outer.elapsed().as_micros() as f64)
 }
 
-fn bench_property_lookup(engine: &mut Engine, region_codes: &[String]) -> BenchResult {
+fn bench_property_lookup(engine: &Engine, region_codes: &[String]) -> BenchResult {
     let mut samples = Vec::with_capacity(region_codes.len());
     let outer = Instant::now();
     for code in region_codes {
@@ -555,49 +562,49 @@ fn bench_property_lookup(engine: &mut Engine, region_codes: &[String]) -> BenchR
     finalize("property_lookup", &mut samples, outer.elapsed().as_micros() as f64)
 }
 
-fn bench_single_pattern_query(engine: &mut Engine, region: &str, iters: usize) -> BenchResult {
+fn bench_single_pattern_query(engine: &Engine, region: &str, iters: usize) -> BenchResult {
     let req = single_pattern_request(region);
     let mut samples = Vec::with_capacity(iters);
     let outer = Instant::now();
     for _ in 0..iters {
         let t = Instant::now();
-        let _ = execute(engine, req.clone()).unwrap();
+        let _ = ndb_engine::query::execute_read(engine, req.clone()).unwrap();
         samples.push(t.elapsed().as_micros() as u64);
     }
     finalize("single_pattern_query", &mut samples, outer.elapsed().as_micros() as f64)
 }
 
-fn bench_two_pattern_join(engine: &mut Engine, region: &str, iters: usize) -> BenchResult {
+fn bench_two_pattern_join(engine: &Engine, region: &str, iters: usize) -> BenchResult {
     let req = two_pattern_request(region);
     let mut samples = Vec::with_capacity(iters);
     let outer = Instant::now();
     for _ in 0..iters {
         let t = Instant::now();
-        let _ = execute(engine, req.clone()).unwrap();
+        let _ = ndb_engine::query::execute_read(engine, req.clone()).unwrap();
         samples.push(t.elapsed().as_micros() as u64);
     }
     finalize("two_pattern_join", &mut samples, outer.elapsed().as_micros() as f64)
 }
 
-fn bench_recursive_contains(engine: &mut Engine, root: EntityId, iters: usize) -> BenchResult {
+fn bench_recursive_contains(engine: &Engine, root: EntityId, iters: usize) -> BenchResult {
     let req = recursive_request(root);
     let mut samples = Vec::with_capacity(iters);
     let outer = Instant::now();
     for _ in 0..iters {
         let t = Instant::now();
-        let _ = execute(engine, req.clone()).unwrap();
+        let _ = ndb_engine::query::execute_read(engine, req.clone()).unwrap();
         samples.push(t.elapsed().as_micros() as u64);
     }
     finalize("recursive_contains_depth3", &mut samples, outer.elapsed().as_micros() as f64)
 }
 
-fn bench_count_aggregate(engine: &mut Engine, iters: usize) -> BenchResult {
+fn bench_count_aggregate(engine: &Engine, iters: usize) -> BenchResult {
     let req = count_request();
     let mut samples = Vec::with_capacity(iters);
     let outer = Instant::now();
     for _ in 0..iters {
         let t = Instant::now();
-        let _ = execute(engine, req.clone()).unwrap();
+        let _ = ndb_engine::query::execute_read(engine, req.clone()).unwrap();
         samples.push(t.elapsed().as_micros() as u64);
     }
     finalize("count_aggregate", &mut samples, outer.elapsed().as_micros() as f64)

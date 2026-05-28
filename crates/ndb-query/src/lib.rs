@@ -37,4 +37,6 @@ pub use error::{ParseError, Span};
 pub use lex::{Tok, TokKind, lex};
 pub use parse::parse_query;
 pub use resolve::{Dictionaries, ResolveError, TypeKindObserved, resolve};
-pub use run::{RunError, RunErrorEnvelope, SpanInfo, execute_text, parse_resolve};
+pub use run::{
+    RunError, RunErrorEnvelope, SpanInfo, execute_text, execute_text_read, parse_resolve,
+};

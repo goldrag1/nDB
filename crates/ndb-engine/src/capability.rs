@@ -102,7 +102,7 @@ impl Engine {
     /// changes via `/commit` become effective on the next `has_capability`
     /// call.
     pub fn has_capability(
-        &mut self,
+        &self,
         subject: EntityId,
         action: &str,
         target: &str,
@@ -181,7 +181,7 @@ impl Engine {
     /// "should I migrate principals.json now?" without reading every
     /// record.
     pub fn has_any_capability_or_principal(
-        &mut self,
+        &self,
     ) -> Result<bool, crate::engine::EngineError> {
         if self.hyperedge_type_count(TYPE_CAPABILITY) > 0 {
             return Ok(true);

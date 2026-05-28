@@ -76,7 +76,11 @@ pub use capability::{
 };
 pub use memtable::Memtable;
 pub use mvcc::{Resolved, effective_tx, resolve, resolve_owned, visible_at};
-pub use query::{Bindings, QueryError, execute as execute_query};
+pub use query::{
+    Bindings, QueryError,
+    execute as execute_query,
+    execute_read as execute_query_read,
+};
 pub use record::{
     ENVELOPE_OVERHEAD, EntityRecord, FORMAT_VERSION, FORMAT_VERSION_MAX_SUPPORTED, HyperEdgeRecord,
     PropertyKeyRecord, Record, RecordKind, RoleNameRecord, TombstoneRecord, TypeNameRecord,

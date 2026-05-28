@@ -752,7 +752,7 @@ impl Engine {
     /// (across Entity / HyperEdge / Tombstone kinds) and feed them to the
     /// visibility resolver.
     pub fn snapshot_read(
-        &mut self,
+        &self,
         uuid: &uuid::Uuid,
         snapshot: TxId,
     ) -> Result<Resolved<Record>, EngineError> {
@@ -776,8 +776,12 @@ impl Engine {
         // Each open SSTable. find_all() probes the block-index sidecar
         // when present (O(log N) seek + ≤ block_size linear scan) and
         // gracefully linear-scans the whole file when the sidecar is
-        // missing or unloadable.
-        for sst in &mut self.sstables {
+        // missing or unloadable. The SSTable readers expose `find_all`
+        // through `&self` (mmap or decrypted heap buffer; both are
+        // immutable post-open), so we don't need `&mut self.sstables`
+        // here. Keeping reads on `&self` is what makes
+        // `RwLock<Engine>`-backed concurrent point lookups parallelise.
+        for sst in &self.sstables {
             for kind in [
                 crate::record::RecordKind::Entity,
                 crate::record::RecordKind::HyperEdge,
@@ -908,7 +912,7 @@ impl Engine {
     /// Materialises the full result set in a `Vec`. For very large scans,
     /// prefer [`Self::snapshot_iter_streaming`] which yields records one
     /// at a time without buffering.
-    pub fn snapshot_iter(&mut self, snapshot: TxId) -> Result<Vec<Record>, EngineError> {
+    pub fn snapshot_iter(&self, snapshot: TxId) -> Result<Vec<Record>, EngineError> {
         self.snapshot_iter_streaming(snapshot)
             .collect::<Result<Vec<_>, _>>()
     }

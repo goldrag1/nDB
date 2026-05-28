@@ -107,15 +107,30 @@ pub enum QueryError {
 }
 
 /// Top-level entry — plan and execute one query against the engine.
+///
+/// Takes `&mut Engine` because write clauses (`create` / `set` / `merge` /
+/// `delete`) need an exclusive borrow for the write txn. Pure-read queries
+/// have a thin dispatcher to [`execute_read`] (no exclusive borrow needed)
+/// — RwLock-backed callers should call that directly so concurrent reads
+/// parallelise on the `RwLock`'s read slot.
 pub fn execute(engine: &mut Engine, req: QueryRequest) -> Result<QueryResponse, QueryError> {
+    // Fast path: no write clauses → the entire query is read-only and
+    // can run via the `&Engine` entry point. This avoids the conceptual
+    // mutable borrow on every query — the caller's lock layer can take
+    // a read lock for these and serialise only the actual writers.
+    if req.creates.is_empty()
+        && req.deletes.is_empty()
+        && req.sets.is_empty()
+        && req.merges.is_empty()
+    {
+        return execute_read(&*engine, req);
+    }
+
     let snapshot = resolve_snapshot(engine, req.as_of)?;
 
     // ── Fast path: count() pushdown to the type-cluster index. ──────
-    // Matches the shape `match X() return count()` exactly: one entity
-    // OR hyperedge pattern, no filters, no recursion, no role bindings,
-    // no `where`, no `order by`, no `limit`, no writes, single return =
-    // `count()` with no variable arg. Direct O(1) index probe instead of
-    // materialising ~49k bindings.
+    // (Reachable only when writes are present alongside; pure-count goes
+    // through `execute_read` above.)
     if let Some(n) = try_count_pushdown(engine, &req) {
         return Ok(QueryResponse {
             columns: vec!["count()".to_string()],
@@ -498,6 +513,89 @@ pub fn execute(engine: &mut Engine, req: QueryRequest) -> Result<QueryResponse, 
     })
 }
 
+/// Read-only entry point — plan and execute a query that has NO write
+/// clauses (`create` / `set` / `merge` / `delete`). Takes `&Engine` so
+/// concurrent read workers on `RwLock<Engine>` parallelise on the read
+/// slot instead of serialising on an exclusive borrow.
+///
+/// Returns an error if the request carries any write clause; the
+/// dispatcher in [`execute`] takes the `&mut Engine` path for those.
+pub fn execute_read(engine: &Engine, req: QueryRequest) -> Result<QueryResponse, QueryError> {
+    // Defensive guard — execute() is the public dispatcher and only
+    // routes here for read-only requests, but `execute_read` is also
+    // pub so direct callers can reach it. Surface a clean error rather
+    // than silently dropping the write clauses.
+    if !req.creates.is_empty()
+        || !req.deletes.is_empty()
+        || !req.sets.is_empty()
+        || !req.merges.is_empty()
+    {
+        return Err(QueryError::RecursionConfigInvalid {
+            reason: "execute_read called with write clauses — use execute() instead".into(),
+        });
+    }
+
+    let snapshot = resolve_snapshot(engine, req.as_of)?;
+
+    // count() pushdown — direct O(1) index probe.
+    if let Some(n) = try_count_pushdown(engine, &req) {
+        return Ok(QueryResponse {
+            columns: vec!["count()".to_string()],
+            rows: vec![vec![JsonValue::I64 { value: n as i64 }]],
+            truncated: false,
+        });
+    }
+
+    let mut rows: Vec<Bindings> = vec![Bindings::new()];
+
+    let plan = plan::plan(engine, &req.patterns);
+    for &idx in &plan.order {
+        let pattern = &req.patterns[idx];
+        rows = execute_pattern(engine, snapshot, pattern, rows)?;
+        if rows.is_empty() {
+            break;
+        }
+    }
+
+    if let Some(ref expr) = req.filter {
+        let mut kept = Vec::with_capacity(rows.len());
+        for r in rows {
+            if eval_filter(expr, &r)? {
+                kept.push(r);
+            }
+        }
+        rows = kept;
+    }
+
+    if !req.order_by.is_empty() {
+        sort_rows(engine, snapshot, &req.order_by, &mut rows);
+    }
+
+    let mut truncated = false;
+    if let Some(n) = req.limit
+        && rows.len() > n
+    {
+        rows.truncate(n);
+        truncated = true;
+    }
+
+    let columns: Vec<String> = req.returns.iter().map(ReturnItem::column_name).collect();
+    let has_aggregate = req.returns.iter().any(ReturnItem::is_aggregate);
+    let response_rows: Vec<Vec<JsonValue>> = if has_aggregate {
+        aggregate_rows(engine, snapshot, &req.returns, rows)
+    } else {
+        rows.into_iter()
+            .map(|r| {
+                req.returns.iter()
+                    .map(|item| project_item(engine, snapshot, item, &r))
+                    .collect()
+            })
+            .collect()
+    };
+
+    Ok(QueryResponse { columns, rows: response_rows, truncated })
+}
+
 /// Sort `rows` in-place by every key in `order_by`. Stable sort, so
 /// ties on key[0] fall through to key[1], etc.
 ///
@@ -507,7 +605,7 @@ pub fn execute(engine: &mut Engine, req: QueryRequest) -> Result<QueryResponse, 
 /// sort to the end of the order (treated as "greatest") so the
 /// well-behaved rows cluster predictably.
 fn sort_rows(
-    engine: &mut Engine,
+    engine: &Engine,
     snapshot: TxId,
     order_by: &[OrderKey],
     rows: &mut [Bindings],
@@ -542,7 +640,7 @@ fn sort_rows(
     }
 }
 
-fn key_for_row(engine: &mut Engine, snapshot: TxId, key: &OrderKey, row: &Bindings) -> Option<Value> {
+fn key_for_row(engine: &Engine, snapshot: TxId, key: &OrderKey, row: &Bindings) -> Option<Value> {
     let v = row.get(&key.variable)?;
     match key.property {
         None => Some(v.clone()),
@@ -596,7 +694,7 @@ fn compare_values(a: Option<&Value>, b: Option<&Value>) -> std::cmp::Ordering {
 /// skip non-numeric values; `count()` counts all rows in the group;
 /// `count(?v)` counts rows where `?v` is bound.
 fn aggregate_rows(
-    engine: &mut Engine,
+    engine: &Engine,
     snapshot: TxId,
     returns: &[ReturnItem],
     rows: Vec<Bindings>,
@@ -639,7 +737,7 @@ fn aggregate_rows(
 
 /// Compute one aggregate value over a group's rows.
 fn compute_aggregate(
-    engine: &mut Engine,
+    engine: &Engine,
     snapshot: TxId,
     func: &str,
     variable: Option<&str>,
@@ -745,7 +843,7 @@ fn resolve_create_term(term: &Term, row: &Bindings) -> Result<Value, QueryError>
 /// `JsonValue::Null` — we never raise; per spec §5.6 a NULL projection
 /// is the well-defined "not present at this snapshot" outcome.
 fn project_item(
-    engine: &mut Engine,
+    engine: &Engine,
     snapshot: TxId,
     item: &ReturnItem,
     bindings: &Bindings,
@@ -852,7 +950,7 @@ fn resolve_snapshot(engine: &Engine, as_of: Option<AsOf>) -> Result<TxId, QueryE
 // ---------------------------------------------------------------------------
 
 fn execute_pattern(
-    engine: &mut Engine,
+    engine: &Engine,
     snapshot: TxId,
     pattern: &Pattern,
     rows: Vec<Bindings>,
@@ -902,7 +1000,7 @@ fn execute_pattern(
 }
 
 fn execute_entity_pattern(
-    engine: &mut Engine,
+    engine: &Engine,
     snapshot: TxId,
     type_id: u32,
     self_var: Option<&str>,
@@ -955,7 +1053,7 @@ fn execute_entity_pattern(
 }
 
 fn execute_hyperedge_pattern(
-    engine: &mut Engine,
+    engine: &Engine,
     snapshot: TxId,
     type_id: u32,
     self_var: Option<&str>,
@@ -1108,7 +1206,7 @@ const fn recursion_bounds(rec: &Recursion) -> (u32, u32) {
 }
 
 fn execute_recursive_hyperedge(
-    engine: &mut Engine,
+    engine: &Engine,
     snapshot: TxId,
     type_id: u32,
     role_bindings: &[RoleBinding],
@@ -1274,7 +1372,7 @@ fn apply_step_constraints(
 // ---------------------------------------------------------------------------
 
 fn candidate_entities_for_pattern(
-    engine: &mut Engine,
+    engine: &Engine,
     snapshot: TxId,
     type_id: u32,
     property_filters: &[PropertyFilter],
@@ -1322,6 +1420,7 @@ fn candidate_entities_for_pattern(
     Ok(out)
 }
 
+#[allow(dead_code)]  // Convenience wrapper retained for future call sites
 fn candidate_hyperedges(
     engine: &Engine,
     type_id: u32,
@@ -1527,7 +1626,7 @@ fn term_value(t: &Term, row: &Bindings) -> Result<Value, QueryError> {
 // ---------------------------------------------------------------------------
 
 fn entity_at(
-    engine: &mut Engine,
+    engine: &Engine,
     snapshot: TxId,
     uuid: uuid::Uuid,
 ) -> Result<Option<crate::record::EntityRecord>, QueryError> {
@@ -1538,7 +1637,7 @@ fn entity_at(
 }
 
 fn hyperedge_at(
-    engine: &mut Engine,
+    engine: &Engine,
     snapshot: TxId,
     uuid: uuid::Uuid,
 ) -> Result<Option<crate::record::HyperEdgeRecord>, QueryError> {

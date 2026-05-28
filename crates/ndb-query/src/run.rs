@@ -124,6 +124,15 @@ pub fn execute_text(engine: &mut Engine, text: &str) -> Result<QueryResponse, Ru
     Ok(execute(engine, req)?)
 }
 
+/// Read-only variant of [`execute_text`] — takes `&Engine`, executes via
+/// `query::execute_read`. Errors if the resolved request carries any
+/// write clauses. Callers that hold a `RwLock<Engine>` read guard use
+/// this so concurrent readers parallelise.
+pub fn execute_text_read(engine: &Engine, text: &str) -> Result<QueryResponse, RunError> {
+    let req = parse_resolve(engine, text)?;
+    Ok(ndb_engine::query::execute_read(engine, req)?)
+}
+
 /// Build a name-resolution dictionary from the engine's current
 /// snapshot.
 fn build_dictionary(engine: &Engine) -> Result<Dictionaries, RunError> {

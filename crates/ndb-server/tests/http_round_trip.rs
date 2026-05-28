@@ -114,7 +114,7 @@ fn commit_then_read_round_trip() {
     // across requests.
     {
         let e = server.engine();
-        let mut e = e.lock().unwrap();
+        let mut e = e.write().unwrap();
         e.require_property(TypeId::new(1), PropertyId::new(10));
         e.expect_value_tag(TypeId::new(1), PropertyId::new(10), TAG_STRING);
     }
@@ -162,7 +162,7 @@ fn validation_failure_returns_422() {
 
     {
         let e = server.engine();
-        let mut e = e.lock().unwrap();
+        let mut e = e.write().unwrap();
         e.require_property(TypeId::new(1), PropertyId::new(10));
     }
 
@@ -242,7 +242,7 @@ fn iter_streams_jsonl() {
     // Pre-load some records before the server starts serving.
     {
         let e = server.engine();
-        let mut e = e.lock().unwrap();
+        let mut e = e.write().unwrap();
         for i in 0..3 {
             let mut txn = e.begin_write();
             txn.put_entity(ndb_engine::EntityRecord {
@@ -278,7 +278,7 @@ fn lookup_route_finds_entity_by_external_key() {
     let alice = EntityId::now_v7();
     {
         let e = server.engine();
-        let mut e = e.lock().unwrap();
+        let mut e = e.write().unwrap();
         e.register_lookup_key(PropertyId::new(10));
         let mut txn = e.begin_write();
         txn.put_entity(ndb_engine::EntityRecord {
@@ -320,7 +320,7 @@ fn vector_search_route_returns_sorted_hits() {
     let b = EntityId::now_v7();
     {
         let e = server.engine();
-        let mut e = e.lock().unwrap();
+        let mut e = e.write().unwrap();
         e.register_vector_property(PropertyId::new(20));
         for (eid, v) in [(a, vec![1.0f32, 0.0]), (b, vec![0.0f32, 1.0])] {
             let mut txn = e.begin_write();
@@ -366,7 +366,7 @@ fn property_lookup_and_range_routes() {
     let carol = EntityId::now_v7();
     {
         let e = server.engine();
-        let mut e = e.lock().unwrap();
+        let mut e = e.write().unwrap();
         e.register_property_btree(TypeId::new(1), PropertyId::new(30));
         for (eid, age) in [(alice, 25i64), (bob, 35), (carol, 45)] {
             let mut txn = e.begin_write();
@@ -436,7 +436,7 @@ fn traverse_route_walks_2_hops() {
     let acme = EntityId::now_v7();
     {
         let e = server.engine();
-        let mut e = e.lock().unwrap();
+        let mut e = e.write().unwrap();
         for eid in [alice, bob, acme] {
             let mut txn = e.begin_write();
             txn.put_entity(ndb_engine::EntityRecord {
@@ -517,7 +517,7 @@ fn query_route_executes_entity_pattern_via_tcp() {
     // Seed three customers — two in Vietnam, one in Singapore.
     {
         let e = server.engine();
-        let mut e = e.lock().unwrap();
+        let mut e = e.write().unwrap();
         for (name, region) in [
             ("Alice", "Vietnam"),
             ("Bob", "Singapore"),
@@ -612,7 +612,7 @@ fn query_explain_returns_plan_tree_without_executing() {
     let server = Arc::new(Server::open(&dir).unwrap());
     {
         let e = server.engine();
-        let mut e = e.lock().unwrap();
+        let mut e = e.write().unwrap();
         // Names so parse_resolve succeeds against the engine snapshot.
         let mut tx = e.begin_write();
         tx.put_raw(ndb_engine::Record::TypeName(ndb_engine::TypeNameRecord {
@@ -737,7 +737,7 @@ fn subscribe_returns_records_committed_after_since_tx() {
     let since_tx_id;
     {
         let e = server.engine();
-        let mut e = e.lock().unwrap();
+        let mut e = e.write().unwrap();
         // Commit one entity → bumps last_tx_id to 1.
         let mut txn = e.begin_write();
         txn.put_entity(ndb_engine::EntityRecord {
@@ -808,7 +808,7 @@ fn subscribe_wakes_on_concurrent_commit_within_a_millisecond_class_latency() {
     let since_tx_id;
     {
         let e = server.engine();
-        let mut e = e.lock().unwrap();
+        let mut e = e.write().unwrap();
         let mut txn = e.begin_write();
         txn.put_entity(ndb_engine::EntityRecord {
             entity_id: EntityId::now_v7(),
@@ -889,7 +889,7 @@ fn query_stream_emits_header_plus_one_line_per_row() {
     let server = Arc::new(Server::open(&dir).unwrap());
     {
         let e = server.engine();
-        let mut e = e.lock().unwrap();
+        let mut e = e.write().unwrap();
         for n in 0..4 {
             let eid = EntityId::now_v7();
             let mut txn = e.begin_write();
@@ -1336,7 +1336,7 @@ fn engine_backed_dispatch_revokes_capability_without_restart() {
     // alice with PROP_ACTION="iter" and commit a tombstone for it.
     {
         let eng_arc = server.engine();
-        let mut eng = eng_arc.lock().unwrap();
+        let mut eng = eng_arc.write().unwrap();
         let snap = TxId::new(eng.manifest().last_tx_id);
         let edges: Vec<HyperedgeId> = eng.hyperedges_for_entity(alice_eid);
         let mut iter_hid: Option<HyperedgeId> = None;

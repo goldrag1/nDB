@@ -135,7 +135,7 @@ fn main() -> ExitCode {
     };
     if args.bench_mode {
         let engine = server.engine();
-        let mut e = engine.lock().expect("engine mutex poisoned");
+        let mut e = engine.write().expect("engine lock poisoned");
         // Simple workload schema.
         e.register_lookup_key(PropertyId::new(BENCH_PROP_EMAIL));
         e.register_property_btree(

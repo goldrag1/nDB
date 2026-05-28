@@ -43,7 +43,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ndb_engine::{
@@ -187,7 +187,7 @@ impl JsonRpcResponse {
 
 /// MCP server handle. Owns a shared engine.
 pub struct McpServer {
-    engine: Arc<Mutex<Engine>>,
+    engine: Arc<RwLock<Engine>>,
     /// Optional principal. When set, every tool call is checked against
     /// the principal's capabilities. When unset, every tool is allowed
     /// (the legacy stdio behaviour — appropriate for a single-tenant
@@ -212,7 +212,7 @@ impl McpServer {
             Engine::create_from_env(path)?
         };
         Ok(Self {
-            engine: Arc::new(Mutex::new(engine)),
+            engine: Arc::new(RwLock::new(engine)),
             principal: None,
             audit: None,
         })
@@ -222,7 +222,7 @@ impl McpServer {
     #[must_use]
     pub fn from_engine(engine: Engine) -> Self {
         Self {
-            engine: Arc::new(Mutex::new(engine)),
+            engine: Arc::new(RwLock::new(engine)),
             principal: None,
             audit: None,
         }
@@ -242,7 +242,7 @@ impl McpServer {
     /// pipeline ingests both surfaces.
     pub fn with_audit_log(mut self) -> Result<Self, McpError> {
         let dir = {
-            let eng = self.engine.lock().expect("engine mutex poisoned");
+            let eng = self.engine.write().expect("engine lock poisoned");
             eng.path().to_path_buf()
         };
         let log = AuditLog::open(&dir)?;
@@ -283,7 +283,7 @@ impl McpServer {
 
     /// Borrow the underlying engine handle.
     #[must_use]
-    pub fn engine(&self) -> Arc<Mutex<Engine>> {
+    pub fn engine(&self) -> Arc<RwLock<Engine>> {
         Arc::clone(&self.engine)
     }
 
@@ -392,7 +392,7 @@ impl McpServer {
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| McpError::BadArgs("read: missing 'uuid'".into()))?;
         let uuid = Uuid::parse_str(uuid_str).map_err(|e| McpError::Convert(e.to_string()))?;
-        let mut engine = self.engine.lock().expect("engine mutex poisoned");
+        let mut engine = self.engine.write().expect("engine lock poisoned");
         let snap = TxId::new(engine.manifest().last_tx_id);
         let resolved = engine.snapshot_read(&uuid, snap)?;
         Ok(match resolved {
@@ -440,7 +440,7 @@ impl McpServer {
                 .map_err(|e: ndb_engine::WireError| McpError::Convert(e.to_string()))?;
             properties.push((PropertyId::new(prop_id), v));
         }
-        let mut engine = self.engine.lock().expect("engine mutex poisoned");
+        let mut engine = self.engine.write().expect("engine lock poisoned");
         let mut txn = engine.begin_write();
         let entity_id = EntityId::now_v7();
         txn.put_entity(EntityRecord {
@@ -462,7 +462,7 @@ impl McpServer {
             .get("limit")
             .and_then(serde_json::Value::as_u64)
             .map_or(1000_usize, |n| n.try_into().unwrap_or(1000));
-        let mut engine = self.engine.lock().expect("engine mutex poisoned");
+        let mut engine = self.engine.write().expect("engine lock poisoned");
         let snap = TxId::new(engine.manifest().last_tx_id);
         let records = engine.snapshot_iter(snap)?;
         // Filter internal v2.0 metadata records, then truncate.
@@ -498,7 +498,7 @@ impl McpServer {
         let v: Value = jv
             .try_into()
             .map_err(|e: ndb_engine::WireError| McpError::Convert(e.to_string()))?;
-        let engine = self.engine.lock().expect("engine mutex poisoned");
+        let engine = self.engine.write().expect("engine lock poisoned");
         let hit = engine.lookup_by_external_key(PropertyId::new(property_id), &v);
         Ok(match hit {
             Some(id) => serde_json::json!({"entity_id": id.into_uuid().to_string()}),
@@ -532,7 +532,7 @@ impl McpServer {
             "cosine" => Distance::Cosine,
             _ => Distance::L2Squared,
         };
-        let engine = self.engine.lock().expect("engine mutex poisoned");
+        let engine = self.engine.write().expect("engine lock poisoned");
         let hits = engine.vector_search(PropertyId::new(property_id), &query, k, metric);
         let payload: Vec<_> = hits
             .into_iter()
@@ -551,7 +551,7 @@ impl McpServer {
         args: &serde_json::Value,
     ) -> Result<serde_json::Value, McpError> {
         let (type_id, property_id, value) = parse_type_prop_value(args)?;
-        let engine = self.engine.lock().expect("engine mutex poisoned");
+        let engine = self.engine.write().expect("engine lock poisoned");
         let hits = engine.property_lookup(type_id, property_id, &value);
         Ok(serde_json::json!({
             "entity_ids": hits
@@ -592,7 +592,7 @@ impl McpServer {
             .map(|jv| jv.try_into())
             .transpose()
             .map_err(|e: ndb_engine::WireError| McpError::Convert(e.to_string()))?;
-        let engine = self.engine.lock().expect("engine mutex poisoned");
+        let engine = self.engine.write().expect("engine lock poisoned");
         let hits = engine.property_range(type_id, property_id, low.as_ref(), high.as_ref());
         Ok(serde_json::json!({
             "entity_ids": hits
@@ -708,7 +708,7 @@ mod tests {
         // Configure validation: type 1 requires prop 10 to be a string.
         {
             let e = server.engine();
-            let mut e = e.lock().unwrap();
+            let mut e = e.write().unwrap();
             e.require_property(TypeId::new(1), PropertyId::new(10));
             e.expect_value_tag(TypeId::new(1), PropertyId::new(10), TAG_STRING);
         }

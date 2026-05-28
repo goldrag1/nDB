@@ -40,7 +40,7 @@ use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ndb_engine::{
@@ -235,8 +235,18 @@ pub enum ServerError {
 }
 
 /// Server handle wrapping a shared engine.
+///
+/// As of v3-final the engine is held behind `RwLock<Engine>` (was
+/// `Mutex<Engine>` through v1.3). Every read route — `/read`, `/iter`,
+/// `/lookup`, `/property_lookup`, `/property_range`, `/vector_search`,
+/// `/traverse`, `/query`/`/query_text` for read-only queries — takes
+/// `.read()` and parallelises. Write routes (`/commit`, `/flush`,
+/// `/compact`, query with `create`/`set`/`merge`/`delete` clauses) take
+/// `.write()` and serialise. The single-writer engine model is
+/// preserved by the RwLock's writer slot; concurrent reads parallelise
+/// up to the host CPU.
 pub struct Server {
-    engine: Arc<Mutex<Engine>>,
+    engine: Arc<RwLock<Engine>>,
     /// Optional bearer token. If `Some` AND `principals` is `None`, every
     /// request must carry `Authorization: Bearer <token>` else 401. v1
     /// keeps this single-token path for backward compatibility with the
@@ -382,12 +392,12 @@ fn commit_principals_to_engine(
 /// in the engine. Token → Principal mapping is reconstructed by joining
 /// each principal entity's `PROP_PRINCIPAL_TOKEN` against the set of
 /// capability hyperedges incident on that entity.
-fn principals_from_engine(engine: &Arc<Mutex<Engine>>) -> Result<Principals, ServerError> {
+fn principals_from_engine(engine: &Arc<RwLock<Engine>>) -> Result<Principals, ServerError> {
     use ndb_engine::{
         PROP_ACTION, PROP_PRINCIPAL_NAME, PROP_PRINCIPAL_TOKEN, ROLE_SUBJECT, Record, TYPE_CAPABILITY,
         TYPE_PRINCIPAL, Value,
     };
-    let mut eng = engine.lock().expect("engine mutex poisoned");
+    let eng = engine.read().expect("engine lock poisoned");
     let snapshot = TxId::new(eng.manifest().last_tx_id);
     // Step 1: gather principal entities — id, name, token.
     let mut principals_by_eid: HashMap<ndb_engine::EntityId, (String, String)> = HashMap::new();
@@ -473,7 +483,7 @@ impl Server {
         };
         let initial_tx = engine.manifest().last_tx_id;
         Ok(Self {
-            engine: Arc::new(Mutex::new(engine)),
+            engine: Arc::new(RwLock::new(engine)),
             auth_token: None,
             principals: None,
             audit: None,
@@ -489,7 +499,7 @@ impl Server {
     pub fn from_engine(engine: Engine) -> Self {
         let initial_tx = engine.manifest().last_tx_id;
         Self {
-            engine: Arc::new(Mutex::new(engine)),
+            engine: Arc::new(RwLock::new(engine)),
             auth_token: None,
             principals: None,
             audit: None,
@@ -558,7 +568,7 @@ impl Server {
     /// any other I/O or parse failure.
     pub fn with_principals_from_db(self) -> Result<(Self, bool), ServerError> {
         let dir = {
-            let eng = self.engine.lock().expect("engine mutex poisoned");
+            let eng = self.engine.read().expect("engine lock poisoned");
             eng.path().to_path_buf()
         };
         let path = dir.join(PRINCIPALS_FILENAME);
@@ -600,14 +610,14 @@ impl Server {
     /// second open (engine already populated).
     pub fn with_principals_bootstrapped(self) -> Result<(Self, usize), ServerError> {
         let dir = {
-            let eng = self.engine.lock().expect("engine mutex poisoned");
+            let eng = self.engine.read().expect("engine lock poisoned");
             eng.path().to_path_buf()
         };
         let mut n_imported = 0;
         // Inside one engine lock so the populate-then-read window can't
         // race a concurrent writer.
         {
-            let mut eng = self.engine.lock().expect("engine mutex poisoned");
+            let mut eng = self.engine.write().expect("engine lock poisoned");
             if !eng.has_any_capability_or_principal()? {
                 let path = dir.join(PRINCIPALS_FILENAME);
                 if let Some(p) = Principals::load(&path)? {
@@ -662,7 +672,7 @@ impl Server {
     /// (so a full disk on the audit volume does not take the server down).
     pub fn with_audit_log(mut self) -> Result<Self, ServerError> {
         let dir = {
-            let eng = self.engine.lock().expect("engine mutex poisoned");
+            let eng = self.engine.read().expect("engine lock poisoned");
             eng.path().to_path_buf()
         };
         let log = AuditLog::open(&dir)?;
@@ -841,7 +851,7 @@ impl Server {
                             let allowed = if let Some(eid) = p.entity_id {
                                 let now_us =
                                     i64::try_from(now_micros()).unwrap_or(i64::MAX);
-                                let mut eng = self.engine.lock().expect("engine mutex poisoned");
+                                let eng = self.engine.read().expect("engine lock poisoned");
                                 match eng.has_capability(eid, cap.as_action(), "*", now_us) {
                                     Ok(b) => b,
                                     Err(e) => {
@@ -930,7 +940,7 @@ impl Server {
         outcome: &mut DispatchOutcome,
     ) -> Result<(), ServerError> {
         if self.read_only { return reject_read_only(out, outcome, "/flush"); }
-        let mut engine = self.engine.lock().expect("engine mutex poisoned");
+        let mut engine = self.engine.write().expect("engine lock poisoned");
         engine.flush()?;
         let (records, bytes) = engine.memtable_stats();
         outcome.status = 200;
@@ -951,7 +961,7 @@ impl Server {
         outcome: &mut DispatchOutcome,
     ) -> Result<(), ServerError> {
         if self.read_only { return reject_read_only(out, outcome, "/compact"); }
-        let mut engine = self.engine.lock().expect("engine mutex poisoned");
+        let mut engine = self.engine.write().expect("engine lock poisoned");
         let stats = engine.compact()?;
         outcome.status = 200;
         write_json(
@@ -982,7 +992,7 @@ impl Server {
                 return write_error(out, 400, "bad_json", &detail);
             }
         };
-        let mut engine = self.engine.lock().expect("engine mutex poisoned");
+        let mut engine = self.engine.write().expect("engine lock poisoned");
         let mut txn: WriteTxn = engine.begin_write();
         for jr in req.records {
             let r: Record = match jr.try_into() {
@@ -1040,7 +1050,7 @@ impl Server {
             outcome.failure = Some(uuid_str.to_owned());
             return write_error(out, 400, "bad_uuid", uuid_str);
         };
-        let mut engine = self.engine.lock().expect("engine mutex poisoned");
+        let engine = self.engine.read().expect("engine lock poisoned");
         let snapshot = match resolve_snapshot_param(&engine, query) {
             Ok(s) => s,
             Err(detail) => return bad_request(out, outcome, "bad_snapshot_param", &detail),
@@ -1065,7 +1075,7 @@ impl Server {
         out: &mut dyn Write,
         outcome: &mut DispatchOutcome,
     ) -> Result<(), ServerError> {
-        let mut engine = self.engine.lock().expect("engine mutex poisoned");
+        let engine = self.engine.read().expect("engine lock poisoned");
         let snapshot = match resolve_snapshot_param(&engine, query) {
             Ok(s) => s,
             Err(detail) => return bad_request(out, outcome, "bad_snapshot_param", &detail),
@@ -1107,7 +1117,7 @@ impl Server {
             Ok(v) => v,
             Err(e) => return bad_request(out, outcome, "bad_value", &e),
         };
-        let engine = self.engine.lock().expect("engine mutex poisoned");
+        let engine = self.engine.read().expect("engine lock poisoned");
         let hit = engine.lookup_by_external_key(PropertyId::new(req.property_id), &value);
         outcome.status = 200;
         write_json(
@@ -1139,7 +1149,7 @@ impl Server {
             VectorMetric::L2 => Distance::L2Squared,
             VectorMetric::Cosine => Distance::Cosine,
         };
-        let engine = self.engine.lock().expect("engine mutex poisoned");
+        let engine = self.engine.read().expect("engine lock poisoned");
         let hits = engine.vector_search(PropertyId::new(req.property_id), &req.query, req.k, metric);
         let resp = VectorSearchResponse {
             hits: hits
@@ -1168,7 +1178,7 @@ impl Server {
             Ok(v) => v,
             Err(e) => return bad_request(out, outcome, "bad_value", &e),
         };
-        let engine = self.engine.lock().expect("engine mutex poisoned");
+        let engine = self.engine.read().expect("engine lock poisoned");
         let hits = engine.property_lookup(
             TypeId::new(req.type_id),
             PropertyId::new(req.property_id),
@@ -1203,7 +1213,7 @@ impl Server {
                 return bad_request(out, outcome, "bad_high", &WireError::to_string(&e));
             }
         };
-        let engine = self.engine.lock().expect("engine mutex poisoned");
+        let engine = self.engine.read().expect("engine lock poisoned");
         let hits = engine.property_range(
             TypeId::new(req.type_id),
             PropertyId::new(req.property_id),
@@ -1238,7 +1248,7 @@ impl Server {
             return bad_request(out, outcome, "bad_uuid", &req.start);
         };
         let start = EntityId::from_uuid(start_uuid);
-        let mut engine = self.engine.lock().expect("engine mutex poisoned");
+        let engine = self.engine.read().expect("engine lock poisoned");
         let snapshot = TxId::new(engine.manifest().last_tx_id);
 
         let mut frontier: std::collections::HashSet<EntityId> =
@@ -1304,8 +1314,15 @@ impl Server {
         if self.read_only && query_request_has_writes(&req) {
             return reject_read_only(out, outcome, "/query (write clauses)");
         }
-        let mut engine = self.engine.lock().expect("engine mutex poisoned");
-        let resp = match execute_query(&mut engine, req) {
+        // Read-only requests parallelise on a read lock; writes serialise.
+        let resp = if query_request_has_writes(&req) {
+            let mut engine = self.engine.write().expect("engine lock poisoned");
+            execute_query(&mut engine, req)
+        } else {
+            let engine = self.engine.read().expect("engine lock poisoned");
+            ndb_engine::query::execute_read(&engine, req)
+        };
+        let resp = match resp {
             Ok(r) => r,
             Err(e) => return query_error_to_http(out, outcome, &e),
         };
@@ -1329,24 +1346,44 @@ impl Server {
             Ok(s) => s,
             Err(e) => return bad_json(out, outcome, "query/text body", &e.to_string()),
         };
-        let mut engine = self.engine.lock().expect("engine mutex poisoned");
-        // In read-only mode, parse + resolve to inspect for write clauses
-        // BEFORE executing. This catches mutations from the surface text.
-        if self.read_only {
+        // Parse + resolve under a read lock so we can inspect for write
+        // clauses BEFORE deciding which execution path (and lock kind)
+        // to take. The same read lock also catches read-only mode
+        // violations from the surface text without round-tripping
+        // through the executor.
+        let req = {
+            let engine = self.engine.read().expect("engine lock poisoned");
             match ndb_query::parse_resolve(&engine, text) {
-                Ok(req) if query_request_has_writes(&req) => {
-                    return reject_read_only(out, outcome, "/query/text (write clauses)");
+                Ok(r) => r,
+                Err(e) => {
+                    let env = e.envelope();
+                    let status = match e {
+                        ndb_query::RunError::Parse(_) | ndb_query::RunError::Resolve(_) => 400,
+                        ndb_query::RunError::Query(_) | ndb_query::RunError::Engine(_) => 500,
+                    };
+                    outcome.status = status;
+                    outcome.failure = Some(env.detail.clone());
+                    return write_json(out, status, &env);
                 }
-                _ => { /* fall through to normal execution path */ }
             }
+        };
+        if self.read_only && query_request_has_writes(&req) {
+            return reject_read_only(out, outcome, "/query/text (write clauses)");
         }
-        match ndb_query::execute_text(&mut engine, text) {
+        // Read-only requests parallelise on a read lock; writes serialise.
+        let resp = if query_request_has_writes(&req) {
+            let mut engine = self.engine.write().expect("engine lock poisoned");
+            execute_query(&mut engine, req).map_err(ndb_query::RunError::Query)
+        } else {
+            let engine = self.engine.read().expect("engine lock poisoned");
+            ndb_engine::query::execute_read(&engine, req).map_err(ndb_query::RunError::Query)
+        };
+        match resp {
             Ok(resp) => {
                 outcome.status = 200;
                 write_json(out, 200, &resp)
             }
             Err(e) => {
-                // Parse + resolve errors land as 400; engine + query errors as 500.
                 let env = e.envelope();
                 let status = match e {
                     ndb_query::RunError::Parse(_) | ndb_query::RunError::Resolve(_) => 400,
@@ -1391,7 +1428,7 @@ impl Server {
             Ok(s) => s,
             Err(e) => return bad_json(out, outcome, "query/explain body", &e.to_string()),
         };
-        let engine = self.engine.lock().expect("engine mutex poisoned");
+        let engine = self.engine.read().expect("engine lock poisoned");
         let req = match ndb_query::parse_resolve(&engine, text) {
             Ok(r) => r,
             Err(e) => {
@@ -1441,8 +1478,15 @@ impl Server {
         if self.read_only && query_request_has_writes(&req) {
             return reject_read_only(out, outcome, "/query_stream (write clauses)");
         }
-        let mut engine = self.engine.lock().expect("engine mutex poisoned");
-        let resp = match execute_query(&mut engine, req) {
+        // Read-only requests parallelise on a read lock; writes serialise.
+        let resp = if query_request_has_writes(&req) {
+            let mut engine = self.engine.write().expect("engine lock poisoned");
+            execute_query(&mut engine, req)
+        } else {
+            let engine = self.engine.read().expect("engine lock poisoned");
+            ndb_engine::query::execute_read(&engine, req)
+        };
+        let resp = match resp {
             Ok(r) => r,
             Err(e) => return query_error_to_http(out, outcome, &e),
         };
@@ -1509,7 +1553,7 @@ impl Server {
         // any reason), return immediately. Manifest is ground truth;
         // commit_notify is a wake hint.
         let manifest_tx = {
-            let e = self.engine.lock().expect("engine mutex poisoned");
+            let e = self.engine.read().expect("engine lock poisoned");
             e.manifest().last_tx_id
         };
         let cur_tx = if manifest_tx > req.since_tx_id {
@@ -1527,7 +1571,7 @@ impl Server {
             // (a separate writer could have committed without going
             // through /commit's notify hook).
             let post = {
-                let e = self.engine.lock().expect("engine mutex poisoned");
+                let e = self.engine.read().expect("engine lock poisoned");
                 e.manifest().last_tx_id
             };
             post.max(*final_guard)
@@ -1546,7 +1590,7 @@ impl Server {
         out.write_all(b"\n")?;
 
         if cur_tx > req.since_tx_id {
-            let mut engine = self.engine.lock().expect("engine mutex poisoned");
+            let engine = self.engine.read().expect("engine lock poisoned");
             let records = engine.snapshot_iter(TxId::new(cur_tx))?;
             for r in records {
                 // Skip internal v2.0 metadata records. Subscribers get
@@ -1578,7 +1622,7 @@ impl Server {
 
     /// Borrow the shared engine for direct manipulation (tests).
     #[must_use]
-    pub fn engine(&self) -> Arc<Mutex<Engine>> {
+    pub fn engine(&self) -> Arc<RwLock<Engine>> {
         Arc::clone(&self.engine)
     }
 }
