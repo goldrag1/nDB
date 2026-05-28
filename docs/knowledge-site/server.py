@@ -102,9 +102,10 @@ FEEDBACK_API = "http://127.0.0.1:8744"
 # from the embedded-vs-networked architectural advantage that nDB has
 # over PG.
 BENCH_BACKENDS = {
-    "/bench/ndb":    "http://127.0.0.1:8771",
-    "/bench/pg":     "http://127.0.0.1:8772",
-    "/bench/sqlite": "http://127.0.0.1:8773",
+    "/bench/ndb":         "http://127.0.0.1:8771",
+    "/bench/pg":          "http://127.0.0.1:8772",
+    "/bench/sqlite":      "http://127.0.0.1:8773",
+    "/bench/sqlite-rust": "http://127.0.0.1:8774",
 }
 
 # Feedback schema. Type 200 for the feedback entity; property IDs are
@@ -137,9 +138,9 @@ RR_PROP_TOTAL_OPS    = 308  # i64
 RR_PROP_TS_MS        = 309  # i64 — milliseconds since Unix epoch
 RR_PROP_RACE_ID      = 310  # string — UUID tying both sides of one race
 RR_PROP_WINNER       = 311  # string: "ndb" | "pg" | "sqlite" — winner
-RR_PROP_CHALLENGER   = 312  # string: "pg" | "sqlite" — what nDB raced against
-                            # (records pre-dating this field default to "pg")
-VALID_CHALLENGERS = ("pg", "sqlite")
+RR_PROP_CHALLENGER   = 312  # string: "pg" | "sqlite" | "sqlite-rust" — what nDB raced
+                            # against (records pre-dating this field default to "pg")
+VALID_CHALLENGERS = ("pg", "sqlite", "sqlite-rust")
 
 # Cap on how many race results we keep before pruning old ones. Pure
 # defensive — the nDB engine handles much more, but the aggregates

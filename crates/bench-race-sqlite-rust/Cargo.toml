@@ -1,0 +1,22 @@
+[package]
+name = "bench-race-sqlite-rust"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+authors.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+description = "SQLite race-bench server, called from Rust via rusqlite — the fair-architecture comparison vs the Python sqlite3 wrapper. Same HTTP race API as bench_race.rs / race_sqlite_server.py."
+
+[[bin]]
+name = "race-sqlite-rust"
+path = "src/main.rs"
+
+[dependencies]
+# `bundled` compiles sqlite3 from the C amalgamation pinned by rusqlite,
+# so the binary doesn't depend on the host's libsqlite3 version — gives
+# us a stable apples-to-apples comparison with Python's stdlib sqlite3
+# (which uses the bundled-in-Python amalgamation too).
+rusqlite   = { version = "0.32", features = ["bundled"] }
+uuid       = { workspace = true }
+serde_json = { workspace = true }

@@ -366,9 +366,10 @@
   <div class="bench-intro" style="margin-top:8px;">
     <p style="margin:0;">
       <strong>Pick a challenger:</strong>
-      <span class="pill-group" id="challenger-pick" style="display:inline-flex;gap:4px;margin-left:8px;">
+      <span class="pill-group" id="challenger-pick" style="display:inline-flex;gap:4px;margin-left:8px;flex-wrap:wrap;">
         <button data-c="pg" class="active" title="Postgres — networked, separate process, libpq + planner per query">vs Postgres</button>
-        <button data-c="sqlite" title="SQLite — embedded, in-process via Python stdlib; isolates storage-engine quality from the embedded-vs-networked architectural advantage">vs SQLite</button>
+        <button data-c="sqlite" title="SQLite via Python — embedded, in-process via Python stdlib sqlite3. Pays GIL cost on every row.">vs SQLite (Python)</button>
+        <button data-c="sqlite-rust" title="SQLite via Rust — same C library, called from native Rust threads via rusqlite. No GIL.">vs SQLite (Rust)</button>
       </span>
       <span class="blurb" id="challenger-blurb" style="display:inline;margin-left:12px;opacity:0.75;">
         Postgres lives on a network socket. nDB lives in-process. Most of nDB's wins below are
@@ -654,13 +655,21 @@
 // storage-engine quality from the embedded-vs-networked architectural
 // advantage nDB has over PG).
 const NDB_BASE = "/bench/ndb";
-const CHAL_LABEL = { pg: "Postgres", sqlite: "SQLite" };
+const CHAL_LABEL = {
+  pg:            "Postgres",
+  sqlite:        "SQLite (Python)",
+  "sqlite-rust": "SQLite (Rust)",
+};
 const CHAL_BLURB = {
   pg: "Postgres lives on a network socket. nDB lives in-process. " +
       "Most of nDB's wins below are partly the cost PG pays to be a server.",
-  sqlite: "SQLite is embedded — same architectural class as nDB. " +
-          "Wins here measure pure storage-engine quality, not the " +
-          "embedded-vs-networked advantage.",
+  sqlite: "SQLite via Python — embedded, same architectural class as nDB, " +
+          "but every row creates a Python tuple under the GIL. Use this " +
+          "for the realistic 'SQLite from a Python app' baseline.",
+  "sqlite-rust": "SQLite via Rust — same C library, same .db file, but " +
+          "called from native Rust threads with no GIL. Wins here are " +
+          "pure storage-engine signal: nDB's data model + indexes vs " +
+          "SQLite's B-trees, on equal language footing.",
 };
 const state = { challenger: "pg" };
 const chalBase = () => "/bench/" + state.challenger;
@@ -886,7 +895,18 @@ function explainGap(name, ndb, pg, winner) {
     "recursive_contains_depth3": "nDB's adjacency cluster (HashMap<entity_id, Vec<edge_id>>) beats SQLite's WITH RECURSIVE workset materialisation by ~2-3×.",
     "count_aggregate":           "nDB pushes count() to a precomputed type-cluster counter — O(1). SQLite has to count rows; still microseconds because in-process, but not free.",
   };
-  const gaps = state.challenger === "sqlite" ? gaps_sqlite : gaps_pg;
+  const gaps_sqlite_rust = {
+    "iter_all":                  "Same .db file as the Python lane, but the Rust caller doesn't pay per-row tuple/GIL costs. The C library iterates at native speed; nDB's flat memtable is still slightly faster on cold cache but the gap narrows.",
+    "point_lookup":              "nDB's HashMap probe is still faster than SQLite's B-tree + SQL parse; the language no longer matters. The remaining gap is storage-engine architecture.",
+    "property_lookup":           "Same as SQLite-Python qualitatively (HashMap vs B-tree) but the Rust caller removes the wrapper overhead — what's left is the storage-engine difference.",
+    "single_pattern_query":      "Rust caller closes most of the wrapper gap. What's left is nDB's planner vs SQLite's parser+planner. Both fast.",
+    "two_pattern_join":          "SQLite's mature B-tree join still wins here, often by 5-10× — and now you can't blame Python. nDB's per-row adjacency probe is the real bottleneck; streaming executor is the planned fix.",
+    "recursive_contains_depth3": "nDB's in-memory adjacency walk beats WITH RECURSIVE because the data structure fits the access pattern. SQLite has to re-plan and materialise per step regardless of language.",
+    "count_aggregate":           "nDB's count() pushdown to the type-cluster index is O(1); SQLite still has to count, faster in Rust than Python but not free.",
+  };
+  const gaps = state.challenger === "sqlite-rust" ? gaps_sqlite_rust
+             : state.challenger === "sqlite"      ? gaps_sqlite
+             : gaps_pg;
   return gaps[name] || "";
 }
 
