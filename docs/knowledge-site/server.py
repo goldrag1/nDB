@@ -95,12 +95,16 @@ DEMO_PREFIX = DEMOS[0]["prefix"]
 FEEDBACK_API = "http://127.0.0.1:8744"
 
 # Live bench-race backends. Each one preloads the same 100k realworld
-# shape and exposes /health, /workloads, /run/<name>. Reverse-proxied
-# at /bench/ndb/* and /bench/pg/* so the static `bench.html` page can
-# call them same-origin.
+# shape and exposes /health, /workloads, /run/<name>, /stress, /stats.
+# Reverse-proxied at /bench/<backend>/* so the static `bench.html` page
+# can call them same-origin. SQLite is the embedded reference: comparing
+# in-process nDB to in-process SQLite isolates storage-engine quality
+# from the embedded-vs-networked architectural advantage that nDB has
+# over PG.
 BENCH_BACKENDS = {
-    "/bench/ndb": "http://127.0.0.1:8771",
-    "/bench/pg":  "http://127.0.0.1:8772",
+    "/bench/ndb":    "http://127.0.0.1:8771",
+    "/bench/pg":     "http://127.0.0.1:8772",
+    "/bench/sqlite": "http://127.0.0.1:8773",
 }
 
 # Feedback schema. Type 200 for the feedback entity; property IDs are
@@ -122,7 +126,7 @@ FB_PROP_STATUS = 206
 # the feedback type at 200.
 RR_TYPE_RACE_RESULT = 300
 RR_PROP_WORKLOAD     = 300  # string
-RR_PROP_BACKEND      = 301  # string: "ndb" | "pg"
+RR_PROP_BACKEND      = 301  # string: "ndb" | "pg" | "sqlite"
 RR_PROP_MODE         = 302  # string: "controlled" | "stress"
 RR_PROP_CONCURRENCY  = 303  # i64 (1 for controlled mode)
 RR_PROP_DURATION_MS  = 304  # i64
@@ -132,7 +136,10 @@ RR_PROP_P99_US       = 307  # f64
 RR_PROP_TOTAL_OPS    = 308  # i64
 RR_PROP_TS_MS        = 309  # i64 — milliseconds since Unix epoch
 RR_PROP_RACE_ID      = 310  # string — UUID tying both sides of one race
-RR_PROP_WINNER       = 311  # string: "ndb" | "pg" — winner of this race
+RR_PROP_WINNER       = 311  # string: "ndb" | "pg" | "sqlite" — winner
+RR_PROP_CHALLENGER   = 312  # string: "pg" | "sqlite" — what nDB raced against
+                            # (records pre-dating this field default to "pg")
+VALID_CHALLENGERS = ("pg", "sqlite")
 
 # Cap on how many race results we keep before pruning old ones. Pure
 # defensive — the nDB engine handles much more, but the aggregates
@@ -511,14 +518,25 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         concurrency = int(payload.get("concurrency") or 1)
         duration_ms = int(payload.get("duration_ms") or 0)
         ndb = payload.get("ndb") or {}
-        pg  = payload.get("pg") or {}
-        if not (isinstance(ndb, dict) and isinstance(pg, dict)
-                and ndb.get("rps") is not None and pg.get("rps") is not None):
+        # Detect the challenger from whichever non-nDB side carries an
+        # `rps` field. Backward-compatible: existing pages POST {ndb,pg};
+        # the new SQLite mode POSTs {ndb,sqlite}. Future challengers
+        # plug in by adding to VALID_CHALLENGERS.
+        challenger = None
+        for cand in VALID_CHALLENGERS:
+            c = payload.get(cand)
+            if isinstance(c, dict) and c.get("rps") is not None:
+                challenger = cand
+                break
+        if challenger is None or not (
+            isinstance(ndb, dict) and ndb.get("rps") is not None
+        ):
             return self._json(400, {"ok": False, "error": "missing_sides"})
+        other = payload[challenger]
 
         ndb_rps = float(ndb.get("rps") or 0)
-        pg_rps  = float(pg.get("rps") or 0)
-        winner = "ndb" if ndb_rps >= pg_rps else "pg"
+        other_rps = float(other.get("rps") or 0)
+        winner = "ndb" if ndb_rps >= other_rps else challenger
         ts_ms = int(time.time() * 1000)
 
         def _side_record(backend: str, m: dict) -> dict:
@@ -541,10 +559,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     {"prop_id": RR_PROP_TS_MS,       "value": {"tag": "i64", "value": ts_ms}},
                     {"prop_id": RR_PROP_RACE_ID,     "value": {"tag": "string", "value": race_id}},
                     {"prop_id": RR_PROP_WINNER,      "value": {"tag": "string", "value": winner}},
+                    {"prop_id": RR_PROP_CHALLENGER,  "value": {"tag": "string", "value": challenger}},
                 ],
             }
 
-        records = [_side_record("ndb", ndb), _side_record("pg", pg)]
+        records = [_side_record("ndb", ndb), _side_record(challenger, other)]
         status, body = _ndb_post("/commit", {"records": records})
         if status >= 300:
             sys.stderr.write(f"race log commit failed {status}: {body!r}\n")
@@ -553,47 +572,67 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def _race_aggregates(self):
         """Stream all RR records, group by (workload, mode, concurrency,
-        backend), compute count + mean RPS + mean p50 + win counts."""
+        challenger), compute count + mean RPS + mean p50 + win counts.
+
+        Query params:
+        - `challenger=pg` (default) or `challenger=sqlite` — restrict
+          output to one challenger's races. Returned rows still carry
+          a `challenger` field so the frontend can label columns.
+        """
+        # Parse ?challenger=... from the path's query string.
+        from urllib.parse import urlparse, parse_qs
+        q = parse_qs(urlparse(self.path).query)
+        want_challenger = (q.get("challenger") or ["pg"])[0]
+        if want_challenger not in VALID_CHALLENGERS:
+            want_challenger = "pg"
+
         all_rr = self._read_all_race_results()
-        # group by (workload, mode, concurrency)
-        groups: dict[tuple[str, str, int], dict] = {}
+        # Group by (workload, mode, concurrency, challenger). Records
+        # pre-dating the challenger field default to "pg".
+        groups: dict[tuple[str, str, int, str], dict] = {}
         for rec in all_rr:
-            key = (rec["workload"], rec["mode"], rec["concurrency"])
+            challenger = rec.get("challenger") or "pg"
+            if challenger != want_challenger:
+                continue
+            key = (rec["workload"], rec["mode"], rec["concurrency"], challenger)
             g = groups.setdefault(key, {
                 "workload": rec["workload"], "mode": rec["mode"],
                 "concurrency": rec["concurrency"],
+                "challenger": challenger,
                 "ndb_rps_sum": 0.0, "ndb_p50_sum": 0.0, "ndb_count": 0,
-                "pg_rps_sum": 0.0,  "pg_p50_sum": 0.0,  "pg_count": 0,
-                "ndb_wins": 0, "pg_wins": 0, "race_ids": set(),
+                "chal_rps_sum": 0.0, "chal_p50_sum": 0.0, "chal_count": 0,
+                "ndb_wins": 0, "chal_wins": 0, "race_ids": set(),
             })
             if rec["backend"] == "ndb":
                 g["ndb_rps_sum"] += rec["rps"]
                 g["ndb_p50_sum"] += rec["p50_us"]
                 g["ndb_count"]   += 1
             else:
-                g["pg_rps_sum"]  += rec["rps"]
-                g["pg_p50_sum"]  += rec["p50_us"]
-                g["pg_count"]    += 1
-            # Count one win per race_id (per side it shows up twice)
+                g["chal_rps_sum"] += rec["rps"]
+                g["chal_p50_sum"] += rec["p50_us"]
+                g["chal_count"]   += 1
+            # Count one win per race_id (per side it shows up twice).
             if rec["race_id"] not in g["race_ids"]:
                 g["race_ids"].add(rec["race_id"])
-                if rec["winner"] == "ndb": g["ndb_wins"] += 1
-                else:                      g["pg_wins"]  += 1
+                if rec["winner"] == "ndb": g["ndb_wins"]  += 1
+                else:                      g["chal_wins"] += 1
 
         rows = []
         for g in groups.values():
             races = len(g["race_ids"])
             rows.append({
                 "workload": g["workload"], "mode": g["mode"],
-                "concurrency": g["concurrency"], "races": races,
-                "ndb_avg_rps": (g["ndb_rps_sum"] / g["ndb_count"]) if g["ndb_count"] else 0.0,
-                "pg_avg_rps":  (g["pg_rps_sum"]  / g["pg_count"])  if g["pg_count"]  else 0.0,
-                "ndb_avg_p50_us": (g["ndb_p50_sum"] / g["ndb_count"]) if g["ndb_count"] else 0.0,
-                "pg_avg_p50_us":  (g["pg_p50_sum"]  / g["pg_count"])  if g["pg_count"]  else 0.0,
-                "ndb_wins": g["ndb_wins"], "pg_wins": g["pg_wins"],
+                "concurrency": g["concurrency"], "challenger": g["challenger"],
+                "races": races,
+                "ndb_avg_rps":  (g["ndb_rps_sum"]  / g["ndb_count"])  if g["ndb_count"]  else 0.0,
+                "chal_avg_rps": (g["chal_rps_sum"] / g["chal_count"]) if g["chal_count"] else 0.0,
+                "ndb_avg_p50_us":  (g["ndb_p50_sum"]  / g["ndb_count"])  if g["ndb_count"]  else 0.0,
+                "chal_avg_p50_us": (g["chal_p50_sum"] / g["chal_count"]) if g["chal_count"] else 0.0,
+                "ndb_wins": g["ndb_wins"], "chal_wins": g["chal_wins"],
             })
         rows.sort(key=lambda r: (r["mode"], r["workload"], r["concurrency"]))
-        self._json(200, {"rows": rows, "total_records": len(all_rr)})
+        self._json(200, {"rows": rows, "challenger": want_challenger,
+                         "total_records": len(all_rr)})
 
     def _read_all_race_results(self) -> list[dict]:
         status, payload = _ndb_get("/iter")
@@ -612,9 +651,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             props = {p.get("prop_id"): p.get("value", {}).get("value")
                      for p in rec.get("properties", [])}
             try:
+                # Pre-v3-final records have no challenger field — default
+                # to "pg" since that was the only challenger before SQLite
+                # joined.
+                challenger = str(props.get(RR_PROP_CHALLENGER) or "pg")
                 out.append({
                     "workload":     str(props.get(RR_PROP_WORKLOAD) or ""),
                     "backend":      str(props.get(RR_PROP_BACKEND) or ""),
+                    "challenger":   challenger,
                     "mode":         str(props.get(RR_PROP_MODE) or ""),
                     "concurrency":  int(props.get(RR_PROP_CONCURRENCY) or 0),
                     "rps":          float(props.get(RR_PROP_RPS) or 0),
