@@ -117,6 +117,27 @@
     padding: 1px 2px; border-radius: 2px;
   }
 
+  .qlp-plan {
+    padding: 12px 14px; font-family: var(--font-mono); font-size: 12.5px;
+    background: var(--surface-2);
+  }
+  .qlp-plan-step {
+    border-left: 3px solid var(--accent);
+    padding: 6px 0 6px 12px; margin-bottom: 10px;
+  }
+  .qlp-plan-step:last-child { margin-bottom: 0; }
+  .qlp-plan-step .head {
+    color: var(--entity); font-weight: 600; margin-bottom: 4px;
+  }
+  .qlp-plan-step .row { color: var(--text-muted); line-height: 1.55; }
+  .qlp-plan-step .row .label {
+    display: inline-block; min-width: 92px; color: var(--text-muted);
+  }
+  .qlp-plan-step .row .v { color: var(--text); }
+  .qlp-plan-step .row .card { color: var(--property); font-weight: 500; }
+  .qlp-plan-step .row .var { color: var(--relation); }
+  .qlp-plan-step .row .var.bound { color: var(--text-muted); }
+
   .qlp-examples h3 {
     font-size: 11px; text-transform: uppercase;
     letter-spacing: 0.08em; color: var(--text-muted);
@@ -204,6 +225,7 @@ return ?s.common_name, ?s.family
 limit 10"></textarea>
         <div class="qlp-toolbar">
           <button class="run" id="qlp-run">Run</button>
+          <button class="clear" id="qlp-explain" title="Lex + parse + resolve + plan, but don't execute. Shows seed atom, execution order, cardinality estimates, bound vs new variables.">Show plan</button>
           <button class="clear" id="qlp-clear">Clear</button>
           <span class="status" id="qlp-status">ready</span>
         </div>
@@ -458,14 +480,16 @@ order by ?r.name asc`,
   },
 ];
 
-const API_URL  = "/biodiv_ndb/api/query/text";
+const API_URL     = "/biodiv_ndb/api/query/text";
+const EXPLAIN_URL = "/biodiv_ndb/api/query/explain";
 
-const editor   = document.getElementById("qlp-editor");
-const status   = document.getElementById("qlp-status");
-const runBtn   = document.getElementById("qlp-run");
-const clearBtn = document.getElementById("qlp-clear");
-const result   = document.getElementById("qlp-result");
-const exList   = document.getElementById("qlp-example-list");
+const editor     = document.getElementById("qlp-editor");
+const status     = document.getElementById("qlp-status");
+const runBtn     = document.getElementById("qlp-run");
+const explainBtn = document.getElementById("qlp-explain");
+const clearBtn   = document.getElementById("qlp-clear");
+const result     = document.getElementById("qlp-result");
+const exList     = document.getElementById("qlp-example-list");
 
 // ─── Sidebar examples
 for (const ex of EXAMPLES) {
@@ -529,6 +553,83 @@ async function run() {
 function setStatus(text, cls) {
   status.textContent = text;
   status.className = "status" + (cls ? " " + cls : "");
+}
+
+// ─── Explain (plan only; doesn't execute)
+async function explain() {
+  const text = editor.value.trim();
+  if (!text) { setStatus("ready", ""); return; }
+  setStatus("planning…", "");
+  explainBtn.disabled = true;
+  const t0 = performance.now();
+  try {
+    const r = await fetch(EXPLAIN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: text,
+    });
+    const ms = (performance.now() - t0).toFixed(0);
+    const body = await r.json();
+    if (r.ok) {
+      renderPlan(body, ms);
+      const n = body.plan ? body.plan.length : 0;
+      setStatus(`${n} atom${n === 1 ? '' : 's'} planned · ${ms} ms · not executed`, "ok");
+    } else {
+      renderError(body, text, ms);
+      setStatus(`${body.error || 'error'} · ${ms} ms`, "err");
+    }
+  } catch (e) {
+    renderError({ error: "network", code: "network_error", detail: String(e) }, text, 0);
+    setStatus("network error", "err");
+  } finally {
+    explainBtn.disabled = false;
+  }
+}
+
+function renderPlan(body, ms) {
+  const steps = body.plan || [];
+  if (steps.length === 0) {
+    result.innerHTML = `
+      <div class="qlp-result-header"><strong>0 atoms</strong> · ${ms} ms</div>
+      <div class="qlp-empty">No read patterns to plan (write-only query?).</div>`;
+    return;
+  }
+  let html = `
+    <div class="qlp-result-header">
+      <strong>plan</strong>
+      · ${steps.length} atom${steps.length === 1 ? '' : 's'}
+      · greedy seed + shared-var ordering
+      · ${ms} ms
+    </div>
+    <div class="qlp-plan">`;
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i];
+    const usesPart = s.uses && s.uses.length
+      ? s.uses.map(v => `<span class="var bound">?${escapeHtml(v)}</span>`).join(', ')
+      : '<span class="var bound">—</span>';
+    const bindsPart = s.binds && s.binds.length
+      ? s.binds.map(v => `<span class="var">?${escapeHtml(v)}</span>`).join(', ')
+      : '<span class="var bound">—</span>';
+    html += `
+      <div class="qlp-plan-step">
+        <div class="head">step ${i + 1} · pattern ${s.pattern_index}</div>
+        <div class="row"><span class="label">atom</span>
+          <span class="v">${escapeHtml(s.atom_summary)}</span></div>
+        <div class="row"><span class="label">est. card.</span>
+          <span class="card">${formatCard(s.estimated_cardinality)}</span></div>
+        <div class="row"><span class="label">uses (bound)</span> ${usesPart}</div>
+        <div class="row"><span class="label">binds (new)</span> ${bindsPart}</div>
+      </div>`;
+  }
+  html += '</div>';
+  result.innerHTML = html;
+}
+
+function formatCard(n) {
+  if (n >= 10_000_000_000) return '∞ (no index)';
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+  if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'k';
+  return String(n);
 }
 
 function renderResult(body, ms) {
@@ -603,6 +704,7 @@ function escapeHtml(s) {
 
 // ─── Bindings
 runBtn.addEventListener("click", run);
+explainBtn.addEventListener("click", explain);
 clearBtn.addEventListener("click", () => {
   editor.value = "";
   result.innerHTML = '<div class="qlp-empty">Editor cleared. Type a query or pick an example →</div>';

@@ -599,6 +599,133 @@ fn query_route_executes_entity_pattern_via_tcp() {
 }
 
 #[test]
+fn query_explain_returns_plan_tree_without_executing() {
+    const TYPE_CUSTOMER: u32 = 100;
+    const TYPE_PURCHASE: u32 = 200;
+    const ROLE_BUYER: u32 = 10;
+    const PROP_NAME: u32 = 30;
+    const PROP_REGION: u32 = 31;
+
+    let dir = temp_dir("query-explain");
+    let server = Arc::new(Server::open(&dir).unwrap());
+    {
+        let e = server.engine();
+        let mut e = e.lock().unwrap();
+        // Names so parse_resolve succeeds against the engine snapshot.
+        let mut tx = e.begin_write();
+        tx.put_raw(ndb_engine::Record::TypeName(ndb_engine::TypeNameRecord {
+            id: TypeId::new(TYPE_CUSTOMER),
+            name: "customer".into(),
+        }));
+        tx.put_raw(ndb_engine::Record::TypeName(ndb_engine::TypeNameRecord {
+            id: TypeId::new(TYPE_PURCHASE),
+            name: "purchase".into(),
+        }));
+        tx.put_raw(ndb_engine::Record::RoleName(ndb_engine::RoleNameRecord {
+            id: ndb_engine::RoleId::new(ROLE_BUYER),
+            name: "buyer".into(),
+        }));
+        tx.put_raw(ndb_engine::Record::PropertyKey(ndb_engine::PropertyKeyRecord {
+            id: PropertyId::new(PROP_NAME),
+            name: "name".into(),
+        }));
+        tx.put_raw(ndb_engine::Record::PropertyKey(ndb_engine::PropertyKeyRecord {
+            id: PropertyId::new(PROP_REGION),
+            name: "region".into(),
+        }));
+        tx.commit().unwrap();
+        // Seed: register region B-tree + 1 Vietnam customer (Alice) + 10
+        // Singapore fillers + 5 purchases tied to Alice. Entity B-tree
+        // probe is then a strict 1; hyperedge type-cluster is 5. Planner
+        // must seed the entity, bind ?c, then walk adjacency for the
+        // purchase pattern.
+        e.register_property_btree(TypeId::new(TYPE_CUSTOMER), PropertyId::new(PROP_REGION));
+        let alice = EntityId::now_v7();
+        let mut tx = e.begin_write();
+        tx.put_entity(ndb_engine::EntityRecord {
+            entity_id: alice,
+            type_id: TypeId::new(TYPE_CUSTOMER),
+            tx_id_assert: ndb_engine::TxId::new(0),
+            tx_id_supersede: ndb_engine::TxId::ACTIVE,
+            properties: vec![
+                (PropertyId::new(PROP_NAME), Value::String("Alice".into())),
+                (PropertyId::new(PROP_REGION), Value::String("Vietnam".into())),
+            ],
+        });
+        tx.commit().unwrap();
+        for _ in 0..10 {
+            let mut tx = e.begin_write();
+            tx.put_entity(ndb_engine::EntityRecord {
+                entity_id: EntityId::now_v7(),
+                type_id: TypeId::new(TYPE_CUSTOMER),
+                tx_id_assert: ndb_engine::TxId::new(0),
+                tx_id_supersede: ndb_engine::TxId::ACTIVE,
+                properties: vec![
+                    (PropertyId::new(PROP_NAME), Value::String("filler".into())),
+                    (PropertyId::new(PROP_REGION), Value::String("Singapore".into())),
+                ],
+            });
+            tx.commit().unwrap();
+        }
+        for _ in 0..5 {
+            let mut tx = e.begin_write();
+            tx.put_hyperedge(ndb_engine::HyperEdgeRecord {
+                hyperedge_id: ndb_engine::HyperedgeId::now_v7(),
+                type_id: TypeId::new(TYPE_PURCHASE),
+                tx_id_assert: ndb_engine::TxId::new(0),
+                tx_id_supersede: ndb_engine::TxId::ACTIVE,
+                roles: vec![(ndb_engine::RoleId::new(ROLE_BUYER), alice)],
+                properties: vec![],
+            });
+            tx.commit().unwrap();
+        }
+    }
+    let addr = spawn_server(Arc::clone(&server), 3);
+
+    // Two-pattern join. Source order is [purchase, customer]; planner
+    // should reorder to [customer (cardinality=2, indexed), purchase
+    // (adjacency-bound via ?c)].
+    let body = r#"match purchase(buyer: ?c) customer(region: "Vietnam") as ?c return ?c"#;
+    let req = format!(
+        "POST /query/explain HTTP/1.1\r\nHost: localhost\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body,
+    );
+    let resp = raw_request(addr, req.as_bytes());
+    assert_eq!(resp.status, 200, "body = {:?}", String::from_utf8_lossy(&resp.body));
+    let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    assert_eq!(v["patterns"], 2);
+    let plan = v["plan"].as_array().expect("plan array");
+    assert_eq!(plan.len(), 2);
+    // Planned first entry is the entity pattern (lower cardinality).
+    assert_eq!(plan[0]["pattern_index"], 1, "entity must seed; got {plan:?}");
+    assert_eq!(plan[0]["estimated_cardinality"], 1);
+    assert!(plan[0]["atom_summary"].as_str().unwrap().starts_with("entity"));
+    let binds: Vec<&str> = plan[0]["binds"].as_array().unwrap()
+        .iter().map(|x| x.as_str().unwrap()).collect();
+    assert!(binds.contains(&"c"), "seed must bind ?c; got {binds:?}");
+    // Second entry references ?c via uses.
+    let uses1: Vec<&str> = plan[1]["uses"].as_array().unwrap()
+        .iter().map(|x| x.as_str().unwrap()).collect();
+    assert!(uses1.contains(&"c"));
+    assert!(plan[1]["atom_summary"].as_str().unwrap().starts_with("hyperedge"));
+
+    // Parse error → 400 + envelope shape.
+    let bad = "match no closing paren";
+    let req = format!(
+        "POST /query/explain HTTP/1.1\r\nHost: localhost\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        bad.len(),
+        bad,
+    );
+    let resp = raw_request(addr, req.as_bytes());
+    assert_eq!(resp.status, 400);
+    let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    assert_eq!(v["error"], "parse");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn subscribe_returns_records_committed_after_since_tx() {
     const TYPE_ITEM: u32 = 100;
 

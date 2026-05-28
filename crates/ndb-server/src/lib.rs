@@ -911,6 +911,7 @@ impl Server {
             ("POST", "/traverse") => self.handle_traverse(body, out, outcome),
             ("POST", "/query") => self.handle_query(body, out, outcome),
             ("POST", "/query/text") => self.handle_query_text(body, out, outcome),
+            ("POST", "/query/explain") => self.handle_query_explain(body, out, outcome),
             ("POST", "/query_stream") => self.handle_query_stream(body, out, outcome),
             ("POST", "/subscribe") => self.handle_subscribe(body, out, outcome),
             _ => {
@@ -1355,6 +1356,61 @@ impl Server {
                 write_json(out, status, &env)
             }
         }
+    }
+
+    /// `POST /query/explain` — like `/query/text` but DOES NOT execute.
+    /// Body is the query source text. Server lexes + parses + resolves +
+    /// plans and returns the per-atom plan tree (chosen execution order,
+    /// cardinality estimate, bound vs newly-bound variables, atom shape).
+    ///
+    /// Response shape:
+    /// ```json
+    /// {
+    ///   "patterns": <number of patterns in the resolved query>,
+    ///   "plan": [{
+    ///     "pattern_index": 1,
+    ///     "estimated_cardinality": 3,
+    ///     "atom_summary": "entity type=100 self=?c filters=1",
+    ///     "binds": ["c"],
+    ///     "uses": []
+    ///   }, ...]
+    /// }
+    /// ```
+    ///
+    /// Write clauses (`create` / `delete` / `set` / `merge`) are accepted
+    /// in the source text but only the read patterns are planned —
+    /// no mutation happens. read-only mode allows this route unconditionally.
+    fn handle_query_explain(
+        &self,
+        body: &[u8],
+        out: &mut dyn Write,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
+        let text = match std::str::from_utf8(body) {
+            Ok(s) => s,
+            Err(e) => return bad_json(out, outcome, "query/explain body", &e.to_string()),
+        };
+        let engine = self.engine.lock().expect("engine mutex poisoned");
+        let req = match ndb_query::parse_resolve(&engine, text) {
+            Ok(r) => r,
+            Err(e) => {
+                let env = e.envelope();
+                let status = match e {
+                    ndb_query::RunError::Parse(_) | ndb_query::RunError::Resolve(_) => 400,
+                    ndb_query::RunError::Query(_) | ndb_query::RunError::Engine(_) => 500,
+                };
+                outcome.status = status;
+                outcome.failure = Some(env.detail.clone());
+                return write_json(out, status, &env);
+            }
+        };
+        let entries = ndb_engine::query::plan::explain(&engine, &req.patterns);
+        let resp = serde_json::json!({
+            "patterns": req.patterns.len(),
+            "plan": entries,
+        });
+        outcome.status = 200;
+        write_json(out, 200, &resp)
     }
 
     /// `POST /query_stream` — same semantics as `/query` but the response

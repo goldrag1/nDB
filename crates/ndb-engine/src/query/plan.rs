@@ -60,7 +60,7 @@ use crate::wire_query::{
 pub const UNKNOWN_HIGH: u64 = 10_000_000_000;
 
 /// One row in an `EXPLAIN`-style trace. Returned by `Engine::explain_query`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ExplainEntry {
     /// Index into the original `QueryRequest::patterns` array.
     pub pattern_index: usize,
