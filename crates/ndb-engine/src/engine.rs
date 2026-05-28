@@ -606,6 +606,15 @@ impl Engine {
         self.type_cluster.by_type_vec(type_id)
     }
 
+    /// Whether hyperedge `hid` is currently clustered under `type_id`.
+    /// O(1) reverse-map probe — lets the join executor filter an entity's
+    /// adjacency list by edge type without materialising the entire type
+    /// bucket into a set per query.
+    #[must_use]
+    pub fn hyperedge_has_type(&self, hid: HyperedgeId, type_id: TypeId) -> bool {
+        self.type_cluster.is_type(type_id, hid)
+    }
+
     /// Count of hyperedges of `type_id`. Constant-time index probe; used
     /// by the planner to estimate cardinality without materialising.
     #[must_use]

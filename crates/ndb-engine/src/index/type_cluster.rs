@@ -55,6 +55,16 @@ impl HyperEdgeTypeIndex {
         self.forward.get(&type_id).map_or(0, BTreeSet::len)
     }
 
+    /// Whether `hid` is currently clustered under `type_id`. O(1) —
+    /// reads the reverse `by_hyperedge` map instead of materialising the
+    /// whole type bucket. Equivalent to `by_type(type_id).contains(hid)`
+    /// because `forward[t]` and `by_hyperedge[h]==t` are maintained in
+    /// lock-step (see `apply_hyperedge` / `remove`).
+    #[must_use]
+    pub fn is_type(&self, type_id: TypeId, hid: HyperedgeId) -> bool {
+        self.by_hyperedge.get(&hid) == Some(&type_id)
+    }
+
     /// Number of distinct types currently observed.
     #[must_use]
     pub fn type_count(&self) -> usize {
