@@ -146,6 +146,101 @@ h2:first-child { margin-top: 0; }
 
 a { color: var(--accent); }
 a:hover { color: #5aa0f2; }
+
+/* ── 3D scatter + system-view modal ─────────────────────────── */
+#three-scatter, #system-canvas-wrap {
+  position: absolute; inset: 0;
+  display: block;
+  cursor: grab;
+}
+#three-scatter:active, #system-canvas-wrap:active { cursor: grabbing; }
+#three-scatter canvas, #system-canvas-wrap canvas { display: block; }
+#three-scatter.hidden { display: none; }
+
+/* HUD overlays on top of the WebGL canvas. */
+.three-hud {
+  position: absolute; padding: 6px 10px;
+  background: rgba(20,20,26,0.86);
+  border: 1px solid var(--border); border-radius: 4px;
+  font-size: 11.5px; font-family: var(--font-mono);
+  color: #cfcfd6; pointer-events: none; z-index: 6;
+}
+#three-axes-hud      { top: 16px; left: 16px; max-width: 260px; }
+#three-axes-hud b    { color: var(--entity); }
+#three-hover-hud     { bottom: 12px; left: 16px; max-width: 320px; display: none; }
+#three-hover-hud.show{ display: block; }
+
+#reset-view {
+  position: absolute; bottom: 12px; right: 16px;
+  background: rgba(28,28,36,0.85); border: 1px solid var(--border);
+  border-radius: 4px; color: #cfcfd6;
+  padding: 5px 10px; font-size: 11px; cursor: pointer; z-index: 6;
+}
+#reset-view:hover { background: rgba(45,45,58,0.9); }
+
+/* ── System-view modal ─────────────────────────────────────── */
+#system-modal {
+  position: fixed; inset: 0;
+  background: rgba(10,10,16,0.92); backdrop-filter: blur(2px);
+  display: none; z-index: 1000;
+}
+#system-modal.open { display: flex; flex-direction: column; }
+#system-modal header {
+  display: flex; align-items: center; gap: 14px;
+  padding: 10px 20px; border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+#system-modal header h2 {
+  margin: 0; font-size: 14px; font-weight: 600; color: #fff;
+  text-transform: none; letter-spacing: 0;
+}
+#system-modal header .meta {
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted);
+}
+#system-modal header .grow { flex: 1; }
+#system-modal header button {
+  background: var(--border-soft); color: var(--text);
+  border: none; padding: 5px 11px; border-radius: 4px;
+  cursor: pointer; font-size: 12px;
+}
+#system-modal header button:hover { background: #38384a; }
+#system-modal header button.primary { background: var(--accent); color: #fff; }
+#system-modal header button.primary:hover { background: #5aa0f2; }
+#system-canvas-wrap {
+  flex: 1; position: relative; background: #08080c;
+  overflow: hidden;
+}
+#system-info-hud {
+  position: absolute; bottom: 14px; left: 16px;
+  padding: 8px 12px; background: rgba(20,20,26,0.92);
+  border: 1px solid var(--border); border-radius: 5px;
+  font-size: 12px; line-height: 1.5; max-width: 320px;
+  font-family: var(--font-mono); color: #cfcfd6;
+  z-index: 5; pointer-events: none;
+}
+#system-info-hud b { color: var(--entity); }
+#system-controls-hud {
+  position: absolute; top: 14px; right: 16px;
+  display: flex; gap: 6px; align-items: center; z-index: 5;
+  background: rgba(20,20,26,0.86); border: 1px solid var(--border);
+  border-radius: 4px; padding: 5px 10px;
+  font-size: 11.5px; font-family: var(--font-mono);
+}
+#system-controls-hud label { color: var(--text-muted); }
+#system-controls-hud input[type="range"] { width: 100px; }
+#system-controls-hud button {
+  background: var(--border-soft); color: var(--text);
+  border: none; padding: 3px 9px; border-radius: 3px;
+  cursor: pointer; font-size: 11px;
+}
+#system-controls-hud button.active { background: var(--accent); color: #fff; }
+#system-help {
+  position: absolute; top: 14px; left: 16px;
+  font-size: 10.5px; color: var(--text-muted); z-index: 5;
+  font-family: var(--font-mono); line-height: 1.5;
+  background: rgba(20,20,26,0.7); padding: 5px 9px;
+  border-radius: 3px; border: 1px solid var(--border);
+}
 </style>
 </head>
 <body>
@@ -195,12 +290,49 @@ a:hover { color: #5aa0f2; }
 
   <main id="centre">
     <div id="mode-toggle">
-      <button data-mode="scatter" class="active">Mass-Radius</button>
-      <button data-mode="year">Discovery year</button>
+      <button data-mode="scatter" class="active">Mass-Radius (2D)</button>
+      <button data-mode="scatter3d">3D · 5D</button>
+      <button data-mode="year">Year stack</button>
     </div>
     <div id="scatter-wrap"><svg id="scatter-svg"></svg></div>
+
+    <!-- Three.js host. Hidden until the user picks the 3D mode. -->
+    <div id="three-scatter" class="hidden">
+      <div id="three-axes-hud" class="three-hud">
+        <b>5-D mapping</b><br>
+        X = log₁₀ <span style="color:#fff">radius</span> (R⊕)<br>
+        Y = log₁₀ <span style="color:#fff">mass</span> (M⊕)<br>
+        Z = log₁₀ <span style="color:#fff">orbital period</span> (d)<br>
+        colour = <span style="color:#fff">detection method</span><br>
+        size&nbsp; = <span style="color:#fff">equilibrium temp</span> (K)
+      </div>
+      <div id="three-hover-hud" class="three-hud"></div>
+      <button id="reset-view">Reset view</button>
+    </div>
+
     <div id="tooltip"></div>
   </main>
+
+  <!-- System view modal — populated on double-click of any planet. -->
+  <div id="system-modal" role="dialog" aria-modal="true">
+    <header>
+      <h2 id="system-modal-title">—</h2>
+      <span class="meta" id="system-modal-meta">—</span>
+      <div class="grow"></div>
+      <button id="system-pause">Pause</button>
+      <button id="system-close">✕ Close</button>
+    </header>
+    <div id="system-canvas-wrap">
+      <div id="system-help">Drag = rotate · scroll = zoom · right-drag = pan · double-click planet to switch focus</div>
+      <div id="system-controls-hud">
+        <label>speed</label>
+        <input type="range" id="system-speed" min="0.1" max="5" step="0.1" value="1">
+        <button id="system-toggle-hz" class="active">HZ ring</button>
+        <button id="system-toggle-labels" class="active">labels</button>
+      </div>
+      <div id="system-info-hud">Click any planet to focus · drag the scene to rotate</div>
+    </div>
+  </div>
 
   <aside id="right-pane">
     <div id="selected-host"></div>
@@ -208,8 +340,20 @@ a:hover { color: #5aa0f2; }
 
 </div>
 
-<script>
+<script type="importmap">
+{
+  "imports": {
+    "three":         "https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.1/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
 "use strict";
+
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 // API base resolution.
 // Direct dev (cargo run … exoplanet_explorer): http://127.0.0.1:9877/ → API at :8745
@@ -265,6 +409,11 @@ const STATE = {
   selected: null,
   mutedMethods: new Set(),
   mode: "scatter",
+  // ── 2D scatter zoom/pan state (manipulates SVG viewBox via tx/ty/scale)
+  view2d: { scale: 1, tx: 0, ty: 0 },
+  // ── lazy-built 3D scenes; null until first switch into the mode
+  three3d: null,    // { renderer, scene, camera, controls, dots, raycaster, ... }
+  systemView: null, // { renderer, scene, camera, controls, planets, animationId, ... }
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -276,6 +425,22 @@ const fmt = (v, digits = 2) =>
         : Number(v).toFixed(digits));
 const escapeHtml = (s) => (s == null ? "" : String(s).replace(/[&<>"']/g,
   c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])));
+
+// Many planets in the curated seed (TOI-178, several K2/TESS transit-only
+// entries) ship orbital_period but not semi_major_au. Kepler's third law
+// reconstructs `a` for visualisation purposes:
+//   a (AU) = (P (years))^(2/3) × M_star (M_sun)^(1/3)
+// Defaults star mass to 1 M_sun when not in nDB.
+function effectiveSemiMajorAU(planet, mstar) {
+  let a = planet.props[PROP.PL_SEMI_MAJOR_AU];
+  if (a != null && a > 0) return a;
+  const P = planet.props[PROP.PL_ORBITAL_PERIOD];
+  const M = mstar || 1.0;
+  if (P != null && P > 0) {
+    return Math.pow(P / 365.25, 2 / 3) * Math.pow(M, 1 / 3);
+  }
+  return null;
+}
 
 async function loadAll() {
   const r = await fetch(API_URL + "/iter");
@@ -400,14 +565,26 @@ function refreshSystemPicker() {
 }
 
 function render() {
+  // Mode switch — show the right host element + render its viz.
+  const wrap2d = $("#scatter-wrap");
+  const wrap3d = $("#three-scatter");
+  if (STATE.mode === "scatter3d") {
+    wrap2d.style.display = "none";
+    wrap3d.classList.remove("hidden");
+    ensure3DScatter();
+    update3DScatter();
+    return;
+  }
+  wrap2d.style.display = "block";
+  wrap3d.classList.add("hidden");
   const svg = $("#scatter-svg");
-  const wrap = $("#scatter-wrap");
-  const W = wrap.clientWidth, H = wrap.clientHeight;
+  const W = wrap2d.clientWidth, H = wrap2d.clientHeight;
   if (W < 40 || H < 40) { setTimeout(render, 100); return; }
   svg.setAttribute("viewBox", "0 0 " + W + " " + H);
   svg.innerHTML = "";
   if (STATE.mode === "scatter") renderScatter(svg, W, H);
   else                          renderYearChart(svg, W, H);
+  apply2dViewTransform();
 }
 
 function renderScatter(svg, W, H) {
@@ -480,6 +657,7 @@ function renderScatter(svg, W, H) {
     c.addEventListener("mouseleave", hideTip);
     c.addEventListener("mousemove",  e => moveTip(e));
     c.addEventListener("click", () => selectPlanet(p.id));
+    c.addEventListener("dblclick", () => openSystemView(p.id));
     svg.appendChild(c);
   }
 }
@@ -684,9 +862,11 @@ function refreshRightPane() {
 }
 
 function renderOrbital(starEnt, sys, hz, selPlanet) {
+  const mstar = (starEnt && starEnt.props[PROP.STAR_MASS_MSUN]) || 1.0;
   const planets = sys.roles.filter(r => r.role_id === ROLE_PLANET)
-    .map(r => STATE.entities.get(r.entity_id)).filter(Boolean);
-  const aValues = planets.map(p => p.props[PROP.PL_SEMI_MAJOR_AU]).filter(a => a != null && a > 0);
+    .map(r => STATE.entities.get(r.entity_id)).filter(Boolean)
+    .map(p => { p._a_au = effectiveSemiMajorAU(p, mstar); return p; });
+  const aValues = planets.map(p => p._a_au).filter(a => a != null && a > 0);
   if (!aValues.length) return '<div id="orbital-pane"><h3>Orbital diagram — no semi-major axis data</h3></div>';
   const amax = Math.max(...aValues), amin = Math.min(...aValues);
   const W = 360, H = 220, CX = W / 2, CY = H / 2;
@@ -703,7 +883,7 @@ function renderOrbital(starEnt, sys, hz, selPlanet) {
 
   let tracks = "", labels = "", dots = "", styles = "";
   planets.forEach((p, i) => {
-    const a = p.props[PROP.PL_SEMI_MAJOR_AU];
+    const a = p._a_au;
     if (a == null || a <= 0) return;
     const r = scale(a);
     const isHz = hzNames.has(p.props[PROP.NAME]);
@@ -887,7 +1067,604 @@ $("#fetch-go").addEventListener("click", async () => {
 });
 $("#fetch-input").addEventListener("keydown", e => { if (e.key === "Enter") $("#fetch-go").click(); });
 
-window.addEventListener("resize", render);
+// ── 2D scatter: wheel zoom + drag pan ────────────────────────────────
+// Manipulates the SVG via an outer-group `transform` instead of viewBox
+// so the existing renderScatter() math stays untouched. Re-rendered on
+// every selection — apply2dViewTransform reapplies on each render.
+function apply2dViewTransform() {
+  const svg = $("#scatter-svg");
+  // Wrap all top-level groups in a single <g> with transform, if not already.
+  let xform = svg.querySelector("g.view-xform");
+  if (!xform) {
+    xform = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    xform.setAttribute("class", "view-xform");
+    while (svg.firstChild) xform.appendChild(svg.firstChild);
+    svg.appendChild(xform);
+  }
+  const v = STATE.view2d;
+  xform.setAttribute("transform", "translate(" + v.tx + "," + v.ty + ") scale(" + v.scale + ")");
+}
+(function wire2dPanZoom() {
+  const wrap = $("#scatter-wrap");
+  wrap.addEventListener("wheel", (e) => {
+    if (STATE.mode === "scatter3d") return;
+    e.preventDefault();
+    const v = STATE.view2d;
+    const rect = wrap.getBoundingClientRect();
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+    const factor = Math.exp(-e.deltaY * 0.001);
+    const next = Math.max(0.4, Math.min(15, v.scale * factor));
+    // zoom around cursor — keep the point under the mouse fixed.
+    v.tx = cx - (cx - v.tx) * (next / v.scale);
+    v.ty = cy - (cy - v.ty) * (next / v.scale);
+    v.scale = next;
+    apply2dViewTransform();
+  }, { passive: false });
+
+  let dragging = false, lastX = 0, lastY = 0;
+  wrap.addEventListener("mousedown", (e) => {
+    if (STATE.mode === "scatter3d") return;
+    // Don't start a pan when clicking a dot — let click handler fire instead.
+    if (e.target && e.target.tagName === "circle") return;
+    dragging = true; lastX = e.clientX; lastY = e.clientY;
+    wrap.style.cursor = "grabbing";
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const v = STATE.view2d;
+    v.tx += e.clientX - lastX;
+    v.ty += e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    apply2dViewTransform();
+  });
+  window.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false; wrap.style.cursor = "";
+  });
+})();
+
+// ── 3D scatter (Three.js) ─────────────────────────────────────────────
+// Lazy-built on first switch into the scatter3d mode. Re-runs
+// update3DScatter() whenever STATE.entities changes (after a live fetch
+// or method-mute) — same lifecycle as the 2D render.
+
+function ensure3DScatter() {
+  if (STATE.three3d) return;
+  const host = document.getElementById("three-scatter");
+  const W = host.clientWidth || 800, H = host.clientHeight || 600;
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0a0a10);
+
+  const camera = new THREE.PerspectiveCamera(45, W / H, 0.1, 5000);
+  camera.position.set(14, 12, 18);
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(W, H);
+  // Insert canvas before the HUD so HUDs overlay it.
+  host.insertBefore(renderer.domElement, host.firstChild);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.set(0, 0, 0);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.zoomSpeed = 0.85;
+
+  // Lights — soft ambient + a single key, just enough that sphere shading reads.
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const key = new THREE.DirectionalLight(0xffffff, 0.65);
+  key.position.set(10, 10, 10);
+  scene.add(key);
+
+  // Axes — three coloured lines from origin + tick labels via sprites.
+  const ax = buildAxes3D(8);
+  scene.add(ax);
+
+  // One Group for all planet dots so update3D can dispose + rebuild cleanly.
+  const dotsGroup = new THREE.Group();
+  scene.add(dotsGroup);
+
+  // Raycaster — hover highlights + click selects + double-click opens system view.
+  const raycaster = new THREE.Raycaster();
+  raycaster.params.Points = { threshold: 0.15 };  // unused (we use meshes), kept for future
+  const pointerNDC = new THREE.Vector2();
+  let hoveredDot = null;
+
+  function onPointerMove(e) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    pointerNDC.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    pointerNDC.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+  }
+  function onClick(e) {
+    const hit = pickDot();
+    if (hit) selectPlanet(hit.userData.entity_id);
+  }
+  function onDoubleClick(e) {
+    const hit = pickDot();
+    if (hit) openSystemView(hit.userData.entity_id);
+  }
+  function pickDot() {
+    raycaster.setFromCamera(pointerNDC, camera);
+    const hits = raycaster.intersectObjects(dotsGroup.children, false);
+    return hits.length ? hits[0].object : null;
+  }
+  renderer.domElement.addEventListener("pointermove", onPointerMove);
+  renderer.domElement.addEventListener("click", onClick);
+  renderer.domElement.addEventListener("dblclick", onDoubleClick);
+
+  // Window resize — refit camera + renderer.
+  function onResize() {
+    if (STATE.mode !== "scatter3d") return;
+    const w = host.clientWidth, h = host.clientHeight;
+    renderer.setSize(w, h);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+  }
+  window.addEventListener("resize", onResize);
+
+  // Render loop — runs always (cheap); animations only matter on dragging.
+  function animate() {
+    STATE.three3d._raf = requestAnimationFrame(animate);
+    // Hover highlight via pointerNDC each frame.
+    const hit = pickDot();
+    if (hit !== hoveredDot) {
+      if (hoveredDot) hoveredDot.scale.setScalar(hoveredDot.userData.scale || 1);
+      hoveredDot = hit;
+      const hud = $("#three-hover-hud");
+      if (hit) {
+        hit.scale.setScalar((hit.userData.scale || 1) * 1.5);
+        const p = STATE.entities.get(hit.userData.entity_id);
+        const meth = hit.userData.method;
+        hud.innerHTML =
+          "<b>" + escapeHtml(p.props[PROP.NAME]) + "</b><br>" +
+          "R = " + fmt(p.props[PROP.PL_RADIUS_RE]) + " R⊕  " +
+          "M = " + fmt(p.props[PROP.PL_MASS_ME]) + " M⊕<br>" +
+          "P = " + fmt(p.props[PROP.PL_ORBITAL_PERIOD]) + " d  " +
+          "T = " + fmt(p.props[PROP.PL_EQ_TEMP_K], 0) + " K<br>" +
+          '<span style="color:var(--text-muted)">' + escapeHtml(meth || "—") + "</span>";
+        hud.classList.add("show");
+      } else {
+        hud.classList.remove("show");
+      }
+    }
+    controls.update();
+    renderer.render(scene, camera);
+  }
+
+  STATE.three3d = { renderer, scene, camera, controls, dotsGroup, raycaster, onResize, animate, _raf: null };
+  animate();
+
+  // Reset-view button — restore default camera + dampen.
+  $("#reset-view").addEventListener("click", () => {
+    camera.position.set(14, 12, 18);
+    controls.target.set(0, 0, 0);
+    controls.update();
+  });
+}
+
+function buildAxes3D(L) {
+  const g = new THREE.Group();
+  // X axis (radius) — pale red
+  // Y axis (mass)   — pale green
+  // Z axis (period) — pale blue
+  const ax = [
+    { dir: [1, 0, 0], color: 0xff7070, label: "log₁₀ R⊕  →" },
+    { dir: [0, 1, 0], color: 0x9be57e, label: "log₁₀ M⊕  ↑" },
+    { dir: [0, 0, 1], color: 0x9bbcff, label: "log₁₀ P (d)  ↗" },
+  ];
+  for (const a of ax) {
+    const points = [new THREE.Vector3(0, 0, 0), new THREE.Vector3(a.dir[0] * L, a.dir[1] * L, a.dir[2] * L)];
+    const geo = new THREE.BufferGeometry().setFromPoints(points);
+    const mat = new THREE.LineBasicMaterial({ color: a.color });
+    g.add(new THREE.Line(geo, mat));
+    g.add(makeSpriteLabel(a.label, a.dir[0] * L * 1.06, a.dir[1] * L * 1.06, a.dir[2] * L * 1.06, "#cfcfd6"));
+  }
+  // Faint cube to anchor the eye.
+  const box = new THREE.BoxGeometry(L * 2, L * 2, L * 2);
+  const edges = new THREE.EdgesGeometry(box);
+  const cube = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x222230 }));
+  cube.position.set(L, L, L);  // origin at corner so the cube spans (0..2L) on each axis
+  g.add(cube);
+  // Tick labels at -2, 0, 2, 4 on each axis (matches log range).
+  for (let v = -2; v <= 4; v += 2) {
+    const lp = v + 2;  // shift so -2 maps to 0
+    g.add(makeSpriteLabel(String(v), lp, -0.4, 0, "#666"));
+    g.add(makeSpriteLabel(String(v), -0.4, lp, 0, "#666"));
+    g.add(makeSpriteLabel(String(v), 0, -0.4, lp, "#666"));
+  }
+  return g;
+}
+
+function makeSpriteLabel(text, x, y, z, color) {
+  const cvs = document.createElement("canvas");
+  cvs.width = 256; cvs.height = 64;
+  const ctx = cvs.getContext("2d");
+  ctx.font = "bold 28px ui-monospace, Menlo, monospace";
+  ctx.fillStyle = color;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, cvs.width / 2, cvs.height / 2);
+  const tex = new THREE.CanvasTexture(cvs);
+  tex.needsUpdate = true;
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
+  const sp = new THREE.Sprite(mat);
+  sp.position.set(x, y, z);
+  sp.scale.set(2, 0.5, 1);
+  return sp;
+}
+
+function update3DScatter() {
+  if (!STATE.three3d) return;
+  const { dotsGroup } = STATE.three3d;
+
+  // Wipe and rebuild — fewer than 200 dots, cost is negligible.
+  while (dotsGroup.children.length) {
+    const c = dotsGroup.children.pop();
+    if (c.geometry) c.geometry.dispose();
+    if (c.material) c.material.dispose();
+  }
+
+  // Equilibrium-temperature size scale: 100K → tiny, 3000K → big.
+  const tempToSize = (t) => {
+    if (t == null) return 0.16;
+    const lo = 100, hi = 3000;
+    const t2 = Math.max(lo, Math.min(hi, t));
+    return 0.10 + (Math.log10(t2) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo)) * 0.35;
+  };
+
+  // L=8 axis length (set in buildAxes3D); we map log10 ∈ [-2, 4] linearly to 0..2L.
+  const map = (lg) => (lg + 2) * 8 / 6;
+
+  for (const p of planetsOnly()) {
+    const R = p.props[PROP.PL_RADIUS_RE];
+    const M = p.props[PROP.PL_MASS_ME];
+    const P = p.props[PROP.PL_ORBITAL_PERIOD];
+    if (R == null || M == null || P == null) continue;
+    const disc = discoveryFor(p.id);
+    const meth = disc ? entityNameByRole(disc, ROLE_METHOD) : null;
+    if (meth && STATE.mutedMethods.has(meth)) continue;
+    const isHz = p.props[PROP.PL_HABITABLE] === "yes";
+    const sz = tempToSize(p.props[PROP.PL_EQ_TEMP_K]);
+
+    const geo = new THREE.SphereGeometry(sz, 16, 12);
+    const mat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(METHOD_COLOR[meth] || METHOD_FALLBACK),
+      emissive: isHz ? new THREE.Color(0x665500) : new THREE.Color(0x000000),
+      emissiveIntensity: isHz ? 0.45 : 0,
+      metalness: 0.1, roughness: 0.55,
+    });
+    const dot = new THREE.Mesh(geo, mat);
+    dot.position.set(
+      map(Math.log10(R)),
+      map(Math.log10(M)),
+      map(Math.log10(P)),
+    );
+    dot.userData = {
+      entity_id: p.id,
+      method: meth,
+      scale: 1,
+    };
+    dotsGroup.add(dot);
+  }
+}
+
+// ── System-view modal (Three.js) ──────────────────────────────────────
+// Built fresh each time the modal opens — we want the camera reset and
+// the animated state to start clean per system. Destroyed on close.
+
+function openSystemView(planetId) {
+  const planet = STATE.entities.get(planetId);
+  if (!planet) return;
+  const host = planet.props[PROP.PL_HOST_NAME];
+  const starEnt = STATE.byName.get(host);
+  const sys = systemsByHost().get(host);
+  const hz = hzByHost().get(host);
+  if (!sys) return;
+  STATE.selected = planetId;
+  refreshRightPane();
+
+  const modal = $("#system-modal");
+  modal.classList.add("open");
+  $("#system-modal-title").textContent = host;
+  $("#system-modal-meta").textContent =
+    (sys.roles.length - 1) + " planets · arity " + sys.roles.length +
+    (starEnt && starEnt.props[PROP.STAR_DIST_PC] != null ?
+      "  ·  " + fmt(starEnt.props[PROP.STAR_DIST_PC], 1) + " pc" : "");
+
+  // If a previous view is around, dispose it first.
+  if (STATE.systemView) disposeSystemView();
+  STATE.systemView = buildSystemView(starEnt, sys, hz, planet);
+}
+
+function closeSystemView() {
+  $("#system-modal").classList.remove("open");
+  disposeSystemView();
+}
+
+function disposeSystemView() {
+  const v = STATE.systemView;
+  if (!v) return;
+  if (v.animationId) cancelAnimationFrame(v.animationId);
+  if (v.renderer) {
+    v.renderer.dispose();
+    if (v.renderer.domElement && v.renderer.domElement.parentNode)
+      v.renderer.domElement.parentNode.removeChild(v.renderer.domElement);
+  }
+  if (v.onResize) window.removeEventListener("resize", v.onResize);
+  STATE.systemView = null;
+}
+
+function buildSystemView(starEnt, sys, hz, selPlanet) {
+  const host = $("#system-canvas-wrap");
+  const W = host.clientWidth || 800, H = host.clientHeight || 600;
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x05050a);
+
+  const camera = new THREE.PerspectiveCamera(45, W / H, 0.05, 5000);
+  // Default: oblique view above the orbital plane.
+  camera.position.set(0, 18, 32);
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(W, H);
+  host.appendChild(renderer.domElement);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.target.set(0, 0, 0);
+
+  // Lights — small ambient + bright point light at the star.
+  scene.add(new THREE.AmbientLight(0xffffff, 0.20));
+
+  // Pull planets from the SYSTEM hyperedge. Most planets ship
+  // semi_major_au from NASA, but many transit-only entries (TOI-178,
+  // some K2/TESS systems) leave it null and only ship orbital_period.
+  // Derive `a` from Kepler's third law in that case:
+  //
+  //   a (AU) = (P (years))^(2/3) × M_star (M_sun)^(1/3)
+  //
+  // The star mass defaults to 1 M_sun when not in nDB — visualisation,
+  // not science. Each planet gets an `_a_au` we use below for layout.
+  const mstar = (starEnt && starEnt.props[PROP.STAR_MASS_MSUN]) || 1.0;
+  const planets = sys.roles.filter(r => r.role_id === ROLE_PLANET)
+    .map(r => STATE.entities.get(r.entity_id))
+    .filter(Boolean)
+    .map(p => { p._a_au = effectiveSemiMajorAU(p, mstar); return p; })
+    .filter(p => p._a_au != null && p._a_au > 0);
+  if (!planets.length) {
+    // Star alone (rare).
+    const star = new THREE.Mesh(
+      new THREE.SphereGeometry(1.6, 32, 24),
+      new THREE.MeshBasicMaterial({ color: 0xf5a623 }));
+    scene.add(star);
+    return wireRenderLoop({ renderer, scene, camera, controls, planetGroups: [], selPlanetId: selPlanet.id });
+  }
+  const aMin = Math.min(...planets.map(p => p._a_au));
+  const aMax = Math.max(...planets.map(p => p._a_au));
+  // Log-scale orbital radii to a comfortable 2..16 view-unit range so
+  // both TRAPPIST-1's tight 0.01-AU planets and HD 10180's 3-AU outers fit.
+  const Rmin = 2.5, Rmax = 16;
+  const scaleR = (a) => {
+    if (aMin === aMax) return (Rmin + Rmax) / 2;
+    const lo = Math.log10(aMin * 0.85), hi = Math.log10(aMax * 1.05);
+    return Rmin + (Math.log10(a) - lo) / (hi - lo) * (Rmax - Rmin);
+  };
+
+  // Star — size proportional to log10(stellar radius+0.1).
+  const starRsun = (starEnt && starEnt.props[PROP.STAR_RADIUS_RSUN]) || 1.0;
+  const starTeff = (starEnt && starEnt.props[PROP.STAR_TEFF]) || 5500;
+  const starRad = Math.max(0.5, Math.min(2.2, 0.7 + Math.log10(starRsun + 0.1) * 0.7));
+  const starColor = teffToColor(starTeff);
+  const star = new THREE.Mesh(
+    new THREE.SphereGeometry(starRad, 48, 32),
+    new THREE.MeshBasicMaterial({ color: starColor }));
+  scene.add(star);
+  // Star glow halo via a slightly larger transparent sphere.
+  const glow = new THREE.Mesh(
+    new THREE.SphereGeometry(starRad * 1.7, 32, 24),
+    new THREE.MeshBasicMaterial({ color: starColor, transparent: true, opacity: 0.18 }));
+  scene.add(glow);
+  // PointLight from the star — so the planets get lit naturally.
+  const starLight = new THREE.PointLight(starColor, 2.5, 200, 0.7);
+  starLight.position.set(0, 0, 0);
+  scene.add(starLight);
+
+  // Habitable-zone ring(s) — translucent yellow torus on the orbital plane.
+  if (hz) {
+    const hzPlanets = hz.roles.filter(r => r.role_id === ROLE_HZ_PLANET)
+      .map(r => STATE.entities.get(r.entity_id)).filter(Boolean);
+    if (hzPlanets.length) {
+      const aInner = Math.min(...hzPlanets.map(p => p._a_au || aMin));
+      const aOuter = Math.max(...hzPlanets.map(p => p._a_au || aMax));
+      const r0 = scaleR(aInner) * 0.85;
+      const r1 = scaleR(aOuter) * 1.15;
+      const ringGeo = new THREE.RingGeometry(r0, r1, 64, 1);
+      const ringMat = new THREE.MeshBasicMaterial({
+        color: 0xf5d24a, transparent: true, opacity: 0.10, side: THREE.DoubleSide,
+      });
+      const ring = new THREE.Mesh(ringGeo, ringMat);
+      ring.rotation.x = -Math.PI / 2;
+      ring.userData.isHzRing = true;
+      scene.add(ring);
+    }
+  }
+
+  // Per-planet: a Group rotating around the star, with the planet mesh
+  // at its scaled radius. Animation = rotate the group's Y axis at speed
+  // inversely proportional to orbital period.
+  const planetGroups = [];
+  const labelSprites = [];
+  for (let i = 0; i < planets.length; i++) {
+    const p = planets[i];
+    const a = p._a_au;
+    const r = scaleR(a);
+
+    // Orbit track (a thin circle in the orbital plane).
+    const trackPts = [];
+    for (let k = 0; k <= 96; k++) {
+      const ang = (k / 96) * Math.PI * 2;
+      trackPts.push(new THREE.Vector3(Math.cos(ang) * r, 0, Math.sin(ang) * r));
+    }
+    const isHzPlanet = p.props[PROP.PL_HABITABLE] === "yes";
+    const trackGeo = new THREE.BufferGeometry().setFromPoints(trackPts);
+    const trackMat = new THREE.LineBasicMaterial({
+      color: isHzPlanet ? 0xf5a623 : 0x4a4a5a, transparent: true,
+      opacity: isHzPlanet ? 0.55 : 0.32,
+    });
+    const track = new THREE.LineLoop(trackGeo, trackMat);
+    scene.add(track);
+
+    // Planet mesh — size from radius (R⊕), capped so a Jupiter doesn't
+    // dwarf its system visually.
+    const pR = p.props[PROP.PL_RADIUS_RE] || 1;
+    const sizeR = Math.min(0.55, Math.max(0.10, 0.10 + Math.log10(pR + 0.5) * 0.32));
+    const planetColor = isHzPlanet ? 0xf5a623 : new THREE.Color(0x65cbf3);
+    const planetMat = new THREE.MeshStandardMaterial({
+      color: planetColor, metalness: 0.15, roughness: 0.55,
+      emissive: isHzPlanet ? new THREE.Color(0x664400) : new THREE.Color(0x000000),
+      emissiveIntensity: isHzPlanet ? 0.3 : 0,
+    });
+    const planetMesh = new THREE.Mesh(new THREE.SphereGeometry(sizeR, 28, 18), planetMat);
+    planetMesh.position.set(r, 0, 0);
+    planetMesh.userData = { entity_id: p.id, planet: p };
+
+    const group = new THREE.Group();
+    group.add(planetMesh);
+    // Random phase so all planets don't start at the same place.
+    group.rotation.y = (i * 31) % (Math.PI * 2);
+    // Speed ∝ 1 / P^(2/3) is the Keplerian relationship; but for visual
+    // clarity we damp it logarithmically (else fast inner / slow outer
+    // are minutes apart on-screen).
+    const period = p.props[PROP.PL_ORBITAL_PERIOD] || 365;
+    const omega = 0.5 / Math.pow(Math.log10(period + 1) + 0.5, 1.2);
+    group.userData.omega = omega;
+    group.userData.planetMesh = planetMesh;
+    scene.add(group);
+    planetGroups.push(group);
+
+    // Label sprite hovering above the planet.
+    const label = makeSpriteLabel(p.props[PROP.NAME], 0, 0, 0,
+      p.id === selPlanet.id ? "#ffffff" : "#aaaab0");
+    label.userData = { planetMesh, isHz: isHzPlanet };
+    label.scale.set(1.6, 0.4, 1);
+    scene.add(label);
+    labelSprites.push(label);
+
+    // Outline ring for the user-selected planet.
+    if (p.id === selPlanet.id) {
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(sizeR * 1.6, sizeR * 0.05, 8, 32),
+        new THREE.MeshBasicMaterial({ color: 0xffffff }));
+      planetMesh.add(ring);
+    }
+  }
+
+  return wireRenderLoop({
+    renderer, scene, camera, controls, planetGroups, labelSprites,
+    selPlanetId: selPlanet.id, host, sys, hz,
+  });
+}
+
+function wireRenderLoop(ctx) {
+  let speed = 1.0, paused = false, showLabels = true, showHz = true;
+  const speedSlider = $("#system-speed");
+  speedSlider.value = "1";
+  speedSlider.oninput = () => { speed = parseFloat(speedSlider.value); };
+  const pauseBtn = $("#system-pause");
+  pauseBtn.onclick = () => { paused = !paused; pauseBtn.textContent = paused ? "Play" : "Pause"; };
+  const hzBtn = $("#system-toggle-hz");
+  hzBtn.onclick = () => {
+    showHz = !showHz;
+    hzBtn.classList.toggle("active", showHz);
+    ctx.scene.traverse(o => {
+      if (o.userData && o.userData.isHzRing) o.visible = showHz;
+    });
+  };
+  const labelBtn = $("#system-toggle-labels");
+  labelBtn.onclick = () => {
+    showLabels = !showLabels;
+    labelBtn.classList.toggle("active", showLabels);
+    if (ctx.labelSprites) ctx.labelSprites.forEach(s => s.visible = showLabels);
+  };
+
+  // Double-click inside the system view focuses a different planet.
+  const raycaster = new THREE.Raycaster();
+  const pointer = new THREE.Vector2();
+  ctx.renderer.domElement.addEventListener("dblclick", (e) => {
+    const rect = ctx.renderer.domElement.getBoundingClientRect();
+    pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(pointer, ctx.camera);
+    // Intersect every planet mesh we can find — they're inside per-planet Groups.
+    const meshes = [];
+    ctx.planetGroups.forEach(g => g.children.forEach(c => { if (c.isMesh) meshes.push(c); }));
+    const hit = raycaster.intersectObjects(meshes, false)[0];
+    if (hit && hit.object.userData.entity_id) {
+      selectPlanet(hit.object.userData.entity_id);
+      $("#system-info-hud").innerHTML =
+        '<b>' + escapeHtml(hit.object.userData.planet.props[PROP.NAME]) + '</b><br>' +
+        'focused — right pane updated';
+    }
+  });
+
+  function animate() {
+    ctx.animationId = requestAnimationFrame(animate);
+    if (!paused) {
+      const dt = 0.016 * speed;
+      for (const g of ctx.planetGroups) {
+        g.rotation.y += g.userData.omega * dt;
+      }
+    }
+    // Move label sprites to track their planet's current world position.
+    if (ctx.labelSprites) {
+      const wp = new THREE.Vector3();
+      for (const s of ctx.labelSprites) {
+        s.userData.planetMesh.getWorldPosition(wp);
+        s.position.copy(wp);
+        s.position.y += 0.55;
+      }
+    }
+    ctx.controls.update();
+    ctx.renderer.render(ctx.scene, ctx.camera);
+  }
+  function onResize() {
+    const w = ctx.host ? ctx.host.clientWidth : ctx.renderer.domElement.clientWidth;
+    const h = ctx.host ? ctx.host.clientHeight : ctx.renderer.domElement.clientHeight;
+    ctx.renderer.setSize(w, h);
+    ctx.camera.aspect = w / h;
+    ctx.camera.updateProjectionMatrix();
+  }
+  window.addEventListener("resize", onResize);
+  ctx.onResize = onResize;
+  animate();
+  return ctx;
+}
+
+function teffToColor(teff) {
+  // Approximate B-V → RGB stellar colours.
+  if (teff > 7500) return new THREE.Color(0xaeb6ff);   // bluish (F0-A)
+  if (teff > 6000) return new THREE.Color(0xfff4d9);   // white-ish
+  if (teff > 5000) return new THREE.Color(0xffd97a);   // sun-like (G)
+  if (teff > 3700) return new THREE.Color(0xff9a4a);   // K
+  return new THREE.Color(0xff5e3a);                    // M (cool red)
+}
+
+// Esc + close-button + double-click on 2D scatter dots → close / open the modal.
+$("#system-close").addEventListener("click", closeSystemView);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && $("#system-modal").classList.contains("open")) closeSystemView();
+});
+// Double-click on a 2D scatter dot is wired in renderScatter() at dot
+// creation time (alongside the single-click handler). No monkey-patch.
+
+window.addEventListener("resize", () => {
+  if (STATE.three3d && STATE.mode === "scatter3d") STATE.three3d.onResize();
+  if (STATE.systemView && $("#system-modal").classList.contains("open"))
+    STATE.systemView.onResize && STATE.systemView.onResize();
+  render();
+});
 
 (async () => {
   try {
