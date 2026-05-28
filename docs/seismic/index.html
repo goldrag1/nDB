@@ -140,6 +140,42 @@ h2:first-child { margin-top: 0; }
 .pill { display: inline-block; padding: 1px 6px; border-radius: 3px; background: var(--border-soft); font-family: var(--font-mono); font-size: 11px; }
 .pill.historic { background: rgba(255,216,74,0.18); color: var(--hist); }
 
+/* ── LIVE indicator ─────────────────────────────────────────── */
+.live-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: rgba(255,94,58,0.12);
+  border: 1px solid rgba(255,94,58,0.45);
+  border-radius: 999px; padding: 3px 10px;
+  color: #ff8a72; font-family: var(--font-mono);
+  font-size: 11px; cursor: pointer; user-select: none;
+}
+.live-pill.paused { background: var(--surface-2); border-color: var(--border); color: var(--text-muted); }
+.live-pill.paused .live-dot { background: var(--text-muted); animation: none; }
+.live-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--quake-shallow); box-shadow: 0 0 6px var(--quake-shallow);
+  animation: livepulse 1.4s ease-in-out infinite;
+}
+@keyframes livepulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.35; transform: scale(0.7); }
+}
+.live-counter { color: var(--text-muted); font-size: 10.5px; padding-left: 4px; }
+.live-pill.has-new .live-counter { color: var(--quake-shallow); }
+
+/* New events from the live feed pulse for a few seconds so visitors
+   notice them appear. */
+@keyframes new-event-pulse {
+  0%   { stroke: #fff; stroke-width: 2.4; r: var(--r1); }
+  100% { stroke: rgba(0,0,0,0.55); stroke-width: 0.5; r: var(--r2); }
+}
+.event-dot.new-live { animation: new-event-pulse 6s ease-out forwards; }
+
+/* Map grab cursor handled separately; turn pointer events off on
+   the layer-host so dragging on empty map area works without
+   accidentally hitting <g>. */
+#map-xform { pointer-events: visiblePainted; }
+
 a { color: var(--accent); }
 a:hover { color: #5aa0f2; }
 </style>
@@ -154,6 +190,12 @@ a:hover { color: #5aa0f2; }
     <span style="font-size:11px;color:#888">SEQUENCE</span>
     <select id="seq-picker"><option>(loading…)</option></select>
     <span id="counts-chip" class="chip">— loading nDB…</span>
+    <div class="sep"></div>
+    <!-- LIVE indicator: pulses while auto-poll is on; click to toggle. -->
+    <button id="live-indicator" class="live-pill" title="Auto-poll USGS every 60s. Click to toggle.">
+      <span class="live-dot"></span><span>LIVE</span>
+      <span id="live-counter" class="live-counter">0 new</span>
+    </button>
     <div class="grow"></div>
     <a href="/" target="_blank" rel="noreferrer">knowledge site →</a>
   </header>
@@ -213,10 +255,14 @@ a:hover { color: #5aa0f2; }
   <main id="centre">
     <div id="map-wrap">
       <svg id="map-svg" viewBox="0 0 1000 500" preserveAspectRatio="xMidYMid meet">
-        <g id="map-graticule"></g>
-        <g id="map-continents"></g>
-        <g id="map-faults"></g>
-        <g id="map-events"></g>
+        <!-- All map layers wrapped in a single transform group so a single
+             (tx, ty, scale) state controls the pan + zoom of every layer. -->
+        <g id="map-xform" transform="translate(0,0) scale(1)">
+          <g id="map-graticule"></g>
+          <g id="map-continents"></g>
+          <g id="map-faults"></g>
+          <g id="map-events"></g>
+        </g>
       </svg>
       <div id="tooltip"></div>
     </div>
@@ -227,6 +273,17 @@ a:hover { color: #5aa0f2; }
         <span style="color:#444">→</span>
         <span id="tl-end">—</span>
         <span style="margin-left:auto" id="tl-window-count">—</span>
+        <!-- Sequence playback: only enabled once a sequence is selected. -->
+        <button id="seq-play" class="btn" disabled
+                style="padding:3px 10px;font-size:11px;display:flex;align-items:center;gap:4px">
+          <span id="seq-play-icon">▶</span><span>Play sequence</span>
+        </button>
+        <select id="seq-speed" class="btn secondary"
+                style="padding:2px 6px;font-size:10.5px;font-family:var(--font-mono);" title="Playback speed">
+          <option value="2">2× speed</option>
+          <option value="1" selected>1× speed</option>
+          <option value="0.5">½× speed</option>
+        </select>
         <button id="tl-reset" class="btn secondary" style="padding:3px 8px;font-size:11px">reset</button>
       </div>
       <svg id="timeline-svg" viewBox="0 0 1000 38" preserveAspectRatio="none"></svg>
@@ -588,6 +645,7 @@ function selectEvent(id) {
   STATE.selected = id;
   renderEvents();
   refreshRightPane();
+  armPlaybackForSelection();
 }
 
 function selectFault(faultId) {
@@ -596,6 +654,7 @@ function selectFault(faultId) {
   document.querySelectorAll(".fault-line").forEach(p => {
     p.classList.toggle("highlighted", p.dataset.faultName === STATE.faults.find(f => f.id === faultId).props[PROP.NAME]);
   });
+  armPlaybackForSelection();
 }
 
 function refreshRightPane() {
@@ -1004,6 +1063,322 @@ async function fetchLive() {
 }
 $("#live-fetch").addEventListener("click", fetchLive);
 
+// ── Map pan + zoom ───────────────────────────────────────────────────
+// SVG `viewBox` stays at 0 0 1000 500 (so the SPA layout doesn't shift);
+// instead we transform an outer <g id="map-xform"> with translate+scale.
+// Wheel zoom anchors at the cursor's SVG coordinates so pinching feels
+// natural. Drag-pan is gated by a 5-px movement threshold so single
+// clicks still register on dots (drag would mask the click otherwise).
+const MAP_VIEW = { tx: 0, ty: 0, scale: 1 };
+
+function applyMapTransform() {
+  const g = document.getElementById("map-xform");
+  if (g) g.setAttribute("transform",
+    "translate(" + MAP_VIEW.tx + "," + MAP_VIEW.ty + ") scale(" + MAP_VIEW.scale + ")");
+}
+
+// Convert browser-pixel coords on the SVG host to SVG userspace coords
+// (the 0..1000 / 0..500 coordinate system the layers live in), then
+// back through MAP_VIEW so we anchor zoom on the cursor's data point.
+function svgPxFromEvent(e) {
+  const svg = document.getElementById("map-svg");
+  const rect = svg.getBoundingClientRect();
+  const vb = svg.viewBox.baseVal;
+  const sx = ((e.clientX - rect.left) / rect.width) * vb.width;
+  const sy = ((e.clientY - rect.top)  / rect.height) * vb.height;
+  return { sx, sy };
+}
+
+(function wireMapPanZoom() {
+  const svg = document.getElementById("map-svg");
+
+  // Wheel zoom — anchor at cursor.
+  svg.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const { sx, sy } = svgPxFromEvent(e);
+    const factor = Math.exp(-e.deltaY * 0.0012);
+    const next = Math.max(1, Math.min(20, MAP_VIEW.scale * factor));
+    // Keep (sx, sy) fixed in world space:
+    //   world = (svg - tx) / scale → keep constant → solve for new tx.
+    MAP_VIEW.tx = sx - (sx - MAP_VIEW.tx) * (next / MAP_VIEW.scale);
+    MAP_VIEW.ty = sy - (sy - MAP_VIEW.ty) * (next / MAP_VIEW.scale);
+    MAP_VIEW.scale = next;
+    applyMapTransform();
+  }, { passive: false });
+
+  // Drag pan — only commits when movement exceeds the click threshold,
+  // so single-click selection still works.
+  let dragging = false, downX = 0, downY = 0, startTx = 0, startTy = 0, moved = false;
+  svg.addEventListener("mousedown", (e) => {
+    // Right-click reserved for native context menu; only act on left btn.
+    if (e.button !== 0) return;
+    dragging = true; moved = false;
+    downX = e.clientX; downY = e.clientY;
+    startTx = MAP_VIEW.tx; startTy = MAP_VIEW.ty;
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - downX, dy = e.clientY - downY;
+    if (!moved && Math.hypot(dx, dy) > 5) moved = true;
+    if (!moved) return;
+    const svgEl = document.getElementById("map-svg");
+    const rect = svgEl.getBoundingClientRect();
+    const vb = svgEl.viewBox.baseVal;
+    MAP_VIEW.tx = startTx + (dx / rect.width)  * vb.width;
+    MAP_VIEW.ty = startTy + (dy / rect.height) * vb.height;
+    applyMapTransform();
+  });
+  window.addEventListener("mouseup", () => { dragging = false; });
+
+  // If the user dragged, swallow the next click on the SVG so it
+  // doesn't fall through to a dot-deselect or fault-select.
+  svg.addEventListener("click", (e) => { if (moved) { e.stopPropagation(); moved = false; } }, true);
+
+  // "Reset view" button — restore identity transform. The timeline's
+  // reset button stays — different scope (time vs space).
+  document.getElementById("tl-reset").addEventListener("click", () => {
+    MAP_VIEW.tx = 0; MAP_VIEW.ty = 0; MAP_VIEW.scale = 1;
+    applyMapTransform();
+  });
+})();
+
+// ── Sequence playback ────────────────────────────────────────────────
+// "Play sequence" animates the time-window's `end` from sequence start
+// to sequence end. As events become visible chronologically, the most
+// recently-revealed ones pulse — visitors see the sequence unfold.
+const PLAYBACK = {
+  sequenceId: null,
+  events: [],   // sorted by ts asc, only events in the current sequence
+  cursor: 0,    // ms
+  startMs: 0,
+  endMs:   0,
+  raf: null,
+  speed: 1,
+  playing: false,
+};
+
+function preparePlaybackFor(sequence) {
+  // Pull events of the sequence (mainshock + aftershocks) sorted by ts.
+  const evs = sequence.roles
+    .map(r => STATE.byId.get(r.entity_id))
+    .filter(Boolean)
+    .filter(e => e.ts != null)
+    .sort((a, b) => a.ts - b.ts);
+  if (evs.length < 2) return;
+  PLAYBACK.sequenceId = sequence.id;
+  PLAYBACK.events     = evs;
+  PLAYBACK.startMs    = evs[0].ts - 3600 * 1000; // one-hour pre-roll for visual breathing room
+  PLAYBACK.endMs      = evs[evs.length - 1].ts + 3600 * 1000;
+  PLAYBACK.cursor     = PLAYBACK.startMs;
+  document.getElementById("seq-play").disabled = false;
+}
+
+function stopPlayback() {
+  PLAYBACK.playing = false;
+  if (PLAYBACK.raf) { cancelAnimationFrame(PLAYBACK.raf); PLAYBACK.raf = null; }
+  document.getElementById("seq-play-icon").textContent = "▶";
+  document.querySelector("#seq-play span:last-child").textContent = "Play sequence";
+}
+
+function playPlayback() {
+  if (!PLAYBACK.sequenceId) return;
+  PLAYBACK.playing = true;
+  document.getElementById("seq-play-icon").textContent = "❚❚";
+  document.querySelector("#seq-play span:last-child").textContent = "Pause";
+
+  // If we're at the end, rewind first.
+  if (PLAYBACK.cursor >= PLAYBACK.endMs) PLAYBACK.cursor = PLAYBACK.startMs;
+
+  // Span of real time covered / how long the playback animation lasts on
+  // screen. We pin one "playback second" to a fraction of the sequence's
+  // total duration so even Maule (90 days) plays in ~25-50s.
+  const totalDur = PLAYBACK.endMs - PLAYBACK.startMs;
+  const baseSeconds = 35;             // total playback ~35s at 1× speed
+
+  let lastT = performance.now();
+  function step(t) {
+    const dt = (t - lastT) / 1000; lastT = t;
+    if (!PLAYBACK.playing) return;
+    const advancePerSec = totalDur / baseSeconds * PLAYBACK.speed;
+    PLAYBACK.cursor = Math.min(PLAYBACK.endMs, PLAYBACK.cursor + advancePerSec * dt);
+    // Drive the time window: keep start fixed at the sequence start
+    // and move end with the playback cursor.
+    STATE.tWindow.start = PLAYBACK.startMs;
+    STATE.tWindow.end   = PLAYBACK.cursor;
+    renderEvents();
+    renderTimeline();
+    if (PLAYBACK.cursor >= PLAYBACK.endMs) { stopPlayback(); return; }
+    PLAYBACK.raf = requestAnimationFrame(step);
+  }
+  PLAYBACK.raf = requestAnimationFrame(step);
+}
+
+document.getElementById("seq-play").addEventListener("click", () => {
+  if (!PLAYBACK.sequenceId) return;
+  if (PLAYBACK.playing) stopPlayback();
+  else                  playPlayback();
+});
+document.getElementById("seq-speed").addEventListener("change", (e) => {
+  PLAYBACK.speed = parseFloat(e.target.value);
+});
+
+// Hook into selection: every time selection changes, see if a sequence
+// is involved and arm playback for it.
+const _originalSelect = selectEvent;
+window.selectEvent = function(id) { /* exported for inspector */ };
+function armPlaybackForSelection() {
+  const sel = STATE.selected;
+  if (!sel) {
+    stopPlayback();
+    PLAYBACK.sequenceId = null;
+    document.getElementById("seq-play").disabled = true;
+    return;
+  }
+  const seq = STATE.sequences.find(s => s.roles.some(r => r.entity_id === sel));
+  if (seq) {
+    if (PLAYBACK.sequenceId !== seq.id) {
+      stopPlayback();
+      preparePlaybackFor(seq);
+    }
+  } else {
+    stopPlayback();
+    PLAYBACK.sequenceId = null;
+    document.getElementById("seq-play").disabled = true;
+  }
+}
+
+// ── Live auto-poll ───────────────────────────────────────────────────
+const LIVE = {
+  enabled:        true,
+  intervalMs:     60_000,
+  timer:          null,
+  newEventsThis:  0,        // counter shown in the LIVE pill
+  newEventEids:   new Set(), // entity ids of events added by the live poll — they get .new-live css
+};
+
+async function autoPollOnce() {
+  if (!LIVE.enabled) return;
+  try {
+    const r = await fetch("https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson");
+    if (!r.ok) throw new Error("USGS " + r.status);
+    const d = await r.json();
+    // Build records for events not already in STATE.
+    const existingIds = new Set();
+    for (const e of STATE.events) {
+      if (e.props && e.props[PROP.USGS_ID]) existingIds.add(e.props[PROP.USGS_ID]);
+    }
+    const newRecords = [];
+    const newRowsForState = [];
+    for (const f of (d.features || [])) {
+      const usgsId = f.id;
+      if (existingIds.has(usgsId)) continue;
+      const p = f.properties || {};
+      const coords = (f.geometry || {}).coordinates || [];
+      const lon = coords[0], lat = coords[1], depth = coords[2];
+      if (lat == null || lon == null) continue;
+      const eid = crypto.randomUUID();
+      const props = [
+        { prop_id: PROP.USGS_ID, value: { tag: "string", value: usgsId } },
+        { prop_id: PROP.NAME,    value: { tag: "string", value: p.place || usgsId } },
+        { prop_id: PROP.LAT,     value: { tag: "f64",    value: +lat } },
+        { prop_id: PROP.LON,     value: { tag: "f64",    value: +lon } },
+        { prop_id: PROP.SOURCE,  value: { tag: "string", value: "live30d" } },
+      ];
+      if (p.mag    != null) props.push({ prop_id: PROP.MAGNITUDE, value: { tag: "f64", value: +p.mag } });
+      if (depth    != null) props.push({ prop_id: PROP.DEPTH_KM,  value: { tag: "f64", value: +depth } });
+      if (p.place)          props.push({ prop_id: PROP.PLACE,     value: { tag: "string", value: p.place } });
+      if (p.time != null)   props.push({ prop_id: PROP.TIME_MS,   value: { tag: "i64", value: +p.time } });
+      if (p.magType)        props.push({ prop_id: PROP.MAG_TYPE,  value: { tag: "string", value: p.magType } });
+      if (p.net)            props.push({ prop_id: PROP.NET,       value: { tag: "string", value: p.net } });
+      newRecords.push({
+        kind: "entity",
+        entity_id: eid,
+        type_id: T_EARTHQUAKE,
+        tx_id_assert: 0,
+        tx_id_supersede: "active",
+        properties: props,
+      });
+      // Mirror into STATE so we don't need a full re-load round-trip.
+      const propsObj = {};
+      for (const x of props) propsObj[x.prop_id] = x.value.value;
+      const row = {
+        id: eid,
+        props: propsObj,
+        raw: { kind: "entity", entity_id: eid, type_id: T_EARTHQUAKE, properties: props },
+        mag: propsObj[PROP.MAGNITUDE],
+        ts:  propsObj[PROP.TIME_MS],
+        lat: propsObj[PROP.LAT],
+        lon: propsObj[PROP.LON],
+        depth: propsObj[PROP.DEPTH_KM],
+      };
+      newRowsForState.push(row);
+    }
+    if (newRecords.length === 0) return;
+
+    // Commit to nDB first; only mirror into the SPA state on success.
+    const cr = await fetch(API_URL + "/commit", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ records: newRecords }),
+    });
+    if (!cr.ok) throw new Error("/commit " + cr.status);
+
+    for (const row of newRowsForState) {
+      STATE.events.push(row);
+      STATE.byId.set(row.id, row);
+      LIVE.newEventEids.add(row.id);
+    }
+    LIVE.newEventsThis += newRecords.length;
+
+    // Refresh visuals + LIVE pill counter.
+    refreshStats();
+    renderEvents();
+    renderTimeline();
+    const counter = document.getElementById("live-counter");
+    counter.textContent = LIVE.newEventsThis + " new since boot";
+    document.getElementById("live-indicator").classList.add("has-new");
+
+    // Toast-style transient flash in the topbar (just the counter colour).
+    setTimeout(() => {
+      document.getElementById("live-indicator").classList.remove("has-new");
+    }, 4500);
+  } catch (e) {
+    // Network blip or USGS hiccup — silent, will retry on next tick.
+    console.warn("[live] poll failed:", e);
+  }
+}
+
+function startLivePolling() {
+  LIVE.enabled = true;
+  document.getElementById("live-indicator").classList.remove("paused");
+  // Poll once immediately to populate, then on the interval.
+  autoPollOnce();
+  if (LIVE.timer) clearInterval(LIVE.timer);
+  LIVE.timer = setInterval(autoPollOnce, LIVE.intervalMs);
+}
+
+function stopLivePolling() {
+  LIVE.enabled = false;
+  if (LIVE.timer) { clearInterval(LIVE.timer); LIVE.timer = null; }
+  document.getElementById("live-indicator").classList.add("paused");
+}
+
+document.getElementById("live-indicator").addEventListener("click", () => {
+  if (LIVE.enabled) stopLivePolling();
+  else              startLivePolling();
+});
+
+// Apply ".new-live" pulse class to any event from the live poll —
+// called automatically at the end of renderEvents() via this MutationObserver
+// (simpler than monkey-patching the function in module scope).
+const _eventsLayer = document.getElementById("map-events");
+new MutationObserver(() => {
+  if (!LIVE.newEventEids.size) return;
+  for (const eid of LIVE.newEventEids) {
+    const el = _eventsLayer.querySelector('[data-id="' + eid + '"]');
+    if (el) el.classList.add("new-live");
+  }
+}).observe(_eventsLayer, { childList: true });
+
 // ── Boot ────────────────────────────────────────────────────────────
 window.addEventListener("resize", () => { renderEvents(); renderTimeline(); });
 
@@ -1017,6 +1392,10 @@ window.addEventListener("resize", () => { renderEvents(); renderTimeline(); });
     renderFaults();
     renderEvents();
     renderTimeline();
+    applyMapTransform();
+    // Kick off auto-poll of the USGS past-hour feed. The LIVE pill
+    // pulses + the counter increments per arrival. Click the pill to pause.
+    startLivePolling();
     // Continents load async — fine to render dots first; continents
     // will paint underneath once the TopoJSON arrives.
     loadContinents();
