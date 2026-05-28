@@ -194,10 +194,15 @@ fn main() {
     drop(engine);
 
     // ─── ndb-server (port 8745) ─────────────────────────────────────
+    // Public demo: read-only via the wire. The SPA's "live NASA fetch"
+    // feature stops working from the browser — same expectation as the
+    // playground in biodiv. To allow visitor writes, fork the demo and
+    // drop the with_read_only call.
     let server = Arc::new(
         Server::open(db_dir)
             .expect("server open")
-            .with_cors_origin("*"),
+            .with_cors_origin("*")
+            .with_read_only(true),
     );
     let api_addr = format!("127.0.0.1:{API_PORT}");
     let api_listener = TcpListener::bind(&api_addr).expect("bind ndb-server");

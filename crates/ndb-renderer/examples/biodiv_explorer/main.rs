@@ -205,7 +205,14 @@ fn main() {
     }
     drop(engine);
 
-    let server = Arc::new(Server::open(db_dir).expect("server open").with_cors_origin("*"));
+    // Public demo — exposed via the knowledge-site proxy. Reads only.
+    // Visitors must not be able to mutate the demo data via the wire.
+    // In-process seeding above is unaffected.
+    let server = Arc::new(
+        Server::open(db_dir).expect("server open")
+            .with_cors_origin("*")
+            .with_read_only(true),
+    );
     let api_addr = format!("127.0.0.1:{API_PORT}");
     let api_listener = TcpListener::bind(&api_addr).expect("bind ndb-server");
     eprintln!("ndb-server  listening on http://{api_addr}");

@@ -177,14 +177,17 @@
   <p class="lede">
     Pattern matching over hyperedges, with property projection,
     multi-pattern joins via shared variables, recursive transitive
-    closure, time travel, <strong>and now declarative writes</strong>
-    (<code>create</code> + <code>delete</code>).
-    The editor below talks to the live
-    <a href="/biodiv_ndb/"><strong>biodiv_ndb</strong></a> engine —
-    145 species, 22 regions, 63 interactions, 6 food webs. Click an
-    example to try it, edit freely, hit <em>Run</em>. Writes really
-    do mutate the live engine, but everything's tombstone-able and
-    you can see prior state via <code>as of tx_id N</code>.
+    closure, aggregations, and time travel. The editor below talks
+    to the live <a href="/biodiv_ndb/"><strong>biodiv_ndb</strong></a>
+    engine — 146 species, 22 regions, 63 interactions, 6 food webs.
+    Click an example to try it, edit freely, hit <em>Run</em>.
+    <br><br>
+    <strong>The demo engine is read-only via this page.</strong> The
+    <code>create</code> / <code>delete</code> / <code>set</code> /
+    <code>merge</code> clauses are valid query-language syntax — try
+    pasting one and the server returns 403 with a clean error. Same
+    engine binary supports writes for CLI users; only the public
+    surface is locked down.
   </p>
 
   <div class="qlp-grid">
@@ -251,6 +254,17 @@ limit 10"></textarea>
     against its dictionary, plans the patterns into an operator tree,
     and executes against the engine. Results come back as
     <code>{columns, rows, truncated}</code> JSON.
+  </p>
+  <p>
+    <strong>Read-only public surface.</strong> The five demo engines
+    are launched with <code>Server::with_read_only(true)</code> on
+    their HTTP front. <code>/commit</code>, <code>/flush</code>,
+    <code>/compact</code>, and any <code>/query[/text]</code> whose
+    body contains a <code>create</code>, <code>delete</code>,
+    <code>set</code>, or <code>merge</code> clause return HTTP 403
+    with <code>{"error": "read_only", "detail": …}</code>. The
+    engine itself is unchanged — the same binary running locally
+    without the flag executes those clauses normally.
   </p>
   <p>
     The implementation lives in <code>crates/ndb-query</code> (lexer +
@@ -369,8 +383,8 @@ order by ?r.name asc, ?pr.common_name asc`,
 return ?prey.common_name`,
   },
   {
-    title: "13. CREATE — add a new species",
-    blurb: "Declarative insert. Returns the new entity's projected properties — try running this twice to add it twice.",
+    title: "13. CREATE — syntax valid, rejected here",
+    blurb: "The public demo is read-only. Try this and the server returns 403. Locally via CLI, the same query creates the entity.",
     query: `create species(common_name: "Eastern quoll",
                scientific_name: "Dasyurus viverrinus",
                life_form: "animal",
@@ -379,8 +393,8 @@ return ?prey.common_name`,
 return ?new.common_name, ?new.scientific_name, ?new.family`,
   },
   {
-    title: "14. Verify CREATE worked — match by name",
-    blurb: "After example 13 runs, the Eastern quoll is live in the engine. Find it by common name.",
+    title: "14. (read-only) any write you'd verify lives in CLI",
+    blurb: "Reads remain free. This one happens to find 0 rows on the public demo, since 13 was blocked.",
     query: `match species(common_name: "Eastern quoll") as ?q
 return ?q.scientific_name, ?q.family, ?q.kingdom`,
   },

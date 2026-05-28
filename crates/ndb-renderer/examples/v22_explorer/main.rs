@@ -121,11 +121,14 @@ fn main() {
     }
     drop(engine);
 
-    // ─── ndb-server with CORS ─────────────────────────────────────
+    // ─── ndb-server with CORS — public demo, read-only via the wire.
+    // The SPA's "live AlphaFold-DB fetch" feature stops working from
+    // the browser. The launcher / CLI can still write directly.
     let server = Arc::new(
         Server::open(db_dir)
             .expect("server open")
-            .with_cors_origin("*"),
+            .with_cors_origin("*")
+            .with_read_only(true),
     );
     let api_addr = format!("127.0.0.1:{API_PORT}");
     let api_listener = TcpListener::bind(&api_addr).expect("bind ndb-server");

@@ -266,6 +266,13 @@ pub struct Server {
     /// for production-internet exposure (use a reverse proxy with
     /// per-origin policy for that).
     cors_origin: Option<String>,
+    /// When `true`, every mutating route returns 403 — the server is a
+    /// pure-read surface. Used by public demo servers exposed via the
+    /// knowledge-site proxy so a visitor's `/query/text` can't delete
+    /// or mutate the demo database. Mutating routes: `/commit`,
+    /// `/flush`, `/compact`, and any `/query[/text]` whose body has
+    /// `creates` / `deletes` / `sets` / `merges`.
+    read_only: bool,
 }
 
 /// Append-only audit log. One JSON line per request. Synchronous flush
@@ -472,6 +479,7 @@ impl Server {
             tls_config: None,
             commit_notify: Arc::new((Mutex::new(initial_tx), std::sync::Condvar::new())),
             cors_origin: None,
+            read_only: false,
         })
     }
 
@@ -487,7 +495,20 @@ impl Server {
             tls_config: None,
             commit_notify: Arc::new((Mutex::new(initial_tx), std::sync::Condvar::new())),
             cors_origin: None,
+            read_only: false,
         }
+    }
+
+    /// Lock the server into read-only mode. Mutating routes
+    /// (`/commit`, `/flush`, `/compact`) return 403; mutating
+    /// query clauses (`create`, `delete`, `set`, `merge`) inside
+    /// `/query` or `/query/text` also return 403. The in-process
+    /// `Engine` is untouched — seed loading + admin code paths run
+    /// normally.
+    #[must_use]
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
     }
 
     /// v2.2 preview: enable `Access-Control-Allow-Origin` headers on
@@ -906,6 +927,7 @@ impl Server {
         out: &mut dyn Write,
         outcome: &mut DispatchOutcome,
     ) -> Result<(), ServerError> {
+        if self.read_only { return reject_read_only(out, outcome, "/flush"); }
         let mut engine = self.engine.lock().expect("engine mutex poisoned");
         engine.flush()?;
         let (records, bytes) = engine.memtable_stats();
@@ -926,6 +948,7 @@ impl Server {
         out: &mut dyn Write,
         outcome: &mut DispatchOutcome,
     ) -> Result<(), ServerError> {
+        if self.read_only { return reject_read_only(out, outcome, "/compact"); }
         let mut engine = self.engine.lock().expect("engine mutex poisoned");
         let stats = engine.compact()?;
         outcome.status = 200;
@@ -947,6 +970,7 @@ impl Server {
         out: &mut dyn Write,
         outcome: &mut DispatchOutcome,
     ) -> Result<(), ServerError> {
+        if self.read_only { return reject_read_only(out, outcome, "/commit"); }
         let req: CommitRequest = match serde_json::from_slice(body) {
             Ok(r) => r,
             Err(e) => {
@@ -1275,6 +1299,9 @@ impl Server {
             Ok(r) => r,
             Err(e) => return bad_json(out, outcome, "query body", &e.to_string()),
         };
+        if self.read_only && query_request_has_writes(&req) {
+            return reject_read_only(out, outcome, "/query (write clauses)");
+        }
         let mut engine = self.engine.lock().expect("engine mutex poisoned");
         let resp = match execute_query(&mut engine, req) {
             Ok(r) => r,
@@ -1301,6 +1328,16 @@ impl Server {
             Err(e) => return bad_json(out, outcome, "query/text body", &e.to_string()),
         };
         let mut engine = self.engine.lock().expect("engine mutex poisoned");
+        // In read-only mode, parse + resolve to inspect for write clauses
+        // BEFORE executing. This catches mutations from the surface text.
+        if self.read_only {
+            match ndb_query::parse_resolve(&engine, text) {
+                Ok(req) if query_request_has_writes(&req) => {
+                    return reject_read_only(out, outcome, "/query/text (write clauses)");
+                }
+                _ => { /* fall through to normal execution path */ }
+            }
+        }
         match ndb_query::execute_text(&mut engine, text) {
             Ok(resp) => {
                 outcome.status = 200;
@@ -1344,6 +1381,9 @@ impl Server {
             Ok(r) => r,
             Err(e) => return bad_json(out, outcome, "query body", &e.to_string()),
         };
+        if self.read_only && query_request_has_writes(&req) {
+            return reject_read_only(out, outcome, "/query_stream (write clauses)");
+        }
         let mut engine = self.engine.lock().expect("engine mutex poisoned");
         let resp = match execute_query(&mut engine, req) {
             Ok(r) => r,
@@ -1874,6 +1914,28 @@ fn required_capability(method: &str, path: &str) -> Option<Capability> {
         ) => Some(Capability::Read),
         _ => None,
     }
+}
+
+/// Has at least one mutating clause (create / delete / set / merge)?
+fn query_request_has_writes(req: &QueryRequest) -> bool {
+    !req.creates.is_empty() || !req.deletes.is_empty()
+        || !req.sets.is_empty() || !req.merges.is_empty()
+}
+
+/// 403 reply for read-only-mode rejection. Same shape as other
+/// `write_error` returns so clients can dispatch by status.
+fn reject_read_only(
+    out: &mut dyn Write,
+    outcome: &mut DispatchOutcome,
+    what: &str,
+) -> Result<(), ServerError> {
+    outcome.status = 403;
+    let detail = format!(
+        "server is in read-only mode; {what} is not allowed. Writes go through the CLI \
+         or a direct /commit on a non-public server."
+    );
+    outcome.failure = Some(detail.clone());
+    write_error(out, 403, "read_only", &detail)
 }
 
 fn bad_json(

@@ -166,7 +166,16 @@ fn main() {
     }
     drop(engine);
 
-    let server = Arc::new(Server::open(db_dir).expect("server open").with_cors_origin("*"));
+    // Public demo. Reads only via the wire — the SPA's /subscribe +
+    // /commit dance for the living-data demo still works because it
+    // goes through the CLI/internal path during seeding, not the
+    // visitor's browser. If a visitor wants to mutate, they'll get
+    // 403 — that's the point.
+    let server = Arc::new(
+        Server::open(db_dir).expect("server open")
+            .with_cors_origin("*")
+            .with_read_only(true),
+    );
     let api_addr = format!("127.0.0.1:{API_PORT}");
     let api_listener = TcpListener::bind(&api_addr).expect("bind ndb-server");
     eprintln!("ndb-server  listening on http://{api_addr}");
