@@ -290,8 +290,8 @@ a:hover { color: #5aa0f2; }
 
   <main id="centre">
     <div id="mode-toggle">
-      <button data-mode="scatter" class="active">Mass-Radius (2D)</button>
-      <button data-mode="scatter3d">3D · 5D</button>
+      <button data-mode="scatter3d" class="active">3D · 5D</button>
+      <button data-mode="scatter">Mass-Radius (2D)</button>
       <button data-mode="year">Year stack</button>
     </div>
     <div id="scatter-wrap"><svg id="scatter-svg"></svg></div>
@@ -408,7 +408,7 @@ const STATE = {
   byName:   new Map(),
   selected: null,
   mutedMethods: new Set(),
-  mode: "scatter",
+  mode: "scatter3d",
   // ── 2D scatter zoom/pan state (manipulates SVG viewBox via tx/ty/scale)
   view2d: { scale: 1, tx: 0, ty: 0 },
   // ── lazy-built 3D scenes; null until first switch into the mode
