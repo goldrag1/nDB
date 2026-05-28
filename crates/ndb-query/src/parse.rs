@@ -501,17 +501,31 @@ impl Parser {
 
     fn parse_return_one(&mut self) -> Result<NameReturn, ParseError> {
         let t = self.advance();
-        match t.kind {
-            TokKind::Var(name) => Ok(NameReturn {
-                name,
-                span: t.span,
-            }),
-            other => Err(ParseError::Unexpected {
+        let name = match t.kind {
+            TokKind::Var(name) => name,
+            other => return Err(ParseError::Unexpected {
                 expected: "variable in return list".into(),
                 found: other.describe(),
                 span: t.span,
             }),
-        }
+        };
+        // Optional `.identifier` property projection.
+        let (property, end_span) = if self.eat(&TokKind::Dot).is_some() {
+            let prop_tok = self.advance();
+            match prop_tok.kind {
+                TokKind::Ident(s) => (Some(s), prop_tok.span),
+                other => return Err(ParseError::Unexpected {
+                    expected: "property name after `.` in return projection".into(),
+                    found: other.describe(),
+                    span: prop_tok.span,
+                }),
+            }
+        } else {
+            (None, t.span)
+        };
+        // Span covers `?v` through the optional `.prop`.
+        let combined_span = crate::error::Span::range(t.span.start, end_span.end());
+        Ok(NameReturn { name, property, span: combined_span })
     }
 }
 

@@ -87,6 +87,8 @@ pub enum TokKind {
     Comma,
     /// Punctuation `:`.
     Colon,
+    /// Punctuation `.` — used in property projection (`?var.prop`).
+    Dot,
 
     // Operators
     /// `=`
@@ -144,6 +146,7 @@ impl TokKind {
             Self::RBrace => "`}`".into(),
             Self::Comma => "`,`".into(),
             Self::Colon => "`:`".into(),
+            Self::Dot => "`.`".into(),
             Self::Eq => "`=`".into(),
             Self::Ne => "`!=`".into(),
             Self::Lt => "`<`".into(),
@@ -225,6 +228,10 @@ fn lex_punct_or_op(bytes: &[u8], i: usize) -> Result<Option<(TokKind, usize)>, P
         b'}' => Some(TokKind::RBrace),
         b',' => Some(TokKind::Comma),
         b':' => Some(TokKind::Colon),
+        // `.` is property-projection punctuation. Numeric literals
+        // (`1.5`) are handled by lex_number before we get here, so
+        // a `.` here is genuinely the path operator.
+        b'.' => Some(TokKind::Dot),
         b'=' => Some(TokKind::Eq),
         b'*' => Some(TokKind::Star),
         b'+' => Some(TokKind::Plus),
@@ -636,11 +643,15 @@ mod tests {
     }
 
     #[test]
-    fn unbalanced_dot_after_number_is_int_then_unexpected() {
+    fn unbalanced_dot_after_number_lexes_int_then_dot() {
         // `42.` (no following digit) — number is the leading 42, the `.`
-        // is then an unexpected character.
-        let err = lex("42.").unwrap_err();
-        assert!(matches!(err, ParseError::UnexpectedChar { ch: '.', .. }));
+        // is then the Dot token used for property projection. The parser
+        // rejects this combination; the lexer accepts both tokens.
+        let toks = lex("42.").unwrap();
+        let kinds: Vec<_> = toks.iter().map(|t| &t.kind).collect();
+        assert!(matches!(kinds[0], TokKind::IntLit(42)));
+        assert!(matches!(kinds[1], TokKind::Dot));
+        assert!(matches!(kinds[2], TokKind::Eof));
     }
 
     #[test]

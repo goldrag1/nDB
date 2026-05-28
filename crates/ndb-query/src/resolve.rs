@@ -214,17 +214,31 @@ pub fn resolve(query: NameQuery, dict: &Dictionaries) -> Result<QueryRequest, Re
         None => None,
     };
 
-    let returns: Vec<String> = query
+    let returns: Vec<ndb_engine::ReturnItem> = query
         .returns
         .into_iter()
         .map(|r| {
-            if bound.contains(&r.name) {
-                Ok(r.name)
-            } else {
-                Err(ResolveError::UnboundVariable {
+            if !bound.contains(&r.name) {
+                return Err(ResolveError::UnboundVariable {
                     name: r.name,
                     span: r.span,
-                })
+                });
+            }
+            match r.property {
+                None => Ok(ndb_engine::ReturnItem::Variable(r.name)),
+                Some(prop_name) => {
+                    let property = *dict.properties.get(&prop_name).ok_or_else(||
+                        ResolveError::UnknownRoleOrProperty {
+                            name: prop_name.clone(),
+                            span: r.span,
+                        }
+                    )?;
+                    Ok(ndb_engine::ReturnItem::Path {
+                        variable: r.name,
+                        property,
+                        display: Some(prop_name),
+                    })
+                }
             }
         })
         .collect::<Result<_, _>>()?;
@@ -718,7 +732,11 @@ mod tests {
         assert!(matches!(q.patterns[0], Pattern::Hyperedge { .. }));
         assert!(matches!(q.patterns[1], Pattern::Entity { .. }));
         assert!(q.filter.is_some());
-        assert_eq!(q.returns, vec!["c", "n", "a"]);
+        let names: Vec<String> = q.returns.iter().map(|r| match r {
+            ndb_engine::ReturnItem::Variable(n) => n.clone(),
+            ndb_engine::ReturnItem::Path { variable, .. } => variable.clone(),
+        }).collect();
+        assert_eq!(names, vec!["c", "n", "a"]);
         assert_eq!(q.limit, Some(100));
     }
 }

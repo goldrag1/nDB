@@ -108,5 +108,5 @@ pub use wire::{
 };
 pub use wire_query::{
     AsOf, CmpOp, DEFAULT_MAX_RECURSION_DEPTH, Expr, Pattern, PropertyFilter, QueryRequest,
-    QueryResponse, Recursion, RoleBinding, Term,
+    QueryResponse, Recursion, ReturnItem, RoleBinding, Term,
 };

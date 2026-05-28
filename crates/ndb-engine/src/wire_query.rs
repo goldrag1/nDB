@@ -75,15 +75,80 @@ pub struct QueryRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter: Option<Expr>,
 
-    /// Variables to project. Order is preserved in the response's
-    /// `columns` array.
-    pub returns: Vec<String>,
+    /// Variables (and optional property projections) to return. Order
+    /// is preserved in the response's `columns` array. Each entry is
+    /// either a bare variable name (`?v`) or a path projection
+    /// (`?v.property_name`). For backward compatibility, a JSON string
+    /// `"v"` deserializes as the bare-variable case — existing callers
+    /// don't need to change their wire payloads.
+    pub returns: Vec<ReturnItem>,
 
     /// Optional cap on the number of result tuples returned. `None`
     /// means no cap. Servers may enforce an implementation-defined hard
     /// cap regardless — see §6.4 of the query-language spec.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
+}
+
+/// One entry in [`QueryRequest::returns`].
+///
+/// Wire shape is **untagged** for backward compatibility:
+///
+/// - `"v"` (JSON string) deserializes as [`ReturnItem::Variable`] —
+///   project the variable's bound value as-is. For self-bound entity
+///   / hyperedge variables, that's the UUID; for role-bound terms
+///   it's whatever scalar landed there.
+/// - `{"variable": "v", "property": 30, "display": "name"}` (JSON
+///   object) deserializes as [`ReturnItem::Path`] — follow the bound
+///   UUID to its record, look up `property` by id, project that
+///   value. `display` is the human-readable property name, used as
+///   the column header in the response. `display` is optional on the
+///   wire; the resolver always populates it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum ReturnItem {
+    /// `?var` — project the binding's value directly.
+    Variable(String),
+    /// `?var.property_name` — UUID-bound variable + property name.
+    Path {
+        /// Bound variable name.
+        variable: String,
+        /// Resolved property id.
+        property: u32,
+        /// Optional human-readable property name, used as the column header.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display: Option<String>,
+    },
+}
+
+impl ReturnItem {
+    /// Column-header label for this projection.
+    #[must_use]
+    pub fn column_name(&self) -> String {
+        match self {
+            Self::Variable(name) => name.clone(),
+            Self::Path { variable, property, display } => match display {
+                Some(d) => format!("{variable}.{d}"),
+                None    => format!("{variable}.{property}"),
+            },
+        }
+    }
+
+    /// Variable this item refers to.
+    #[must_use]
+    pub fn variable_name(&self) -> &str {
+        match self {
+            Self::Variable(name) => name,
+            Self::Path { variable, .. } => variable,
+        }
+    }
+}
+
+impl From<&str> for ReturnItem {
+    fn from(s: &str) -> Self { Self::Variable(s.to_string()) }
+}
+impl From<String> for ReturnItem {
+    fn from(s: String) -> Self { Self::Variable(s) }
 }
 
 /// `POST /query` response body.

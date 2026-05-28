@@ -264,10 +264,37 @@ mod tests {
     }
 
     #[test]
+    fn execute_text_property_projection_returns_scalars() {
+        let (mut engine, _dir) = build_engine();
+        // ?c.name should project the literal "Alice" / "Bob" string,
+        // not the entity UUID.
+        let resp = execute_text(&mut engine,
+            "match customer(name: ?n) as ?c return ?c.name, ?n"
+        ).expect("query");
+        assert_eq!(resp.columns, vec!["c.name", "n"]);
+        assert_eq!(resp.rows.len(), 2);
+        // Each row should contain the customer's name string in both columns.
+        for row in &resp.rows {
+            assert_eq!(row[0], row[1], "?c.name and ?n should both bind to the name string");
+        }
+    }
+
+    #[test]
+    fn property_projection_unknown_property_surfaces_resolve_error() {
+        let (mut engine, _dir) = build_engine();
+        let err = execute_text(&mut engine,
+            "match customer() as ?c return ?c.nonexistent"
+        ).unwrap_err();
+        let env = err.envelope();
+        assert_eq!(env.error, "resolve");
+        assert_eq!(env.code, "unknown_role_or_property");
+    }
+
+    #[test]
     fn parse_resolve_returns_request_without_executing() {
         let (engine, _dir) = build_engine();
         let req = parse_resolve(&engine, "match customer() as ?c return ?c").expect("parse_resolve");
         assert_eq!(req.patterns.len(), 1);
-        assert_eq!(req.returns, vec!["c"]);
+        assert_eq!(req.returns, vec![ndb_engine::ReturnItem::from("c")]);
     }
 }

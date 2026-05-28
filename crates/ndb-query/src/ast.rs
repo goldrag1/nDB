@@ -182,10 +182,18 @@ pub enum NameCmpOp {
 }
 
 /// One entry in the `return` list.
+///
+/// - `?v` — `property` is `None`. Projects the variable's bound value
+///   (UUID for self-bound entities / hyperedges, scalar for role
+///   bindings).
+/// - `?v.name` — `property` is `Some("name")`. Follows the bound UUID
+///   to its record and projects the named property's value.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NameReturn {
     /// Variable name (without the `?`).
     pub name: String,
-    /// Source location.
+    /// Optional property name following a `.` (e.g. `?p.season_from`).
+    pub property: Option<String>,
+    /// Source location spanning the whole `?v[.prop]` projection.
     pub span: Span,
 }

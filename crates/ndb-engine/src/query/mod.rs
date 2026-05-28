@@ -38,7 +38,7 @@ use crate::value::Value;
 use crate::wire::JsonValue;
 use crate::wire_query::{
     AsOf, CmpOp, Expr, Pattern, PropertyFilter, QueryRequest, QueryResponse, Recursion,
-    RoleBinding, Term,
+    ReturnItem, RoleBinding, Term,
 };
 
 /// Per-row variable assignments. Keyed by variable name (without the `?`).
@@ -141,24 +141,71 @@ pub fn execute(engine: &mut Engine, req: QueryRequest) -> Result<QueryResponse, 
         truncated = true;
     }
 
+    // Build the column header list (independent of row iteration so we
+    // don't have to recompute per row).
+    let columns: Vec<String> = req.returns.iter().map(ReturnItem::column_name).collect();
+
     let response_rows: Vec<Vec<JsonValue>> = rows
         .into_iter()
         .map(|r| {
-            req.returns
-                .iter()
-                .map(|c| {
-                    r.get(c)
-                        .map_or(JsonValue::Null, |v| (&v.clone()).into())
-                })
+            req.returns.iter()
+                .map(|item| project_item(engine, snapshot, item, &r))
                 .collect()
         })
         .collect();
 
     Ok(QueryResponse {
-        columns: req.returns,
+        columns,
         rows: response_rows,
         truncated,
     })
+}
+
+/// Project one `ReturnItem` for one row of bindings.
+///
+/// For `Variable`, the bound value is returned directly. For `Path`,
+/// the bound value MUST be a UUID — we resolve it to the underlying
+/// entity or hyperedge record at the snapshot and look up the property
+/// by id. Missing UUID, missing record, or missing property all map to
+/// `JsonValue::Null` — we never raise; per spec §5.6 a NULL projection
+/// is the well-defined "not present at this snapshot" outcome.
+fn project_item(
+    engine: &mut Engine,
+    snapshot: TxId,
+    item: &ReturnItem,
+    bindings: &Bindings,
+) -> JsonValue {
+    match item {
+        ReturnItem::Variable(name) => bindings
+            .get(name)
+            .map_or(JsonValue::Null, |v| (&v.clone()).into()),
+
+        ReturnItem::Path { variable, property, .. } => {
+            // Must be a UUID-typed binding. The executor stores self-bound
+            // entity / hyperedge UUIDs as Value::EntityRef (the storage
+            // layer represents both kinds with the same uuid::Uuid).
+            let Some(Value::EntityRef(eid)) = bindings.get(variable) else {
+                return JsonValue::Null;
+            };
+            let uuid: uuid::Uuid = eid.into_uuid();
+            let Ok(Resolved::Live(record)) = engine.snapshot_read(&uuid, snapshot) else {
+                return JsonValue::Null;
+            };
+            // Pull the property by id from whichever record kind matched.
+            let props_iter: Box<dyn Iterator<Item = &(PropertyId, Value)>> = match &record {
+                Record::Entity(e)    => Box::new(e.properties.iter()),
+                Record::HyperEdge(h) => Box::new(h.properties.iter()),
+                _ => return JsonValue::Null,
+            };
+            let target = PropertyId::new(*property);
+            for (pid, v) in props_iter {
+                if *pid == target {
+                    return (&v.clone()).into();
+                }
+            }
+            JsonValue::Null
+        }
+    }
 }
 
 fn resolve_snapshot(engine: &Engine, as_of: Option<AsOf>) -> Result<TxId, QueryError> {
