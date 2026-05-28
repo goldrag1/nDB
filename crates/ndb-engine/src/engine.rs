@@ -902,7 +902,49 @@ impl Engine {
         for sst in &self.sstables {
             sources.push(MergeSource::SSTable(sst.iter()));
         }
-        SnapshotStream::new(sources, snapshot)
+        // Pre-scan tombstones across every source — entity/hyperedge
+        // records and their tombstones live under different SSTableKey
+        // kind bytes, so the merge sort never groups them together.
+        // Without this pre-pass the streaming pump would emit deleted
+        // records (the per-key resolve only sees same-kind versions).
+        // Tombstones are tiny (target_uuid + tx_id_supersede) so the
+        // pre-scan cost stays well below the entity-iteration cost it
+        // gates.
+        let mut tombstones: std::collections::HashMap<uuid::Uuid, TxId> =
+            std::collections::HashMap::new();
+        // Memtable tombstones.
+        for (k, r) in self.memtable.iter() {
+            if k.kind == crate::record::RecordKind::Tombstone.as_byte()
+                && let Record::Tombstone(t) = r
+            {
+                tombstones
+                    .entry(t.target_id)
+                    .and_modify(|cur| {
+                        if t.tx_id_supersede > *cur {
+                            *cur = t.tx_id_supersede;
+                        }
+                    })
+                    .or_insert(t.tx_id_supersede);
+            }
+        }
+        // SSTable tombstones — block-index sidecar gives O(log n) seek
+        // when present; otherwise the iter call still covers it.
+        for sst in &self.sstables {
+            for item in sst.iter() {
+                let Ok((rec, _)) = item else { continue };
+                if let Record::Tombstone(t) = &rec {
+                    tombstones
+                        .entry(t.target_id)
+                        .and_modify(|cur| {
+                            if t.tx_id_supersede > *cur {
+                                *cur = t.tx_id_supersede;
+                            }
+                        })
+                        .or_insert(t.tx_id_supersede);
+                }
+            }
+        }
+        SnapshotStream::new(sources, snapshot).with_tombstones(tombstones)
     }
 
     /// Iterate every record visible at `snapshot`, in (kind, primary)
@@ -1680,6 +1722,13 @@ pub struct SnapshotStream<'a> {
     primed: bool,
     /// Error captured during merge; subsequent next() calls return None.
     errored: bool,
+    /// Pre-scanned tombstone map: `target_id → latest tx_id_supersede`.
+    /// Entity / hyperedge records are emitted only if either (a) no
+    /// tombstone exists for their primary id, or (b) the tombstone's
+    /// supersede tx is greater than the requested snapshot — i.e. the
+    /// delete happened in the future from the snapshot's perspective.
+    /// Populated via [`Self::with_tombstones`] at stream construction.
+    tombstones: std::collections::HashMap<uuid::Uuid, TxId>,
 }
 
 impl<'a> SnapshotStream<'a> {
@@ -1691,7 +1740,21 @@ impl<'a> SnapshotStream<'a> {
             snapshot,
             primed: false,
             errored: false,
+            tombstones: std::collections::HashMap::new(),
         }
+    }
+
+    /// Attach a pre-scanned tombstone map. Emitted only when the
+    /// streaming iterator sees an entity/hyperedge record whose
+    /// primary id matches a tombstone whose `tx_id_supersede` is ≤
+    /// the snapshot — that's the MVCC "deleted" condition that
+    /// `snapshot_read` already enforces across kinds.
+    fn with_tombstones(
+        mut self,
+        tombstones: std::collections::HashMap<uuid::Uuid, TxId>,
+    ) -> Self {
+        self.tombstones = tombstones;
+        self
     }
 
     fn prime(&mut self) -> Result<(), EngineError> {
@@ -1736,6 +1799,23 @@ impl<'a> SnapshotStream<'a> {
             if let Some(r) = crate::mvcc::resolve_iter(versions.iter(), self.snapshot).into_live()
                 && crate::mvcc::visible_at(r, self.snapshot)
             {
+                // Cross-kind tombstone check — entity/hyperedge records
+                // and their tombstones live under different SSTableKey
+                // kind bytes, so the per-key resolve above never saw
+                // the tombstone. Drop the record if a tombstone for the
+                // same primary id is visible at this snapshot.
+                let target = match r {
+                    Record::Entity(e)    => Some(e.entity_id.into_uuid()),
+                    Record::HyperEdge(h) => Some(h.hyperedge_id.into_uuid()),
+                    _ => None,
+                };
+                if let Some(uuid) = target
+                    && let Some(supersede) = self.tombstones.get(&uuid)
+                    && *supersede <= self.snapshot
+                {
+                    // Tombstoned at or before snapshot — skip.
+                    continue;
+                }
                 return Ok(Some(r.clone()));
             }
             // Else: key was tombstoned at this snapshot — keep pumping.
@@ -3464,6 +3544,63 @@ mod tests {
         let mut engine = Engine::open(&dir).unwrap();
         assert_visible(&mut engine, &ids);
         engine.close().unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Regression: `snapshot_iter_streaming` MUST respect cross-kind
+    /// tombstones. Before this fix, the merge grouped versions by full
+    /// `(kind, primary)` SSTableKey — entity records and their
+    /// tombstones lived under different kind bytes and never reached
+    /// the per-key MVCC resolve together, so /iter kept emitting
+    /// records that `snapshot_read` correctly reported as `Deleted`.
+    /// This bit the bench-race aggregator (it filtered by entity
+    /// `tx_id_supersede` but tombstone records leave that field
+    /// untouched).
+    #[test]
+    fn snapshot_iter_streaming_respects_cross_kind_tombstones() {
+        let dir = temp_dir("iter_tombstone");
+        let mut engine = Engine::create(&dir).unwrap();
+        // 3 entities, then delete the middle one.
+        let eids: Vec<EntityId> = (0..3).map(|_| EntityId::now_v7()).collect();
+        for &eid in &eids {
+            let mut txn = engine.begin_write();
+            txn.put_entity(make_entity(eid, "alive"));
+            txn.commit().unwrap();
+        }
+        {
+            let mut txn = engine.begin_write();
+            txn.delete(eids[1].into_uuid());
+            txn.commit().unwrap();
+        }
+
+        let snap = TxId::new(engine.manifest().last_tx_id);
+        let visible: Vec<uuid::Uuid> = engine
+            .snapshot_iter_streaming(snap)
+            .filter_map(Result::ok)
+            .filter_map(|r| match r {
+                Record::Entity(e) => Some(e.entity_id.into_uuid()),
+                _ => None,
+            })
+            .collect();
+        // Tombstoned entity must NOT appear in the streaming iterator.
+        assert!(visible.contains(&eids[0].into_uuid()));
+        assert!(!visible.contains(&eids[1].into_uuid()), "tombstoned entity leaked through snapshot_iter_streaming");
+        assert!(visible.contains(&eids[2].into_uuid()));
+
+        // Same invariant after a flush — the tombstone lives in an
+        // SSTable now, but the pre-scan still picks it up.
+        engine.flush().unwrap();
+        let snap = TxId::new(engine.manifest().last_tx_id);
+        let visible: Vec<uuid::Uuid> = engine
+            .snapshot_iter_streaming(snap)
+            .filter_map(Result::ok)
+            .filter_map(|r| match r {
+                Record::Entity(e) => Some(e.entity_id.into_uuid()),
+                _ => None,
+            })
+            .collect();
+        assert!(!visible.contains(&eids[1].into_uuid()), "tombstoned entity leaked after flush");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
