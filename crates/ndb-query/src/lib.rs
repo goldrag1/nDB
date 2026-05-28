@@ -27,6 +27,7 @@ pub mod error;
 pub mod lex;
 pub mod parse;
 pub mod resolve;
+pub mod run;
 
 pub use ast::{
     NameAsOf, NameBinding, NameCmpOp, NameExpr, NamePattern, NameQuery, NameRecursion,
@@ -36,3 +37,4 @@ pub use error::{ParseError, Span};
 pub use lex::{Tok, TokKind, lex};
 pub use parse::parse_query;
 pub use resolve::{Dictionaries, ResolveError, TypeKindObserved, resolve};
+pub use run::{RunError, RunErrorEnvelope, SpanInfo, execute_text, parse_resolve};

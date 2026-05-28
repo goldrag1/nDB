@@ -312,6 +312,18 @@ impl Client {
         parse_2xx(status, &resp)
     }
 
+    /// `POST /query/text` — execute query SOURCE TEXT against the server.
+    ///
+    /// The server lexes + parses + resolves names → ids using its own
+    /// dictionary snapshot, then runs the resulting wire-AST. Use this
+    /// over [`Self::query`] when the caller has a query string in hand
+    /// (CLI / REPL / SPA filter) and doesn't want to ship the parser to
+    /// the client.
+    pub fn query_text(&self, text: &str) -> Result<QueryResponse, ClientError> {
+        let (status, resp) = self.post("/query/text", text.as_bytes())?;
+        parse_2xx(status, &resp)
+    }
+
     /// `POST /property_range` — range query on `(type, property)`.
     /// Both bounds inclusive; `None` = unbounded.
     pub fn property_range(

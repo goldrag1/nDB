@@ -48,7 +48,7 @@ enum Command {
         low_json: Option<String>,
         high_json: Option<String>,
     },
-    Query,
+    Query { text: Option<String> },
 }
 
 fn usage(out: &mut impl Write) {
@@ -67,7 +67,8 @@ fn usage(out: &mut impl Write) {
            vector-search <prop> <k> <l2|cosine>            k-NN; query vector on stdin as JSON [f32,...]\n  \
            property-lookup <type> <prop> <value-json>      exact match on (type, property, value)\n  \
            property-range <type> <prop> [<low>] [<high>]   range query (low/high are value-json or omitted)\n  \
-           query                                           execute QueryRequest JSON from stdin (POST /query)\n\
+           query [<text>]                                  execute a query — text positional → POST /query/text;\n  \
+                                                             no positional → read QueryRequest JSON from stdin → POST /query\n\
          \n\
          <value-json> is the tagged-union JSON shape, e.g. '{{\"tag\":\"string\",\"value\":\"alice\"}}'\n\
          \n\
@@ -132,7 +133,7 @@ fn parse_args() -> Option<Args> {
             let high_json = argv.next();
             Command::PropertyRange { type_id, property_id, low_json, high_json }
         }
-        "query" => Command::Query,
+        "query" => Command::Query { text: argv.next() },
         other => {
             eprintln!("unknown command: {other}");
             return None;
@@ -190,7 +191,7 @@ fn main() -> ExitCode {
             };
             emit_json(&client.property_range(type_id, property_id, low, high))
         }
-        Command::Query => run_query(&client),
+        Command::Query { text } => run_query(&client, text),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -224,14 +225,20 @@ fn run_iter(client: &Client) -> Result<(), String> {
     Ok(())
 }
 
-fn run_query(client: &Client) -> Result<(), String> {
-    let mut body = String::new();
-    std::io::stdin()
-        .read_to_string(&mut body)
-        .map_err(|e| format!("read stdin: {e}"))?;
-    let req: QueryRequest =
-        serde_json::from_str(&body).map_err(|e| format!("stdin is not a valid QueryRequest: {e}"))?;
-    let resp = client.query(&req).map_err(format_err)?;
+fn run_query(client: &Client, text: Option<String>) -> Result<(), String> {
+    let resp = if let Some(text) = text {
+        // text path → POST /query/text. Server handles lex + parse + resolve.
+        client.query_text(&text).map_err(format_err)?
+    } else {
+        // stdin path → caller already has a wire-AST.
+        let mut body = String::new();
+        std::io::stdin()
+            .read_to_string(&mut body)
+            .map_err(|e| format!("read stdin: {e}"))?;
+        let req: QueryRequest =
+            serde_json::from_str(&body).map_err(|e| format!("stdin is not a valid QueryRequest: {e}"))?;
+        client.query(&req).map_err(format_err)?
+    };
     let pretty = serde_json::to_string_pretty(&resp).map_err(|e| e.to_string())?;
     println!("{pretty}");
     Ok(())

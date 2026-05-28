@@ -37,7 +37,7 @@ use std::sync::Arc;
 
 use ndb_engine::Engine;
 use ndb_engine::id::{EntityId, HyperedgeId, PropertyId, RoleId, TxId, TypeId};
-use ndb_engine::record::{EntityRecord, HyperEdgeRecord, Record};
+use ndb_engine::record::{EntityRecord, HyperEdgeRecord, PropertyKeyRecord, Record, RoleNameRecord, TypeNameRecord};
 use ndb_engine::value::Value;
 use ndb_server::Server;
 use serde::Deserialize;
@@ -253,6 +253,11 @@ fn main() {
 fn seed(engine: &mut Engine) {
     let doc: SeedDoc = serde_json::from_str(SEED_JSON).expect("parse seed.json");
 
+    // Register name dictionaries so the text-query endpoint can resolve
+    // "species", "pollinator", "season_from", etc. → ids without the
+    // client having to send raw ids.
+    seed_name_dictionaries(engine);
+
     let mut region_ids:  HashMap<String, EntityId> = HashMap::with_capacity(doc.regions.len());
     let mut species_ids: HashMap<String, EntityId> = HashMap::with_capacity(doc.species.len());
 
@@ -427,6 +432,50 @@ fn seed(engine: &mut Engine) {
         doc.regions.len(), doc.species.len(), n_poll, n_mut, n_par, n_pred, n_fw,
     );
     eprintln!("max hyperedge arity: {max_arity}");
+}
+
+fn seed_name_dictionaries(engine: &mut Engine) {
+    let types: &[(u32, &str)] = &[
+        (T_SPECIES,     "species"),
+        (T_REGION,      "region"),
+        (T_POLLINATION, "pollination"),
+        (T_MUTUALISM,   "mutualism"),
+        (T_PARASITISM,  "parasitism"),
+        (T_PREDATION,   "predation"),
+        (T_FOOD_WEB,    "food_web"),
+    ];
+    let roles: &[(u32, &str)] = &[
+        (ROLE_PLANT, "plant"), (ROLE_POLLINATOR, "pollinator"),
+        (ROLE_MUTUALIST_A, "mutualist_a"), (ROLE_MUTUALIST_B, "mutualist_b"),
+        (ROLE_HOST, "host"), (ROLE_PARASITE, "parasite"),
+        (ROLE_PREDATOR, "predator"), (ROLE_PREY, "prey"),
+        (ROLE_REGION, "region"), (ROLE_ECOSYSTEM, "ecosystem"),
+        (ROLE_MEMBER, "member"),
+    ];
+    let props: &[(u32, &str)] = &[
+        (PROP_NAME, "name"), (PROP_SCIENTIFIC_NAME, "scientific_name"),
+        (PROP_COMMON_NAME, "common_name"), (PROP_KINGDOM, "kingdom"),
+        (PROP_FAMILY, "family"), (PROP_LIFE_FORM, "life_form"),
+        (PROP_PHOTO_URL, "photo_url"), (PROP_WIKI_URL, "wiki_url"),
+        (PROP_REGION_KIND, "region_kind"), (PROP_LATITUDE, "latitude"),
+        (PROP_LONGITUDE, "longitude"), (PROP_REGION_KEY, "region_key"),
+        (PROP_SEASON_FROM, "season_from"), (PROP_SEASON_TO, "season_to"),
+        (PROP_OBLIGATE, "obligate"), (PROP_INTERACTION_SUBTYPE, "interaction_subtype"),
+        (PROP_TRANSMISSION, "transmission"), (PROP_NOTE, "note"),
+        (PROP_FOOD_WEB_NAME, "food_web_name"), (PROP_INTERACTION_KIND, "interaction_kind"),
+        (PROP_TROPHIC_EDGES_JSON, "trophic_edges_json"),
+    ];
+    let mut txn = engine.begin_write();
+    for (id, n) in types {
+        txn.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(*id), name: (*n).into() }));
+    }
+    for (id, n) in roles {
+        txn.put_raw(Record::RoleName(RoleNameRecord { id: RoleId::new(*id), name: (*n).into() }));
+    }
+    for (id, n) in props {
+        txn.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(*id), name: (*n).into() }));
+    }
+    txn.commit().expect("commit dictionaries");
 }
 
 // ─── Engine helpers ────────────────────────────────────────────────────

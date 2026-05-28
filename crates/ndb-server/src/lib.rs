@@ -889,6 +889,7 @@ impl Server {
             ("POST", "/property_range") => self.handle_property_range(body, out, outcome),
             ("POST", "/traverse") => self.handle_traverse(body, out, outcome),
             ("POST", "/query") => self.handle_query(body, out, outcome),
+            ("POST", "/query/text") => self.handle_query_text(body, out, outcome),
             ("POST", "/query_stream") => self.handle_query_stream(body, out, outcome),
             ("POST", "/subscribe") => self.handle_subscribe(body, out, outcome),
             _ => {
@@ -1281,6 +1282,42 @@ impl Server {
         };
         outcome.status = 200;
         write_json(out, 200, &resp)
+    }
+
+    /// `POST /query/text` — like `/query` but the body is the query
+    /// SOURCE TEXT (e.g. `match species() as ?s return ?s limit 10`).
+    /// The server lexes + parses + resolves names → ids against its
+    /// current dictionary snapshot and runs the resulting wire-AST.
+    /// Useful for ad-hoc clients (curl, the CLI, the browser SPA) that
+    /// don't want to hand-craft AST JSON.
+    fn handle_query_text(
+        &self,
+        body: &[u8],
+        out: &mut dyn Write,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
+        let text = match std::str::from_utf8(body) {
+            Ok(s) => s,
+            Err(e) => return bad_json(out, outcome, "query/text body", &e.to_string()),
+        };
+        let mut engine = self.engine.lock().expect("engine mutex poisoned");
+        match ndb_query::execute_text(&mut engine, text) {
+            Ok(resp) => {
+                outcome.status = 200;
+                write_json(out, 200, &resp)
+            }
+            Err(e) => {
+                // Parse + resolve errors land as 400; engine + query errors as 500.
+                let env = e.envelope();
+                let status = match e {
+                    ndb_query::RunError::Parse(_) | ndb_query::RunError::Resolve(_) => 400,
+                    ndb_query::RunError::Query(_) | ndb_query::RunError::Engine(_)  => 500,
+                };
+                outcome.status = status;
+                outcome.failure = Some(env.detail.clone());
+                write_json(out, status, &env)
+            }
+        }
     }
 
     /// `POST /query_stream` — same semantics as `/query` but the response
@@ -1833,7 +1870,7 @@ fn required_capability(method: &str, path: &str) -> Option<Capability> {
         (
             "POST",
             "/lookup" | "/vector_search" | "/property_lookup" | "/property_range" | "/traverse"
-                | "/query" | "/query_stream" | "/subscribe",
+                | "/query" | "/query/text" | "/query_stream" | "/subscribe",
         ) => Some(Capability::Read),
         _ => None,
     }
