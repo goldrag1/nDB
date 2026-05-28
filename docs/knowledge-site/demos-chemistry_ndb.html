@@ -37,6 +37,32 @@
     <a href="https://pubchem.ncbi.nlm.nih.gov/" class="btn secondary" target="_blank" rel="noreferrer">PubChem (compound source)</a>
   </div>
 
+  <figure class="hero-figure">
+    <img src="/static/images/heroes/hero-chemistry-haber.png" alt="chemistry_ndb lab bench showing the Haber–Bosch reaction with full molecular animation">
+    <figcaption>
+      <strong>Lab Bench mode.</strong>
+      Drag inventory tiles onto the bench; the reaction's molecules animate
+      reactant → product. Slide the temperature on the editor (left) and
+      ΔG / K_eq recompute in real time; hit <em>commit</em> and the live
+      mirror on the right wakes via <code>/subscribe</code>.
+    </figcaption>
+  </figure>
+
+  <div class="figure-row">
+    <figure class="svg-tall">
+      <img src="/static/images/external/chemistry-aspirin-skeletal.svg" alt="Aspirin skeletal formula">
+      <figcaption><strong>Aspirin (C₉H₈O₄).</strong> Skeletal formula — the SMILES string we pull from PubChem is rendered live by SmilesDrawer in each tile. Image: Wikimedia Commons, public domain.</figcaption>
+    </figure>
+    <figure class="svg-tall">
+      <img src="/static/images/external/chemistry-glycolysis.svg" alt="Glycolysis 10-step pathway diagram">
+      <figcaption><strong>Glycolysis — 10 ordered reactions.</strong> The full linear pathway is one <code>T_PATHWAY</code> entity that names its 10 constituent reaction hyperedges in order. Diagram: Wikimedia Commons, public domain.</figcaption>
+    </figure>
+    <figure>
+      <img src="/static/images/external/chemistry-bz-photo.jpg" alt="Belousov–Zhabotinsky oscillating reaction in a petri dish">
+      <figcaption><strong>The Belousov–Zhabotinsky oscillator.</strong> A real chemical system whose properties literally oscillate over time — the canonical motivation for the <code>/subscribe</code> change-feed primitive. Photo: Wikimedia Commons, public domain.</figcaption>
+    </figure>
+  </div>
+
   <h2>What this is</h2>
 
   <ul>
@@ -48,6 +74,16 @@
   </ul>
 
   <h2>The "living data" angle</h2>
+
+  <figure class="hero-figure concept">
+    <object type="image/svg+xml" data="/static/images/concepts/subscribe-flow.svg" aria-label="Editor commits to engine, mirror wakes via /subscribe and updates"></object>
+    <figcaption>
+      <strong>How the change-feed wakes downstream consumers.</strong>
+      Editor commits the new property values → engine appends a transaction →
+      every <code>/subscribe</code> long-poll hanging on a prior <code>tx_id</code>
+      returns immediately → mirror re-fetches and re-renders.
+    </figcaption>
+  </figure>
 
   <p>You asked: <em>does nDB support reactive data — edit a property, watch dependents update in real-time?</em></p>
 

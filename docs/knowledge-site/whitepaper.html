@@ -31,6 +31,17 @@
     <a href="https://github.com/goldrag1/nDB/blob/main/docs/superpowers/specs/2026-05-27-nDB-hypergraph-design.md" target="_blank" rel="noreferrer">the design spec</a>.
   </p>
 
+  <figure class="hero-figure concept">
+    <object type="image/svg+xml" data="/static/images/concepts/nary-vs-sql.svg" aria-label="Same exoplanet discovery fact: one nDB hyperedge versus three SQL tables with a junction"></object>
+    <figcaption>
+      <strong>The whole pitch in one diagram.</strong>
+      An exoplanet discovery names a star, a planet, a detection method, and a mission.
+      nDB stores it as one arity-4 hyperedge. The relational equivalent needs star and
+      planet tables plus a junction — and the method and mission get repeated once per
+      discovery row instead of once per fact.
+    </figcaption>
+  </figure>
+
   <h2>The problem: reality is multi-dimensional, databases are 2D</h2>
 
   <p>

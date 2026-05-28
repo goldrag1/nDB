@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 360" font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#65CBF3"/>
+    </marker>
+    <marker id="arrow-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#f5a623"/>
+    </marker>
+    <radialGradient id="hub" cx="0.5" cy="0.5" r="0.6">
+      <stop offset="0%" stop-color="#f5a623" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#f5a623" stop-opacity="0.3"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Divider -->
+  <line x1="440" y1="20" x2="440" y2="340" stroke="#2b2b36" stroke-dasharray="4 6"/>
+
+  <!-- ── LEFT: nDB ── -->
+  <text x="220" y="36" text-anchor="middle" fill="#65CBF3" font-size="11" font-weight="600" letter-spacing="2">nDB · ONE RECORD</text>
+
+  <!-- 4 role-filler entities arranged around the hub -->
+  <g font-size="11" fill="#e8e8ec">
+    <circle cx="100" cy="120" r="22" fill="#1c1c24" stroke="#65CBF3" stroke-width="1.5"/>
+    <text x="100" y="124" text-anchor="middle">★ Star</text>
+    <circle cx="340" cy="120" r="22" fill="#1c1c24" stroke="#65CBF3" stroke-width="1.5"/>
+    <text x="340" y="124" text-anchor="middle">⚲ Planet</text>
+    <circle cx="100" cy="260" r="22" fill="#1c1c24" stroke="#65CBF3" stroke-width="1.5"/>
+    <text x="100" y="264" text-anchor="middle">⚙ Method</text>
+    <circle cx="340" cy="260" r="22" fill="#1c1c24" stroke="#65CBF3" stroke-width="1.5"/>
+    <text x="340" y="264" text-anchor="middle">⌖ Mission</text>
+  </g>
+
+  <!-- Lines from hub to fillers -->
+  <g stroke="#f5a623" stroke-width="1.4" opacity="0.7">
+    <line x1="220" y1="190" x2="122" y2="120"/>
+    <line x1="220" y1="190" x2="318" y2="120"/>
+    <line x1="220" y1="190" x2="122" y2="260"/>
+    <line x1="220" y1="190" x2="318" y2="260"/>
+  </g>
+
+  <!-- Central hub: one hyperedge -->
+  <circle cx="220" cy="190" r="48" fill="url(#hub)" stroke="#f5a623" stroke-width="2"/>
+  <circle cx="220" cy="190" r="58" fill="none" stroke="#f5a623" stroke-width="1" opacity="0.4">
+    <animate attributeName="r" values="48;68;48" dur="3s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.5;0;0.5" dur="3s" repeatCount="indefinite"/>
+  </circle>
+  <text x="220" y="186" text-anchor="middle" fill="#fff" font-size="11" font-weight="600">DISCOVERY</text>
+  <text x="220" y="200" text-anchor="middle" fill="#fff" font-size="10" opacity="0.85">hyperedge</text>
+
+  <text x="220" y="316" text-anchor="middle" fill="#888" font-size="11">
+    <tspan font-family="ui-monospace,SF Mono,Menlo,Consolas,monospace">arity = 4</tspan>
+    <tspan dx="6"> · 4 role-fillers · 1 row</tspan>
+  </text>
+
+  <!-- ── RIGHT: SQL ── -->
+  <text x="660" y="36" text-anchor="middle" fill="#f5a623" font-size="11" font-weight="600" letter-spacing="2">RELATIONAL · 3 TABLES + JOINS</text>
+
+  <!-- Three tables stacked -->
+  <g font-size="10" font-family="ui-monospace, SF Mono, Menlo, Consolas, monospace">
+
+    <!-- stars -->
+    <rect x="490" y="60" width="120" height="60" rx="3" fill="#1c1c24" stroke="#2b2b36"/>
+    <text x="500" y="76" fill="#888" font-size="9">stars</text>
+    <text x="500" y="92" fill="#65CBF3">id  name</text>
+    <text x="500" y="106" fill="#e8e8ec">42  Sun</text>
+
+    <!-- planets -->
+    <rect x="710" y="60" width="120" height="60" rx="3" fill="#1c1c24" stroke="#2b2b36"/>
+    <text x="720" y="76" fill="#888" font-size="9">planets</text>
+    <text x="720" y="92" fill="#65CBF3">id  name</text>
+    <text x="720" y="106" fill="#e8e8ec">93  Earth</text>
+
+    <!-- discoveries (junction) -->
+    <rect x="490" y="190" width="340" height="86" rx="3" fill="#1c1c24" stroke="#f5a623"/>
+    <text x="500" y="206" fill="#888" font-size="9">discoveries (junction table)</text>
+    <text x="500" y="222" fill="#f5a623">star_id  planet_id  method   mission</text>
+    <text x="500" y="238" fill="#e8e8ec">42       93         radial   HARPS</text>
+    <text x="500" y="252" fill="#e8e8ec">42       93         transit  K2</text>
+    <text x="500" y="266" fill="#e8e8ec">42       93         astrom.  Gaia</text>
+  </g>
+
+  <!-- FK arrows -->
+  <g stroke="#65CBF3" stroke-width="1.2" opacity="0.6" fill="none" marker-end="url(#arrow)">
+    <path d="M 550 130 Q 540 160 520 188"/>
+    <path d="M 770 130 Q 780 160 800 188"/>
+  </g>
+
+  <text x="660" y="316" text-anchor="middle" fill="#888" font-size="11">
+    <tspan>method+mission stored </tspan>
+    <tspan fill="#f5a623">3× per planet</tspan>
+    <tspan> as separate rows</tspan>
+  </text>
+</svg>

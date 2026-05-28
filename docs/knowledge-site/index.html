@@ -40,6 +40,36 @@
     </div>
   </section>
 
+  <figure class="hero-figure concept">
+    <object type="image/svg+xml" data="/static/images/concepts/nary-vs-sql.svg" aria-label="One N-ary record in nDB versus three SQL tables for the same fact"></object>
+    <figcaption>
+      <strong>Same fact, two storage models.</strong>
+      An exoplanet discovery names a star, a planet, a detection method, and a mission.
+      In nDB it's one record with four role-fillers. In a relational schema it's a junction
+      table — and the method and mission get stored once per discovery row instead of once per fact.
+    </figcaption>
+  </figure>
+
+  <h2>What it looks like, in four flavours</h2>
+  <div class="figure-row">
+    <figure>
+      <a href="/alphafold_ndb/"><img src="/static/images/heroes/hero-alphafold-graph.png" alt="alphafold_ndb 3D structure + hypergraph"></a>
+      <figcaption><strong>alphafold_ndb</strong> — protein structures as hypergraphs. Catalytic triads, zinc fingers, helices and sheets each become one hyperedge.</figcaption>
+    </figure>
+    <figure>
+      <a href="/exoplanet_ndb/"><img src="/static/images/heroes/hero-exoplanet-3d.png" alt="exoplanet_ndb 5D scatter of confirmed planets"></a>
+      <figcaption><strong>exoplanet_ndb</strong> — 91 confirmed planets across all 11 detection methods. Every discovery is an arity-4 record.</figcaption>
+    </figure>
+    <figure>
+      <a href="/seismic_ndb/"><img src="/static/images/heroes/hero-seismic-ringoffire.png" alt="seismic_ndb global earthquake map"></a>
+      <figcaption><strong>seismic_ndb</strong> — the 2010 Maule aftershock sequence packs 1,000 events into one arity-1001 record.</figcaption>
+    </figure>
+    <figure>
+      <a href="/chemistry_ndb/"><img src="/static/images/heroes/hero-chemistry-haber.png" alt="chemistry_ndb reaction lab bench"></a>
+      <figcaption><strong>chemistry_ndb</strong> — reactions with stoichiometry as repeated role-fillers, plus live propagation via <code>/subscribe</code>.</figcaption>
+    </figure>
+  </div>
+
   <h2>Why this exists</h2>
   <p>
     Most of reality is N-ary. A reaction has reactants, products, catalysts, conditions.

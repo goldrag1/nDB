@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 260" font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7ed321"/>
+    </marker>
+  </defs>
+
+  <!-- LEFT pane: editor -->
+  <rect x="40" y="60" width="240" height="140" rx="6" fill="#1c1c24" stroke="#65CBF3" stroke-width="1.5"/>
+  <text x="160" y="84" text-anchor="middle" fill="#65CBF3" font-size="11" font-weight="600" letter-spacing="1.5">EDITOR</text>
+  <text x="160" y="108" text-anchor="middle" fill="#e8e8ec" font-size="13">Haber–Bosch</text>
+  <text x="160" y="128" text-anchor="middle" fill="#888" font-size="11" font-family="ui-monospace,SF Mono,Menlo,Consolas,monospace">T = 700 K</text>
+  <text x="160" y="146" text-anchor="middle" fill="#888" font-size="11" font-family="ui-monospace,SF Mono,Menlo,Consolas,monospace">ΔG = −33 kJ/mol</text>
+  <text x="160" y="164" text-anchor="middle" fill="#7ed321" font-size="11" font-family="ui-monospace,SF Mono,Menlo,Consolas,monospace">K_eq = 296</text>
+  <rect x="100" y="174" width="120" height="18" rx="3" fill="#4a90e2"/>
+  <text x="160" y="187" text-anchor="middle" fill="#fff" font-size="10" font-weight="600">COMMIT</text>
+
+  <!-- Engine -->
+  <rect x="350" y="80" width="180" height="100" rx="6" fill="#0a0a10" stroke="#f5a623" stroke-width="1.5"/>
+  <text x="440" y="104" text-anchor="middle" fill="#f5a623" font-size="11" font-weight="600" letter-spacing="1.5">nDB ENGINE</text>
+  <text x="440" y="126" text-anchor="middle" fill="#e8e8ec" font-size="12">append tx</text>
+  <text x="440" y="146" text-anchor="middle" fill="#888" font-size="11" font-family="ui-monospace,SF Mono,Menlo,Consolas,monospace">tx_id = 1042</text>
+  <text x="440" y="164" text-anchor="middle" fill="#888" font-size="11" font-family="ui-monospace,SF Mono,Menlo,Consolas,monospace">notify subscribers</text>
+
+  <!-- RIGHT pane: mirror -->
+  <rect x="600" y="60" width="240" height="140" rx="6" fill="#1c1c24" stroke="#65CBF3" stroke-width="1.5"/>
+  <text x="720" y="84" text-anchor="middle" fill="#65CBF3" font-size="11" font-weight="600" letter-spacing="1.5">LIVE MIRROR</text>
+  <text x="720" y="108" text-anchor="middle" fill="#e8e8ec" font-size="13">Haber–Bosch</text>
+  <text x="720" y="128" text-anchor="middle" fill="#888" font-size="11" font-family="ui-monospace,SF Mono,Menlo,Consolas,monospace">T = 700 K</text>
+  <text x="720" y="146" text-anchor="middle" fill="#888" font-size="11" font-family="ui-monospace,SF Mono,Menlo,Consolas,monospace">ΔG = −33 kJ/mol</text>
+  <text x="720" y="164" text-anchor="middle" fill="#7ed321" font-size="11" font-family="ui-monospace,SF Mono,Menlo,Consolas,monospace">K_eq = 296</text>
+  <!-- Pulse highlight -->
+  <rect x="600" y="60" width="240" height="140" rx="6" fill="none" stroke="#7ed321" stroke-width="2">
+    <animate attributeName="opacity" values="0;0.9;0" dur="3s" repeatCount="indefinite" begin="1.7s"/>
+  </rect>
+
+  <!-- Arrows with traveling dots -->
+  <line x1="282" y1="130" x2="348" y2="130" stroke="#7ed321" stroke-width="1.5" marker-end="url(#ar)"/>
+  <line x1="532" y1="130" x2="598" y2="130" stroke="#7ed321" stroke-width="1.5" marker-end="url(#ar)"/>
+
+  <circle r="4" fill="#7ed321">
+    <animateMotion dur="3s" repeatCount="indefinite" path="M 282 130 L 348 130" keyPoints="0;1" keyTimes="0;1"/>
+  </circle>
+  <circle r="4" fill="#7ed321">
+    <animateMotion dur="3s" repeatCount="indefinite" begin="1.5s" path="M 532 130 L 598 130"/>
+  </circle>
+
+  <!-- Labels -->
+  <text x="315" y="118" text-anchor="middle" fill="#7ed321" font-size="9" font-family="ui-monospace,SF Mono,Menlo,Consolas,monospace">POST /commit</text>
+  <text x="565" y="118" text-anchor="middle" fill="#7ed321" font-size="9" font-family="ui-monospace,SF Mono,Menlo,Consolas,monospace">/subscribe woke</text>
+
+  <text x="440" y="232" text-anchor="middle" fill="#888" font-size="11">edit → commit → tx_id → subscribers wake → mirror updates</text>
+</svg>
