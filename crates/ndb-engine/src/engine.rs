@@ -765,8 +765,6 @@ impl Engine {
         uuid: &uuid::Uuid,
         snapshot: TxId,
     ) -> Result<Resolved<Record>, EngineError> {
-        let mut candidates: Vec<Record> = Vec::new();
-
         // One key allocation, reused across all (kind, layer) probes by
         // mutating only the `kind` discriminant — the 16-byte primary is
         // identical for the three kinds, so allocating it per kind/per
@@ -778,26 +776,15 @@ impl Engine {
             primary: uuid.as_bytes().to_vec(),
         };
 
-        // Memtable first.
-        for kind in [
-            crate::record::RecordKind::Entity,
-            crate::record::RecordKind::HyperEdge,
-            crate::record::RecordKind::Tombstone,
-        ] {
-            key.kind = kind.as_byte();
-            if let Some(vs) = self.memtable.versions(&key) {
-                candidates.extend(vs.iter().cloned());
-            }
-        }
-
-        // Each open SSTable. find_all() probes the block-index sidecar
-        // when present (O(log N) seek + ≤ block_size linear scan) and
-        // gracefully linear-scans the whole file when the sidecar is
-        // missing or unloadable. The SSTable readers expose `find_all`
-        // through `&self` (mmap or decrypted heap buffer; both are
-        // immutable post-open), so we don't need `&mut self.sstables`
-        // here. Keeping reads on `&self` is what makes
-        // `RwLock<Engine>`-backed concurrent point lookups parallelise.
+        // SSTable hits must be owned (deserialized out of the file), so
+        // hold them in a local buffer we can borrow alongside the
+        // memtable's borrowed version slices. find_all() probes the
+        // block-index sidecar when present (O(log N) seek + ≤ block_size
+        // scan) and linear-scans the whole file otherwise. Reads go
+        // through `&self` (mmap / decrypted heap buffer; both immutable
+        // post-open), which is what lets `RwLock<Engine>` parallelise
+        // concurrent point lookups.
+        let mut sstable_owned: Vec<Record> = Vec::new();
         for sst in &self.sstables {
             for kind in [
                 crate::record::RecordKind::Entity,
@@ -805,11 +792,29 @@ impl Engine {
                 crate::record::RecordKind::Tombstone,
             ] {
                 key.kind = kind.as_byte();
-                candidates.extend(sst.find_all(&key)?);
+                sstable_owned.extend(sst.find_all(&key)?);
             }
         }
 
-        Ok(match resolve_iter(candidates.iter(), snapshot) {
+        // Resolve over BORROWED candidates — memtable version slices are
+        // referenced in place (no per-version clone), SSTable records
+        // borrowed from the local buffer. Newest layer first: memtable,
+        // then SSTables. Only the winning record is cloned, instead of
+        // cloning every candidate and then the winner again.
+        let mut refs: Vec<&Record> = Vec::new();
+        for kind in [
+            crate::record::RecordKind::Entity,
+            crate::record::RecordKind::HyperEdge,
+            crate::record::RecordKind::Tombstone,
+        ] {
+            key.kind = kind.as_byte();
+            if let Some(vs) = self.memtable.versions(&key) {
+                refs.extend(vs.iter());
+            }
+        }
+        refs.extend(sstable_owned.iter());
+
+        Ok(match resolve_iter(refs, snapshot) {
             Resolved::Missing => Resolved::Missing,
             Resolved::Deleted { deleted_at } => Resolved::Deleted { deleted_at },
             Resolved::Live(r) => Resolved::Live(r.clone()),
