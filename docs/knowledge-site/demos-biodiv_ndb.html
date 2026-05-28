@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>biodiv_ndb · Demo · nDB</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">nDB <span class="sub">N-dimensional database</span></div>
+  <nav>
+    <a href="/">Home</a>
+    <a href="/whitepaper.html">Whitepaper</a>
+    <a href="/discussion.html">Discussion</a>
+    <a href="/demos.html" class="active">Demos</a>
+    <a href="/repo.html">Repo</a>
+  </nav>
+  <div class="right">v2.3.0 · 488 tests</div>
+</header>
+
+<main class="page">
+
+  <h1>biodiv_ndb</h1>
+  <p class="lede">
+    Ecology is inherently N-ary. A pollination event names a plant, a
+    pollinator, a region, and a season; a food web names an entire
+    ecosystem alongside 15+ species at once. Demo #5 stores all of it
+    as hyperedges with temporal qualifiers — and serves a Wikipedia
+    photo for every one of the 145 species so you can actually <em>see</em>
+    what each role is.
+  </p>
+
+  <div class="btn-row">
+    <a href="/biodiv_ndb/" class="btn">Launch live demo →</a>
+    <a href="https://en.wikipedia.org/wiki/Biotic_interaction" class="btn secondary" target="_blank" rel="noreferrer">Biotic interaction · Wikipedia</a>
+    <a href="https://www.globalbioticinteractions.org/" class="btn secondary" target="_blank" rel="noreferrer">GloBI (further reading)</a>
+  </div>
+
+  <figure class="hero-figure">
+    <img src="/static/images/heroes/hero-biodiv-foodweb.png" alt="Yellowstone food web rendered as a hub-spoke hyperedge in biodiv_ndb">
+    <figcaption>
+      <strong>One ecosystem, one record.</strong>
+      The Yellowstone food web is a single arity-18 hyperedge — Yellowstone
+      at the hub, 17 species in role-filler slots around the ring. Wolves,
+      elk, beaver, willow, grizzly, eagle, bison, coyote, pronghorn, fox,
+      raven, salmon… each photo is sourced live from the species' Wikipedia
+      page at build time.
+    </figcaption>
+  </figure>
+
+  <figure class="hero-figure">
+    <img src="/static/images/heroes/hero-biodiv-yucca.jpg" alt="biodiv_ndb species grid plus inspector showing the yucca / yucca-moth obligate-pollination hyperedge">
+    <figcaption>
+      <strong>Drilled into one hyperedge.</strong>
+      Yucca filamentosa is selected (centre grid). The inspector on the right
+      shows the underlying nDB record: three role-fillers (plant, pollinator,
+      region), a 12-month temporal-validity bar (May–July highlighted), and the
+      <code>obligate</code> badge — the moth lays its eggs in the yucca flower,
+      and the yucca cannot be pollinated by anything else.
+    </figcaption>
+  </figure>
+
+  <h2>What this is</h2>
+
+  <p>A single-page web app that lets you walk the world's biotic interactions the way nDB stores them:</p>
+
+  <ul>
+    <li><strong>145 species entities</strong>, every one with a Wikipedia-sourced photo. The taxonomy spans plants, animals, fungi, lichens, microbes, and algae — across all six kingdoms a biology textbook would care about.</li>
+    <li><strong>22 region entities</strong> — continents, biomes, oceans, ecosystems. Each holds a lat/lon centroid so the map view can pin it.</li>
+    <li><strong>57 binary/ternary interactions</strong> across four categories: 15 pollination, 15 non-pollination mutualism, 12 parasitism, 15 predation. Every record is a hyperedge of arity 3 — two species plus the region.</li>
+    <li><strong>6 food-web hyperedges</strong>, one per major ecosystem (Yellowstone, California kelp forest, Serengeti, Indo-Pacific coral reef, Arctic, Amazon rainforest). The Yellowstone food web tops arity at <strong>18</strong> (1 ecosystem + 17 member species) in a single nDB row.</li>
+    <li><strong>Temporal qualifiers</strong> on the hyperedges — May–July for yucca/moth, year-round for tropical hummingbird/heliconia, August–October for bald eagle / sockeye salmon. The inspector renders these as a 12-month strip so you can see at a glance when each interaction is valid.</li>
+  </ul>
+
+  <h2>The angle this demo nails: temporal qualifiers</h2>
+
+  <p>Each of the previous four demos showed a different facet of nDB's value — protein structure, N-ary discovery facts, time-clustered events, stoichiometry-as-repeated-roles. Biotic interactions add the next axis: <strong>a fact that's only true at certain times</strong>.</p>
+
+  <p>The yucca / yucca-moth obligate mutualism is famously time-restricted: only May–July, when yucca blooms. In a relational schema you'd model that as either a junction table with `start_month` and `end_month` columns (lossy: months 12→2 wraps badly), or by exploding the relation into per-month rows (huge cardinality). In nDB it's just two properties on the hyperedge: <code>season_from = 5</code>, <code>season_to = 7</code>. The query "what's pollinating in June?" filters edges where the month falls in <code>[from, to]</code>.</p>
+
+  <h2>Schema</h2>
+
+  <h3>Entity types</h3>
+  <ul>
+    <li><code>T_SPECIES = 1</code> — 145 species, properties: <code>scientific_name · common_name · kingdom · family · life_form · photo_url · wiki_url</code>.</li>
+    <li><code>T_REGION = 2</code> — 22 geographic/ecosystem regions with <code>lat · lon · region_kind</code>.</li>
+  </ul>
+
+  <h3>Hyperedge types</h3>
+  <ul>
+    <li><code>T_POLLINATION = 100</code> — arity 3. Roles <code>(plant, pollinator, region)</code>. Properties: <code>season_from · season_to · obligate? · note</code>.</li>
+    <li><code>T_MUTUALISM = 101</code> — arity 3. Roles <code>(species_a, species_b, region)</code>. Properties: <code>subtype · obligate?</code>.</li>
+    <li><code>T_PARASITISM = 102</code> — arity 3. Roles <code>(host, parasite, region)</code>. Properties: <code>transmission</code>.</li>
+    <li><code>T_PREDATION = 103</code> — arity 3. Roles <code>(predator, prey, region)</code>. Properties: <code>season_from · season_to</code>.</li>
+    <li><code>T_FOOD_WEB = 104</code> — arity 11–18. Roles <code>(ecosystem, member_1, …, member_N)</code>. One record per ecosystem.</li>
+  </ul>
+
+  <h3>Hyperedges of mixed cardinality, one type</h3>
+
+  <p>All four pairwise types share an arity of 3 (two participants + one region). Food webs alone vary — Arctic = 11 roles, Yellowstone = 18. nDB doesn't enforce a single arity per type; the type just labels the <em>kind</em> of relation. SQL would model these very differently (interactions as junction rows; food webs as either an `ecosystem_members` table with thousands of rows, or as a JSON blob on the ecosystem). nDB makes them the same kind of object.</p>
+
+  <h2>The 30-second tour</h2>
+
+  <ol>
+    <li><strong>Species mode</strong> — 145 cards, each a photo + common name + binomial + family. Filter by life form on the left; type a search term to narrow.</li>
+    <li><strong>Click any species.</strong> The right pane fills with its taxonomy, Wikipedia link, and chips for every interaction it appears in.</li>
+    <li><strong>Click an interaction chip.</strong> The inspector flips to show that hyperedge — role-fillers (with photos), temporal validity bar, the note explaining the relationship.</li>
+    <li><strong>Map mode.</strong> 22 region pins sized by interaction count. The Indo-Pacific and Sub-Saharan Africa light up brightest — they pack the most coevolved relationships.</li>
+    <li><strong>Food-web mode.</strong> Pick an ecosystem from the chips — the central blue hub is the ecosystem entity, the photo ring is every member species in that arity-N record.</li>
+  </ol>
+
+  <h2>What this is not</h2>
+
+  <ul>
+    <li><strong>Not GloBI scale.</strong> GloBI holds ~3 M verified interactions; we hold 63. We picked textbook examples a non-biologist would recognise (yucca + yucca moth, polar bear + ringed seal, sea otter + urchin keystone-predation) rather than crowdsourced volume.</li>
+    <li><strong>No directional asymmetry on mutualism.</strong> Pollination and parasitism are directional (plant ≠ pollinator; host ≠ parasite). Mutualism stores both species but doesn't claim one is "primary" — both roles are symmetric.</li>
+    <li><strong>Food webs don't store edge directionality.</strong> A real food web is a directed graph (who eats whom). For the demo we collapsed that into "membership in this ecosystem". The narrative note carries the trophic-cascade story; the data does not.</li>
+    <li><strong>Wikipedia photos may not always be the canonical individual.</strong> Some pages show a juvenile, a different sex, or a captive specimen. The seed builder takes Wikipedia's <code>pageimage</code> verbatim and caches it; curating individual photos is a separate exercise.</li>
+  </ul>
+
+  <h2>Across the five demos</h2>
+
+  <table>
+    <thead><tr><th>Demo</th><th>Max arity</th><th>What that arity holds</th><th>Angle the demo highlights</th></tr></thead>
+    <tbody>
+      <tr><td><a href="/alphafold_ndb/">alphafold_ndb</a></td><td>1518</td><td>KRAS protein-atoms</td><td>spatial structure as hyperedges</td></tr>
+      <tr><td><a href="/exoplanet_ndb/">exoplanet_ndb</a></td><td>9</td><td>Kepler-90 (1 star + 8 planets)</td><td>clean N-ary discovery facts</td></tr>
+      <tr><td><a href="/seismic_ndb/">seismic_ndb</a></td><td>1000</td><td>Maule 2010 aftershock sequence</td><td>time-clustered events as one record</td></tr>
+      <tr><td><a href="/chemistry_ndb/">chemistry_ndb</a></td><td>1003</td><td>Polyethylene polymerisation</td><td>stoichiometry as repeated role-fillers · live <code>/subscribe</code></td></tr>
+      <tr><td><a href="/biodiv_ndb/"><strong>biodiv_ndb</strong></a></td><td><strong>18</strong></td><td>Yellowstone food web (17 species + ecosystem)</td><td><strong>temporal qualifiers on hyperedges</strong></td></tr>
+    </tbody>
+  </table>
+
+  <h2>Where the code lives</h2>
+
+  <table>
+    <thead><tr><th>Component</th><th>Path</th></tr></thead>
+    <tbody>
+      <tr><td>Rust binary (engine + ndb-server :8748 + static :9881)</td><td><code>crates/ndb-renderer/examples/biodiv_explorer/main.rs</code></td></tr>
+      <tr><td>Curated seed (JSON, ~80 KB)</td><td><code>crates/ndb-renderer/examples/biodiv_explorer/seed.json</code></td></tr>
+      <tr><td>Source-of-truth interactions (Python list)</td><td><code>tools/biodiv/interactions.py</code></td></tr>
+      <tr><td>Seed builder (resolves photos from Wikipedia, caches)</td><td><code>tools/biodiv/build_seed.py</code></td></tr>
+      <tr><td>SPA (3 view modes + inspector)</td><td><code>docs/biodiv/index.html</code></td></tr>
+    </tbody>
+  </table>
+
+  <h2>Run it yourself</h2>
+
+<pre><code>git clone https://github.com/goldrag1/nDB
+cd nDB
+
+# Regenerate the seed (Wikipedia photos are cached at tools/biodiv/.photo-cache.json):
+python3 tools/biodiv/build_seed.py
+
+# Launch:
+cargo run -p ndb-renderer --example biodiv_explorer
+# then open http://127.0.0.1:9881/
+</code></pre>
+
+  <div class="btn-row" style="margin-top: 36px;">
+    <a href="/biodiv_ndb/" class="btn">Launch live demo →</a>
+    <a href="/demos.html" class="btn secondary">Other demos</a>
+  </div>
+
+</main>
+
+<footer class="site-foot">
+  <p>nDB is open-source under MIT. <a href="https://github.com/goldrag1/nDB" target="_blank" rel="noreferrer">github.com/goldrag1/nDB</a></p>
+</footer>
+
+</body>
+</html>

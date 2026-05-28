@@ -1,0 +1,350 @@
+"""
+biodiv_ndb — curated biotic-interaction seed (source of truth for the demo).
+
+Five categories, every interaction is a textbook example a non-biologist will recognise:
+  • pollination  (15) — mutualism between a plant and a pollinator
+  • mutualism    (15) — non-pollination mutualism
+  • parasitism   (12) — including brood parasitism + host-manipulating parasites
+  • predation    (15) — classic predator–prey pairs
+  • food_web      (6) — whole-ecosystem hyperedges, each ~18-22 species
+
+Each species is keyed by its scientific name (binomial) — the seed builder
+resolves photo URLs from the Wikipedia API at build time and caches them.
+
+The shape mirrors `tools/chemistry/reactions.py`: a flat list of dicts that
+the build script flattens into nDB entities + hyperedges. The Rust seeder
+(`crates/ndb-renderer/examples/biodiv_explorer/main.rs`) replays them.
+"""
+
+# ─── Regions (geographic + biome) ────────────────────────────────────────
+REGIONS = [
+    {"key": "north_america",   "name": "North America",        "kind": "continent", "lat":  45.0, "lon": -100.0},
+    {"key": "neotropics",      "name": "Neotropics",           "kind": "biome",     "lat":  -5.0, "lon":  -60.0},
+    {"key": "mediterranean",   "name": "Mediterranean Basin",  "kind": "biome",     "lat":  38.0, "lon":   15.0},
+    {"key": "sonoran_desert",  "name": "Sonoran Desert",       "kind": "biome",     "lat":  32.0, "lon": -112.0},
+    {"key": "sub_saharan",     "name": "Sub-Saharan Africa",   "kind": "biome",     "lat":  -5.0, "lon":   25.0},
+    {"key": "serengeti",       "name": "Serengeti",            "kind": "ecosystem", "lat":  -2.5, "lon":   35.0},
+    {"key": "madagascar",      "name": "Madagascar",           "kind": "country",   "lat": -19.0, "lon":   47.0},
+    {"key": "australia",       "name": "Australia",            "kind": "continent", "lat": -25.0, "lon":  133.0},
+    {"key": "south_asia",      "name": "South Asia",           "kind": "continent", "lat":  20.0, "lon":   80.0},
+    {"key": "himalaya",        "name": "Himalaya",             "kind": "ecosystem", "lat":  28.0, "lon":   85.0},
+    {"key": "amazon",          "name": "Amazon Rainforest",    "kind": "ecosystem", "lat":  -3.0, "lon":  -62.0},
+    {"key": "indo_pacific",    "name": "Indo-Pacific",         "kind": "ocean",     "lat":   0.0, "lon":  140.0},
+    {"key": "cape_coast",      "name": "Cape Coast",           "kind": "ecosystem", "lat": -34.0, "lon":   18.0},
+    {"key": "pacific_nw",      "name": "Pacific Northwest",    "kind": "ecosystem", "lat":  47.0, "lon": -122.0},
+    {"key": "arctic",          "name": "Arctic",               "kind": "biome",     "lat":  80.0, "lon":    0.0},
+    {"key": "great_lakes",     "name": "Laurentian Great Lakes","kind": "ecosystem","lat":  45.0, "lon":  -85.0},
+    {"key": "yellowstone",     "name": "Yellowstone",          "kind": "ecosystem", "lat":  44.6, "lon": -110.5},
+    {"key": "kelp_forest",     "name": "California Kelp Forest","kind":"ecosystem", "lat":  36.6, "lon": -121.9},
+    {"key": "coral_reef",      "name": "Indo-Pacific Coral Reef","kind":"ecosystem","lat":  -8.0, "lon":  147.0},
+    {"key": "global",          "name": "Global",               "kind": "biome",     "lat":   0.0, "lon":    0.0},
+    {"key": "europe",          "name": "Europe",               "kind": "continent", "lat":  50.0, "lon":   10.0},
+    {"key": "patagonia",       "name": "Patagonia",            "kind": "ecosystem", "lat": -45.0, "lon":  -70.0},
+]
+
+# ─── Species (taxon entities) ────────────────────────────────────────────
+# Photos are resolved at build time from Wikipedia / Commons via the
+# binomial in `wiki_title` (falls back to scientific_name if unset).
+SPECIES = [
+    # Plants
+    {"sci": "Yucca filamentosa",       "common": "Adam's needle yucca",    "kingdom": "Plantae",   "family": "Asparagaceae",     "life_form": "plant"},
+    {"sci": "Ficus carica",            "common": "Common fig",             "kingdom": "Plantae",   "family": "Moraceae",         "life_form": "plant"},
+    {"sci": "Asclepias syriaca",       "common": "Common milkweed",        "kingdom": "Plantae",   "family": "Apocynaceae",      "life_form": "plant"},
+    {"sci": "Heliconia rostrata",      "common": "Lobster claw",           "kingdom": "Plantae",   "family": "Heliconiaceae",    "life_form": "plant"},
+    {"sci": "Prunus dulcis",           "common": "Almond tree",            "kingdom": "Plantae",   "family": "Rosaceae",         "life_form": "plant"},
+    {"sci": "Solanum lycopersicum",    "common": "Tomato",                 "kingdom": "Plantae",   "family": "Solanaceae",       "life_form": "plant"},
+    {"sci": "Carnegiea gigantea",      "common": "Saguaro cactus",         "kingdom": "Plantae",   "family": "Cactaceae",        "life_form": "plant"},
+    {"sci": "Datura wrightii",         "common": "Sacred datura",          "kingdom": "Plantae",   "family": "Solanaceae",       "life_form": "plant"},
+    {"sci": "Magnolia grandiflora",    "common": "Southern magnolia",      "kingdom": "Plantae",   "family": "Magnoliaceae",     "life_form": "plant"},
+    {"sci": "Aloe ferox",              "common": "Bitter aloe",            "kingdom": "Plantae",   "family": "Asphodelaceae",    "life_form": "plant"},
+    {"sci": "Ravenala madagascariensis","common": "Traveller's palm",      "kingdom": "Plantae",   "family": "Strelitziaceae",   "life_form": "plant"},
+    {"sci": "Banksia integrifolia",    "common": "Coast banksia",          "kingdom": "Plantae",   "family": "Proteaceae",       "life_form": "plant"},
+    {"sci": "Ophrys apifera",          "common": "Bee orchid",             "kingdom": "Plantae",   "family": "Orchidaceae",      "life_form": "plant"},
+    {"sci": "Nymphaea alba",           "common": "European white water-lily","kingdom":"Plantae",  "family": "Nymphaeaceae",     "life_form": "plant"},
+    {"sci": "Vachellia drepanolobium", "common": "Whistling thorn acacia", "kingdom": "Plantae",   "family": "Fabaceae",         "life_form": "plant"},
+    {"sci": "Quercus robur",           "common": "English oak",            "kingdom": "Plantae",   "family": "Fagaceae",         "life_form": "plant"},
+    {"sci": "Phoradendron leucarpum",  "common": "American mistletoe",     "kingdom": "Plantae",   "family": "Santalaceae",      "life_form": "plant"},
+    {"sci": "Ficus aurea",             "common": "Florida strangler fig",  "kingdom": "Plantae",   "family": "Moraceae",         "life_form": "plant"},
+    {"sci": "Glycine max",             "common": "Soybean",                "kingdom": "Plantae",   "family": "Fabaceae",         "life_form": "plant"},
+    {"sci": "Bertholletia excelsa",    "common": "Brazil nut",             "kingdom": "Plantae",   "family": "Lecythidaceae",    "life_form": "plant"},
+    {"sci": "Macrocystis pyrifera",    "common": "Giant kelp",             "kingdom": "Chromista", "family": "Laminariaceae",    "life_form": "alga"},
+    {"sci": "Pinus contorta",          "common": "Lodgepole pine",         "kingdom": "Plantae",   "family": "Pinaceae",         "life_form": "plant"},
+    {"sci": "Salix exigua",            "common": "Sandbar willow",         "kingdom": "Plantae",   "family": "Salicaceae",       "life_form": "plant"},
+    {"sci": "Bouteloua gracilis",      "common": "Blue grama grass",       "kingdom": "Plantae",   "family": "Poaceae",          "life_form": "plant"},
+    {"sci": "Acropora millepora",      "common": "Staghorn coral",         "kingdom": "Animalia",  "family": "Acroporidae",      "life_form": "animal"},
+    {"sci": "Symbiodinium microadriaticum","common": "Zooxanthella",       "kingdom": "Chromista", "family": "Symbiodiniaceae",  "life_form": "alga"},
+    # Pollinators
+    {"sci": "Tegeticula yuccasella",   "common": "Yucca moth",             "kingdom": "Animalia",  "family": "Prodoxidae",       "life_form": "animal"},
+    {"sci": "Blastophaga psenes",      "common": "Fig wasp",               "kingdom": "Animalia",  "family": "Agaonidae",        "life_form": "animal"},
+    {"sci": "Danaus plexippus",        "common": "Monarch butterfly",      "kingdom": "Animalia",  "family": "Nymphalidae",      "life_form": "animal"},
+    {"sci": "Trochilus polytmus",      "common": "Streamertail hummingbird","kingdom":"Animalia",  "family": "Trochilidae",      "life_form": "animal"},
+    {"sci": "Apis mellifera",          "common": "Western honeybee",       "kingdom": "Animalia",  "family": "Apidae",           "life_form": "animal"},
+    {"sci": "Bombus terrestris",       "common": "Buff-tailed bumblebee",  "kingdom": "Animalia",  "family": "Apidae",           "life_form": "animal"},
+    {"sci": "Leptonycteris yerbabuenae","common": "Lesser long-nosed bat", "kingdom": "Animalia",  "family": "Phyllostomidae",   "life_form": "animal"},
+    {"sci": "Manduca sexta",           "common": "Tobacco hornworm hawkmoth","kingdom":"Animalia", "family": "Sphingidae",       "life_form": "animal"},
+    {"sci": "Cyclocephala borealis",   "common": "Northern masked chafer", "kingdom": "Animalia",  "family": "Scarabaeidae",     "life_form": "animal"},
+    {"sci": "Nectarinia famosa",       "common": "Malachite sunbird",      "kingdom": "Animalia",  "family": "Nectariniidae",    "life_form": "animal"},
+    {"sci": "Eulemur rubriventer",     "common": "Red-bellied lemur",      "kingdom": "Animalia",  "family": "Lemuridae",        "life_form": "animal"},
+    {"sci": "Anthochaera carunculata", "common": "Red wattlebird",         "kingdom": "Animalia",  "family": "Meliphagidae",     "life_form": "animal"},
+    {"sci": "Eucera longicornis",      "common": "Long-horned bee",        "kingdom": "Animalia",  "family": "Apidae",           "life_form": "animal"},
+    # Mutualists / cleaners / symbionts
+    {"sci": "Amphiprion ocellaris",    "common": "Clown anemonefish",      "kingdom": "Animalia",  "family": "Pomacentridae",    "life_form": "animal"},
+    {"sci": "Heteractis magnifica",    "common": "Magnificent sea anemone","kingdom": "Animalia",  "family": "Stichodactylidae", "life_form": "animal"},
+    {"sci": "Labroides dimidiatus",    "common": "Bluestreak cleaner wrasse","kingdom":"Animalia", "family": "Labridae",         "life_form": "animal"},
+    {"sci": "Epinephelus tukula",      "common": "Potato grouper",         "kingdom": "Animalia",  "family": "Serranidae",       "life_form": "animal"},
+    {"sci": "Buphagus africanus",      "common": "Yellow-billed oxpecker", "kingdom": "Animalia",  "family": "Buphagidae",       "life_form": "animal"},
+    {"sci": "Ceratotherium simum",     "common": "White rhinoceros",       "kingdom": "Animalia",  "family": "Rhinocerotidae",   "life_form": "animal"},
+    {"sci": "Rhizopogon roseolus",     "common": "Rosy false-truffle",     "kingdom": "Fungi",     "family": "Rhizopogonaceae",  "life_form": "fungus"},
+    {"sci": "Pseudomyrmex ferruginea", "common": "Acacia ant",             "kingdom": "Animalia",  "family": "Formicidae",       "life_form": "animal"},
+    {"sci": "Bubulcus ibis",           "common": "Cattle egret",           "kingdom": "Animalia",  "family": "Ardeidae",         "life_form": "animal"},
+    {"sci": "Bos taurus",              "common": "Domestic cattle",        "kingdom": "Animalia",  "family": "Bovidae",          "life_form": "animal"},
+    {"sci": "Mellivora capensis",      "common": "Honey badger",           "kingdom": "Animalia",  "family": "Mustelidae",       "life_form": "animal"},
+    {"sci": "Indicator indicator",     "common": "Greater honeyguide",     "kingdom": "Animalia",  "family": "Indicatoridae",    "life_form": "animal"},
+    {"sci": "Lasius niger",            "common": "Black garden ant",       "kingdom": "Animalia",  "family": "Formicidae",       "life_form": "animal"},
+    {"sci": "Aphis fabae",             "common": "Black bean aphid",       "kingdom": "Animalia",  "family": "Aphididae",        "life_form": "animal"},
+    {"sci": "Trichonympha agilis",     "common": "Termite gut flagellate", "kingdom": "Protozoa",  "family": "Trichonymphidae",  "life_form": "microbe"},
+    {"sci": "Reticulitermes flavipes", "common": "Eastern subterranean termite","kingdom":"Animalia","family":"Rhinotermitidae","life_form": "animal"},
+    {"sci": "Bradyrhizobium japonicum","common": "Soybean nitrogen-fixer", "kingdom": "Bacteria",  "family": "Bradyrhizobiaceae","life_form": "microbe"},
+    {"sci": "Bradypus variegatus",     "common": "Brown-throated sloth",   "kingdom": "Animalia",  "family": "Bradypodidae",     "life_form": "animal"},
+    {"sci": "Cryptocentrus cinctus",   "common": "Yellow watchman goby",   "kingdom": "Animalia",  "family": "Gobiidae",         "life_form": "animal"},
+    {"sci": "Alpheus randalli",      "common": "Randall's pistol shrimp","kingdom": "Animalia",  "family": "Alpheidae",        "life_form": "animal"},
+    {"sci": "Lecanora muralis",        "common": "Wall lichen",            "kingdom": "Fungi",     "family": "Lecanoraceae",     "life_form": "lichen"},
+    # Parasites + brood parasites
+    {"sci": "Cuculus canorus",         "common": "Common cuckoo",          "kingdom": "Animalia",  "family": "Cuculidae",        "life_form": "animal"},
+    {"sci": "Acrocephalus scirpaceus", "common": "Eurasian reed warbler",  "kingdom": "Animalia",  "family": "Acrocephalidae",   "life_form": "animal"},
+    {"sci": "Ophiocordyceps unilateralis","common": "Zombie-ant fungus",   "kingdom": "Fungi",     "family": "Ophiocordycipitaceae","life_form": "fungus"},
+    {"sci": "Camponotus leonardi",     "common": "Carpenter ant",          "kingdom": "Animalia",  "family": "Formicidae",       "life_form": "animal"},
+    {"sci": "Petromyzon marinus",      "common": "Sea lamprey",            "kingdom": "Animalia",  "family": "Petromyzontidae",  "life_form": "animal"},
+    {"sci": "Salvelinus namaycush",    "common": "Lake trout",             "kingdom": "Animalia",  "family": "Salmonidae",       "life_form": "animal"},
+    {"sci": "Taenia saginata",         "common": "Beef tapeworm",          "kingdom": "Animalia",  "family": "Taeniidae",        "life_form": "animal"},
+    {"sci": "Plasmodium falciparum",   "common": "Malaria parasite",       "kingdom": "Protozoa",  "family": "Plasmodiidae",     "life_form": "microbe"},
+    {"sci": "Anopheles gambiae",       "common": "African malaria mosquito","kingdom":"Animalia",  "family": "Culicidae",        "life_form": "animal"},
+    {"sci": "Toxoplasma gondii",       "common": "Toxoplasma parasite",    "kingdom": "Protozoa",  "family": "Sarcocystidae",    "life_form": "microbe"},
+    {"sci": "Felis catus",             "common": "Domestic cat",           "kingdom": "Animalia",  "family": "Felidae",          "life_form": "animal"},
+    {"sci": "Rattus norvegicus",       "common": "Brown rat",              "kingdom": "Animalia",  "family": "Muridae",          "life_form": "animal"},
+    {"sci": "Dermatobia hominis",      "common": "Human botfly",           "kingdom": "Animalia",  "family": "Oestridae",        "life_form": "animal"},
+    {"sci": "Bipalium kewense",        "common": "Hammerhead worm",        "kingdom": "Animalia",  "family": "Geoplanidae",      "life_form": "animal"},
+    {"sci": "Lumbricus terrestris",    "common": "Common earthworm",       "kingdom": "Animalia",  "family": "Lumbricidae",      "life_form": "animal"},
+    {"sci": "Ixodes scapularis",       "common": "Black-legged tick",      "kingdom": "Animalia",  "family": "Ixodidae",         "life_form": "animal"},
+    {"sci": "Odocoileus virginianus",  "common": "White-tailed deer",      "kingdom": "Animalia",  "family": "Cervidae",         "life_form": "animal"},
+    {"sci": "Spinochordodes tellinii", "common": "Hairworm",               "kingdom": "Animalia",  "family": "Spinochordodidae", "life_form": "animal"},
+    {"sci": "Meconema thalassinum",    "common": "Drumming katydid",       "kingdom": "Animalia",  "family": "Tettigoniidae",    "life_form": "animal"},
+    # Predators + prey
+    {"sci": "Panthera leo",            "common": "Lion",                   "kingdom": "Animalia",  "family": "Felidae",          "life_form": "animal"},
+    {"sci": "Equus quagga",            "common": "Plains zebra",           "kingdom": "Animalia",  "family": "Equidae",          "life_form": "animal"},
+    {"sci": "Carcharodon carcharias",  "common": "Great white shark",      "kingdom": "Animalia",  "family": "Lamnidae",         "life_form": "animal"},
+    {"sci": "Arctocephalus pusillus",  "common": "Cape fur seal",          "kingdom": "Animalia",  "family": "Otariidae",        "life_form": "animal"},
+    {"sci": "Haliaeetus leucocephalus","common": "Bald eagle",             "kingdom": "Animalia",  "family": "Accipitridae",     "life_form": "animal"},
+    {"sci": "Oncorhynchus nerka",      "common": "Sockeye salmon",         "kingdom": "Animalia",  "family": "Salmonidae",       "life_form": "animal"},
+    {"sci": "Canis lupus",             "common": "Gray wolf",              "kingdom": "Animalia",  "family": "Canidae",          "life_form": "animal"},
+    {"sci": "Cervus canadensis",       "common": "Elk",                    "kingdom": "Animalia",  "family": "Cervidae",         "life_form": "animal"},
+    {"sci": "Ursus maritimus",         "common": "Polar bear",             "kingdom": "Animalia",  "family": "Ursidae",          "life_form": "animal"},
+    {"sci": "Pusa hispida",            "common": "Ringed seal",            "kingdom": "Animalia",  "family": "Phocidae",         "life_form": "animal"},
+    {"sci": "Orcinus orca",            "common": "Killer whale",           "kingdom": "Animalia",  "family": "Delphinidae",      "life_form": "animal"},
+    {"sci": "Otaria flavescens",       "common": "South American sea lion","kingdom": "Animalia",  "family": "Otariidae",        "life_form": "animal"},
+    {"sci": "Acinonyx jubatus",        "common": "Cheetah",                "kingdom": "Animalia",  "family": "Felidae",          "life_form": "animal"},
+    {"sci": "Eudorcas thomsonii",      "common": "Thomson's gazelle",      "kingdom": "Animalia",  "family": "Bovidae",          "life_form": "animal"},
+    {"sci": "Panthera uncia",          "common": "Snow leopard",           "kingdom": "Animalia",  "family": "Felidae",          "life_form": "animal"},
+    {"sci": "Pseudois nayaur",         "common": "Bharal (blue sheep)",    "kingdom": "Animalia",  "family": "Bovidae",          "life_form": "animal"},
+    {"sci": "Panthera tigris",         "common": "Tiger",                  "kingdom": "Animalia",  "family": "Felidae",          "life_form": "animal"},
+    {"sci": "Rusa unicolor",           "common": "Sambar deer",            "kingdom": "Animalia",  "family": "Cervidae",         "life_form": "animal"},
+    {"sci": "Eunectes murinus",        "common": "Green anaconda",         "kingdom": "Animalia",  "family": "Boidae",           "life_form": "animal"},
+    {"sci": "Hydrochoerus hydrochaeris","common": "Capybara",              "kingdom": "Animalia",  "family": "Caviidae",         "life_form": "animal"},
+    {"sci": "Varanus komodoensis",     "common": "Komodo dragon",          "kingdom": "Animalia",  "family": "Varanidae",        "life_form": "animal"},
+    {"sci": "Bubalus bubalis",         "common": "Water buffalo",          "kingdom": "Animalia",  "family": "Bovidae",          "life_form": "animal"},
+    {"sci": "Falco peregrinus",        "common": "Peregrine falcon",       "kingdom": "Animalia",  "family": "Falconidae",       "life_form": "animal"},
+    {"sci": "Columba livia",           "common": "Rock dove",              "kingdom": "Animalia",  "family": "Columbidae",       "life_form": "animal"},
+    {"sci": "Odontodactylus scyllarus","common": "Peacock mantis shrimp",  "kingdom": "Animalia",  "family": "Odontodactylidae", "life_form": "animal"},
+    {"sci": "Cancer pagurus",          "common": "Edible crab",            "kingdom": "Animalia",  "family": "Cancridae",        "life_form": "animal"},
+    {"sci": "Enhydra lutris",          "common": "Sea otter",              "kingdom": "Animalia",  "family": "Mustelidae",       "life_form": "animal"},
+    {"sci": "Strongylocentrotus purpuratus","common":"Purple sea urchin",  "kingdom": "Animalia",  "family": "Strongylocentrotidae","life_form":"animal"},
+    # Additional food-web members
+    {"sci": "Castor canadensis",       "common": "American beaver",        "kingdom": "Animalia",  "family": "Castoridae",       "life_form": "animal"},
+    {"sci": "Ursus arctos horribilis", "common": "Grizzly bear",           "kingdom": "Animalia",  "family": "Ursidae",          "life_form": "animal"},
+    {"sci": "Aquila chrysaetos",       "common": "Golden eagle",           "kingdom": "Animalia",  "family": "Accipitridae",     "life_form": "animal"},
+    {"sci": "Bison bison",             "common": "American bison",         "kingdom": "Animalia",  "family": "Bovidae",          "life_form": "animal"},
+    {"sci": "Canis latrans",           "common": "Coyote",                 "kingdom": "Animalia",  "family": "Canidae",          "life_form": "animal"},
+    {"sci": "Antilocapra americana",   "common": "Pronghorn",              "kingdom": "Animalia",  "family": "Antilocapridae",   "life_form": "animal"},
+    {"sci": "Vulpes vulpes",           "common": "Red fox",                "kingdom": "Animalia",  "family": "Canidae",          "life_form": "animal"},
+    {"sci": "Corvus corax",            "common": "Common raven",           "kingdom": "Animalia",  "family": "Corvidae",         "life_form": "animal"},
+    {"sci": "Haliotis rufescens",      "common": "Red abalone",            "kingdom": "Animalia",  "family": "Haliotidae",       "life_form": "animal"},
+    {"sci": "Zalophus californianus",  "common": "California sea lion",    "kingdom": "Animalia",  "family": "Otariidae",        "life_form": "animal"},
+    {"sci": "Pycnopodia helianthoides","common": "Sunflower sea star",     "kingdom": "Animalia",  "family": "Asteriidae",       "life_form": "animal"},
+    {"sci": "Pugettia producta",       "common": "Kelp crab",              "kingdom": "Animalia",  "family": "Epialtidae",       "life_form": "animal"},
+    {"sci": "Triakis semifasciata",    "common": "Leopard shark",          "kingdom": "Animalia",  "family": "Triakidae",        "life_form": "animal"},
+    {"sci": "Hypsypops rubicundus",    "common": "Garibaldi",              "kingdom": "Animalia",  "family": "Pomacentridae",    "life_form": "animal"},
+    {"sci": "Connochaetes taurinus",   "common": "Blue wildebeest",        "kingdom": "Animalia",  "family": "Bovidae",          "life_form": "animal"},
+    {"sci": "Panthera pardus",         "common": "Leopard",                "kingdom": "Animalia",  "family": "Felidae",          "life_form": "animal"},
+    {"sci": "Crocuta crocuta",         "common": "Spotted hyena",          "kingdom": "Animalia",  "family": "Hyaenidae",        "life_form": "animal"},
+    {"sci": "Gyps africanus",          "common": "White-backed vulture",   "kingdom": "Animalia",  "family": "Accipitridae",     "life_form": "animal"},
+    {"sci": "Crocodylus niloticus",    "common": "Nile crocodile",         "kingdom": "Animalia",  "family": "Crocodylidae",     "life_form": "animal"},
+    {"sci": "Papio anubis",            "common": "Olive baboon",           "kingdom": "Animalia",  "family": "Cercopithecidae",  "life_form": "animal"},
+    {"sci": "Scarus guacamaia",        "common": "Rainbow parrotfish",     "kingdom": "Animalia",  "family": "Scaridae",         "life_form": "animal"},
+    {"sci": "Octopus vulgaris",        "common": "Common octopus",         "kingdom": "Animalia",  "family": "Octopodidae",      "life_form": "animal"},
+    {"sci": "Gymnothorax javanicus",   "common": "Giant moray",            "kingdom": "Animalia",  "family": "Muraenidae",       "life_form": "animal"},
+    {"sci": "Carcharhinus melanopterus","common": "Blacktip reef shark",   "kingdom": "Animalia",  "family": "Carcharhinidae",   "life_form": "animal"},
+    {"sci": "Manta birostris",         "common": "Giant manta ray",        "kingdom": "Animalia",  "family": "Mobulidae",        "life_form": "animal"},
+    {"sci": "Lutjanus kasmira",        "common": "Bluestripe snapper",     "kingdom": "Animalia",  "family": "Lutjanidae",       "life_form": "animal"},
+    {"sci": "Calanus glacialis",       "common": "Arctic copepod",         "kingdom": "Animalia",  "family": "Calanidae",        "life_form": "animal"},
+    {"sci": "Boreogadus saida",        "common": "Arctic cod",             "kingdom": "Animalia",  "family": "Gadidae",          "life_form": "animal"},
+    {"sci": "Monodon monoceros",       "common": "Narwhal",                "kingdom": "Animalia",  "family": "Monodontidae",     "life_form": "animal"},
+    {"sci": "Delphinapterus leucas",   "common": "Beluga whale",           "kingdom": "Animalia",  "family": "Monodontidae",     "life_form": "animal"},
+    {"sci": "Bubo scandiacus",         "common": "Snowy owl",              "kingdom": "Animalia",  "family": "Strigidae",        "life_form": "animal"},
+    {"sci": "Dicrostonyx groenlandicus","common": "Arctic lemming",        "kingdom": "Animalia",  "family": "Cricetidae",       "life_form": "animal"},
+    {"sci": "Vulpes lagopus",          "common": "Arctic fox",             "kingdom": "Animalia",  "family": "Canidae",          "life_form": "animal"},
+    {"sci": "Panthera onca",           "common": "Jaguar",                 "kingdom": "Animalia",  "family": "Felidae",          "life_form": "animal"},
+    {"sci": "Harpia harpyja",          "common": "Harpy eagle",            "kingdom": "Animalia",  "family": "Accipitridae",     "life_form": "animal"},
+    {"sci": "Dasyprocta leporina",     "common": "Red-rumped agouti",      "kingdom": "Animalia",  "family": "Dasyproctidae",    "life_form": "animal"},
+    {"sci": "Ara macao",               "common": "Scarlet macaw",          "kingdom": "Animalia",  "family": "Psittacidae",      "life_form": "animal"},
+    {"sci": "Pygocentrus nattereri",   "common": "Red-bellied piranha",    "kingdom": "Animalia",  "family": "Serrasalmidae",    "life_form": "animal"},
+]
+
+# ─── Interactions ────────────────────────────────────────────────────────
+# Each interaction lists role-fillers (by scientific name) + region key +
+# valid month window (season_from / season_to, 1–12) + obligate? + note.
+
+POLLINATION = [
+    # plant, pollinator, region, season_from, season_to, obligate, note
+    ("Yucca filamentosa",      "Tegeticula yuccasella",  "north_america",  5,  7, True,  "Classic obligate-mutualism — moth pollinates only yucca, larva eats only yucca seeds."),
+    ("Ficus carica",           "Blastophaga psenes",     "mediterranean",  4, 10, True,  "Each Ficus species coevolves with one wasp species; arity grows to 2 wasps over the fig life cycle."),
+    ("Asclepias syriaca",      "Danaus plexippus",       "north_america",  6,  9, False, "Monarch larvae also EAT milkweed; the adult re-pollinates as nectar feeder."),
+    ("Heliconia rostrata",     "Trochilus polytmus",     "neotropics",     1, 12, False, "Year-round in tropics; bill shape matches the flower curve."),
+    ("Prunus dulcis",          "Apis mellifera",         "north_america",  2,  3, False, "California almond bloom hosts the largest managed-pollinator migration on earth."),
+    ("Solanum lycopersicum",   "Bombus terrestris",      "europe",         5,  9, False, "Bumblebees sonicate the anther — honeybees can't buzz-pollinate tomatoes."),
+    ("Carnegiea gigantea",     "Leptonycteris yerbabuenae","sonoran_desert",4, 6, False, "Lesser long-nosed bats feed on saguaro nectar by night, doves take over by day."),
+    ("Datura wrightii",        "Manduca sexta",          "sonoran_desert", 7, 10, False, "Hawkmoth pollination — nocturnal, white flowers, strong scent."),
+    ("Magnolia grandiflora",   "Cyclocephala borealis",  "north_america",  4,  6, False, "Beetles predate bees: magnolia retains the ancient cantharophily syndrome."),
+    ("Aloe ferox",             "Nectarinia famosa",      "sub_saharan",    6,  9, False, "Birds, not bees: African aloes coevolved with long-billed sunbirds."),
+    ("Ravenala madagascariensis","Eulemur rubriventer",  "madagascar",     1, 12, False, "Primate pollination — lemurs push apart the bract to drink nectar."),
+    ("Banksia integrifolia",   "Anthochaera carunculata","australia",      3,  7, False, "Honeyeaters are the dominant pollinator of the Banksia genus."),
+    ("Ophrys apifera",         "Eucera longicornis",     "mediterranean",  4,  6, False, "Sexual deception — flower mimics female bee; male bee pseudo-copulates and disperses pollen."),
+    ("Nymphaea alba",          "Cyclocephala borealis",  "europe",         6,  8, False, "Floating water lilies trap beetles overnight, release with pollen at dawn."),
+    ("Vachellia drepanolobium","Apis mellifera",         "serengeti",      5, 10, False, "Whistling thorn acacia: bees pollinate while the resident ants defend the tree (see mutualism)."),
+]
+
+MUTUALISM = [
+    # species_a, species_b, region, interaction_subtype, obligate, note
+    ("Amphiprion ocellaris", "Heteractis magnifica",  "indo_pacific", "protection-and-cleaning", True,  "Clownfish lives in the anemone's stinging tentacles; both fully dependent."),
+    ("Labroides dimidiatus", "Epinephelus tukula",    "indo_pacific", "cleaning",                False, "Cleaner wrasse picks parasites from grouper mouth — predator–prey roles invert."),
+    ("Buphagus africanus",   "Ceratotherium simum",   "sub_saharan",  "tick-removal",            False, "Oxpecker eats ticks off the rhino; some studies argue parasitism too (wound-feeding)."),
+    ("Pinus contorta",       "Rhizopogon roseolus",   "north_america","mycorrhiza",              True,  "Fungus extends the root system 100×; pine gives sugars — both die alone."),
+    ("Lecanora muralis",     "Symbiodinium microadriaticum","global", "endosymbiosis",           True,  "Lichen-style; alga photosynthesises, fungus protects + provides minerals."),
+    ("Acropora millepora",   "Symbiodinium microadriaticum","coral_reef","endosymbiosis",       True,  "Bleaching = breakdown of this single mutualism — the global crisis driver."),
+    ("Vachellia drepanolobium","Pseudomyrmex ferruginea","serengeti", "habitat-and-defence",     True,  "Acacia grows hollow swollen thorns; ants defend the tree against giraffes."),
+    ("Bubulcus ibis",        "Bos taurus",            "global",       "flush-feeding",           False, "Egret rides cattle; cattle stir up insects the egret eats."),
+    ("Mellivora capensis",   "Indicator indicator",   "sub_saharan",  "guidance",                False, "Honeyguide leads honey badger to hives; both feast on what the badger breaks open."),
+    ("Lasius niger",         "Aphis fabae",           "europe",       "farming",                 False, "Ants 'farm' aphids: protection in exchange for honeydew."),
+    ("Reticulitermes flavipes","Trichonympha agilis", "north_america","gut-endosymbiosis",       True,  "Termite cannot digest cellulose alone; flagellate cannot survive outside the termite."),
+    ("Glycine max",          "Bradyrhizobium japonicum","global",     "nitrogen-fixation",       True,  "Rhizobia convert atmospheric N₂ into ammonia inside soybean root nodules."),
+    ("Bradypus variegatus",  "Lecanora muralis",      "neotropics",   "camouflage",              False, "Sloth fur grows algae and fungi — supplemental food and camouflage."),
+    ("Cryptocentrus cinctus","Alpheus randalli",    "indo_pacific", "burrow-sharing",          True,  "Pistol shrimp digs the burrow; goby stands lookout with better vision."),
+    ("Lecanora muralis",     "Rhizopogon roseolus",   "global",       "soil-network",            False, "Lichens and mycorrhizal fungi cooperate in soil networks — community-scale mutualism."),
+]
+
+PARASITISM = [
+    # host, parasite, region, transmission_mode, life_form_summary, note
+    ("Acrocephalus scirpaceus", "Cuculus canorus",        "europe",       "brood-parasitism",   "Cuckoo lays a single egg in warbler's nest; chick ejects host eggs."),
+    ("Camponotus leonardi",     "Ophiocordyceps unilateralis","sub_saharan","host-manipulation","Zombie-ant fungus alters ant behaviour to climb and die in a fungal-friendly spot."),
+    ("Quercus robur",           "Phoradendron leucarpum", "north_america","aerial-parasite",    "Mistletoe punctures bark, taps host xylem for water + minerals."),
+    ("Magnolia grandiflora",    "Ficus aurea",            "neotropics",   "strangling",         "Strangler fig germinates in canopy, sends roots down, eventually kills host tree."),
+    ("Salvelinus namaycush",    "Petromyzon marinus",     "great_lakes",  "ectoparasite",       "Sea lamprey attaches with rasping disc; one of the worst invasive in the Great Lakes."),
+    ("Bos taurus",              "Taenia saginata",        "global",       "endoparasite",       "Beef tapeworm: cysts in muscle, adult in human gut — humans complete the cycle."),
+    ("Anopheles gambiae",       "Plasmodium falciparum",  "sub_saharan",  "vector-borne",       "Malaria parasite uses mosquito as vector; humans are the other host (we don't include human entity)."),
+    ("Felis catus",             "Toxoplasma gondii",      "global",       "vector-borne",       "Cat is the definitive host; rodent intermediate is behaviour-manipulated to seek cats."),
+    ("Bos taurus",              "Dermatobia hominis",     "neotropics",   "ectoparasite",       "Botfly lays eggs on a vector insect; larva burrows under skin."),
+    ("Lumbricus terrestris",    "Bipalium kewense",       "global",       "predator-parasite",  "Hammerhead flatworm preys on earthworms (technically predator, behaves like parasite)."),
+    ("Odocoileus virginianus",  "Ixodes scapularis",      "north_america","ectoparasite",       "Black-legged tick vectors Lyme disease — three-host life cycle."),
+    ("Meconema thalassinum",    "Spinochordodes tellinii","europe",       "host-manipulation",  "Hairworm grows inside cricket, then makes it leap into water so the worm can emerge."),
+]
+
+PREDATION = [
+    # predator, prey, region, season_from, season_to, note
+    ("Panthera leo",            "Equus quagga",            "serengeti",       1, 12, "Lions hunt cooperatively; success rate higher than any other big cat."),
+    ("Carcharodon carcharias",  "Arctocephalus pusillus",  "cape_coast",      5,  9, "Famous breaching predation at Seal Island, False Bay — peaks in winter."),
+    ("Haliaeetus leucocephalus","Oncorhynchus nerka",      "pacific_nw",      8, 10, "Salmon spawning run concentrates predation; eagle is opportunist."),
+    ("Canis lupus",             "Cervus canadensis",       "yellowstone",     1, 12, "1995 wolf reintroduction reshaped elk behaviour AND willow growth — trophic cascade."),
+    ("Ursus maritimus",         "Pusa hispida",            "arctic",          4,  7, "Polar bear ambushes ringed seal at breathing holes — sea ice is the platform."),
+    ("Orcinus orca",            "Otaria flavescens",       "patagonia",       2,  4, "Punta Norte intentional stranding — orcas hunt sea lions on the beach itself."),
+    ("Acinonyx jubatus",        "Eudorcas thomsonii",      "serengeti",       1, 12, "Cheetah is the fastest sprinter; daytime hunter to avoid larger nocturnal cats."),
+    ("Panthera uncia",          "Pseudois nayaur",         "himalaya",        1, 12, "Snow leopard preys on bharal at 3,000–5,000 m elevation."),
+    ("Panthera tigris",         "Rusa unicolor",           "south_asia",      1, 12, "Sambar is the primary prey of Bengal tigers; both are forest-edge specialists."),
+    ("Eunectes murinus",        "Hydrochoerus hydrochaeris","amazon",         1, 12, "Anaconda ambushes capybara at water's edge; constricts and swallows whole."),
+    ("Varanus komodoensis",     "Bubalus bubalis",         "indo_pacific",    1, 12, "Komodo dragon uses venomous bite + endurance — buffalo dies of shock days later."),
+    ("Falco peregrinus",        "Columba livia",           "global",          1, 12, "Fastest animal — diving stoop reaches 320 km/h, kills with talons mid-flight."),
+    ("Odontodactylus scyllarus","Cancer pagurus",          "indo_pacific",    1, 12, "Mantis shrimp's strike accelerates faster than a 22-caliber bullet."),
+    ("Enhydra lutris",          "Strongylocentrotus purpuratus","kelp_forest",1,12, "Keystone species: otter predation on urchin keeps kelp forest from becoming urchin barren."),
+    ("Orcinus orca",            "Carcharodon carcharias",  "cape_coast",      1, 12, "Apex of apex: a single orca pair drove great whites out of False Bay 2017."),
+]
+
+# Food webs: one hyperedge per ecosystem, arity = 1 (ecosystem) + N members
+FOOD_WEBS = [
+    {
+        "name": "Yellowstone food web",
+        "ecosystem": "yellowstone",
+        "members": [
+            "Canis lupus", "Cervus canadensis", "Castor canadensis", "Salix exigua",
+            "Ursus arctos horribilis", "Oncorhynchus nerka", "Aquila chrysaetos",
+            "Bison bison", "Canis latrans", "Antilocapra americana", "Vulpes vulpes",
+            "Corvus corax", "Pinus contorta", "Bouteloua gracilis", "Odocoileus virginianus",
+            "Ixodes scapularis", "Ursus maritimus",
+        ],
+        "note": "1995 wolf reintroduction is the canonical trophic-cascade story: wolves cut elk browsing, willows recovered, beavers returned.",
+    },
+    {
+        "name": "California kelp forest food web",
+        "ecosystem": "kelp_forest",
+        "members": [
+            "Macrocystis pyrifera", "Strongylocentrotus purpuratus", "Enhydra lutris",
+            "Haliotis rufescens", "Zalophus californianus", "Pycnopodia helianthoides",
+            "Pugettia producta", "Triakis semifasciata", "Hypsypops rubicundus",
+            "Carcharodon carcharias", "Orcinus orca", "Octopus vulgaris",
+        ],
+        "note": "Keystone trio: kelp (producer), urchin (herbivore), otter (predator). Remove the otter, urchins explode, kelp vanishes.",
+    },
+    {
+        "name": "Serengeti food web",
+        "ecosystem": "serengeti",
+        "members": [
+            "Bouteloua gracilis", "Vachellia drepanolobium", "Connochaetes taurinus",
+            "Equus quagga", "Eudorcas thomsonii", "Panthera leo", "Acinonyx jubatus",
+            "Panthera pardus", "Crocuta crocuta", "Gyps africanus", "Crocodylus niloticus",
+            "Papio anubis", "Bubulcus ibis", "Buphagus africanus", "Ceratotherium simum",
+            "Pseudomyrmex ferruginea",
+        ],
+        "note": "Great Migration: ~1.5M wildebeest move clockwise around the ecosystem each year, predator densities track them.",
+    },
+    {
+        "name": "Indo-Pacific coral reef food web",
+        "ecosystem": "coral_reef",
+        "members": [
+            "Acropora millepora", "Symbiodinium microadriaticum", "Scarus guacamaia",
+            "Strongylocentrotus purpuratus", "Octopus vulgaris", "Gymnothorax javanicus",
+            "Epinephelus tukula", "Lutjanus kasmira", "Carcharhinus melanopterus",
+            "Manta birostris", "Labroides dimidiatus", "Amphiprion ocellaris",
+            "Heteractis magnifica", "Odontodactylus scyllarus",
+        ],
+        "note": "Zooxanthellae make this whole ecosystem possible: 90% of the coral's energy is photosynthate from the algal symbiont.",
+    },
+    {
+        "name": "Arctic food web",
+        "ecosystem": "arctic",
+        "members": [
+            "Calanus glacialis", "Boreogadus saida", "Pusa hispida", "Ursus maritimus",
+            "Monodon monoceros", "Delphinapterus leucas", "Bubo scandiacus",
+            "Dicrostonyx groenlandicus", "Vulpes lagopus", "Orcinus orca",
+        ],
+        "note": "Sea ice is the keystone HABITAT — every node here is being squeezed by its retreat.",
+    },
+    {
+        "name": "Amazon rainforest food web",
+        "ecosystem": "amazon",
+        "members": [
+            "Bertholletia excelsa", "Bradypus variegatus", "Panthera onca",
+            "Harpia harpyja", "Hydrochoerus hydrochaeris", "Eunectes murinus",
+            "Dasyprocta leporina", "Ara macao", "Pygocentrus nattereri",
+            "Ficus aurea", "Heliconia rostrata", "Trochilus polytmus",
+            "Danaus plexippus",
+        ],
+        "note": "Brazil nut tree depends on agouti (only mammal that can crack its pod) AND on a specific orchid bee for pollination — three-way mutualism.",
+    },
+]

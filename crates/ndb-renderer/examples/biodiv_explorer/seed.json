@@ -1,0 +1,2058 @@
+{
+  "regions": [
+    {
+      "key": "north_america",
+      "name": "North America",
+      "kind": "continent",
+      "lat": 45.0,
+      "lon": -100.0
+    },
+    {
+      "key": "neotropics",
+      "name": "Neotropics",
+      "kind": "biome",
+      "lat": -5.0,
+      "lon": -60.0
+    },
+    {
+      "key": "mediterranean",
+      "name": "Mediterranean Basin",
+      "kind": "biome",
+      "lat": 38.0,
+      "lon": 15.0
+    },
+    {
+      "key": "sonoran_desert",
+      "name": "Sonoran Desert",
+      "kind": "biome",
+      "lat": 32.0,
+      "lon": -112.0
+    },
+    {
+      "key": "sub_saharan",
+      "name": "Sub-Saharan Africa",
+      "kind": "biome",
+      "lat": -5.0,
+      "lon": 25.0
+    },
+    {
+      "key": "serengeti",
+      "name": "Serengeti",
+      "kind": "ecosystem",
+      "lat": -2.5,
+      "lon": 35.0
+    },
+    {
+      "key": "madagascar",
+      "name": "Madagascar",
+      "kind": "country",
+      "lat": -19.0,
+      "lon": 47.0
+    },
+    {
+      "key": "australia",
+      "name": "Australia",
+      "kind": "continent",
+      "lat": -25.0,
+      "lon": 133.0
+    },
+    {
+      "key": "south_asia",
+      "name": "South Asia",
+      "kind": "continent",
+      "lat": 20.0,
+      "lon": 80.0
+    },
+    {
+      "key": "himalaya",
+      "name": "Himalaya",
+      "kind": "ecosystem",
+      "lat": 28.0,
+      "lon": 85.0
+    },
+    {
+      "key": "amazon",
+      "name": "Amazon Rainforest",
+      "kind": "ecosystem",
+      "lat": -3.0,
+      "lon": -62.0
+    },
+    {
+      "key": "indo_pacific",
+      "name": "Indo-Pacific",
+      "kind": "ocean",
+      "lat": 0.0,
+      "lon": 140.0
+    },
+    {
+      "key": "cape_coast",
+      "name": "Cape Coast",
+      "kind": "ecosystem",
+      "lat": -34.0,
+      "lon": 18.0
+    },
+    {
+      "key": "pacific_nw",
+      "name": "Pacific Northwest",
+      "kind": "ecosystem",
+      "lat": 47.0,
+      "lon": -122.0
+    },
+    {
+      "key": "arctic",
+      "name": "Arctic",
+      "kind": "biome",
+      "lat": 80.0,
+      "lon": 0.0
+    },
+    {
+      "key": "great_lakes",
+      "name": "Laurentian Great Lakes",
+      "kind": "ecosystem",
+      "lat": 45.0,
+      "lon": -85.0
+    },
+    {
+      "key": "yellowstone",
+      "name": "Yellowstone",
+      "kind": "ecosystem",
+      "lat": 44.6,
+      "lon": -110.5
+    },
+    {
+      "key": "kelp_forest",
+      "name": "California Kelp Forest",
+      "kind": "ecosystem",
+      "lat": 36.6,
+      "lon": -121.9
+    },
+    {
+      "key": "coral_reef",
+      "name": "Indo-Pacific Coral Reef",
+      "kind": "ecosystem",
+      "lat": -8.0,
+      "lon": 147.0
+    },
+    {
+      "key": "global",
+      "name": "Global",
+      "kind": "biome",
+      "lat": 0.0,
+      "lon": 0.0
+    },
+    {
+      "key": "europe",
+      "name": "Europe",
+      "kind": "continent",
+      "lat": 50.0,
+      "lon": 10.0
+    },
+    {
+      "key": "patagonia",
+      "name": "Patagonia",
+      "kind": "ecosystem",
+      "lat": -45.0,
+      "lon": -70.0
+    }
+  ],
+  "species": [
+    {
+      "sci": "Yucca filamentosa",
+      "common": "Adam's needle yucca",
+      "kingdom": "Plantae",
+      "family": "Asparagaceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/5/56/Yucca_filamentosa.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Yucca_filamentosa"
+    },
+    {
+      "sci": "Ficus carica",
+      "common": "Common fig",
+      "kingdom": "Plantae",
+      "family": "Moraceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/2/2e/Ficus_carica_L%2C_1771.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Fig"
+    },
+    {
+      "sci": "Asclepias syriaca",
+      "common": "Common milkweed",
+      "kingdom": "Plantae",
+      "family": "Apocynaceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/77/Asclepias_syriacus.tif/lossy-page1-960px-Asclepias_syriacus.tif.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Asclepias_syriaca"
+    },
+    {
+      "sci": "Heliconia rostrata",
+      "common": "Lobster claw",
+      "kingdom": "Plantae",
+      "family": "Heliconiaceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/b/bb/Heliconia_rostrata_4.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Heliconia_rostrata"
+    },
+    {
+      "sci": "Prunus dulcis",
+      "common": "Almond tree",
+      "kingdom": "Plantae",
+      "family": "Rosaceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/37/Almonds_-_in_shell%2C_shell_cracked_open%2C_shelled%2C_blanched.jpg/960px-Almonds_-_in_shell%2C_shell_cracked_open%2C_shelled%2C_blanched.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Almond"
+    },
+    {
+      "sci": "Solanum lycopersicum",
+      "common": "Tomato",
+      "kingdom": "Plantae",
+      "family": "Solanaceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/89/Tomato_je.jpg/960px-Tomato_je.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Tomato"
+    },
+    {
+      "sci": "Carnegiea gigantea",
+      "common": "Saguaro cactus",
+      "kingdom": "Plantae",
+      "family": "Cactaceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cd/Carnegiea_gigantea_in_Saguaro_National_Park_near_Tucson%2C_Arizona_during_November_%2858%29.jpg/960px-Carnegiea_gigantea_in_Saguaro_National_Park_near_Tucson%2C_Arizona_during_November_%2858%29.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Saguaro"
+    },
+    {
+      "sci": "Datura wrightii",
+      "common": "Sacred datura",
+      "kingdom": "Plantae",
+      "family": "Solanaceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/61/Datura_wrightii_flower2.jpg/960px-Datura_wrightii_flower2.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Datura_wrightii"
+    },
+    {
+      "sci": "Magnolia grandiflora",
+      "common": "Southern magnolia",
+      "kingdom": "Plantae",
+      "family": "Magnoliaceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dc/Magn%C3%B2lia_a_Verbania.JPG/960px-Magn%C3%B2lia_a_Verbania.JPG",
+      "wiki_url": "https://en.wikipedia.org/wiki/Magnolia_grandiflora"
+    },
+    {
+      "sci": "Aloe ferox",
+      "common": "Bitter aloe",
+      "kingdom": "Plantae",
+      "family": "Asphodelaceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/9/9e/Aloe_Ferox_between_Cofimvaba_and_Ngcobo.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Aloe_ferox"
+    },
+    {
+      "sci": "Ravenala madagascariensis",
+      "common": "Traveller's palm",
+      "kingdom": "Plantae",
+      "family": "Strelitziaceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a4/Ravenala%2C_travellers_palms%2C_on_Maui.jpg/960px-Ravenala%2C_travellers_palms%2C_on_Maui.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Ravenala_madagascariensis"
+    },
+    {
+      "sci": "Banksia integrifolia",
+      "common": "Coast banksia",
+      "kingdom": "Plantae",
+      "family": "Proteaceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/7/76/B_integrifolia_integrifolia1.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Banksia_integrifolia"
+    },
+    {
+      "sci": "Ophrys apifera",
+      "common": "Bee orchid",
+      "kingdom": "Plantae",
+      "family": "Orchidaceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a9/%28MHNT%29_Ophrys_apifera_-_Villeneuve-l%C3%A8s-Bouloc_-_Flower.jpg/960px-%28MHNT%29_Ophrys_apifera_-_Villeneuve-l%C3%A8s-Bouloc_-_Flower.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Ophrys_apifera"
+    },
+    {
+      "sci": "Nymphaea alba",
+      "common": "European white water-lily",
+      "kingdom": "Plantae",
+      "family": "Nymphaeaceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3f/2016_Kwiat_grzybieni_bia%C5%82ych_2.jpg/960px-2016_Kwiat_grzybieni_bia%C5%82ych_2.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Nymphaea_alba"
+    },
+    {
+      "sci": "Vachellia drepanolobium",
+      "common": "Whistling thorn acacia",
+      "kingdom": "Plantae",
+      "family": "Fabaceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/d/d2/Whistling_thorn.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Vachellia_drepanolobium"
+    },
+    {
+      "sci": "Quercus robur",
+      "common": "English oak",
+      "kingdom": "Plantae",
+      "family": "Fagaceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/a/af/Quercus_robur.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Quercus_robur"
+    },
+    {
+      "sci": "Phoradendron leucarpum",
+      "common": "American mistletoe",
+      "kingdom": "Plantae",
+      "family": "Santalaceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/e/e6/American_Mistletoe_%28NGM_XXXI_p514%29.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Phoradendron_leucarpum"
+    },
+    {
+      "sci": "Ficus aurea",
+      "common": "Florida strangler fig",
+      "kingdom": "Plantae",
+      "family": "Moraceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/25/Ficus_aurea03.jpg/960px-Ficus_aurea03.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Ficus_aurea"
+    },
+    {
+      "sci": "Glycine max",
+      "common": "Soybean",
+      "kingdom": "Plantae",
+      "family": "Fabaceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/8/82/Soybean.USDA.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Soybean"
+    },
+    {
+      "sci": "Bertholletia excelsa",
+      "common": "Brazil nut",
+      "kingdom": "Plantae",
+      "family": "Lecythidaceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/39/Bertholletia_excelsa_compose.jpg/960px-Bertholletia_excelsa_compose.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Brazil_nut"
+    },
+    {
+      "sci": "Macrocystis pyrifera",
+      "common": "Giant kelp",
+      "kingdom": "Chromista",
+      "family": "Laminariaceae",
+      "life_form": "alga",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9a/Giantkelp2_300.jpg/960px-Giantkelp2_300.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Macrocystis"
+    },
+    {
+      "sci": "Pinus contorta",
+      "common": "Lodgepole pine",
+      "kingdom": "Plantae",
+      "family": "Pinaceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/68/Pinus_contorta_28263.JPG/960px-Pinus_contorta_28263.JPG",
+      "wiki_url": "https://en.wikipedia.org/wiki/Pinus_contorta"
+    },
+    {
+      "sci": "Salix exigua",
+      "common": "Sandbar willow",
+      "kingdom": "Plantae",
+      "family": "Salicaceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/34/Salix_exigua_staminate_catkin_2003-06-04.jpg/960px-Salix_exigua_staminate_catkin_2003-06-04.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Salix_exigua"
+    },
+    {
+      "sci": "Bouteloua gracilis",
+      "common": "Blue grama grass",
+      "kingdom": "Plantae",
+      "family": "Poaceae",
+      "life_form": "plant",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/8/85/Bouteloua_gracilis.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Bouteloua_gracilis"
+    },
+    {
+      "sci": "Acropora millepora",
+      "common": "Staghorn coral",
+      "kingdom": "Animalia",
+      "family": "Acroporidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/91/Acropora_millepora_Maldives.jpg/960px-Acropora_millepora_Maldives.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Acropora_millepora"
+    },
+    {
+      "sci": "Symbiodinium microadriaticum",
+      "common": "Zooxanthella",
+      "kingdom": "Chromista",
+      "family": "Symbiodiniaceae",
+      "life_form": "alga",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/6/6c/Symbiodinium.png",
+      "wiki_url": "https://en.wikipedia.org/wiki/Symbiodinium"
+    },
+    {
+      "sci": "Tegeticula yuccasella",
+      "common": "Yucca moth",
+      "kingdom": "Animalia",
+      "family": "Prodoxidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b1/Tegeticula_yuccasella_127111562.jpg/960px-Tegeticula_yuccasella_127111562.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Tegeticula_yuccasella"
+    },
+    {
+      "sci": "Blastophaga psenes",
+      "common": "Fig wasp",
+      "kingdom": "Animalia",
+      "family": "Agaonidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/f/f2/Blastophaga_psenes.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Blastophaga_psenes"
+    },
+    {
+      "sci": "Danaus plexippus",
+      "common": "Monarch butterfly",
+      "kingdom": "Animalia",
+      "family": "Nymphalidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/73/Monarch_Butterfly_Danaus_plexippus_Male_2664px.jpg/960px-Monarch_Butterfly_Danaus_plexippus_Male_2664px.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Monarch_butterfly"
+    },
+    {
+      "sci": "Trochilus polytmus",
+      "common": "Streamertail hummingbird",
+      "kingdom": "Animalia",
+      "family": "Trochilidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/61/Red-billed_streamertail%28_Trochilus_polytmus%29_adult_male_2.jpg/960px-Red-billed_streamertail%28_Trochilus_polytmus%29_adult_male_2.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Red-billed_streamertail"
+    },
+    {
+      "sci": "Apis mellifera",
+      "common": "Western honeybee",
+      "kingdom": "Animalia",
+      "family": "Apidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4d/Apis_mellifera_Western_honey_bee.jpg/960px-Apis_mellifera_Western_honey_bee.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Western_honey_bee"
+    },
+    {
+      "sci": "Bombus terrestris",
+      "common": "Buff-tailed bumblebee",
+      "kingdom": "Animalia",
+      "family": "Apidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f6/Bombus_terrestris.jpg/960px-Bombus_terrestris.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Bombus_terrestris"
+    },
+    {
+      "sci": "Leptonycteris yerbabuenae",
+      "common": "Lesser long-nosed bat",
+      "kingdom": "Animalia",
+      "family": "Phyllostomidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f5/Leptonycteris_yerbabuenae_5502051.jpg/960px-Leptonycteris_yerbabuenae_5502051.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Lesser_long-nosed_bat"
+    },
+    {
+      "sci": "Manduca sexta",
+      "common": "Tobacco hornworm hawkmoth",
+      "kingdom": "Animalia",
+      "family": "Sphingidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/en/thumb/6/60/Manduca_sexta_missouri.jpg/960px-Manduca_sexta_missouri.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Manduca_sexta"
+    },
+    {
+      "sci": "Cyclocephala borealis",
+      "common": "Northern masked chafer",
+      "kingdom": "Animalia",
+      "family": "Scarabaeidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/2/2f/Cyclocephal_borealis_Adult.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Cyclocephala_borealis"
+    },
+    {
+      "sci": "Nectarinia famosa",
+      "common": "Malachite sunbird",
+      "kingdom": "Animalia",
+      "family": "Nectariniidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/30/Malachite_Sunbird_on_Leucospermum.jpg/960px-Malachite_Sunbird_on_Leucospermum.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Malachite_sunbird"
+    },
+    {
+      "sci": "Eulemur rubriventer",
+      "common": "Red-bellied lemur",
+      "kingdom": "Animalia",
+      "family": "Lemuridae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/89/Eulemur_rubriventer_001.jpg/960px-Eulemur_rubriventer_001.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Red-bellied_lemur"
+    },
+    {
+      "sci": "Anthochaera carunculata",
+      "common": "Red wattlebird",
+      "kingdom": "Animalia",
+      "family": "Meliphagidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/37/Red_wattlebird.jpg/960px-Red_wattlebird.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Red_wattlebird"
+    },
+    {
+      "sci": "Eucera longicornis",
+      "common": "Long-horned bee",
+      "kingdom": "Animalia",
+      "family": "Apidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/Longhorned_bee%2C_Eucera_longicornis.jpg/960px-Longhorned_bee%2C_Eucera_longicornis.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Eucera_longicornis"
+    },
+    {
+      "sci": "Amphiprion ocellaris",
+      "common": "Clown anemonefish",
+      "kingdom": "Animalia",
+      "family": "Pomacentridae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f6/Clown_fish_in_the_Andaman_Coral_Reef.jpg/960px-Clown_fish_in_the_Andaman_Coral_Reef.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Ocellaris_clownfish"
+    },
+    {
+      "sci": "Heteractis magnifica",
+      "common": "Magnificent sea anemone",
+      "kingdom": "Animalia",
+      "family": "Stichodactylidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/13/Amphiprion_perideraion_%28Pink_anemonefish%29_in_Heteractis_magnifica_%28Magnificent_sea_anemone%29.jpg/960px-Amphiprion_perideraion_%28Pink_anemonefish%29_in_Heteractis_magnifica_%28Magnificent_sea_anemone%29.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Radianthus_magnifica"
+    },
+    {
+      "sci": "Labroides dimidiatus",
+      "common": "Bluestreak cleaner wrasse",
+      "kingdom": "Animalia",
+      "family": "Labridae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/06/L%C3%A1brido_limpiador_com%C3%BAn_%28Labroides_dimidiatus%29%2C_mar_Rojo%2C_Egipto%2C_2023-04-17%2C_DD_90.jpg/960px-L%C3%A1brido_limpiador_com%C3%BAn_%28Labroides_dimidiatus%29%2C_mar_Rojo%2C_Egipto%2C_2023-04-17%2C_DD_90.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Bluestreak_cleaner_wrasse"
+    },
+    {
+      "sci": "Epinephelus tukula",
+      "common": "Potato grouper",
+      "kingdom": "Animalia",
+      "family": "Serranidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5f/Epinephelus_tukula_1866.jpg/960px-Epinephelus_tukula_1866.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Potato_grouper"
+    },
+    {
+      "sci": "Buphagus africanus",
+      "common": "Yellow-billed oxpecker",
+      "kingdom": "Animalia",
+      "family": "Buphagidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/b/b7/Flickr_-_Rainbirder_-_Yellow-billed_Oxpecker_%28Buphagus_africanus%29.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Yellow-billed_oxpecker"
+    },
+    {
+      "sci": "Ceratotherium simum",
+      "common": "White rhinoceros",
+      "kingdom": "Animalia",
+      "family": "Rhinocerotidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/28/109_Male_White_rhinoceros_walking_in_the_Kalahari_Desert_of_Namibia_Photo_by_Giles_Laurent.jpg/960px-109_Male_White_rhinoceros_walking_in_the_Kalahari_Desert_of_Namibia_Photo_by_Giles_Laurent.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/White_rhinoceros"
+    },
+    {
+      "sci": "Rhizopogon roseolus",
+      "common": "Rosy false-truffle",
+      "kingdom": "Fungi",
+      "family": "Rhizopogonaceae",
+      "life_form": "fungus",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/de/2010-05-14_Rhizopogon_roseolus_1.jpg/960px-2010-05-14_Rhizopogon_roseolus_1.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Rhizopogon_roseolus"
+    },
+    {
+      "sci": "Pseudomyrmex ferruginea",
+      "common": "Acacia ant",
+      "kingdom": "Animalia",
+      "family": "Formicidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b2/Pseudomyrmex_ferrugineus_casent0005785_profile_1.jpg/960px-Pseudomyrmex_ferrugineus_casent0005785_profile_1.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Pseudomyrmex_ferruginea"
+    },
+    {
+      "sci": "Bubulcus ibis",
+      "common": "Cattle egret",
+      "kingdom": "Animalia",
+      "family": "Ardeidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/25/Kuhreiher_am_Strand_in_%C3%84gypten_9528BE.jpg/960px-Kuhreiher_am_Strand_in_%C3%84gypten_9528BE.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Western_cattle_egret"
+    },
+    {
+      "sci": "Bos taurus",
+      "common": "Domestic cattle",
+      "kingdom": "Animalia",
+      "family": "Bovidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8c/Cow_%28Fleckvieh_breed%29_Oeschinensee_Slaunger_2009-07-07.jpg/960px-Cow_%28Fleckvieh_breed%29_Oeschinensee_Slaunger_2009-07-07.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Cattle"
+    },
+    {
+      "sci": "Mellivora capensis",
+      "common": "Honey badger",
+      "kingdom": "Animalia",
+      "family": "Mustelidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/42/Honey_Badger.jpg/960px-Honey_Badger.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Honey_badger"
+    },
+    {
+      "sci": "Indicator indicator",
+      "common": "Greater honeyguide",
+      "kingdom": "Animalia",
+      "family": "Indicatoridae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/18/Greater_Honeyguide_%28Indicator_indicator%29_%2845663851145%29%2C_crop.jpg/960px-Greater_Honeyguide_%28Indicator_indicator%29_%2845663851145%29%2C_crop.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Greater_honeyguide"
+    },
+    {
+      "sci": "Lasius niger",
+      "common": "Black garden ant",
+      "kingdom": "Animalia",
+      "family": "Formicidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b1/Black_Garden_Ant_tending_Citrus_Mealybug_%2816063538972%29.jpg/960px-Black_Garden_Ant_tending_Citrus_Mealybug_%2816063538972%29.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Black_garden_ant"
+    },
+    {
+      "sci": "Aphis fabae",
+      "common": "Black bean aphid",
+      "kingdom": "Animalia",
+      "family": "Aphididae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/9/90/Aphids_May_2010-3.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Black_bean_aphid"
+    },
+    {
+      "sci": "Trichonympha agilis",
+      "common": "Termite gut flagellate",
+      "kingdom": "Protozoa",
+      "family": "Trichonymphidae",
+      "life_form": "microbe",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/9/92/Trichonympha_campanula.png",
+      "wiki_url": "https://en.wikipedia.org/wiki/Trichonympha"
+    },
+    {
+      "sci": "Reticulitermes flavipes",
+      "common": "Eastern subterranean termite",
+      "kingdom": "Animalia",
+      "family": "Rhinotermitidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6b/Reticulitermes_flavipes_K8085-6.jpg/960px-Reticulitermes_flavipes_K8085-6.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Reticulitermes_flavipes"
+    },
+    {
+      "sci": "Bradyrhizobium japonicum",
+      "common": "Soybean nitrogen-fixer",
+      "kingdom": "Bacteria",
+      "family": "Bradyrhizobiaceae",
+      "life_form": "microbe",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ac/Root-nodule01.jpg/960px-Root-nodule01.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Bradyrhizobium_japonicum"
+    },
+    {
+      "sci": "Bradypus variegatus",
+      "common": "Brown-throated sloth",
+      "kingdom": "Animalia",
+      "family": "Bradypodidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/18/Bradypus.jpg/960px-Bradypus.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Brown-throated_sloth"
+    },
+    {
+      "sci": "Cryptocentrus cinctus",
+      "common": "Yellow watchman goby",
+      "kingdom": "Animalia",
+      "family": "Gobiidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/53/Cryptocentrus_cinctus.JPG/960px-Cryptocentrus_cinctus.JPG",
+      "wiki_url": "https://en.wikipedia.org/wiki/Yellow_prawn-goby"
+    },
+    {
+      "sci": "Alpheus randalli",
+      "common": "Randall's pistol shrimp",
+      "kingdom": "Animalia",
+      "family": "Alpheidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/6/6f/Pistol_Shrimp01.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Alpheus_randalli"
+    },
+    {
+      "sci": "Lecanora muralis",
+      "common": "Wall lichen",
+      "kingdom": "Fungi",
+      "family": "Lecanoraceae",
+      "life_form": "lichen",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/Lecanora_muralis_289533.jpg/960px-Lecanora_muralis_289533.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Lecanora_muralis"
+    },
+    {
+      "sci": "Cuculus canorus",
+      "common": "Common cuckoo",
+      "kingdom": "Animalia",
+      "family": "Cuculidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b9/Cuckoo_%2851169010335%29.jpg/960px-Cuckoo_%2851169010335%29.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Common_cuckoo"
+    },
+    {
+      "sci": "Acrocephalus scirpaceus",
+      "common": "Eurasian reed warbler",
+      "kingdom": "Animalia",
+      "family": "Acrocephalidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/24/PleidelsheimerWiesentalTeichrohrsaenger.jpg/960px-PleidelsheimerWiesentalTeichrohrsaenger.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Common_reed_warbler"
+    },
+    {
+      "sci": "Ophiocordyceps unilateralis",
+      "common": "Zombie-ant fungus",
+      "kingdom": "Fungi",
+      "family": "Ophiocordycipitaceae",
+      "life_form": "fungus",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/85/Ophiocordyceps_unilateralis.png/960px-Ophiocordyceps_unilateralis.png",
+      "wiki_url": "https://en.wikipedia.org/wiki/Ophiocordyceps_unilateralis"
+    },
+    {
+      "sci": "Camponotus leonardi",
+      "common": "Carpenter ant",
+      "kingdom": "Animalia",
+      "family": "Formicidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fb/Carpenter_ant_Tanzania_crop.jpg/960px-Carpenter_ant_Tanzania_crop.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Carpenter_ant"
+    },
+    {
+      "sci": "Petromyzon marinus",
+      "common": "Sea lamprey",
+      "kingdom": "Animalia",
+      "family": "Petromyzontidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/bc/Petromyzon_marinus.001_-_Aquarium_Finisterrae.jpg/960px-Petromyzon_marinus.001_-_Aquarium_Finisterrae.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Sea_lamprey"
+    },
+    {
+      "sci": "Salvelinus namaycush",
+      "common": "Lake trout",
+      "kingdom": "Animalia",
+      "family": "Salmonidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/ba/Lake_trout_fishes_salvelinus_namaycush.jpg/960px-Lake_trout_fishes_salvelinus_namaycush.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Lake_trout"
+    },
+    {
+      "sci": "Taenia saginata",
+      "common": "Beef tapeworm",
+      "kingdom": "Animalia",
+      "family": "Taeniidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/e/e2/Taenia_saginata_adult_5260_lores.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Taenia_saginata"
+    },
+    {
+      "sci": "Plasmodium falciparum",
+      "common": "Malaria parasite",
+      "kingdom": "Protozoa",
+      "family": "Plasmodiidae",
+      "life_form": "microbe",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/f/fc/Plasmodium_falciparum_01.png",
+      "wiki_url": "https://en.wikipedia.org/wiki/Plasmodium_falciparum"
+    },
+    {
+      "sci": "Anopheles gambiae",
+      "common": "African malaria mosquito",
+      "kingdom": "Animalia",
+      "family": "Culicidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/0/0a/AnophelesGambiaemosquito.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Anopheles_gambiae"
+    },
+    {
+      "sci": "Toxoplasma gondii",
+      "common": "Toxoplasma parasite",
+      "kingdom": "Protozoa",
+      "family": "Sarcocystidae",
+      "life_form": "microbe",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/3/39/Toxoplasma_gondii_tachy.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Toxoplasma_gondii"
+    },
+    {
+      "sci": "Felis catus",
+      "common": "Domestic cat",
+      "kingdom": "Animalia",
+      "family": "Felidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/15/Cat_August_2010-4.jpg/960px-Cat_August_2010-4.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Cat"
+    },
+    {
+      "sci": "Rattus norvegicus",
+      "common": "Brown rat",
+      "kingdom": "Animalia",
+      "family": "Muridae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/Brown_rat_%28Rattus_norvegicus%29_Drenthe.jpg/960px-Brown_rat_%28Rattus_norvegicus%29_Drenthe.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Brown_rat"
+    },
+    {
+      "sci": "Dermatobia hominis",
+      "common": "Human botfly",
+      "kingdom": "Animalia",
+      "family": "Oestridae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/b/b6/D._hominis_adult_female.png",
+      "wiki_url": "https://en.wikipedia.org/wiki/Dermatobia_hominis"
+    },
+    {
+      "sci": "Bipalium kewense",
+      "common": "Hammerhead worm",
+      "kingdom": "Animalia",
+      "family": "Geoplanidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ca/Bipalium_kewense_on_leaf_%28cropped%29.jpg/960px-Bipalium_kewense_on_leaf_%28cropped%29.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Bipalium_kewense"
+    },
+    {
+      "sci": "Lumbricus terrestris",
+      "common": "Common earthworm",
+      "kingdom": "Animalia",
+      "family": "Lumbricidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/3/30/Regenwurm1.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Lumbricus_terrestris"
+    },
+    {
+      "sci": "Ixodes scapularis",
+      "common": "Black-legged tick",
+      "kingdom": "Animalia",
+      "family": "Ixodidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/34/Adult_deer_tick.jpg/960px-Adult_deer_tick.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Ixodes_scapularis"
+    },
+    {
+      "sci": "Odocoileus virginianus",
+      "common": "White-tailed deer",
+      "kingdom": "Animalia",
+      "family": "Cervidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b7/White-tailed_deer.jpg/960px-White-tailed_deer.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/White-tailed_deer"
+    },
+    {
+      "sci": "Spinochordodes tellinii",
+      "common": "Hairworm",
+      "kingdom": "Animalia",
+      "family": "Spinochordodidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9b/Spinochordodes_in_Meconema.jpg/960px-Spinochordodes_in_Meconema.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Spinochordodes_tellinii"
+    },
+    {
+      "sci": "Meconema thalassinum",
+      "common": "Drumming katydid",
+      "kingdom": "Animalia",
+      "family": "Tettigoniidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/97/Meconema_thalassinum01.jpg/960px-Meconema_thalassinum01.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Meconema_thalassinum"
+    },
+    {
+      "sci": "Panthera leo",
+      "common": "Lion",
+      "kingdom": "Animalia",
+      "family": "Felidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a6/020_The_lion_king_Snyggve_in_the_Serengeti_National_Park_Photo_by_Giles_Laurent.jpg/960px-020_The_lion_king_Snyggve_in_the_Serengeti_National_Park_Photo_by_Giles_Laurent.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Lion"
+    },
+    {
+      "sci": "Equus quagga",
+      "common": "Plains zebra",
+      "kingdom": "Animalia",
+      "family": "Equidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/45/Equus_quagga_burchellii_-_Etosha%2C_2014.jpg/960px-Equus_quagga_burchellii_-_Etosha%2C_2014.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Plains_zebra"
+    },
+    {
+      "sci": "Carcharodon carcharias",
+      "common": "Great white shark",
+      "kingdom": "Animalia",
+      "family": "Lamnidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/56/White_shark.jpg/960px-White_shark.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Great_white_shark"
+    },
+    {
+      "sci": "Arctocephalus pusillus",
+      "common": "Cape fur seal",
+      "kingdom": "Animalia",
+      "family": "Otariidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e5/Arctocephalus_pusillus_-_SE_Tasmania.jpg/960px-Arctocephalus_pusillus_-_SE_Tasmania.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Arctocephalus_pusillus"
+    },
+    {
+      "sci": "Haliaeetus leucocephalus",
+      "common": "Bald eagle",
+      "kingdom": "Animalia",
+      "family": "Accipitridae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/db/Bald_eagle_about_to_fly_in_Alaska_%282016%29.jpg/960px-Bald_eagle_about_to_fly_in_Alaska_%282016%29.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Bald_eagle"
+    },
+    {
+      "sci": "Oncorhynchus nerka",
+      "common": "Sockeye salmon",
+      "kingdom": "Animalia",
+      "family": "Salmonidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/76/Sockeye_salmon_swimming_right.jpg/960px-Sockeye_salmon_swimming_right.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Sockeye_salmon"
+    },
+    {
+      "sci": "Canis lupus",
+      "common": "Gray wolf",
+      "kingdom": "Animalia",
+      "family": "Canidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/68/Eurasian_wolf_2.jpg/960px-Eurasian_wolf_2.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Wolf"
+    },
+    {
+      "sci": "Cervus canadensis",
+      "common": "Elk",
+      "kingdom": "Animalia",
+      "family": "Cervidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/73/Jasper.Wapiti-Hirsch.P1033401.jpg/960px-Jasper.Wapiti-Hirsch.P1033401.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Elk"
+    },
+    {
+      "sci": "Ursus maritimus",
+      "common": "Polar bear",
+      "kingdom": "Animalia",
+      "family": "Ursidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/6/66/Polar_Bear_-_Alaska_%28cropped%29.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Polar_bear"
+    },
+    {
+      "sci": "Pusa hispida",
+      "common": "Ringed seal",
+      "kingdom": "Animalia",
+      "family": "Phocidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/3/33/Pusa_hispida_hispida_NOAA_1.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Ringed_seal"
+    },
+    {
+      "sci": "Orcinus orca",
+      "common": "Killer whale",
+      "kingdom": "Animalia",
+      "family": "Delphinidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/37/Killerwhales_jumping.jpg/960px-Killerwhales_jumping.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Orca"
+    },
+    {
+      "sci": "Otaria flavescens",
+      "common": "South American sea lion",
+      "kingdom": "Animalia",
+      "family": "Otariidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0f/Southern_Sea_Lions.jpg/960px-Southern_Sea_Lions.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/South_American_sea_lion"
+    },
+    {
+      "sci": "Acinonyx jubatus",
+      "common": "Cheetah",
+      "kingdom": "Animalia",
+      "family": "Felidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/92/Male_cheetah_facing_left_in_South_Africa.jpg/960px-Male_cheetah_facing_left_in_South_Africa.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Cheetah"
+    },
+    {
+      "sci": "Eudorcas thomsonii",
+      "common": "Thomson's gazelle",
+      "kingdom": "Animalia",
+      "family": "Bovidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/db/Gacela_de_Thomson_%28Eudorcas_thomsonii%29%2C_parque_nacional_de_Amboseli%2C_Kenia%2C_2024-05-23%2C_DD_11.jpg/960px-Gacela_de_Thomson_%28Eudorcas_thomsonii%29%2C_parque_nacional_de_Amboseli%2C_Kenia%2C_2024-05-23%2C_DD_11.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Thomson%27s_gazelle"
+    },
+    {
+      "sci": "Panthera uncia",
+      "common": "Snow leopard",
+      "kingdom": "Animalia",
+      "family": "Felidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a5/Irbis4.JPG/960px-Irbis4.JPG",
+      "wiki_url": "https://en.wikipedia.org/wiki/Snow_leopard"
+    },
+    {
+      "sci": "Pseudois nayaur",
+      "common": "Bharal (blue sheep)",
+      "kingdom": "Animalia",
+      "family": "Bovidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/f/fe/Bharal_-_Shreeram_M_V_-_Kibber%2C_Spiti_Valley%2C_Himachal_Pradesh%2C_India.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Bharal"
+    },
+    {
+      "sci": "Panthera tigris",
+      "common": "Tiger",
+      "kingdom": "Animalia",
+      "family": "Felidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b0/Bengal_tiger_%28Panthera_tigris_tigris%29_female_3_crop.jpg/960px-Bengal_tiger_%28Panthera_tigris_tigris%29_female_3_crop.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Tiger"
+    },
+    {
+      "sci": "Rusa unicolor",
+      "common": "Sambar deer",
+      "kingdom": "Animalia",
+      "family": "Cervidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7a/Sambar_%28Cervus_unicolor_unicolor%29_male.jpg/960px-Sambar_%28Cervus_unicolor_unicolor%29_male.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Sambar_deer"
+    },
+    {
+      "sci": "Eunectes murinus",
+      "common": "Green anaconda",
+      "kingdom": "Animalia",
+      "family": "Boidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b4/Sucuri_verde.jpg/960px-Sucuri_verde.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Green_anaconda"
+    },
+    {
+      "sci": "Hydrochoerus hydrochaeris",
+      "common": "Capybara",
+      "kingdom": "Animalia",
+      "family": "Caviidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/71/Capybaracropped.jpg/960px-Capybaracropped.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Capybara"
+    },
+    {
+      "sci": "Varanus komodoensis",
+      "common": "Komodo dragon",
+      "kingdom": "Animalia",
+      "family": "Varanidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f5/202306_Varanus_komodoensis.jpg/960px-202306_Varanus_komodoensis.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Komodo_dragon"
+    },
+    {
+      "sci": "Bubalus bubalis",
+      "common": "Water buffalo",
+      "kingdom": "Animalia",
+      "family": "Bovidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/bc/Water_buffalo_at_Rinca.jpg/960px-Water_buffalo_at_Rinca.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Water_buffalo"
+    },
+    {
+      "sci": "Falco peregrinus",
+      "common": "Peregrine falcon",
+      "kingdom": "Animalia",
+      "family": "Falconidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9c/Falco_peregrinus_m_Humber_Bay_Park_Toronto.jpg/960px-Falco_peregrinus_m_Humber_Bay_Park_Toronto.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Peregrine_falcon"
+    },
+    {
+      "sci": "Columba livia",
+      "common": "Rock dove",
+      "kingdom": "Animalia",
+      "family": "Columbidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/10/Columba_livia_%28Rock_Dove%2C_wild%29%2C_Duncansby_Head%2C_Caithness%2C_Scotland_1.jpg/960px-Columba_livia_%28Rock_Dove%2C_wild%29%2C_Duncansby_Head%2C_Caithness%2C_Scotland_1.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Rock_dove"
+    },
+    {
+      "sci": "Odontodactylus scyllarus",
+      "common": "Peacock mantis shrimp",
+      "kingdom": "Animalia",
+      "family": "Odontodactylidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1e/Odontodactylus_scyllarus_R%C3%A9union.jpg/960px-Odontodactylus_scyllarus_R%C3%A9union.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Odontodactylus_scyllarus"
+    },
+    {
+      "sci": "Cancer pagurus",
+      "common": "Edible crab",
+      "kingdom": "Animalia",
+      "family": "Cancridae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/71/Cancer_pagurus.jpg/960px-Cancer_pagurus.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Cancer_pagurus"
+    },
+    {
+      "sci": "Enhydra lutris",
+      "common": "Sea otter",
+      "kingdom": "Animalia",
+      "family": "Mustelidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/0/02/Sea_Otter_%28Enhydra_lutris%29_%2825169790524%29_crop.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Sea_otter"
+    },
+    {
+      "sci": "Strongylocentrotus purpuratus",
+      "common": "Purple sea urchin",
+      "kingdom": "Animalia",
+      "family": "Strongylocentrotidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e2/Urchin_%289398869414%29.jpg/960px-Urchin_%289398869414%29.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Strongylocentrotus_purpuratus"
+    },
+    {
+      "sci": "Castor canadensis",
+      "common": "American beaver",
+      "kingdom": "Animalia",
+      "family": "Castoridae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/6/6b/American_Beaver.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/North_American_beaver"
+    },
+    {
+      "sci": "Ursus arctos horribilis",
+      "common": "Grizzly bear",
+      "kingdom": "Animalia",
+      "family": "Ursidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a9/GrizzlyBearJeanBeaufort.jpg/960px-GrizzlyBearJeanBeaufort.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Grizzly_bear"
+    },
+    {
+      "sci": "Aquila chrysaetos",
+      "common": "Golden eagle",
+      "kingdom": "Animalia",
+      "family": "Accipitridae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cc/015_Wild_Golden_Eagle_in_flight_at_Pfyn-Finges_%28Switzerland%29_Photo_by_Giles_Laurent.jpg/960px-015_Wild_Golden_Eagle_in_flight_at_Pfyn-Finges_%28Switzerland%29_Photo_by_Giles_Laurent.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Golden_eagle"
+    },
+    {
+      "sci": "Bison bison",
+      "common": "American bison",
+      "kingdom": "Animalia",
+      "family": "Bovidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8d/American_bison_k5680-1.jpg/960px-American_bison_k5680-1.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/American_bison"
+    },
+    {
+      "sci": "Canis latrans",
+      "common": "Coyote",
+      "kingdom": "Animalia",
+      "family": "Canidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/9/9c/2009-Coyote-Yosemite.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Coyote"
+    },
+    {
+      "sci": "Antilocapra americana",
+      "common": "Pronghorn",
+      "kingdom": "Animalia",
+      "family": "Antilocapridae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/a/a3/Antilocapra_americana.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Pronghorn"
+    },
+    {
+      "sci": "Vulpes vulpes",
+      "common": "Red fox",
+      "kingdom": "Animalia",
+      "family": "Canidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d2/Portrait_of_a_red_fox_in_Rautas_fj%C3%A4llurskog_%28cropped%29.jpg/960px-Portrait_of_a_red_fox_in_Rautas_fj%C3%A4llurskog_%28cropped%29.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Red_fox"
+    },
+    {
+      "sci": "Corvus corax",
+      "common": "Common raven",
+      "kingdom": "Animalia",
+      "family": "Corvidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7c/Corvus_corax.jpg/960px-Corvus_corax.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Common_raven"
+    },
+    {
+      "sci": "Haliotis rufescens",
+      "common": "Red abalone",
+      "kingdom": "Animalia",
+      "family": "Haliotidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/71/Haliotis_rufescens.jpeg/960px-Haliotis_rufescens.jpeg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Haliotis_rufescens"
+    },
+    {
+      "sci": "Zalophus californianus",
+      "common": "California sea lion",
+      "kingdom": "Animalia",
+      "family": "Otariidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3f/California_Sea_Lion%2C_Monterey%2C_California%2C_United_States_imported_from_iNaturalist_photo_203598492.jpg/960px-California_Sea_Lion%2C_Monterey%2C_California%2C_United_States_imported_from_iNaturalist_photo_203598492.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/California_sea_lion"
+    },
+    {
+      "sci": "Pycnopodia helianthoides",
+      "common": "Sunflower sea star",
+      "kingdom": "Animalia",
+      "family": "Asteriidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8d/Pycnopodia_helianthoides_SLO_CA.jpg/960px-Pycnopodia_helianthoides_SLO_CA.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Sunflower_sea_star"
+    },
+    {
+      "sci": "Pugettia producta",
+      "common": "Kelp crab",
+      "kingdom": "Animalia",
+      "family": "Epialtidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/bb/Northern_Kelp_Crab.jpg/960px-Northern_Kelp_Crab.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Pugettia_producta"
+    },
+    {
+      "sci": "Triakis semifasciata",
+      "common": "Leopard shark",
+      "kingdom": "Animalia",
+      "family": "Triakidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1e/Leopard_shark_in_kelp.jpg/960px-Leopard_shark_in_kelp.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Leopard_shark"
+    },
+    {
+      "sci": "Hypsypops rubicundus",
+      "common": "Garibaldi",
+      "kingdom": "Animalia",
+      "family": "Pomacentridae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/27/Hypsypops_rubicundus_adult.jpg/960px-Hypsypops_rubicundus_adult.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Garibaldi_(fish)"
+    },
+    {
+      "sci": "Connochaetes taurinus",
+      "common": "Blue wildebeest",
+      "kingdom": "Animalia",
+      "family": "Bovidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fb/Blue_Wildebeest%2C_Ngorongoro.jpg/960px-Blue_Wildebeest%2C_Ngorongoro.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Blue_wildebeest"
+    },
+    {
+      "sci": "Panthera pardus",
+      "common": "Leopard",
+      "kingdom": "Animalia",
+      "family": "Felidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/70/African_leopard_male_%28cropped%29.jpg/960px-African_leopard_male_%28cropped%29.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Leopard"
+    },
+    {
+      "sci": "Crocuta crocuta",
+      "common": "Spotted hyena",
+      "kingdom": "Animalia",
+      "family": "Hyaenidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dc/Spotted_hyena_%28Crocuta_crocuta%29.jpg/960px-Spotted_hyena_%28Crocuta_crocuta%29.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Spotted_hyena"
+    },
+    {
+      "sci": "Gyps africanus",
+      "common": "White-backed vulture",
+      "kingdom": "Animalia",
+      "family": "Accipitridae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d3/2012-white-backed-vulture.jpg/960px-2012-white-backed-vulture.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/White-backed_vulture"
+    },
+    {
+      "sci": "Crocodylus niloticus",
+      "common": "Nile crocodile",
+      "kingdom": "Animalia",
+      "family": "Crocodylidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/81/NileCrocodile.jpg/960px-NileCrocodile.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Nile_crocodile"
+    },
+    {
+      "sci": "Papio anubis",
+      "common": "Olive baboon",
+      "kingdom": "Animalia",
+      "family": "Cercopithecidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/35/Olive_baboon_Ngorongoro.jpg/960px-Olive_baboon_Ngorongoro.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Olive_baboon"
+    },
+    {
+      "sci": "Scarus guacamaia",
+      "common": "Rainbow parrotfish",
+      "kingdom": "Animalia",
+      "family": "Scaridae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f7/Rainbow_parrotfish.jpg/960px-Rainbow_parrotfish.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Rainbow_parrotfish"
+    },
+    {
+      "sci": "Octopus vulgaris",
+      "common": "Common octopus",
+      "kingdom": "Animalia",
+      "family": "Octopodidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/57/Octopus2.jpg/960px-Octopus2.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Common_octopus"
+    },
+    {
+      "sci": "Gymnothorax javanicus",
+      "common": "Giant moray",
+      "kingdom": "Animalia",
+      "family": "Muraenidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8a/Moray_eel_komodo.jpg/960px-Moray_eel_komodo.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Giant_moray"
+    },
+    {
+      "sci": "Carcharhinus melanopterus",
+      "common": "Blacktip reef shark",
+      "kingdom": "Animalia",
+      "family": "Carcharhinidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9f/Blacktip_reef_shark_%28Carcharhinus_melanopterus%29_Moorea.jpg/960px-Blacktip_reef_shark_%28Carcharhinus_melanopterus%29_Moorea.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Blacktip_reef_shark"
+    },
+    {
+      "sci": "Manta birostris",
+      "common": "Giant manta ray",
+      "kingdom": "Animalia",
+      "family": "Mobulidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/d/df/Manta_birostris-Thailand4.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Giant_oceanic_manta_ray"
+    },
+    {
+      "sci": "Lutjanus kasmira",
+      "common": "Bluestripe snapper",
+      "kingdom": "Animalia",
+      "family": "Lutjanidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/46/Lutjanus_kasmira_01.jpg/960px-Lutjanus_kasmira_01.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Common_bluestripe_snapper"
+    },
+    {
+      "sci": "Calanus glacialis",
+      "common": "Arctic copepod",
+      "kingdom": "Animalia",
+      "family": "Calanidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1f/Cop%C3%A9podo.jpg/960px-Cop%C3%A9podo.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Calanus_glacialis"
+    },
+    {
+      "sci": "Boreogadus saida",
+      "common": "Arctic cod",
+      "kingdom": "Animalia",
+      "family": "Gadidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/74/Boreogadus_saida.jpg/960px-Boreogadus_saida.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Boreogadus"
+    },
+    {
+      "sci": "Monodon monoceros",
+      "common": "Narwhal",
+      "kingdom": "Animalia",
+      "family": "Monodontidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/bc/%D0%9D%D0%B0%D1%80%D0%B2%D0%B0%D0%BB_%D0%B2_%D1%80%D0%BE%D1%81%D1%81%D0%B8%D0%B9%D1%81%D0%BA%D0%BE%D0%B9_%D0%90%D1%80%D0%BA%D1%82%D0%B8%D0%BA%D0%B5.jpg/960px-%D0%9D%D0%B0%D1%80%D0%B2%D0%B0%D0%BB_%D0%B2_%D1%80%D0%BE%D1%81%D1%81%D0%B8%D0%B9%D1%81%D0%BA%D0%BE%D0%B9_%D0%90%D1%80%D0%BA%D1%82%D0%B8%D0%BA%D0%B5.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Narwhal"
+    },
+    {
+      "sci": "Delphinapterus leucas",
+      "common": "Beluga whale",
+      "kingdom": "Animalia",
+      "family": "Monodontidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/Oceanogr%C3%A0fic_29102004.jpg/960px-Oceanogr%C3%A0fic_29102004.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Beluga_whale"
+    },
+    {
+      "sci": "Bubo scandiacus",
+      "common": "Snowy owl",
+      "kingdom": "Animalia",
+      "family": "Strigidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f1/SnowyOwlAmericanBlackDuck.jpg/960px-SnowyOwlAmericanBlackDuck.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Snowy_owl"
+    },
+    {
+      "sci": "Dicrostonyx groenlandicus",
+      "common": "Arctic lemming",
+      "kingdom": "Animalia",
+      "family": "Cricetidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/Collared_lemming_standing_in_grass_-_DPLA_-_31b8863a7a5bd9e5bd2f73fc0565d883.jpg/960px-Collared_lemming_standing_in_grass_-_DPLA_-_31b8863a7a5bd9e5bd2f73fc0565d883.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Northern_collared_lemming"
+    },
+    {
+      "sci": "Vulpes lagopus",
+      "common": "Arctic fox",
+      "kingdom": "Animalia",
+      "family": "Canidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dc/Vulpes_lagopus_in_Iceland_%28cropped_3%29.jpg/960px-Vulpes_lagopus_in_Iceland_%28cropped_3%29.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Arctic_fox"
+    },
+    {
+      "sci": "Panthera onca",
+      "common": "Jaguar",
+      "kingdom": "Animalia",
+      "family": "Felidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/0/0a/Standing_jaguar.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Jaguar"
+    },
+    {
+      "sci": "Harpia harpyja",
+      "common": "Harpy eagle",
+      "kingdom": "Animalia",
+      "family": "Accipitridae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/3/3b/Harpia_harpyja_001_800.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Harpy_eagle"
+    },
+    {
+      "sci": "Dasyprocta leporina",
+      "common": "Red-rumped agouti",
+      "kingdom": "Animalia",
+      "family": "Dasyproctidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8f/Red-rumped_Agouti_%2817380318590%29.jpg/960px-Red-rumped_Agouti_%2817380318590%29.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Red-rumped_agouti"
+    },
+    {
+      "sci": "Ara macao",
+      "common": "Scarlet macaw",
+      "kingdom": "Animalia",
+      "family": "Psittacidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/47/Scarlet_macaw_%28Ara_macao_cyanopterus%29_Copan.jpg/960px-Scarlet_macaw_%28Ara_macao_cyanopterus%29_Copan.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Scarlet_macaw"
+    },
+    {
+      "sci": "Pygocentrus nattereri",
+      "common": "Red-bellied piranha",
+      "kingdom": "Animalia",
+      "family": "Serrasalmidae",
+      "life_form": "animal",
+      "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c7/Pygocentrus_nattereri_-_Karlsruhe_Zoo_01.jpg/960px-Pygocentrus_nattereri_-_Karlsruhe_Zoo_01.jpg",
+      "wiki_url": "https://en.wikipedia.org/wiki/Red-bellied_piranha"
+    }
+  ],
+  "pollination": [
+    {
+      "plant": "Yucca filamentosa",
+      "pollinator": "Tegeticula yuccasella",
+      "region": "north_america",
+      "season_from": 5,
+      "season_to": 7,
+      "obligate": true,
+      "note": "Classic obligate-mutualism — moth pollinates only yucca, larva eats only yucca seeds."
+    },
+    {
+      "plant": "Ficus carica",
+      "pollinator": "Blastophaga psenes",
+      "region": "mediterranean",
+      "season_from": 4,
+      "season_to": 10,
+      "obligate": true,
+      "note": "Each Ficus species coevolves with one wasp species; arity grows to 2 wasps over the fig life cycle."
+    },
+    {
+      "plant": "Asclepias syriaca",
+      "pollinator": "Danaus plexippus",
+      "region": "north_america",
+      "season_from": 6,
+      "season_to": 9,
+      "obligate": false,
+      "note": "Monarch larvae also EAT milkweed; the adult re-pollinates as nectar feeder."
+    },
+    {
+      "plant": "Heliconia rostrata",
+      "pollinator": "Trochilus polytmus",
+      "region": "neotropics",
+      "season_from": 1,
+      "season_to": 12,
+      "obligate": false,
+      "note": "Year-round in tropics; bill shape matches the flower curve."
+    },
+    {
+      "plant": "Prunus dulcis",
+      "pollinator": "Apis mellifera",
+      "region": "north_america",
+      "season_from": 2,
+      "season_to": 3,
+      "obligate": false,
+      "note": "California almond bloom hosts the largest managed-pollinator migration on earth."
+    },
+    {
+      "plant": "Solanum lycopersicum",
+      "pollinator": "Bombus terrestris",
+      "region": "europe",
+      "season_from": 5,
+      "season_to": 9,
+      "obligate": false,
+      "note": "Bumblebees sonicate the anther — honeybees can't buzz-pollinate tomatoes."
+    },
+    {
+      "plant": "Carnegiea gigantea",
+      "pollinator": "Leptonycteris yerbabuenae",
+      "region": "sonoran_desert",
+      "season_from": 4,
+      "season_to": 6,
+      "obligate": false,
+      "note": "Lesser long-nosed bats feed on saguaro nectar by night, doves take over by day."
+    },
+    {
+      "plant": "Datura wrightii",
+      "pollinator": "Manduca sexta",
+      "region": "sonoran_desert",
+      "season_from": 7,
+      "season_to": 10,
+      "obligate": false,
+      "note": "Hawkmoth pollination — nocturnal, white flowers, strong scent."
+    },
+    {
+      "plant": "Magnolia grandiflora",
+      "pollinator": "Cyclocephala borealis",
+      "region": "north_america",
+      "season_from": 4,
+      "season_to": 6,
+      "obligate": false,
+      "note": "Beetles predate bees: magnolia retains the ancient cantharophily syndrome."
+    },
+    {
+      "plant": "Aloe ferox",
+      "pollinator": "Nectarinia famosa",
+      "region": "sub_saharan",
+      "season_from": 6,
+      "season_to": 9,
+      "obligate": false,
+      "note": "Birds, not bees: African aloes coevolved with long-billed sunbirds."
+    },
+    {
+      "plant": "Ravenala madagascariensis",
+      "pollinator": "Eulemur rubriventer",
+      "region": "madagascar",
+      "season_from": 1,
+      "season_to": 12,
+      "obligate": false,
+      "note": "Primate pollination — lemurs push apart the bract to drink nectar."
+    },
+    {
+      "plant": "Banksia integrifolia",
+      "pollinator": "Anthochaera carunculata",
+      "region": "australia",
+      "season_from": 3,
+      "season_to": 7,
+      "obligate": false,
+      "note": "Honeyeaters are the dominant pollinator of the Banksia genus."
+    },
+    {
+      "plant": "Ophrys apifera",
+      "pollinator": "Eucera longicornis",
+      "region": "mediterranean",
+      "season_from": 4,
+      "season_to": 6,
+      "obligate": false,
+      "note": "Sexual deception — flower mimics female bee; male bee pseudo-copulates and disperses pollen."
+    },
+    {
+      "plant": "Nymphaea alba",
+      "pollinator": "Cyclocephala borealis",
+      "region": "europe",
+      "season_from": 6,
+      "season_to": 8,
+      "obligate": false,
+      "note": "Floating water lilies trap beetles overnight, release with pollen at dawn."
+    },
+    {
+      "plant": "Vachellia drepanolobium",
+      "pollinator": "Apis mellifera",
+      "region": "serengeti",
+      "season_from": 5,
+      "season_to": 10,
+      "obligate": false,
+      "note": "Whistling thorn acacia: bees pollinate while the resident ants defend the tree (see mutualism)."
+    }
+  ],
+  "mutualism": [
+    {
+      "species_a": "Amphiprion ocellaris",
+      "species_b": "Heteractis magnifica",
+      "region": "indo_pacific",
+      "subtype": "protection-and-cleaning",
+      "obligate": true,
+      "note": "Clownfish lives in the anemone's stinging tentacles; both fully dependent."
+    },
+    {
+      "species_a": "Labroides dimidiatus",
+      "species_b": "Epinephelus tukula",
+      "region": "indo_pacific",
+      "subtype": "cleaning",
+      "obligate": false,
+      "note": "Cleaner wrasse picks parasites from grouper mouth — predator–prey roles invert."
+    },
+    {
+      "species_a": "Buphagus africanus",
+      "species_b": "Ceratotherium simum",
+      "region": "sub_saharan",
+      "subtype": "tick-removal",
+      "obligate": false,
+      "note": "Oxpecker eats ticks off the rhino; some studies argue parasitism too (wound-feeding)."
+    },
+    {
+      "species_a": "Pinus contorta",
+      "species_b": "Rhizopogon roseolus",
+      "region": "north_america",
+      "subtype": "mycorrhiza",
+      "obligate": true,
+      "note": "Fungus extends the root system 100×; pine gives sugars — both die alone."
+    },
+    {
+      "species_a": "Lecanora muralis",
+      "species_b": "Symbiodinium microadriaticum",
+      "region": "global",
+      "subtype": "endosymbiosis",
+      "obligate": true,
+      "note": "Lichen-style; alga photosynthesises, fungus protects + provides minerals."
+    },
+    {
+      "species_a": "Acropora millepora",
+      "species_b": "Symbiodinium microadriaticum",
+      "region": "coral_reef",
+      "subtype": "endosymbiosis",
+      "obligate": true,
+      "note": "Bleaching = breakdown of this single mutualism — the global crisis driver."
+    },
+    {
+      "species_a": "Vachellia drepanolobium",
+      "species_b": "Pseudomyrmex ferruginea",
+      "region": "serengeti",
+      "subtype": "habitat-and-defence",
+      "obligate": true,
+      "note": "Acacia grows hollow swollen thorns; ants defend the tree against giraffes."
+    },
+    {
+      "species_a": "Bubulcus ibis",
+      "species_b": "Bos taurus",
+      "region": "global",
+      "subtype": "flush-feeding",
+      "obligate": false,
+      "note": "Egret rides cattle; cattle stir up insects the egret eats."
+    },
+    {
+      "species_a": "Mellivora capensis",
+      "species_b": "Indicator indicator",
+      "region": "sub_saharan",
+      "subtype": "guidance",
+      "obligate": false,
+      "note": "Honeyguide leads honey badger to hives; both feast on what the badger breaks open."
+    },
+    {
+      "species_a": "Lasius niger",
+      "species_b": "Aphis fabae",
+      "region": "europe",
+      "subtype": "farming",
+      "obligate": false,
+      "note": "Ants 'farm' aphids: protection in exchange for honeydew."
+    },
+    {
+      "species_a": "Reticulitermes flavipes",
+      "species_b": "Trichonympha agilis",
+      "region": "north_america",
+      "subtype": "gut-endosymbiosis",
+      "obligate": true,
+      "note": "Termite cannot digest cellulose alone; flagellate cannot survive outside the termite."
+    },
+    {
+      "species_a": "Glycine max",
+      "species_b": "Bradyrhizobium japonicum",
+      "region": "global",
+      "subtype": "nitrogen-fixation",
+      "obligate": true,
+      "note": "Rhizobia convert atmospheric N₂ into ammonia inside soybean root nodules."
+    },
+    {
+      "species_a": "Bradypus variegatus",
+      "species_b": "Lecanora muralis",
+      "region": "neotropics",
+      "subtype": "camouflage",
+      "obligate": false,
+      "note": "Sloth fur grows algae and fungi — supplemental food and camouflage."
+    },
+    {
+      "species_a": "Cryptocentrus cinctus",
+      "species_b": "Alpheus randalli",
+      "region": "indo_pacific",
+      "subtype": "burrow-sharing",
+      "obligate": true,
+      "note": "Pistol shrimp digs the burrow; goby stands lookout with better vision."
+    },
+    {
+      "species_a": "Lecanora muralis",
+      "species_b": "Rhizopogon roseolus",
+      "region": "global",
+      "subtype": "soil-network",
+      "obligate": false,
+      "note": "Lichens and mycorrhizal fungi cooperate in soil networks — community-scale mutualism."
+    }
+  ],
+  "parasitism": [
+    {
+      "host": "Acrocephalus scirpaceus",
+      "parasite": "Cuculus canorus",
+      "region": "europe",
+      "transmission": "brood-parasitism",
+      "note": "Cuckoo lays a single egg in warbler's nest; chick ejects host eggs."
+    },
+    {
+      "host": "Camponotus leonardi",
+      "parasite": "Ophiocordyceps unilateralis",
+      "region": "sub_saharan",
+      "transmission": "host-manipulation",
+      "note": "Zombie-ant fungus alters ant behaviour to climb and die in a fungal-friendly spot."
+    },
+    {
+      "host": "Quercus robur",
+      "parasite": "Phoradendron leucarpum",
+      "region": "north_america",
+      "transmission": "aerial-parasite",
+      "note": "Mistletoe punctures bark, taps host xylem for water + minerals."
+    },
+    {
+      "host": "Magnolia grandiflora",
+      "parasite": "Ficus aurea",
+      "region": "neotropics",
+      "transmission": "strangling",
+      "note": "Strangler fig germinates in canopy, sends roots down, eventually kills host tree."
+    },
+    {
+      "host": "Salvelinus namaycush",
+      "parasite": "Petromyzon marinus",
+      "region": "great_lakes",
+      "transmission": "ectoparasite",
+      "note": "Sea lamprey attaches with rasping disc; one of the worst invasive in the Great Lakes."
+    },
+    {
+      "host": "Bos taurus",
+      "parasite": "Taenia saginata",
+      "region": "global",
+      "transmission": "endoparasite",
+      "note": "Beef tapeworm: cysts in muscle, adult in human gut — humans complete the cycle."
+    },
+    {
+      "host": "Anopheles gambiae",
+      "parasite": "Plasmodium falciparum",
+      "region": "sub_saharan",
+      "transmission": "vector-borne",
+      "note": "Malaria parasite uses mosquito as vector; humans are the other host (we don't include human entity)."
+    },
+    {
+      "host": "Felis catus",
+      "parasite": "Toxoplasma gondii",
+      "region": "global",
+      "transmission": "vector-borne",
+      "note": "Cat is the definitive host; rodent intermediate is behaviour-manipulated to seek cats."
+    },
+    {
+      "host": "Bos taurus",
+      "parasite": "Dermatobia hominis",
+      "region": "neotropics",
+      "transmission": "ectoparasite",
+      "note": "Botfly lays eggs on a vector insect; larva burrows under skin."
+    },
+    {
+      "host": "Lumbricus terrestris",
+      "parasite": "Bipalium kewense",
+      "region": "global",
+      "transmission": "predator-parasite",
+      "note": "Hammerhead flatworm preys on earthworms (technically predator, behaves like parasite)."
+    },
+    {
+      "host": "Odocoileus virginianus",
+      "parasite": "Ixodes scapularis",
+      "region": "north_america",
+      "transmission": "ectoparasite",
+      "note": "Black-legged tick vectors Lyme disease — three-host life cycle."
+    },
+    {
+      "host": "Meconema thalassinum",
+      "parasite": "Spinochordodes tellinii",
+      "region": "europe",
+      "transmission": "host-manipulation",
+      "note": "Hairworm grows inside cricket, then makes it leap into water so the worm can emerge."
+    }
+  ],
+  "predation": [
+    {
+      "predator": "Panthera leo",
+      "prey": "Equus quagga",
+      "region": "serengeti",
+      "season_from": 1,
+      "season_to": 12,
+      "note": "Lions hunt cooperatively; success rate higher than any other big cat."
+    },
+    {
+      "predator": "Carcharodon carcharias",
+      "prey": "Arctocephalus pusillus",
+      "region": "cape_coast",
+      "season_from": 5,
+      "season_to": 9,
+      "note": "Famous breaching predation at Seal Island, False Bay — peaks in winter."
+    },
+    {
+      "predator": "Haliaeetus leucocephalus",
+      "prey": "Oncorhynchus nerka",
+      "region": "pacific_nw",
+      "season_from": 8,
+      "season_to": 10,
+      "note": "Salmon spawning run concentrates predation; eagle is opportunist."
+    },
+    {
+      "predator": "Canis lupus",
+      "prey": "Cervus canadensis",
+      "region": "yellowstone",
+      "season_from": 1,
+      "season_to": 12,
+      "note": "1995 wolf reintroduction reshaped elk behaviour AND willow growth — trophic cascade."
+    },
+    {
+      "predator": "Ursus maritimus",
+      "prey": "Pusa hispida",
+      "region": "arctic",
+      "season_from": 4,
+      "season_to": 7,
+      "note": "Polar bear ambushes ringed seal at breathing holes — sea ice is the platform."
+    },
+    {
+      "predator": "Orcinus orca",
+      "prey": "Otaria flavescens",
+      "region": "patagonia",
+      "season_from": 2,
+      "season_to": 4,
+      "note": "Punta Norte intentional stranding — orcas hunt sea lions on the beach itself."
+    },
+    {
+      "predator": "Acinonyx jubatus",
+      "prey": "Eudorcas thomsonii",
+      "region": "serengeti",
+      "season_from": 1,
+      "season_to": 12,
+      "note": "Cheetah is the fastest sprinter; daytime hunter to avoid larger nocturnal cats."
+    },
+    {
+      "predator": "Panthera uncia",
+      "prey": "Pseudois nayaur",
+      "region": "himalaya",
+      "season_from": 1,
+      "season_to": 12,
+      "note": "Snow leopard preys on bharal at 3,000–5,000 m elevation."
+    },
+    {
+      "predator": "Panthera tigris",
+      "prey": "Rusa unicolor",
+      "region": "south_asia",
+      "season_from": 1,
+      "season_to": 12,
+      "note": "Sambar is the primary prey of Bengal tigers; both are forest-edge specialists."
+    },
+    {
+      "predator": "Eunectes murinus",
+      "prey": "Hydrochoerus hydrochaeris",
+      "region": "amazon",
+      "season_from": 1,
+      "season_to": 12,
+      "note": "Anaconda ambushes capybara at water's edge; constricts and swallows whole."
+    },
+    {
+      "predator": "Varanus komodoensis",
+      "prey": "Bubalus bubalis",
+      "region": "indo_pacific",
+      "season_from": 1,
+      "season_to": 12,
+      "note": "Komodo dragon uses venomous bite + endurance — buffalo dies of shock days later."
+    },
+    {
+      "predator": "Falco peregrinus",
+      "prey": "Columba livia",
+      "region": "global",
+      "season_from": 1,
+      "season_to": 12,
+      "note": "Fastest animal — diving stoop reaches 320 km/h, kills with talons mid-flight."
+    },
+    {
+      "predator": "Odontodactylus scyllarus",
+      "prey": "Cancer pagurus",
+      "region": "indo_pacific",
+      "season_from": 1,
+      "season_to": 12,
+      "note": "Mantis shrimp's strike accelerates faster than a 22-caliber bullet."
+    },
+    {
+      "predator": "Enhydra lutris",
+      "prey": "Strongylocentrotus purpuratus",
+      "region": "kelp_forest",
+      "season_from": 1,
+      "season_to": 12,
+      "note": "Keystone species: otter predation on urchin keeps kelp forest from becoming urchin barren."
+    },
+    {
+      "predator": "Orcinus orca",
+      "prey": "Carcharodon carcharias",
+      "region": "cape_coast",
+      "season_from": 1,
+      "season_to": 12,
+      "note": "Apex of apex: a single orca pair drove great whites out of False Bay 2017."
+    }
+  ],
+  "food_webs": [
+    {
+      "name": "Yellowstone food web",
+      "ecosystem": "yellowstone",
+      "members": [
+        "Canis lupus",
+        "Cervus canadensis",
+        "Castor canadensis",
+        "Salix exigua",
+        "Ursus arctos horribilis",
+        "Oncorhynchus nerka",
+        "Aquila chrysaetos",
+        "Bison bison",
+        "Canis latrans",
+        "Antilocapra americana",
+        "Vulpes vulpes",
+        "Corvus corax",
+        "Pinus contorta",
+        "Bouteloua gracilis",
+        "Odocoileus virginianus",
+        "Ixodes scapularis",
+        "Ursus maritimus"
+      ],
+      "note": "1995 wolf reintroduction is the canonical trophic-cascade story: wolves cut elk browsing, willows recovered, beavers returned."
+    },
+    {
+      "name": "California kelp forest food web",
+      "ecosystem": "kelp_forest",
+      "members": [
+        "Macrocystis pyrifera",
+        "Strongylocentrotus purpuratus",
+        "Enhydra lutris",
+        "Haliotis rufescens",
+        "Zalophus californianus",
+        "Pycnopodia helianthoides",
+        "Pugettia producta",
+        "Triakis semifasciata",
+        "Hypsypops rubicundus",
+        "Carcharodon carcharias",
+        "Orcinus orca",
+        "Octopus vulgaris"
+      ],
+      "note": "Keystone trio: kelp (producer), urchin (herbivore), otter (predator). Remove the otter, urchins explode, kelp vanishes."
+    },
+    {
+      "name": "Serengeti food web",
+      "ecosystem": "serengeti",
+      "members": [
+        "Bouteloua gracilis",
+        "Vachellia drepanolobium",
+        "Connochaetes taurinus",
+        "Equus quagga",
+        "Eudorcas thomsonii",
+        "Panthera leo",
+        "Acinonyx jubatus",
+        "Panthera pardus",
+        "Crocuta crocuta",
+        "Gyps africanus",
+        "Crocodylus niloticus",
+        "Papio anubis",
+        "Bubulcus ibis",
+        "Buphagus africanus",
+        "Ceratotherium simum",
+        "Pseudomyrmex ferruginea"
+      ],
+      "note": "Great Migration: ~1.5M wildebeest move clockwise around the ecosystem each year, predator densities track them."
+    },
+    {
+      "name": "Indo-Pacific coral reef food web",
+      "ecosystem": "coral_reef",
+      "members": [
+        "Acropora millepora",
+        "Symbiodinium microadriaticum",
+        "Scarus guacamaia",
+        "Strongylocentrotus purpuratus",
+        "Octopus vulgaris",
+        "Gymnothorax javanicus",
+        "Epinephelus tukula",
+        "Lutjanus kasmira",
+        "Carcharhinus melanopterus",
+        "Manta birostris",
+        "Labroides dimidiatus",
+        "Amphiprion ocellaris",
+        "Heteractis magnifica",
+        "Odontodactylus scyllarus"
+      ],
+      "note": "Zooxanthellae make this whole ecosystem possible: 90% of the coral's energy is photosynthate from the algal symbiont."
+    },
+    {
+      "name": "Arctic food web",
+      "ecosystem": "arctic",
+      "members": [
+        "Calanus glacialis",
+        "Boreogadus saida",
+        "Pusa hispida",
+        "Ursus maritimus",
+        "Monodon monoceros",
+        "Delphinapterus leucas",
+        "Bubo scandiacus",
+        "Dicrostonyx groenlandicus",
+        "Vulpes lagopus",
+        "Orcinus orca"
+      ],
+      "note": "Sea ice is the keystone HABITAT — every node here is being squeezed by its retreat."
+    },
+    {
+      "name": "Amazon rainforest food web",
+      "ecosystem": "amazon",
+      "members": [
+        "Bertholletia excelsa",
+        "Bradypus variegatus",
+        "Panthera onca",
+        "Harpia harpyja",
+        "Hydrochoerus hydrochaeris",
+        "Eunectes murinus",
+        "Dasyprocta leporina",
+        "Ara macao",
+        "Pygocentrus nattereri",
+        "Ficus aurea",
+        "Heliconia rostrata",
+        "Trochilus polytmus",
+        "Danaus plexippus"
+      ],
+      "note": "Brazil nut tree depends on agouti (only mammal that can crack its pod) AND on a specific orchid bee for pollination — three-way mutualism."
+    }
+  ]
+}

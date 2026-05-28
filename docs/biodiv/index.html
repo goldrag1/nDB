@@ -1,0 +1,1008 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>biodiv_ndb — ecological interactions</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='50' font-size='52'%3E%F0%9F%8C%BF%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg:           #14141a;
+    --surface:      #1c1c24;
+    --surface-2:    #0a0a10;
+    --border:       #2b2b36;
+    --border-soft:  #2d2d3a;
+    --text:         #e8e8ec;
+    --text-strong:  #ffffff;
+    --text-muted:   #888;
+    --accent:       #4a90e2;
+    --accent-hover: #5aa0f2;
+    --entity:       #65CBF3;
+    --relation:     #f5a623;
+    --property:     #7ed321;
+
+    --c-poll:       #f5d423;   /* pollination — yellow */
+    --c-mut:        #7ed321;   /* mutualism — green   */
+    --c-par:        #e85a4a;   /* parasitism — red    */
+    --c-pred:       #b667e2;   /* predation — purple  */
+    --c-fw:         #4a90e2;   /* food web — blue     */
+
+    --font-ui:   system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: var(--font-ui); font-size: 14px; line-height: 1.5;
+    height: 100vh; overflow: hidden;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { color: var(--accent-hover); text-decoration: underline; }
+
+  /* ── Top bar ───────────────────────────────────────────────── */
+  header.topbar {
+    height: 48px; padding: 0 16px;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 14px;
+    z-index: 10;
+  }
+  header .brand { font-weight: 600; color: var(--text-strong); }
+  header .brand .sub { color: var(--text-muted); font-weight: 400; margin-left: 6px; font-size: 12px; }
+  .modes { display: flex; gap: 4px; margin-left: 12px; }
+  .modes button {
+    background: var(--surface-2); color: var(--text-muted);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 4px 10px; font-size: 12.5px; cursor: pointer;
+  }
+  .modes button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .modes button:hover:not(.active) { color: var(--text); border-color: var(--border-soft); }
+  .search { margin-left: auto; }
+  .search input {
+    background: var(--surface-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 4px 8px; font-size: 12.5px; width: 220px; font-family: var(--font-ui);
+  }
+  .search input:focus { border-color: var(--accent); outline: none; }
+  .home-link { font-size: 12px; color: var(--text-muted); margin-left: 8px; }
+
+  /* ── Main 3-pane layout ─────────────────────────────────────── */
+  .layout {
+    display: grid; grid-template-columns: 240px 1fr 360px;
+    height: calc(100vh - 48px);
+    overflow: hidden;
+  }
+  aside.sidebar {
+    background: var(--surface); border-right: 1px solid var(--border);
+    overflow-y: auto; padding: 14px 12px;
+  }
+  aside h3 {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--text-muted); margin: 14px 0 6px; font-weight: 600;
+  }
+  aside h3:first-child { margin-top: 0; }
+  .filter-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 6px; border-radius: 3px; cursor: pointer; font-size: 12.5px;
+    color: var(--text);
+  }
+  .filter-row:hover { background: var(--surface-2); }
+  .filter-row input { cursor: pointer; accent-color: var(--accent); }
+  .filter-row .swatch { width: 10px; height: 10px; border-radius: 2px; flex: 0 0 10px; }
+  .filter-row .ct { color: var(--text-muted); margin-left: auto; font-family: var(--font-mono); font-size: 11px; }
+  .filter-row.region { padding-left: 14px; font-size: 12px; color: var(--text-muted); }
+  .filter-row.region input:checked + span { color: var(--text); }
+
+  /* ── Main pane ──────────────────────────────────────────────── */
+  main.pane {
+    overflow-y: auto;
+    background: var(--bg);
+    position: relative;
+  }
+  /* Species grid view */
+  .grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 10px; padding: 14px;
+  }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 5px; overflow: hidden; cursor: pointer;
+    transition: transform 0.08s ease, border-color 0.15s ease;
+    display: flex; flex-direction: column;
+  }
+  .card:hover { border-color: var(--accent); transform: translateY(-1px); }
+  .card.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(74,144,226,0.3); }
+  .card img {
+    width: 100%; height: 110px; object-fit: cover; background: var(--surface-2);
+    display: block;
+  }
+  .card .body { padding: 6px 8px 8px; flex: 1; min-width: 0; }
+  .card .common {
+    font-size: 12.5px; color: var(--text-strong); font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .card .sci {
+    font-size: 10.5px; color: var(--text-muted); font-style: italic;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .card .badges { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+  .badge {
+    font-size: 9px; padding: 1px 5px; border-radius: 2px;
+    background: var(--surface-2); color: var(--text-muted);
+    font-family: var(--font-mono);
+  }
+  .badge.life { color: var(--entity); }
+
+  /* Map view */
+  .map-wrap { padding: 14px; }
+  .map-svg {
+    width: 100%; height: auto;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 5px;
+  }
+  .map-region { fill: var(--surface); stroke: var(--border-soft); stroke-width: 0.5; }
+  .map-region.has-data { fill: rgba(74,144,226,0.18); }
+  .map-pin {
+    fill: var(--relation); stroke: var(--bg); stroke-width: 1.5;
+    cursor: pointer; transition: fill 0.15s;
+  }
+  .map-pin:hover { fill: var(--accent-hover); }
+  .map-pin.selected { fill: var(--accent); }
+  .map-label {
+    font-size: 9px; fill: var(--text-muted);
+    pointer-events: none; font-family: var(--font-mono);
+  }
+
+  /* Food-web view */
+  .fw-picker {
+    padding: 14px; display: flex; flex-wrap: wrap; gap: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .fw-picker button {
+    background: var(--surface); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 6px 10px; font-size: 12px; cursor: pointer;
+  }
+  .fw-picker button.active { background: var(--c-fw); border-color: var(--c-fw); color: #fff; }
+  .fw-canvas-wrap {
+    padding: 14px;
+  }
+  .fw-svg {
+    width: 100%; height: 540px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 5px;
+  }
+  .fw-svg .ring { fill: none; stroke: var(--border-soft); stroke-width: 0.5; }
+  .fw-svg .spoke { stroke: var(--c-fw); stroke-width: 1; opacity: 0.5; }
+  .fw-svg .hub-bg { fill: var(--c-fw); }
+  .fw-svg .hub-label { fill: #fff; font-size: 11px; text-anchor: middle; }
+  .fw-svg .node-photo { stroke: var(--border); stroke-width: 1; cursor: pointer; }
+  .fw-svg .node-photo:hover { stroke: var(--accent); stroke-width: 2; }
+  .fw-svg .node-label { font-size: 9px; fill: var(--text); text-anchor: middle; pointer-events: none; }
+  .fw-meta {
+    padding: 10px 14px; color: var(--text-muted); font-size: 13px;
+    border-top: 1px solid var(--border);
+  }
+  .fw-meta strong { color: var(--text); }
+
+  /* ── Inspector ───────────────────────────────────────────────── */
+  section.inspector {
+    background: var(--surface); border-left: 1px solid var(--border);
+    overflow-y: auto; padding: 14px 14px 24px;
+  }
+  .insp-empty { color: var(--text-muted); font-size: 13px; padding: 40px 12px; text-align: center; }
+  .insp-photo {
+    width: 100%; max-height: 220px; object-fit: cover;
+    border-radius: 5px; border: 1px solid var(--border); margin-bottom: 8px;
+  }
+  .insp-photo.placeholder {
+    background: var(--surface-2); display: flex; align-items: center;
+    justify-content: center; color: var(--text-muted); font-size: 13px;
+    height: 120px;
+  }
+  .insp-title { font-size: 15px; font-weight: 600; color: var(--text-strong); margin: 4px 0 2px; }
+  .insp-sci   { font-size: 12px; color: var(--text-muted); font-style: italic; margin-bottom: 8px; }
+  .insp-row { font-size: 12.5px; margin: 4px 0; }
+  .insp-row .key {
+    color: var(--text-muted); font-family: var(--font-mono); font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.04em; margin-right: 6px;
+  }
+  .insp-row .val { color: var(--text); }
+  .insp-note {
+    margin: 10px 0; padding: 8px 10px; background: var(--surface-2);
+    border-left: 3px solid var(--accent); border-radius: 0 4px 4px 0;
+    font-size: 12.5px; color: var(--text);
+  }
+  .insp-section {
+    margin-top: 14px; padding-top: 10px;
+    border-top: 1px solid var(--border-soft);
+  }
+  .insp-section h4 {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--text-muted); margin: 0 0 6px; font-weight: 600;
+  }
+
+  /* Hyperedge inspector — roles list */
+  .roles { display: flex; flex-direction: column; gap: 6px; }
+  .role {
+    display: flex; gap: 8px; align-items: center;
+    padding: 4px 6px; border-radius: 3px; background: var(--surface-2);
+    cursor: pointer;
+  }
+  .role:hover { background: var(--bg); }
+  .role img {
+    width: 40px; height: 40px; object-fit: cover;
+    border-radius: 3px; background: var(--bg); border: 1px solid var(--border);
+    flex: 0 0 40px;
+  }
+  .role .role-label {
+    font-size: 9.5px; color: var(--relation);
+    text-transform: uppercase; letter-spacing: 0.06em;
+    font-family: var(--font-mono);
+  }
+  .role .role-name { font-size: 12px; color: var(--text); }
+  .role .role-sci  { font-size: 10.5px; color: var(--text-muted); font-style: italic; }
+
+  /* Temporal validity bar */
+  .season-bar {
+    display: grid; grid-template-columns: repeat(12, 1fr); gap: 2px;
+    margin: 6px 0 4px;
+  }
+  .season-cell {
+    height: 18px; background: var(--surface-2); border-radius: 2px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px; color: var(--text-muted); font-family: var(--font-mono);
+  }
+  .season-cell.on { background: var(--c-poll); color: #14141a; font-weight: 600; }
+
+  /* Related interactions chips */
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .chip {
+    font-size: 11px; padding: 2px 8px; border-radius: 10px;
+    background: var(--surface-2); color: var(--text); cursor: pointer;
+    border: 1px solid var(--border);
+  }
+  .chip:hover { background: var(--bg); border-color: var(--accent); }
+  .chip.poll  { border-left: 3px solid var(--c-poll); }
+  .chip.mut   { border-left: 3px solid var(--c-mut); }
+  .chip.par   { border-left: 3px solid var(--c-par); }
+  .chip.pred  { border-left: 3px solid var(--c-pred); }
+  .chip.fw    { border-left: 3px solid var(--c-fw); }
+
+  /* loading / error */
+  .status-msg {
+    position: fixed; bottom: 14px; left: 14px; padding: 8px 12px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 4px; font-size: 12px; color: var(--text-muted);
+    z-index: 20;
+  }
+  .status-msg.error { color: #e85a4a; border-color: #e85a4a; }
+  .status-msg.hidden { display: none; }
+
+  /* Mobile */
+  @media (max-width: 1100px) {
+    .layout { grid-template-columns: 200px 1fr 320px; }
+    .search input { width: 160px; }
+  }
+  @media (max-width: 800px) {
+    .layout { grid-template-columns: 1fr; }
+    aside.sidebar, section.inspector { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">biodiv_ndb <span class="sub">N-ary ecology</span></div>
+  <div class="modes" id="modes">
+    <button data-mode="grid"   class="active">Species</button>
+    <button data-mode="map">Map</button>
+    <button data-mode="webs">Food webs</button>
+  </div>
+  <div class="search">
+    <input id="search" placeholder="Search species, common name, family…" autocomplete="off">
+  </div>
+  <a class="home-link" href="/">← ndb.nextstar-erp.com</a>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <h3>Interaction type</h3>
+    <label class="filter-row"><input type="checkbox" data-type="pollination" checked> <span class="swatch" style="background:var(--c-poll)"></span> <span>Pollination</span> <span class="ct" id="ct-poll">–</span></label>
+    <label class="filter-row"><input type="checkbox" data-type="mutualism"   checked> <span class="swatch" style="background:var(--c-mut)"></span>  <span>Mutualism</span>   <span class="ct" id="ct-mut">–</span></label>
+    <label class="filter-row"><input type="checkbox" data-type="parasitism"  checked> <span class="swatch" style="background:var(--c-par)"></span>  <span>Parasitism</span>  <span class="ct" id="ct-par">–</span></label>
+    <label class="filter-row"><input type="checkbox" data-type="predation"   checked> <span class="swatch" style="background:var(--c-pred)"></span> <span>Predation</span>   <span class="ct" id="ct-pred">–</span></label>
+    <label class="filter-row"><input type="checkbox" data-type="food_web"    checked> <span class="swatch" style="background:var(--c-fw)"></span>   <span>Food web</span>    <span class="ct" id="ct-fw">–</span></label>
+
+    <h3>Life form</h3>
+    <label class="filter-row"><input type="checkbox" data-life="plant"   checked> <span>Plants & algae</span></label>
+    <label class="filter-row"><input type="checkbox" data-life="animal"  checked> <span>Animals</span></label>
+    <label class="filter-row"><input type="checkbox" data-life="fungus"  checked> <span>Fungi & lichen</span></label>
+    <label class="filter-row"><input type="checkbox" data-life="microbe" checked> <span>Microbes</span></label>
+    <label class="filter-row"><input type="checkbox" data-life="alga"    checked> <span>Algae (other)</span></label>
+
+    <h3>Region</h3>
+    <div id="region-list"></div>
+
+    <h3>Schema</h3>
+    <div style="font-size: 11.5px; color: var(--text-muted); line-height: 1.55;">
+      Each interaction = 1 hyperedge.
+      Roles: <code style="font-family: var(--font-mono); color: var(--relation); font-size: 11px;">plant · pollinator · region</code>, etc.
+      Food webs reach <strong style="color:var(--text);">arity 18</strong> (one ecosystem + 17 species in one record).
+    </div>
+  </aside>
+
+  <main class="pane" id="pane">
+    <!-- mode-specific content goes here -->
+  </main>
+
+  <section class="inspector" id="inspector">
+    <div class="insp-empty">
+      Click any species, region, or interaction chip to see the underlying nDB record.
+    </div>
+  </section>
+</div>
+
+<div id="status" class="status-msg">Loading nDB data…</div>
+
+<script>
+"use strict";
+
+// ─── Schema constants (mirror main.rs) ──────────────────────────────────
+const T_SPECIES = 1, T_REGION = 2;
+const T_POLLINATION = 100, T_MUTUALISM = 101, T_PARASITISM = 102,
+      T_PREDATION = 103, T_FOOD_WEB = 104;
+
+const ROLE = {
+  PLANT: 10, POLLINATOR: 11,
+  MUT_A: 12, MUT_B: 13,
+  HOST: 14, PARASITE: 15,
+  PREDATOR: 16, PREY: 17,
+  REGION: 18, ECOSYSTEM: 19, MEMBER: 20,
+};
+const PROP = {
+  NAME: 30, SCI: 31, COMMON: 32, KINGDOM: 33, FAMILY: 34, LIFE: 35,
+  PHOTO: 36, WIKI: 37, REGION_KIND: 38, LAT: 39, LON: 40, REGION_KEY: 41,
+  SEASON_FROM: 50, SEASON_TO: 51, OBLIGATE: 52, SUBTYPE: 53,
+  TRANSMISSION: 54, NOTE: 55, FW_NAME: 56, KIND: 57,
+};
+const KIND_OF_TYPE = {
+  [T_POLLINATION]: "pollination",
+  [T_MUTUALISM]:   "mutualism",
+  [T_PARASITISM]:  "parasitism",
+  [T_PREDATION]:   "predation",
+  [T_FOOD_WEB]:    "food_web",
+};
+const KIND_LABEL = {
+  pollination: "Pollination", mutualism: "Mutualism",
+  parasitism: "Parasitism", predation: "Predation", food_web: "Food web",
+};
+
+const API_BASE  = (location.origin === "http://127.0.0.1:9881")
+  ? "http://127.0.0.1:8748"
+  : "/biodiv_ndb/api";
+
+// ─── App state ──────────────────────────────────────────────────────────
+const state = {
+  speciesById: new Map(),   // entityId → species
+  regionById:  new Map(),   // entityId → region
+  speciesBySci: new Map(),  // sci name → species
+  regionByKey: new Map(),
+  interactions: [],          // each: {id, kind, roles, props, region_key}
+  filterTypes: new Set(["pollination","mutualism","parasitism","predation","food_web"]),
+  filterLifeForms: new Set(["plant","animal","fungus","microbe","alga","lichen"]),
+  filterRegion: null,        // region key or null = all
+  searchText: "",
+  mode: "grid",
+  selectedEntityId: null,
+  selectedHyperedgeId: null,
+  selectedFoodWeb: null,
+};
+
+// Wire format: properties = [{prop_id, value: {tag, value}}, ...]
+//              roles      = [{role_id, entity_id}, ...]
+function unwrapValue(wrapped) {
+  if (wrapped == null) return undefined;
+  if (wrapped.value !== undefined && wrapped.tag !== undefined) return wrapped.value;
+  return wrapped;
+}
+function propVal(record, propId) {
+  if (!record || !record.properties) return undefined;
+  for (const p of record.properties) {
+    if (p.prop_id === propId) return unwrapValue(p.value);
+  }
+  return undefined;
+}
+function valStr(v)  { return v == null ? "" : String(v); }
+function valNum(v)  { return v == null ? null : Number(v); }
+function valBool(v) { return v === true || v === "true"; }
+
+// ─── Data load ─────────────────────────────────────────────────────────
+async function loadAll() {
+  const status = document.getElementById("status");
+  status.textContent = "Loading nDB data…"; status.classList.remove("hidden", "error");
+
+  const res = await fetch(`${API_BASE}/iter`);
+  if (!res.ok) { status.textContent = `Failed: HTTP ${res.status}`; status.classList.add("error"); return; }
+
+  // /iter returns JSONL — first line is current_tx_id, then one record per line
+  const text = await res.text();
+  const lines = text.split("\n").filter(l => l.trim());
+  let recs = 0;
+  for (const line of lines) {
+    let obj;
+    try { obj = JSON.parse(line); } catch { continue; }
+    if (obj.current_tx_id !== undefined) continue;
+    recs++;
+
+    if (obj.kind === "entity") {
+      const typeId = obj.type_id;
+      const eid = obj.entity_id;
+      const sci   = valStr(propVal(obj, PROP.SCI));
+      const common = valStr(propVal(obj, PROP.COMMON));
+      const kingdom = valStr(propVal(obj, PROP.KINGDOM));
+      const family  = valStr(propVal(obj, PROP.FAMILY));
+      const life    = valStr(propVal(obj, PROP.LIFE));
+      const photo   = valStr(propVal(obj, PROP.PHOTO));
+      const wiki    = valStr(propVal(obj, PROP.WIKI));
+      const name    = valStr(propVal(obj, PROP.NAME));
+
+      if (typeId === T_SPECIES) {
+        const s = { eid, sci, common, kingdom, family, life_form: life, photo, wiki };
+        state.speciesById.set(eid, s);
+        state.speciesBySci.set(sci, s);
+      } else if (typeId === T_REGION) {
+        const r = {
+          eid,
+          name,
+          key:  valStr(propVal(obj, PROP.REGION_KEY)),
+          kind: valStr(propVal(obj, PROP.REGION_KIND)),
+          lat:  valNum(propVal(obj, PROP.LAT)),
+          lon:  valNum(propVal(obj, PROP.LON)),
+        };
+        state.regionById.set(eid, r);
+        state.regionByKey.set(r.key, r);
+      }
+    } else if (obj.kind === "hyper_edge" || obj.kind === "hyperedge") {
+      const kind = KIND_OF_TYPE[obj.type_id];
+      if (!kind) continue;
+      const roles = (obj.roles || []).map(r => ({ rid: r.role_id, eid: r.entity_id }));
+      const interaction = {
+        id: obj.hyperedge_id,
+        kind,
+        roles,
+        props: obj.properties || [],
+      };
+      // Resolve region key for filtering
+      const regionRole = roles.find(r => r.rid === ROLE.REGION || r.rid === ROLE.ECOSYSTEM);
+      if (regionRole) {
+        const region = state.regionById.get(regionRole.eid);
+        interaction.region_key = region ? region.key : null;
+      }
+      // Cache friendly accessors
+      interaction.kind_label = KIND_LABEL[kind];
+      interaction.note = valStr(propVal(obj, PROP.NOTE));
+      interaction.season_from = valNum(propVal(obj, PROP.SEASON_FROM));
+      interaction.season_to   = valNum(propVal(obj, PROP.SEASON_TO));
+      interaction.obligate    = valBool(propVal(obj, PROP.OBLIGATE));
+      interaction.subtype     = valStr(propVal(obj, PROP.SUBTYPE));
+      interaction.transmission = valStr(propVal(obj, PROP.TRANSMISSION));
+      interaction.fw_name     = valStr(propVal(obj, PROP.FW_NAME));
+      state.interactions.push(interaction);
+    }
+  }
+
+  status.classList.add("hidden");
+  buildRegionList();
+  updateFilterCounts();
+  buildSearch();
+  render();
+}
+
+// ─── Sidebar ───────────────────────────────────────────────────────────
+function buildRegionList() {
+  const wrap = document.getElementById("region-list");
+  // List regions sorted; "global" pinned first
+  const arr = Array.from(state.regionByKey.values());
+  arr.sort((a, b) => {
+    if (a.key === "global") return -1;
+    if (b.key === "global") return 1;
+    return a.name.localeCompare(b.name);
+  });
+  wrap.innerHTML = '<label class="filter-row region"><input type="radio" name="region" value="" checked> <span>All regions</span></label>'
+    + arr.map(r =>
+      `<label class="filter-row region"><input type="radio" name="region" value="${r.key}"> <span>${r.name}</span></label>`
+    ).join("");
+  wrap.querySelectorAll("input").forEach(el => el.addEventListener("change", () => {
+    state.filterRegion = el.value || null;
+    render();
+  }));
+}
+function updateFilterCounts() {
+  const counts = {pollination:0, mutualism:0, parasitism:0, predation:0, food_web:0};
+  for (const it of state.interactions) counts[it.kind]++;
+  const map = {poll:"pollination", mut:"mutualism", par:"parasitism", pred:"predation", fw:"food_web"};
+  for (const [k, v] of Object.entries(map)) {
+    document.getElementById(`ct-${k}`).textContent = counts[v];
+  }
+}
+
+document.querySelectorAll('aside input[data-type]').forEach(el => {
+  el.addEventListener("change", () => {
+    if (el.checked) state.filterTypes.add(el.dataset.type);
+    else state.filterTypes.delete(el.dataset.type);
+    render();
+  });
+});
+document.querySelectorAll('aside input[data-life]').forEach(el => {
+  el.addEventListener("change", () => {
+    if (el.checked) state.filterLifeForms.add(el.dataset.life);
+    else state.filterLifeForms.delete(el.dataset.life);
+    render();
+  });
+});
+
+// ─── Mode buttons ──────────────────────────────────────────────────────
+document.querySelectorAll('#modes button').forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll('#modes button').forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    state.mode = btn.dataset.mode;
+    render();
+  });
+});
+
+// ─── Search ────────────────────────────────────────────────────────────
+function buildSearch() {
+  const input = document.getElementById("search");
+  input.addEventListener("input", () => {
+    state.searchText = input.value.trim().toLowerCase();
+    render();
+  });
+}
+
+// ─── Filtering ─────────────────────────────────────────────────────────
+function speciesPassesFilter(sp) {
+  if (state.filterLifeForms.size && !state.filterLifeForms.has(sp.life_form)) return false;
+  if (state.searchText) {
+    const hay = (sp.sci + " " + sp.common + " " + sp.family + " " + sp.kingdom).toLowerCase();
+    if (!hay.includes(state.searchText)) return false;
+  }
+  if (state.filterRegion) {
+    const inRegion = state.interactions.some(it =>
+      it.region_key === state.filterRegion
+      && it.roles.some(r => r.eid === sp.eid)
+    );
+    if (!inRegion) return false;
+  }
+  // Filter by interaction type: species is shown only if it participates in
+  // at least one enabled-type interaction (so toggling off all types empties the grid).
+  const hasEnabled = state.interactions.some(it =>
+    state.filterTypes.has(it.kind)
+    && it.roles.some(r => r.eid === sp.eid)
+  );
+  if (!hasEnabled && state.interactions.length) return false;
+  return true;
+}
+function interactionsForSpecies(eid) {
+  return state.interactions.filter(it =>
+    state.filterTypes.has(it.kind)
+    && it.roles.some(r => r.eid === eid)
+  );
+}
+
+// ─── Render dispatch ───────────────────────────────────────────────────
+function render() {
+  const pane = document.getElementById("pane");
+  pane.innerHTML = "";
+  if (state.mode === "grid") renderGrid(pane);
+  else if (state.mode === "map") renderMap(pane);
+  else if (state.mode === "webs") renderFoodWebs(pane);
+  renderInspector();
+}
+
+// ── Species grid ──────────────────────────────────────────────────────
+function renderGrid(pane) {
+  const grid = document.createElement("div");
+  grid.className = "grid";
+  const visible = Array.from(state.speciesById.values())
+    .filter(speciesPassesFilter)
+    .sort((a, b) => a.common.localeCompare(b.common));
+
+  if (visible.length === 0) {
+    grid.innerHTML = `<div style="grid-column:1/-1; padding:60px 12px; text-align:center; color:var(--text-muted);">
+      No species match the current filters.
+    </div>`;
+  } else {
+    for (const sp of visible) {
+      const card = document.createElement("div");
+      card.className = "card" + (sp.eid === state.selectedEntityId ? " selected" : "");
+      card.innerHTML = `
+        <img loading="lazy" src="${sp.photo}" alt="${sp.common}"
+             onerror="this.style.background='var(--surface-2)'; this.removeAttribute('src');">
+        <div class="body">
+          <div class="common">${sp.common}</div>
+          <div class="sci">${sp.sci}</div>
+          <div class="badges">
+            <span class="badge life">${sp.life_form}</span>
+            <span class="badge">${sp.family}</span>
+          </div>
+        </div>`;
+      card.addEventListener("click", () => {
+        state.selectedEntityId = sp.eid;
+        state.selectedHyperedgeId = null;
+        render();
+      });
+      grid.appendChild(card);
+    }
+  }
+  pane.appendChild(grid);
+}
+
+// ── Map view ──────────────────────────────────────────────────────────
+function renderMap(pane) {
+  const wrap = document.createElement("div");
+  wrap.className = "map-wrap";
+
+  // Simple equirectangular projection
+  const W = 1200, H = 600;
+  const proj = (lat, lon) => [
+    (lon + 180) * (W / 360),
+    (90 - lat)  * (H / 180),
+  ];
+
+  // Region pins sized by interaction count
+  const regionCounts = new Map();
+  for (const it of state.interactions) {
+    if (!state.filterTypes.has(it.kind)) continue;
+    if (!it.region_key) continue;
+    regionCounts.set(it.region_key, (regionCounts.get(it.region_key) || 0) + 1);
+  }
+
+  const arr = Array.from(state.regionByKey.values())
+    .filter(r => regionCounts.has(r.key));
+  arr.sort((a, b) => regionCounts.get(b.key) - regionCounts.get(a.key));
+
+  let svgPins = "";
+  let svgLabels = "";
+  for (const r of arr) {
+    const [x, y] = proj(r.lat, r.lon);
+    const ct = regionCounts.get(r.key);
+    const radius = 5 + Math.sqrt(ct) * 4;
+    const sel = (state.filterRegion === r.key) ? " selected" : "";
+    svgPins += `<circle class="map-pin${sel}" cx="${x}" cy="${y}" r="${radius}"
+                  data-region="${r.key}">
+                  <title>${r.name}: ${ct} interaction(s)</title>
+                </circle>`;
+    svgLabels += `<text class="map-label" x="${x + radius + 4}" y="${y + 3}">${r.name}</text>`;
+  }
+
+  wrap.innerHTML = `
+    <div style="margin-bottom: 10px; color: var(--text-muted); font-size: 13px;">
+      <strong style="color:var(--text-strong);">${arr.length} regions</strong> with at least one active interaction.
+      Pin size = number of interactions in that region. Click a pin to filter the grid.
+    </div>
+    <svg class="map-svg" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <pattern id="grid" width="60" height="60" patternUnits="userSpaceOnUse">
+          <path d="M 60 0 L 0 0 0 60" fill="none" stroke="rgba(45,45,58,0.4)" stroke-width="0.5"/>
+        </pattern>
+      </defs>
+      <rect width="${W}" height="${H}" fill="url(#grid)"/>
+      <line x1="0" y1="${H/2}" x2="${W}" y2="${H/2}" stroke="var(--border-soft)" stroke-width="0.5" stroke-dasharray="2 4"/>
+      <line x1="${W/2}" y1="0" x2="${W/2}" y2="${H}" stroke="var(--border-soft)" stroke-width="0.5" stroke-dasharray="2 4"/>
+      ${svgPins}
+      ${svgLabels}
+    </svg>`;
+  pane.appendChild(wrap);
+
+  wrap.querySelectorAll(".map-pin").forEach(pin => {
+    pin.addEventListener("click", () => {
+      const key = pin.dataset.region;
+      state.filterRegion = (state.filterRegion === key) ? null : key;
+      // Update radio
+      const radio = document.querySelector(`input[name="region"][value="${state.filterRegion || ''}"]`);
+      if (radio) radio.checked = true;
+      else document.querySelector('input[name="region"][value=""]').checked = true;
+      // Show the region info in the inspector
+      const r = state.regionByKey.get(key);
+      state.selectedEntityId = r ? r.eid : null;
+      state.selectedHyperedgeId = null;
+      render();
+    });
+  });
+}
+
+// ── Food-web view ─────────────────────────────────────────────────────
+function renderFoodWebs(pane) {
+  const fws = state.interactions.filter(it => it.kind === "food_web");
+  if (!state.selectedFoodWeb && fws.length) state.selectedFoodWeb = fws[0].id;
+  const current = fws.find(it => it.id === state.selectedFoodWeb) || fws[0];
+
+  const picker = document.createElement("div");
+  picker.className = "fw-picker";
+  picker.innerHTML = fws.map(it =>
+    `<button data-fw="${it.id}"${it.id === current.id ? " class=\"active\"" : ""}>${it.fw_name}</button>`
+  ).join("");
+  pane.appendChild(picker);
+  picker.querySelectorAll("button").forEach(b => b.addEventListener("click", () => {
+    state.selectedFoodWeb = b.dataset.fw;
+    state.selectedHyperedgeId = b.dataset.fw;
+    state.selectedEntityId = null;
+    render();
+  }));
+
+  if (!current) return;
+  const canvasWrap = document.createElement("div");
+  canvasWrap.className = "fw-canvas-wrap";
+
+  const ecosystemRole = current.roles.find(r => r.rid === ROLE.ECOSYSTEM);
+  const memberRoles = current.roles.filter(r => r.rid === ROLE.MEMBER);
+  const ecosystem = state.regionById.get(ecosystemRole.eid);
+
+  // Lay out members in a circle
+  const W = 900, H = 540;
+  const cx = W / 2, cy = H / 2;
+  const photoSize = 56;
+  const radius = Math.min(W, H) / 2 - photoSize - 30;
+  const N = memberRoles.length;
+
+  let nodes = "";
+  let spokes = "";
+  let labels = "";
+  memberRoles.forEach((r, i) => {
+    const angle = (i / N) * Math.PI * 2 - Math.PI / 2;
+    const x = cx + radius * Math.cos(angle);
+    const y = cy + radius * Math.sin(angle);
+    const sp = state.speciesById.get(r.eid);
+    if (!sp) return;
+    spokes += `<line class="spoke" x1="${cx}" y1="${cy}" x2="${x}" y2="${y}"/>`;
+    // clipPath circle for the photo
+    nodes += `
+      <defs><clipPath id="clip-${i}"><circle cx="${x}" cy="${y}" r="${photoSize/2}"/></clipPath></defs>
+      <image href="${sp.photo}" x="${x - photoSize/2}" y="${y - photoSize/2}"
+             width="${photoSize}" height="${photoSize}"
+             preserveAspectRatio="xMidYMid slice"
+             clip-path="url(#clip-${i})"/>
+      <circle class="node-photo" cx="${x}" cy="${y}" r="${photoSize/2}"
+              fill="transparent" data-eid="${r.eid}"/>`;
+    // Label below
+    const ly = y + photoSize/2 + 12;
+    const isOuter = Math.abs(angle) > Math.PI/2;
+    labels += `<text class="node-label" x="${x}" y="${ly}">${sp.common}</text>`;
+  });
+
+  const hubR = 56;
+  canvasWrap.innerHTML = `
+    <svg class="fw-svg" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+      <circle class="ring" cx="${cx}" cy="${cy}" r="${radius}"/>
+      ${spokes}
+      ${nodes}
+      ${labels}
+      <circle class="hub-bg" cx="${cx}" cy="${cy}" r="${hubR}"/>
+      <text class="hub-label" x="${cx}" y="${cy - 4}">${ecosystem ? ecosystem.name : '?'}</text>
+      <text class="hub-label" x="${cx}" y="${cy + 12}" style="font-size:9px; opacity:0.85;">arity = ${current.roles.length}</text>
+    </svg>
+    <div class="fw-meta">
+      <strong>One nDB record.</strong> ${current.note || ""}
+    </div>`;
+  pane.appendChild(canvasWrap);
+
+  canvasWrap.querySelectorAll('.node-photo').forEach(n => {
+    n.addEventListener("click", () => {
+      state.selectedEntityId = n.dataset.eid;
+      state.selectedHyperedgeId = current.id;
+      render();
+    });
+  });
+
+  // Auto-select the food-web hyperedge in inspector if nothing else is selected
+  if (!state.selectedEntityId && state.selectedHyperedgeId !== current.id) {
+    state.selectedHyperedgeId = current.id;
+  }
+}
+
+// ── Inspector ─────────────────────────────────────────────────────────
+function roleLabel(rid) {
+  switch (rid) {
+    case ROLE.PLANT:      return "plant";
+    case ROLE.POLLINATOR: return "pollinator";
+    case ROLE.MUT_A:      return "mutualist A";
+    case ROLE.MUT_B:      return "mutualist B";
+    case ROLE.HOST:       return "host";
+    case ROLE.PARASITE:   return "parasite";
+    case ROLE.PREDATOR:   return "predator";
+    case ROLE.PREY:       return "prey";
+    case ROLE.REGION:     return "region";
+    case ROLE.ECOSYSTEM:  return "ecosystem";
+    case ROLE.MEMBER:     return "member";
+    default: return "role";
+  }
+}
+function renderInspector() {
+  const ins = document.getElementById("inspector");
+  ins.innerHTML = "";
+
+  if (state.selectedHyperedgeId) {
+    const it = state.interactions.find(x => x.id === state.selectedHyperedgeId);
+    if (it) { renderInteractionInspector(ins, it); return; }
+  }
+  if (state.selectedEntityId) {
+    const sp = state.speciesById.get(state.selectedEntityId);
+    if (sp) { renderSpeciesInspector(ins, sp); return; }
+    const r = state.regionById.get(state.selectedEntityId);
+    if (r) { renderRegionInspector(ins, r); return; }
+  }
+  ins.innerHTML = `<div class="insp-empty">Click any species, region, or interaction chip to see the underlying nDB record.</div>`;
+}
+
+function renderSpeciesInspector(ins, sp) {
+  const html = [];
+  if (sp.photo) {
+    html.push(`<img class="insp-photo" src="${sp.photo}" alt="${sp.common}"
+                onerror="this.classList.add('placeholder'); this.removeAttribute('src');">`);
+  } else {
+    html.push(`<div class="insp-photo placeholder">no photo</div>`);
+  }
+  html.push(`<div class="insp-title">${sp.common}</div>`);
+  html.push(`<div class="insp-sci">${sp.sci}</div>`);
+  html.push(`<div class="insp-row"><span class="key">kingdom</span><span class="val">${sp.kingdom}</span></div>`);
+  html.push(`<div class="insp-row"><span class="key">family</span><span class="val">${sp.family}</span></div>`);
+  html.push(`<div class="insp-row"><span class="key">life form</span><span class="val">${sp.life_form}</span></div>`);
+  if (sp.wiki) html.push(`<div class="insp-row"><a href="${sp.wiki}" target="_blank" rel="noreferrer">Wikipedia →</a></div>`);
+
+  // Interactions in which this species appears
+  const involved = interactionsForSpecies(sp.eid);
+  if (involved.length) {
+    html.push(`<div class="insp-section"><h4>Interactions in nDB · ${involved.length}</h4>`);
+    html.push(`<div class="chips">`);
+    for (const it of involved) {
+      const cl = it.kind === "pollination" ? "poll"
+              : it.kind === "mutualism"  ? "mut"
+              : it.kind === "parasitism" ? "par"
+              : it.kind === "predation"  ? "pred"
+              : "fw";
+      let label = it.kind_label;
+      if (it.kind === "food_web") label = it.fw_name;
+      else {
+        const partners = it.roles
+          .filter(r => r.rid !== ROLE.REGION && r.rid !== ROLE.ECOSYSTEM && r.eid !== sp.eid)
+          .map(r => state.speciesById.get(r.eid))
+          .filter(Boolean)
+          .map(s => s.common).join(" ↔ ");
+        if (partners) label = partners;
+      }
+      html.push(`<span class="chip ${cl}" data-id="${it.id}">${label}</span>`);
+    }
+    html.push(`</div></div>`);
+  }
+  ins.innerHTML = html.join("");
+  ins.querySelectorAll(".chip").forEach(c => c.addEventListener("click", () => {
+    state.selectedHyperedgeId = c.dataset.id;
+    state.selectedEntityId = sp.eid;
+    renderInspector();
+  }));
+}
+
+function renderRegionInspector(ins, r) {
+  const inRegion = state.interactions.filter(it => it.region_key === r.key && state.filterTypes.has(it.kind));
+  ins.innerHTML = `
+    <div class="insp-title">${r.name}</div>
+    <div class="insp-sci">${r.kind}</div>
+    <div class="insp-row"><span class="key">key</span><span class="val">${r.key}</span></div>
+    <div class="insp-row"><span class="key">lat / lon</span><span class="val">${r.lat.toFixed(1)}°, ${r.lon.toFixed(1)}°</span></div>
+    <div class="insp-section"><h4>Interactions in this region · ${inRegion.length}</h4>
+      <div class="chips">
+        ${inRegion.map(it => {
+          const cl = it.kind === "pollination" ? "poll"
+                  : it.kind === "mutualism"  ? "mut"
+                  : it.kind === "parasitism" ? "par"
+                  : it.kind === "predation"  ? "pred" : "fw";
+          let label = it.kind_label;
+          if (it.kind === "food_web") label = it.fw_name;
+          else {
+            const parts = it.roles.filter(rl => rl.rid !== ROLE.REGION && rl.rid !== ROLE.ECOSYSTEM)
+              .map(rl => state.speciesById.get(rl.eid))
+              .filter(Boolean).map(s => s.common).join(" ↔ ");
+            if (parts) label = parts;
+          }
+          return `<span class="chip ${cl}" data-id="${it.id}">${label}</span>`;
+        }).join("")}
+      </div>
+    </div>`;
+  ins.querySelectorAll(".chip").forEach(c => c.addEventListener("click", () => {
+    state.selectedHyperedgeId = c.dataset.id;
+    renderInspector();
+  }));
+}
+
+function renderInteractionInspector(ins, it) {
+  const swatchColor = {
+    pollination: "var(--c-poll)", mutualism: "var(--c-mut)",
+    parasitism: "var(--c-par)",  predation: "var(--c-pred)", food_web: "var(--c-fw)",
+  }[it.kind];
+  const html = [];
+  html.push(`<div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+    <span style="width:10px; height:10px; border-radius:2px; background:${swatchColor};"></span>
+    <span style="font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted);">${KIND_LABEL[it.kind]}</span>
+    ${it.obligate ? `<span class="badge" style="color:var(--c-par);">obligate</span>` : ""}
+  </div>`);
+
+  html.push(`<div class="insp-title">${it.fw_name || (KIND_LABEL[it.kind] + " hyperedge")}</div>`);
+
+  // Roles
+  html.push(`<div class="insp-section"><h4>Role-fillers · arity ${it.roles.length}</h4><div class="roles">`);
+  for (const r of it.roles) {
+    if (r.rid === ROLE.REGION || r.rid === ROLE.ECOSYSTEM) {
+      const reg = state.regionById.get(r.eid);
+      if (reg) {
+        html.push(`<div class="role" data-reg="${r.eid}">
+          <div style="width:40px; height:40px; flex:0 0 40px; background:var(--surface-2);
+                      border:1px solid var(--border); border-radius:3px;
+                      display:flex; align-items:center; justify-content:center;
+                      font-size:18px;">🌐</div>
+          <div style="min-width:0;">
+            <div class="role-label">${roleLabel(r.rid)}</div>
+            <div class="role-name">${reg.name}</div>
+            <div class="role-sci">${reg.kind}</div>
+          </div></div>`);
+      }
+    } else {
+      const sp = state.speciesById.get(r.eid);
+      if (sp) {
+        html.push(`<div class="role" data-eid="${sp.eid}">
+          <img src="${sp.photo}" alt="${sp.common}" onerror="this.style.background='var(--surface-2)';this.removeAttribute('src');">
+          <div style="min-width:0;">
+            <div class="role-label">${roleLabel(r.rid)}</div>
+            <div class="role-name">${sp.common}</div>
+            <div class="role-sci">${sp.sci}</div>
+          </div></div>`);
+      }
+    }
+  }
+  html.push(`</div></div>`);
+
+  // Temporal validity bar
+  if (it.season_from && it.season_to) {
+    html.push(`<div class="insp-section"><h4>Temporal validity (months)</h4><div class="season-bar">`);
+    const months = ["J","F","M","A","M","J","J","A","S","O","N","D"];
+    const sf = it.season_from, st = it.season_to;
+    for (let m = 1; m <= 12; m++) {
+      const on = (sf <= st) ? (m >= sf && m <= st) : (m >= sf || m <= st);
+      html.push(`<div class="season-cell${on ? " on" : ""}">${months[m-1]}</div>`);
+    }
+    html.push(`</div><div style="font-size:11.5px; color:var(--text-muted); margin-top:4px;">
+      ${(sf === 1 && st === 12) ? "Year-round" :
+        `Active ${monthName(sf)}–${monthName(st)}. This is one of nDB's <em>temporal qualifiers</em> on the hyperedge — the same primitive lets you query "all interactions valid in June".`}
+    </div></div>`);
+  }
+  if (it.subtype) {
+    html.push(`<div class="insp-row"><span class="key">subtype</span><span class="val">${it.subtype}</span></div>`);
+  }
+  if (it.transmission) {
+    html.push(`<div class="insp-row"><span class="key">transmission</span><span class="val">${it.transmission}</span></div>`);
+  }
+  if (it.note) {
+    html.push(`<div class="insp-note">${it.note}</div>`);
+  }
+  ins.innerHTML = html.join("");
+
+  ins.querySelectorAll("[data-eid]").forEach(el => el.addEventListener("click", () => {
+    state.selectedEntityId = el.dataset.eid;
+    state.selectedHyperedgeId = null;
+    render();
+  }));
+  ins.querySelectorAll("[data-reg]").forEach(el => el.addEventListener("click", () => {
+    state.selectedEntityId = el.dataset.reg;
+    state.selectedHyperedgeId = null;
+    renderInspector();
+  }));
+}
+function monthName(m) {
+  return ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][(m-1) % 12];
+}
+
+// ─── Bootstrap ─────────────────────────────────────────────────────────
+loadAll();
+</script>
+
+</body>
+</html>

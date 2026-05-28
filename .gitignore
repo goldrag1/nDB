@@ -7,3 +7,6 @@ __pycache__/
 *.pyc
 .playwright-mcp/
 .demo-data/
+
+# biodiv_ndb seed builder caches Wikipedia photo URLs here
+tools/biodiv/.photo-cache.json
