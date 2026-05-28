@@ -430,6 +430,9 @@ def make_handler(state: State):
             if self.path == "/workloads":
                 self._send_json(200, WORKLOADS)
                 return
+            if self.path == "/stats":
+                self._send_json(200, collect_stats(state))
+                return
             self._send_json(404, {"error": "not_found"})
 
         def do_POST(self):
@@ -587,6 +590,84 @@ def run_stress(state: "State", workload_name: str, concurrency: int, duration_ms
         "max_us": flat[-1] if flat else 0,
         "histogram_log10": hist_pairs,
     }
+
+
+def collect_stats(state: "State") -> dict:
+    """Snapshot disk + RAM + CPU for the bench Postgres. Bytes on disk
+    comes from pg_database_size(); RSS + CPU are summed across every
+    `postgres` process whose cmdline contains the bench DB name (covers
+    every active and idle pooled backend, not just the ones currently
+    showing up in pg_stat_activity). Cheap (~5 ms)."""
+    bytes_on_disk = 0
+    try:
+        with state.conn_lock:
+            cur = state.conn.execute("SELECT pg_database_size(current_database())")
+            row = cur.fetchone()
+            bytes_on_disk = int(row[0]) if row else 0
+    except Exception:
+        pass
+    backend_pids = _find_pg_backends(BENCH_DB)
+    rss_kb = 0
+    cpu_us = 0
+    for pid in backend_pids:
+        rss_kb += _proc_rss_kb(pid)
+        cpu_us += _proc_cpu_us(pid)
+    return {
+        "bytes_on_disk": bytes_on_disk,
+        "bytes_resident": rss_kb * 1024,
+        "cpu_user_us": cpu_us,  # we don't split user/sys; sum is what the lane cares about
+        "cpu_sys_us": 0,
+        "backend_pids": len(backend_pids),
+    }
+
+
+def _find_pg_backends(db_name: str) -> list[int]:
+    """Walk /proc and return PIDs of postgres processes whose argv0
+    cmdline contains the bench DB name. `postgres: 16/main: long
+    ndb_bench_race [local] idle` etc. — matches both active and idle
+    pooled backends."""
+    pids = []
+    try:
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit(): continue
+            try:
+                with open(f"/proc/{entry}/cmdline", "rb") as f:
+                    raw = f.read().decode("utf-8", errors="ignore")
+                if "postgres" in raw and db_name in raw:
+                    pids.append(int(entry))
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return pids
+
+
+def _proc_rss_kb(pid: int) -> int:
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    parts = line.split()
+                    return int(parts[1])
+    except (OSError, ValueError):
+        pass
+    return 0
+
+
+def _proc_cpu_us(pid: int) -> int:
+    """Sum (utime + stime) for one process, in microseconds (assumes
+    100 Hz clock — standard on every Linux distro)."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            raw = f.read()
+        # comm field can contain spaces; skip past the closing ')'.
+        rest = raw.rsplit(") ", 1)[1]
+        parts = rest.split()
+        utime = int(parts[11])
+        stime = int(parts[12])
+        return (utime + stime) * 10_000  # 10_000 μs per tick at 100 Hz
+    except (OSError, ValueError, IndexError):
+        return 0
 
 
 def _do_one_op(conn: psycopg.Connection, workload_name: str, samples: dict, idx: int) -> None:

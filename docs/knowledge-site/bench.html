@@ -116,6 +116,19 @@
   }
   .lane .stats .v { color: var(--text); }
   .lane .err { color: #e85a4a; font-size: 12px; font-family: var(--font-mono); }
+
+  /* Resource strip shown in both controlled + stress lanes */
+  .res-strip {
+    margin-top: 10px; padding-top: 10px;
+    border-top: 1px dashed var(--border);
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+    font-size: 11.5px; font-family: var(--font-mono);
+    color: var(--text-muted);
+  }
+  .res-strip .cell { display: flex; flex-direction: column; gap: 1px; }
+  .res-strip .lbl { font-size: 10.5px; text-transform: uppercase;
+                    letter-spacing: 0.06em; }
+  .res-strip .val { color: var(--text); font-weight: 500; font-size: 13px; }
   .verdict {
     margin-top: 14px; padding: 10px 14px;
     background: var(--surface-2); border: 1px solid var(--border);
@@ -278,6 +291,56 @@
   .stress-verdict .ratio { font-weight: 500; font-family: var(--font-mono); }
   .stress-verdict .ratio.win  { color: var(--property); }
   .stress-verdict .ratio.loss { color: #e85a4a; }
+
+  /* ── Aggregates table ──────────────────────────────────────────── */
+  .agg-panel {
+    margin-top: 30px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 6px; overflow: hidden;
+  }
+  .agg-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px; background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  .agg-header h3 {
+    margin: 0; font-size: 12.5px;
+    color: var(--text-muted); text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .agg-header .meta {
+    font-size: 12px; color: var(--text-muted);
+    font-family: var(--font-mono);
+  }
+  .agg-header .meta .count {
+    color: var(--text-strong); font-weight: 500;
+  }
+  .agg-table-wrap { overflow-x: auto; }
+  .agg-table {
+    width: 100%; border-collapse: collapse;
+    font-size: 12.5px; font-family: var(--font-mono);
+  }
+  .agg-table th, .agg-table td {
+    padding: 6px 12px; text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+  .agg-table tr:last-child td { border-bottom: none; }
+  .agg-table th {
+    color: var(--text-muted); font-weight: 500;
+    background: var(--surface);
+  }
+  .agg-table td.right    { text-align: right; color: var(--text); }
+  .agg-table td.win      { color: var(--property); font-weight: 500; }
+  .agg-table td.loss     { color: #e85a4a; font-weight: 500; }
+  .agg-table td.muted    { color: var(--text-muted); }
+  .agg-empty {
+    padding: 20px 16px; text-align: center;
+    color: var(--text-muted); font-size: 13px;
+  }
+  .agg-fresh {
+    background: rgba(76, 175, 80, 0.08);
+    transition: background 1.5s;
+  }
 </style>
 </head>
 <body>
@@ -353,6 +416,11 @@
             <span>throughput</span><span class="v">—</span>
             <span>iters</span><span class="v">—</span>
           </div>
+          <div class="res-strip" id="ndb-res">
+            <div class="cell"><span class="lbl">disk</span><span class="val">—</span></div>
+            <div class="cell"><span class="lbl">ram</span><span class="val">—</span></div>
+            <div class="cell"><span class="lbl">cpu</span><span class="val">—</span></div>
+          </div>
         </div>
         <div class="lane" id="lane-pg">
           <div class="who"><span class="dot"></span> Postgres</div>
@@ -361,6 +429,11 @@
             <span>p99</span><span class="v">—</span>
             <span>throughput</span><span class="v">—</span>
             <span>iters</span><span class="v">—</span>
+          </div>
+          <div class="res-strip" id="pg-res">
+            <div class="cell"><span class="lbl">disk</span><span class="val">—</span></div>
+            <div class="cell"><span class="lbl">ram</span><span class="val">—</span></div>
+            <div class="cell"><span class="lbl">cpu</span><span class="val">—</span></div>
           </div>
         </div>
       </div>
@@ -389,6 +462,33 @@
           </tbody>
         </table>
       </div>
+    </div>
+  </div>
+
+  <div class="agg-panel">
+    <div class="agg-header">
+      <h3>Community runs · all-time (controlled)</h3>
+      <span class="meta" id="agg-meta-controlled">
+        <span class="count" id="agg-races-controlled">—</span> races,
+        <span class="count" id="agg-records-controlled">—</span> records
+      </span>
+    </div>
+    <div class="agg-table-wrap">
+      <table class="agg-table">
+        <thead>
+          <tr>
+            <th>workload</th>
+            <th class="right">races</th>
+            <th class="right">nDB avg p50</th>
+            <th class="right">PG avg p50</th>
+            <th class="right">nDB wins</th>
+            <th class="right">PG wins</th>
+          </tr>
+        </thead>
+        <tbody id="agg-body-controlled">
+          <tr><td colspan="6" class="agg-empty">no races logged yet — be the first</td></tr>
+        </tbody>
+      </table>
     </div>
   </div>
   </section>
@@ -454,6 +554,11 @@
         </div>
         <div class="hist" id="ndb-hist"></div>
         <div class="hist-axis"><span>1 μs</span><span>1 ms</span><span>1 s</span></div>
+        <div class="res-strip" id="sndb-res">
+          <div class="cell"><span class="lbl">disk</span><span class="val">—</span></div>
+          <div class="cell"><span class="lbl">ram</span><span class="val">—</span></div>
+          <div class="cell"><span class="lbl">cpu</span><span class="val">—</span></div>
+        </div>
       </div>
       <div class="stress-lane" id="slane-pg">
         <div class="who"><span class="dot"></span> Postgres</div>
@@ -467,10 +572,43 @@
         </div>
         <div class="hist" id="pg-hist"></div>
         <div class="hist-axis"><span>1 μs</span><span>1 ms</span><span>1 s</span></div>
+        <div class="res-strip" id="spg-res">
+          <div class="cell"><span class="lbl">disk</span><span class="val">—</span></div>
+          <div class="cell"><span class="lbl">ram</span><span class="val">—</span></div>
+          <div class="cell"><span class="lbl">cpu</span><span class="val">—</span></div>
+        </div>
       </div>
     </div>
 
     <div class="stress-verdict" id="stress-verdict" style="display:none"></div>
+
+    <div class="agg-panel">
+      <div class="agg-header">
+        <h3>Community runs · all-time (stress)</h3>
+        <span class="meta" id="agg-meta-stress">
+          <span class="count" id="agg-races-stress">—</span> races,
+          <span class="count" id="agg-records-stress">—</span> records
+        </span>
+      </div>
+      <div class="agg-table-wrap">
+        <table class="agg-table">
+          <thead>
+            <tr>
+              <th>workload</th>
+              <th class="right">clients</th>
+              <th class="right">races</th>
+              <th class="right">nDB avg RPS</th>
+              <th class="right">PG avg RPS</th>
+              <th class="right">nDB wins</th>
+              <th class="right">PG wins</th>
+            </tr>
+          </thead>
+          <tbody id="agg-body-stress">
+            <tr><td colspan="7" class="agg-empty">no stress races logged yet — be the first</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </section>
 
   <p class="footnote">
@@ -595,8 +733,10 @@ async function race(name) {
     lanePg.classList.toggle("loser",   winner !== "pg");
     renderVerdict(name, ndbR.value, pgR.value, winner);
     setStatus(`${totalMs} ms wall-clock · ${selected}`, "ok");
+    window.__lastControlled = { ok: true, workload: name, ndb: ndbR.value, pg: pgR.value };
   } else {
     setStatus("race finished with errors", "err");
+    window.__lastControlled = { ok: false };
   }
   laneNdb.classList.remove("running");
   lanePg.classList.remove("running");
@@ -769,7 +909,7 @@ function pillVal(group) {
   return parseInt(a.dataset.v, 10);
 }
 
-stressBtn.addEventListener("click", stressRace);
+stressBtn.addEventListener("click", () => stressRace());
 
 // Try to populate stress workloads once /workloads has loaded. The
 // init promise above sets `workloads`; re-check shortly after page
@@ -825,8 +965,11 @@ async function stressRace() {
     slanePg.classList.toggle("loser",   winner !== "pg");
     renderStressVerdict(w, n, ndbBody, pgBody, winner);
     setStressStatus(`finished in ${totalMs} ms`, "ok");
+    window.__lastStress = { ok: true, workload: w, concurrency: n, duration_ms: ms,
+                            ndb: ndbBody, pg: pgBody };
   } else {
     setStressStatus("stress race finished with errors", "err");
+    window.__lastStress = { ok: false };
   }
   slaneNdb.classList.remove("running");
   slanePg.classList.remove("running");
@@ -952,6 +1095,167 @@ function fmtRps(v) {
   if (v >= 1_000)     return (v / 1_000).toFixed(1) + "k";
   return v.toFixed(0);
 }
+
+// ─── Resource strip (disk · RAM · CPU%) ───────────────────────────────
+async function fetchStats() {
+  try {
+    const [ndb, pg] = await Promise.all([
+      fetch(NDB_BASE + "/stats").then(r => r.json()).catch(() => null),
+      fetch(PG_BASE  + "/stats").then(r => r.json()).catch(() => null),
+    ]);
+    return { ndb, pg, t: performance.now() };
+  } catch { return { ndb: null, pg: null, t: performance.now() }; }
+}
+
+function fmtBytes(b) {
+  if (b == null) return "—";
+  if (b >= 1024 ** 3) return (b / 1024 ** 3).toFixed(2) + " GiB";
+  if (b >= 1024 ** 2) return (b / 1024 ** 2).toFixed(1) + " MiB";
+  if (b >= 1024)      return (b / 1024).toFixed(1) + " KiB";
+  return b + " B";
+}
+
+function paintResources(prefix, before, after, wall_ms) {
+  // prefix: "ndb-" or "pg-" (controlled) or "sndb-"/"spg-" (stress)
+  const root = document.getElementById(prefix + "res");
+  if (!root || !after) return;
+  const cells = root.querySelectorAll(".cell .val");
+  cells[0].textContent = fmtBytes(after.bytes_on_disk);
+  cells[1].textContent = fmtBytes(after.bytes_resident);
+  let cpuLabel = "—";
+  if (before && wall_ms > 0) {
+    const cpuDeltaUs = ((after.cpu_user_us + after.cpu_sys_us)
+                       - (before.cpu_user_us + before.cpu_sys_us));
+    const wallUs = wall_ms * 1000;
+    const pct = (cpuDeltaUs / wallUs) * 100;
+    cpuLabel = (pct >= 100 ? pct.toFixed(0) : pct.toFixed(1)) + "%";
+  }
+  cells[2].textContent = cpuLabel;
+}
+
+// ─── Aggregates table ─────────────────────────────────────────────────
+async function logRace(payload) {
+  try {
+    await fetch("/api/race/log", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (_) { /* don't break the page if the log endpoint hiccups */ }
+}
+
+async function refreshAggregates() {
+  try {
+    const r = await fetch("/api/race/aggregates");
+    const body = await r.json();
+    renderAggregates("controlled", body);
+    renderAggregates("stress",     body);
+    document.getElementById("agg-records-controlled").textContent = body.total_records;
+    document.getElementById("agg-records-stress").textContent     = body.total_records;
+  } catch (_) { /* fine if no data yet */ }
+}
+
+function renderAggregates(mode, body) {
+  const tbody = document.getElementById("agg-body-" + mode);
+  const rows = (body.rows || []).filter(r => r.mode === mode);
+  const total = rows.reduce((sum, r) => sum + r.races, 0);
+  document.getElementById("agg-races-" + mode).textContent = total;
+  if (rows.length === 0) {
+    const cols = mode === "stress" ? 7 : 6;
+    tbody.innerHTML = `<tr><td colspan="${cols}" class="agg-empty">no ${mode} races logged yet — be the first</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map(r => renderAggRow(r, mode)).join("");
+}
+
+function renderAggRow(r, mode) {
+  const ndbWin = r.ndb_avg_rps >= r.pg_avg_rps;
+  if (mode === "controlled") {
+    const ndbP50 = fmtUs(r.ndb_avg_p50_us);
+    const pgP50  = fmtUs(r.pg_avg_p50_us);
+    return `
+      <tr>
+        <td>${escapeHtml(r.workload)}</td>
+        <td class="right">${r.races}</td>
+        <td class="right ${ndbWin ? 'win' : ''}">${ndbP50}</td>
+        <td class="right ${ndbWin ? '' : 'win'}">${pgP50}</td>
+        <td class="right ${r.ndb_wins > r.pg_wins ? 'win' : 'muted'}">${r.ndb_wins}</td>
+        <td class="right ${r.pg_wins  > r.ndb_wins ? 'win' : 'muted'}">${r.pg_wins}</td>
+      </tr>`;
+  }
+  return `
+    <tr>
+      <td>${escapeHtml(r.workload)}</td>
+      <td class="right">${r.concurrency}</td>
+      <td class="right">${r.races}</td>
+      <td class="right ${ndbWin ? 'win' : ''}">${fmtRps(r.ndb_avg_rps)}</td>
+      <td class="right ${ndbWin ? '' : 'win'}">${fmtRps(r.pg_avg_rps)}</td>
+      <td class="right ${r.ndb_wins > r.pg_wins ? 'win' : 'muted'}">${r.ndb_wins}</td>
+      <td class="right ${r.pg_wins  > r.ndb_wins ? 'win' : 'muted'}">${r.pg_wins}</td>
+    </tr>`;
+}
+
+// Initial load + after every successful race.
+refreshAggregates();
+
+// Initial resource snapshot — shows disk + RAM at rest before any
+// race fires. CPU stays "—" because we have no prior baseline.
+(async function() {
+  const s = await fetchStats();
+  paintResources("ndb-", null, s.ndb, 0);
+  paintResources("pg-",  null, s.pg,  0);
+  paintResources("sndb-", null, s.ndb, 0);
+  paintResources("spg-",  null, s.pg,  0);
+})();
+
+// Hook log+refresh into the controlled race() and stressRace() flows.
+// Both functions already compute ndbR / pgR — we wrap them with a
+// post-step that fires the log + reload. Patch via wrappers so we
+// don't have to touch the originals.
+(function() {
+  const origRace = race;
+  race = async function (name) {
+    const before = await fetchStats();
+    const t0 = performance.now();
+    await origRace(name);
+    const wall = performance.now() - t0;
+    const after = await fetchStats();
+    paintResources("ndb-", before.ndb, after.ndb, wall);
+    paintResources("pg-",  before.pg,  after.pg,  wall);
+    if (window.__lastControlled && window.__lastControlled.ok) {
+      const { ndb, pg, workload } = window.__lastControlled;
+      const race_id = crypto.randomUUID();
+      logRace({
+        race_id, workload, mode: "controlled", concurrency: 1, duration_ms: 0,
+        ndb: { rps: ndb.ops_per_sec, p50_us: ndb.p50_us, p99_us: ndb.p99_us, total_ops: ndb.iters },
+        pg:  { rps:  pg.ops_per_sec, p50_us:  pg.p50_us, p99_us:  pg.p99_us, total_ops:  pg.iters },
+      }).then(refreshAggregates);
+    }
+  };
+})();
+(function() {
+  const origStress = stressRace;
+  stressRace = async function () {
+    const before = await fetchStats();
+    await origStress();
+    const after = await fetchStats();
+    const wall = (window.__lastStress && window.__lastStress.ok)
+      ? Math.max(window.__lastStress.ndb.wall_ms || 0,
+                 window.__lastStress.pg.wall_ms  || 0)
+      : 0;
+    paintResources("sndb-", before.ndb, after.ndb, wall);
+    paintResources("spg-",  before.pg,  after.pg,  wall);
+    if (window.__lastStress && window.__lastStress.ok) {
+      const { workload, concurrency, duration_ms, ndb, pg } = window.__lastStress;
+      const race_id = crypto.randomUUID();
+      logRace({
+        race_id, workload, mode: "stress", concurrency, duration_ms,
+        ndb: { rps: ndb.rps, p50_us: ndb.p50_us, p99_us: ndb.p99_us, total_ops: ndb.total_ops },
+        pg:  { rps:  pg.rps, p50_us:  pg.p50_us, p99_us:  pg.p99_us, total_ops:  pg.total_ops },
+      }).then(refreshAggregates);
+    }
+  };
+})();
 </script>
 
 </body>

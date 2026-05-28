@@ -37,6 +37,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -113,6 +114,30 @@ FB_PROP_TS = 203
 FB_PROP_USER_AGENT = 204
 FB_PROP_PAGE = 205
 FB_PROP_STATUS = 206
+
+# Race-result schema (lives in the same feedback nDB at port 8744 —
+# this is a small enough volume of records to share the engine, and
+# co-locating means one persistent storage + one backup story). Type
+# 300 + props 300-310 are reserved for race results; no overlap with
+# the feedback type at 200.
+RR_TYPE_RACE_RESULT = 300
+RR_PROP_WORKLOAD     = 300  # string
+RR_PROP_BACKEND      = 301  # string: "ndb" | "pg"
+RR_PROP_MODE         = 302  # string: "controlled" | "stress"
+RR_PROP_CONCURRENCY  = 303  # i64 (1 for controlled mode)
+RR_PROP_DURATION_MS  = 304  # i64
+RR_PROP_RPS          = 305  # f64
+RR_PROP_P50_US       = 306  # f64
+RR_PROP_P99_US       = 307  # f64
+RR_PROP_TOTAL_OPS    = 308  # i64
+RR_PROP_TS_MS        = 309  # i64 — milliseconds since Unix epoch
+RR_PROP_RACE_ID      = 310  # string — UUID tying both sides of one race
+RR_PROP_WINNER       = 311  # string: "ndb" | "pg" — winner of this race
+
+# Cap on how many race results we keep before pruning old ones. Pure
+# defensive — the nDB engine handles much more, but the aggregates
+# pass loads everything into memory for grouping.
+RR_MAX_RECORDS = 20_000
 
 # HTML-response rewrites.
 # (1) Demo: hardcoded API host → same-origin path so the browser stays here.
@@ -309,6 +334,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._feedback_status(m.group(1))
             return
 
+        # ── race results: log + aggregate ──
+        if bare == "/api/race/log" and method == "POST":
+            self._race_log()
+            return
+        if bare == "/api/race/aggregates" and method == "GET":
+            self._race_aggregates()
+            return
+
         # ── bench-race proxy (live nDB vs PG) ──
         for pre, upstream in BENCH_BACKENDS.items():
             if bare == pre or bare.startswith(pre + "/"):
@@ -454,6 +487,145 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._json(200, {"ok": True, "id": fid, "status": new_status})
 
         return self._json(404, {"ok": False, "error": "not_found"})
+
+    # ── race-result log + aggregate handlers ────────────────────────
+    def _race_log(self):
+        """Persist one completed race as 2 entity records in the
+        feedback nDB (one per side). Body shape:
+            {race_id, workload, mode, concurrency, duration_ms,
+             ndb: {rps, p50_us, p99_us, total_ops},
+             pg:  {rps, p50_us, p99_us, total_ops}}
+        """
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            payload = json.loads(raw or b"{}")
+        except (ValueError, json.JSONDecodeError):
+            return self._json(400, {"ok": False, "error": "bad_json"})
+
+        race_id = str(payload.get("race_id") or uuid.uuid4())
+        workload = str(payload.get("workload") or "")[:80]
+        mode = str(payload.get("mode") or "")
+        if mode not in ("controlled", "stress"):
+            return self._json(400, {"ok": False, "error": "bad_mode"})
+        concurrency = int(payload.get("concurrency") or 1)
+        duration_ms = int(payload.get("duration_ms") or 0)
+        ndb = payload.get("ndb") or {}
+        pg  = payload.get("pg") or {}
+        if not (isinstance(ndb, dict) and isinstance(pg, dict)
+                and ndb.get("rps") is not None and pg.get("rps") is not None):
+            return self._json(400, {"ok": False, "error": "missing_sides"})
+
+        ndb_rps = float(ndb.get("rps") or 0)
+        pg_rps  = float(pg.get("rps") or 0)
+        winner = "ndb" if ndb_rps >= pg_rps else "pg"
+        ts_ms = int(time.time() * 1000)
+
+        def _side_record(backend: str, m: dict) -> dict:
+            return {
+                "kind": "entity",
+                "entity_id": str(uuid.uuid4()),
+                "type_id": RR_TYPE_RACE_RESULT,
+                "tx_id_assert": 0,
+                "tx_id_supersede": "active",
+                "properties": [
+                    {"prop_id": RR_PROP_WORKLOAD,    "value": {"tag": "string", "value": workload}},
+                    {"prop_id": RR_PROP_BACKEND,     "value": {"tag": "string", "value": backend}},
+                    {"prop_id": RR_PROP_MODE,        "value": {"tag": "string", "value": mode}},
+                    {"prop_id": RR_PROP_CONCURRENCY, "value": {"tag": "i64", "value": concurrency}},
+                    {"prop_id": RR_PROP_DURATION_MS, "value": {"tag": "i64", "value": duration_ms}},
+                    {"prop_id": RR_PROP_RPS,         "value": {"tag": "f64", "value": float(m.get("rps") or 0)}},
+                    {"prop_id": RR_PROP_P50_US,      "value": {"tag": "f64", "value": float(m.get("p50_us") or 0)}},
+                    {"prop_id": RR_PROP_P99_US,      "value": {"tag": "f64", "value": float(m.get("p99_us") or 0)}},
+                    {"prop_id": RR_PROP_TOTAL_OPS,   "value": {"tag": "i64", "value": int(m.get("total_ops") or 0)}},
+                    {"prop_id": RR_PROP_TS_MS,       "value": {"tag": "i64", "value": ts_ms}},
+                    {"prop_id": RR_PROP_RACE_ID,     "value": {"tag": "string", "value": race_id}},
+                    {"prop_id": RR_PROP_WINNER,      "value": {"tag": "string", "value": winner}},
+                ],
+            }
+
+        records = [_side_record("ndb", ndb), _side_record("pg", pg)]
+        status, body = _ndb_post("/commit", {"records": records})
+        if status >= 300:
+            sys.stderr.write(f"race log commit failed {status}: {body!r}\n")
+            return self._json(502, {"ok": False, "error": "ndb_commit_failed"})
+        return self._json(200, {"ok": True, "race_id": race_id, "winner": winner})
+
+    def _race_aggregates(self):
+        """Stream all RR records, group by (workload, mode, concurrency,
+        backend), compute count + mean RPS + mean p50 + win counts."""
+        all_rr = self._read_all_race_results()
+        # group by (workload, mode, concurrency)
+        groups: dict[tuple[str, str, int], dict] = {}
+        for rec in all_rr:
+            key = (rec["workload"], rec["mode"], rec["concurrency"])
+            g = groups.setdefault(key, {
+                "workload": rec["workload"], "mode": rec["mode"],
+                "concurrency": rec["concurrency"],
+                "ndb_rps_sum": 0.0, "ndb_p50_sum": 0.0, "ndb_count": 0,
+                "pg_rps_sum": 0.0,  "pg_p50_sum": 0.0,  "pg_count": 0,
+                "ndb_wins": 0, "pg_wins": 0, "race_ids": set(),
+            })
+            if rec["backend"] == "ndb":
+                g["ndb_rps_sum"] += rec["rps"]
+                g["ndb_p50_sum"] += rec["p50_us"]
+                g["ndb_count"]   += 1
+            else:
+                g["pg_rps_sum"]  += rec["rps"]
+                g["pg_p50_sum"]  += rec["p50_us"]
+                g["pg_count"]    += 1
+            # Count one win per race_id (per side it shows up twice)
+            if rec["race_id"] not in g["race_ids"]:
+                g["race_ids"].add(rec["race_id"])
+                if rec["winner"] == "ndb": g["ndb_wins"] += 1
+                else:                      g["pg_wins"]  += 1
+
+        rows = []
+        for g in groups.values():
+            races = len(g["race_ids"])
+            rows.append({
+                "workload": g["workload"], "mode": g["mode"],
+                "concurrency": g["concurrency"], "races": races,
+                "ndb_avg_rps": (g["ndb_rps_sum"] / g["ndb_count"]) if g["ndb_count"] else 0.0,
+                "pg_avg_rps":  (g["pg_rps_sum"]  / g["pg_count"])  if g["pg_count"]  else 0.0,
+                "ndb_avg_p50_us": (g["ndb_p50_sum"] / g["ndb_count"]) if g["ndb_count"] else 0.0,
+                "pg_avg_p50_us":  (g["pg_p50_sum"]  / g["pg_count"])  if g["pg_count"]  else 0.0,
+                "ndb_wins": g["ndb_wins"], "pg_wins": g["pg_wins"],
+            })
+        rows.sort(key=lambda r: (r["mode"], r["workload"], r["concurrency"]))
+        self._json(200, {"rows": rows, "total_records": len(all_rr)})
+
+    def _read_all_race_results(self) -> list[dict]:
+        status, payload = _ndb_get("/iter")
+        if status != 200:
+            return []
+        out = []
+        for line in payload.splitlines():
+            if not line.strip(): continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("kind") != "entity": continue
+            if rec.get("type_id") != RR_TYPE_RACE_RESULT: continue
+            if rec.get("tx_id_supersede") != "active": continue
+            props = {p.get("prop_id"): p.get("value", {}).get("value")
+                     for p in rec.get("properties", [])}
+            try:
+                out.append({
+                    "workload":     str(props.get(RR_PROP_WORKLOAD) or ""),
+                    "backend":      str(props.get(RR_PROP_BACKEND) or ""),
+                    "mode":         str(props.get(RR_PROP_MODE) or ""),
+                    "concurrency":  int(props.get(RR_PROP_CONCURRENCY) or 0),
+                    "rps":          float(props.get(RR_PROP_RPS) or 0),
+                    "p50_us":       float(props.get(RR_PROP_P50_US) or 0),
+                    "p99_us":       float(props.get(RR_PROP_P99_US) or 0),
+                    "race_id":      str(props.get(RR_PROP_RACE_ID) or ""),
+                    "winner":       str(props.get(RR_PROP_WINNER) or ""),
+                })
+            except (TypeError, ValueError):
+                continue
+        return out
 
     def _json(self, status: int, obj):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")

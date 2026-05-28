@@ -121,6 +121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         n_entities,
         n_hyperedges,
         load_ms,
+        dir: dir.clone(),
         rate_limiter: Mutex::new(HashMap::new()),
     };
     let state = std::sync::Arc::new(state);
@@ -155,6 +156,7 @@ struct State {
     n_entities: usize,
     n_hyperedges: usize,
     load_ms: f64,
+    dir: std::path::PathBuf,
     rate_limiter: Mutex<HashMap<(String, String), Instant>>,
 }
 
@@ -220,6 +222,15 @@ fn handle(state: Arc<State>, mut stream: TcpStream) -> std::io::Result<()> {
                  \"n_entities\":{},\"n_hyperedges\":{},\"load_ms\":{:.0}}}",
                 env!("CARGO_PKG_VERSION"),
                 state.n_entities, state.n_hyperedges, state.load_ms,
+            ))
+        }
+        ("GET", "/stats") => {
+            let bytes_on_disk = dir_size_bytes(&state.dir);
+            let (rss_kb, cpu_user_us, cpu_sys_us, _) = read_self_proc_stats();
+            send_json(&mut stream, 200, &format!(
+                "{{\"bytes_on_disk\":{},\"bytes_resident\":{},\
+                 \"cpu_user_us\":{},\"cpu_sys_us\":{}}}",
+                bytes_on_disk, rss_kb * 1024, cpu_user_us, cpu_sys_us,
             ))
         }
         ("GET", "/workloads") => {
@@ -831,3 +842,55 @@ fn sample_string_n(pool: &[String], n: usize, seed: u64) -> Vec<String> {
     }
     out
 }
+
+fn dir_size_bytes(dir: &std::path::Path) -> u64 {
+    let mut total = 0_u64;
+    if let Ok(read) = std::fs::read_dir(dir) {
+        for entry in read.flatten() {
+            let p = entry.path();
+            if p.is_dir() { total += dir_size_bytes(&p); }
+            else if let Ok(m) = std::fs::metadata(&p) { total += m.len(); }
+        }
+    }
+    total
+}
+
+/// Snapshot /proc/self/{status,stat}. Returns
+/// (vm_rss_kb, cpu_user_us, cpu_sys_us, jiffies_per_sec).
+fn read_self_proc_stats() -> (u64, u64, u64, u64) {
+    let mut rss_kb = 0_u64;
+    if let Ok(s) = std::fs::read_to_string("/proc/self/status") {
+        for line in s.lines() {
+            if let Some(rest) = line.strip_prefix("VmRSS:") {
+                rss_kb = rest.split_whitespace().next()
+                    .and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+                break;
+            }
+        }
+    }
+    // /proc/self/stat: utime, stime are fields 14, 15 (1-indexed) in
+    // clock ticks. man 5 proc.
+    let hz = clk_tck_hz();
+    let (mut utime, mut stime) = (0_u64, 0_u64);
+    if let Ok(s) = std::fs::read_to_string("/proc/self/stat") {
+        // The comm field can contain spaces inside parentheses; skip to
+        // the closing ')' first.
+        if let Some(after_comm) = s.rsplit_once(") ") {
+            let parts: Vec<&str> = after_comm.1.split_whitespace().collect();
+            // After ") ", field positions in `parts` are 3..N (0-indexed),
+            // so utime is parts[11] and stime is parts[12]. (Verified
+            // against `man 5 proc` for the post-comm offset.)
+            if parts.len() > 12 {
+                utime = parts[11].parse::<u64>().unwrap_or(0);
+                stime = parts[12].parse::<u64>().unwrap_or(0);
+            }
+        }
+    }
+    let to_us = |ticks: u64| ticks.saturating_mul(1_000_000) / hz.max(1);
+    (rss_kb, to_us(utime), to_us(stime), hz)
+}
+
+/// Linux clock-ticks-per-second. Hardcoded to 100 Hz — the default for
+/// every distro kernel I've ever seen on x86_64 / aarch64. Avoids
+/// pulling in libc as a dep just for sysconf(_SC_CLK_TCK).
+fn clk_tck_hz() -> u64 { 100 }
