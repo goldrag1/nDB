@@ -39,7 +39,7 @@ use ndb_engine::record::{
     EntityRecord, HyperEdgeRecord, PropertyKeyRecord, Record, RoleNameRecord, TypeNameRecord,
 };
 use ndb_engine::{
-    Distance, Engine, EntityId, HyperedgeId, PropertyId, RoleId, TxId, TypeId, Value,
+    Distance, Engine, EngineConfig, EntityId, HyperedgeId, PropertyId, RoleId, TxId, TypeId, Value,
 };
 
 // ─── Schema ────────────────────────────────────────────────────────────
@@ -208,6 +208,11 @@ fn load_cache() -> Option<Vec<Paper>> {
 // ─── Schema registration + ingest ──────────────────────────────────────
 fn register_schema(engine: &mut Engine) {
     engine.register_lookup_key(PropertyId::new(PROP_NAME));
+    // citations drives langgraph-server's /view/top (property_top_k); field
+    // is kept for completeness. Both must be registered HERE (write time) so
+    // the .pidx sidecar covers them when the server opens --low-memory and
+    // queries them — a reader can't index pairs the sidecar doesn't hold.
+    engine.register_property_btree(TypeId::new(TYPE_PAPER), PropertyId::new(PROP_CITATIONS));
     engine.register_property_btree(TypeId::new(TYPE_PAPER), PropertyId::new(PROP_FIELD));
     engine.register_vector_property(PropertyId::new(PROP_EMBED));
 
@@ -661,7 +666,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let db_dir = args.first().cloned().unwrap_or_else(|| ".demo-data/langgraph-ndb".to_string());
+    // --low-memory creates the nDB with on-disk index sidecars so a
+    // (possibly large) graph can later be SERVED with bounded RAM
+    // (`langgraph-server --low-memory`). The db dir is the first non-flag arg.
+    let low_memory = args.iter().any(|a| a == "--low-memory");
+    let db_dir = args
+        .iter()
+        .find(|a| !a.starts_with("--"))
+        .cloned()
+        .unwrap_or_else(|| ".demo-data/langgraph-ndb".to_string());
     let _ = std::fs::remove_dir_all(&db_dir);
     std::fs::create_dir_all(&db_dir)?;
 
@@ -670,7 +683,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         synthetic_papers()
     });
 
-    let mut engine = Engine::create(&db_dir)?;
+    let mut engine = if low_memory {
+        Engine::create_with_config(&db_dir, EngineConfig::low_memory(2 * 1024 * 1024 * 1024))?
+    } else {
+        Engine::create(&db_dir)?
+    };
     register_schema(&mut engine);
     let ing = ingest_papers(&mut engine, &papers);
     println!("→ {db_dir}");

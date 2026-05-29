@@ -34,7 +34,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 
 use ndb_engine::record::Record;
-use ndb_engine::{Distance, Engine, EntityId, PropertyId, TxId, TypeId, Value};
+use ndb_engine::{Distance, Engine, EngineConfig, EntityId, PropertyId, TxId, TypeId, Value};
 
 const TYPE_PAPER: u32 = 310;
 const TYPE_CITES: u32 = 410;
@@ -325,9 +325,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arg = |k: &str, d: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned().unwrap_or_else(|| d.into());
     let db = arg("--db", ".demo-data/langgraph-ndb");
     let bind = arg("--bind", "127.0.0.1:8791");
+    // Low-RAM core: serve the engine's secondary indexes from disk instead
+    // of rebuilding them in RAM. Requires the nDB to have been ingested
+    // with --low-memory (so the sidecars exist). The app-side `papers` map
+    // below is the remaining (smaller) RAM term — a future reduction.
+    let low_memory = args.iter().any(|a| a == "--low-memory");
+    let cache_mb: usize = arg("--cache-mb", "2048").parse().unwrap_or(2048);
 
-    eprintln!("opening nDB at {db}");
-    let mut engine = Engine::open(&db)?;
+    eprintln!("opening nDB at {db}{}", if low_memory { " (low-memory)" } else { "" });
+    let mut engine = if low_memory {
+        Engine::open_with_config(&db, EngineConfig::low_memory(cache_mb * 1024 * 1024))?
+    } else {
+        Engine::open(&db)?
+    };
     // Register the vector index for the embedding property, then rebuild so
     // it's populated from the store (registration isn't persisted; rebuild
     // scans memtable + sstables). This is what lets kNN run on the engine
