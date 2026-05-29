@@ -30,7 +30,7 @@
 //! `&self` for reads, so the caller serialises writers itself; the data
 //! structures do not embed locks.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -44,7 +44,7 @@ use crate::error::EncodeError;
 use crate::id::{EntityId, HyperedgeId, PropertyId, TX_ACTIVE, TxId, TypeId};
 use crate::index::property_btree::value_to_index_bytes;
 use crate::index::property_index_file::{
-    PropertyIndexBuilder, sidecar_path_for as pidx_sidecar_path_for,
+    PropertyIndexBuilder, PropertyIndexFile, sidecar_path_for as pidx_sidecar_path_for,
 };
 use crate::index::{
     AdjacencyIndex, Distance, EntityTypeIndex, HyperEdgeTypeIndex, Index, LookupKeyIndex,
@@ -393,6 +393,12 @@ pub struct Engine {
     /// Resident-memory tunables. `EngineConfig::default()` reproduces the
     /// historical behaviour; opt into low-RAM mode via `open_with_config`.
     config: EngineConfig,
+    /// mmap'd on-disk property index sidecars, keyed by their SSTable path.
+    /// Populated only under `config.mmap_indexes`. SSTables present here are
+    /// served from disk; SSTables absent here (no sidecar) fall back to the
+    /// in-RAM `property_btree` mirror, which under mmap mode holds only the
+    /// memtable + sidecar-less data.
+    property_index_files: HashMap<PathBuf, PropertyIndexFile>,
 }
 
 impl Engine {
@@ -442,6 +448,7 @@ impl Engine {
             commit_timestamps: std::collections::BTreeMap::new(),
             retention: HashMap::new(),
             config: EngineConfig::default(),
+            property_index_files: HashMap::new(),
         })
     }
 
@@ -577,7 +584,12 @@ impl Engine {
             commit_timestamps: std::collections::BTreeMap::new(),
             retention: HashMap::new(),
             config,
+            property_index_files: HashMap::new(),
         };
+        // Low-RAM core: open the on-disk property-index sidecars (under
+        // `mmap_indexes`) BEFORE rebuilding RAM indexes, so the rebuild can
+        // skip the property data already served from disk.
+        engine.load_property_index_sidecars();
         // Indexes are in-memory in v1 — rebuild them from the primary
         // store (SSTables in newest-first order) and the memtable
         // (already populated from WAL replay).
@@ -630,6 +642,10 @@ impl Engine {
         self.retention.clear();
         // SSTables (sstables[0] is newest layer; iterate in declared order).
         for sst in &mut self.sstables {
+            // Under mmap mode, SSTables with a sidecar serve their property
+            // data from disk — don't duplicate it into the RAM B-tree.
+            let property_on_disk =
+                self.config.mmap_indexes && self.property_index_files.contains_key(sst.path());
             for item in sst.iter() {
                 let (rec, _) = item?;
                 let tx = match &rec {
@@ -655,7 +671,9 @@ impl Engine {
                 self.type_cluster.apply(&rec, tx);
                 self.entity_type_cluster.apply(&rec, tx);
                 self.vector.apply(&rec, tx);
-                self.property_btree.apply(&rec, tx);
+                if !property_on_disk {
+                    self.property_btree.apply(&rec, tx);
+                }
             }
         }
         // Memtable.
@@ -818,7 +836,26 @@ impl Engine {
         property_id: PropertyId,
         value: &Value,
     ) -> Vec<EntityId> {
-        self.property_btree.find(type_id, property_id, value)
+        if !self.property_served_from_disk() {
+            return self.property_btree.find(type_id, property_id, value);
+        }
+        let Some(target) = value_to_index_bytes(value) else {
+            return Vec::new();
+        };
+        let mut cand: HashSet<EntityId> = HashSet::new();
+        for f in self.property_index_files.values() {
+            cand.extend(f.find(type_id, property_id, &target));
+        }
+        cand.extend(self.property_btree.find(type_id, property_id, value));
+        let mut out: Vec<EntityId> = cand
+            .into_iter()
+            .filter(|e| {
+                self.current_indexed_value(*e, type_id, property_id).as_deref()
+                    == Some(target.as_slice())
+            })
+            .collect();
+        out.sort();
+        out
     }
 
     /// Range lookup: every entity of `type_id` whose `property_id` value
@@ -833,7 +870,28 @@ impl Engine {
         low: Option<&Value>,
         high: Option<&Value>,
     ) -> Vec<EntityId> {
-        self.property_btree.range(type_id, property_id, low, high)
+        if !self.property_served_from_disk() {
+            return self.property_btree.range(type_id, property_id, low, high);
+        }
+        let lo_b = low.and_then(value_to_index_bytes);
+        let hi_b = high.and_then(value_to_index_bytes);
+        let mut cand: HashSet<EntityId> = HashSet::new();
+        for f in self.property_index_files.values() {
+            cand.extend(f.range(type_id, property_id, lo_b.as_deref(), hi_b.as_deref()));
+        }
+        cand.extend(self.property_btree.range(type_id, property_id, low, high));
+        let mut out: Vec<EntityId> = cand
+            .into_iter()
+            .filter(|e| match self.current_indexed_value(*e, type_id, property_id) {
+                Some(v) => {
+                    lo_b.as_ref().is_none_or(|l| &v >= l)
+                        && hi_b.as_ref().is_none_or(|h| &v <= h)
+                }
+                None => false,
+            })
+            .collect();
+        out.sort();
+        out
     }
 
     /// Top-`k` entities of `type_id` by `property_id`, highest value first.
@@ -847,7 +905,31 @@ impl Engine {
         property_id: PropertyId,
         k: usize,
     ) -> Vec<EntityId> {
-        self.property_btree.top_k(type_id, property_id, k)
+        if k == 0 {
+            return Vec::new();
+        }
+        if !self.property_served_from_disk() {
+            return self.property_btree.top_k(type_id, property_id, k);
+        }
+        // Gather top-k candidates from every sidecar + the RAM mirror. A
+        // globally top-k entity (by current value) is within top-k of the
+        // sidecar that holds its current value, so k-per-source is enough.
+        let mut cand: HashSet<EntityId> = HashSet::new();
+        for f in self.property_index_files.values() {
+            cand.extend(f.top_k(type_id, property_id, k).into_iter().map(|(_, e)| e));
+        }
+        cand.extend(self.property_btree.top_k(type_id, property_id, k));
+        // Verify + rank by the CURRENT value (drops stale-high entries),
+        // then take k.
+        let mut scored: Vec<(Vec<u8>, EntityId)> = cand
+            .into_iter()
+            .filter_map(|e| {
+                self.current_indexed_value(e, type_id, property_id).map(|v| (v, e))
+            })
+            .collect();
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        scored.truncate(k);
+        scored.into_iter().map(|(_, e)| e).collect()
     }
 
     /// k-nearest-neighbor search over a vector-indexed property. Returns
@@ -937,6 +1019,83 @@ impl Engine {
         builder
             .finish(&path)
             .map_err(|e| std::io::Error::other(format!("property index sidecar: {e}")))?;
+        Ok(())
+    }
+
+    /// Open each SSTable's `.pidx` sidecar into `property_index_files`.
+    /// Only under `config.mmap_indexes`; missing/corrupt sidecars are
+    /// skipped (those SSTables fall back to the in-RAM property mirror).
+    fn load_property_index_sidecars(&mut self) {
+        self.property_index_files.clear();
+        if !self.config.mmap_indexes {
+            return;
+        }
+        for sst in &self.sstables {
+            let pidx = pidx_sidecar_path_for(sst.path());
+            match PropertyIndexFile::open(&pidx) {
+                Ok(Some(f)) => {
+                    self.property_index_files.insert(sst.path().to_path_buf(), f);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!(
+                        "ndb-engine: property-index sidecar {} unreadable ({e}); \
+                         falling back to RAM mirror",
+                        pidx.display()
+                    );
+                }
+            }
+        }
+    }
+
+    /// Whether `(type, prop)` queries should be served from on-disk
+    /// sidecars + verification (low-RAM mode with at least one sidecar)
+    /// rather than purely from the in-RAM property B-tree.
+    fn property_served_from_disk(&self) -> bool {
+        self.config.mmap_indexes && !self.property_index_files.is_empty()
+    }
+
+    /// Resolve an entity's *current* order-preserving value bytes for
+    /// `(type_id, property_id)` at the latest snapshot, or `None` if the
+    /// entity is deleted, not of `type_id`, or lacks the property. The
+    /// MVCC verification step behind every on-disk property query.
+    fn current_indexed_value(
+        &self,
+        entity: EntityId,
+        type_id: TypeId,
+        property_id: PropertyId,
+    ) -> Option<Vec<u8>> {
+        let snap = TxId::new(self.db.manifest().last_tx_id);
+        match self.snapshot_read(&entity.into_uuid(), snap) {
+            Ok(Resolved::Live(Record::Entity(e))) if e.type_id == type_id => e
+                .properties
+                .iter()
+                .find(|(p, _)| *p == property_id)
+                .and_then(|(_, v)| value_to_index_bytes(v)),
+            _ => None,
+        }
+    }
+
+    /// Rebuild the in-RAM property B-tree to mirror only data WITHOUT an
+    /// on-disk sidecar (sidecar-less SSTables + the memtable). Called after
+    /// a flush under `mmap_indexes` so the just-flushed (now sidecar-backed)
+    /// entries leave RAM — this is what keeps the property index resident
+    /// footprint bounded by the memtable, not the whole DB. In steady state
+    /// (every SSTable has a sidecar) the result is just the memtable.
+    fn refresh_property_ram_mirror(&mut self) -> Result<(), EngineError> {
+        self.property_btree.clear();
+        for sst in &mut self.sstables {
+            if self.property_index_files.contains_key(sst.path()) {
+                continue;
+            }
+            for item in sst.iter() {
+                let (rec, _) = item?;
+                self.property_btree.apply(&rec, record_index_tx(&rec));
+            }
+        }
+        for (_k, rec) in self.memtable.iter() {
+            self.property_btree.apply(rec, record_index_tx(rec));
+        }
         Ok(())
     }
 
@@ -1237,6 +1396,14 @@ impl Engine {
         // `config.mmap_indexes`; default mode ignores it.
         self.write_property_sidecar(&reader)?;
         self.sstables.insert(0, reader);
+        // Under mmap mode: register the new sidecar and drop the just-
+        // flushed entries from the RAM property mirror (bounded footprint).
+        if self.config.mmap_indexes {
+            if let Ok(Some(f)) = PropertyIndexFile::open(&pidx_sidecar_path_for(&sst_path)) {
+                self.property_index_files.insert(sst_path.clone(), f);
+            }
+            self.refresh_property_ram_mirror()?;
+        }
 
         // Replace WAL.
         if let Some(old) = self.wal.replace(new_wal) {
@@ -1439,6 +1606,10 @@ impl Engine {
             let _ = std::fs::remove_file(pidx_sidecar_path_for(&p));
         }
 
+        // Reload sidecars for the (now single) compacted SSTable before the
+        // rebuild, so rebuild_indexes skips its property data (served from
+        // disk) and the RAM mirror ends up holding only the memtable.
+        self.load_property_index_sidecars();
         // Rebuild indexes since we dropped tombstoned records.
         self.rebuild_indexes()?;
 
@@ -2090,6 +2261,17 @@ fn sstable_path(dir: &Path, seq: u64) -> PathBuf {
     dir.join(format!("{seq:06}{SSTABLE_FILENAME_SUFFIX}"))
 }
 
+/// The tx id an index uses as the out-of-order watermark for a record.
+fn record_index_tx(rec: &Record) -> TxId {
+    match rec {
+        Record::Entity(e) => e.tx_id_assert,
+        Record::HyperEdge(h) => h.tx_id_assert,
+        Record::Tombstone(t) => t.tx_id_supersede,
+        Record::TxTimestamp(t) => t.tx_id,
+        _ => TxId::new(0),
+    }
+}
+
 /// Replay every clean WAL record into the memtable. Returns the safe
 /// truncate boundary AND the maximum `effective_tx` seen during replay.
 ///
@@ -2358,6 +2540,176 @@ mod tests {
         let pidx = sidecar_path_for(&super::sstable_path(engine.path(), sst_seq));
         assert!(!pidx.exists(), "no registration → no sidecar");
         engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // --- Phase 1c: property index served from disk (low-RAM mode) -------
+
+    fn put_cites(engine: &mut Engine, eid: EntityId, ty: TypeId, prop: PropertyId, v: i64) {
+        let mut txn = engine.begin_write();
+        txn.put_entity(EntityRecord {
+            entity_id: eid,
+            type_id: ty,
+            tx_id_assert: TxId::new(0),
+            tx_id_supersede: TxId::ACTIVE,
+            properties: vec![(prop, Value::I64(v))],
+        });
+        txn.commit().unwrap();
+    }
+
+    /// Reopen + re-register + rebuild (the langgraph-server usage pattern).
+    fn reopen_registered(dir: &PathBuf, ty: TypeId, prop: PropertyId, cfg: EngineConfig) -> Engine {
+        let mut e = Engine::open_with_config(dir, cfg).unwrap();
+        e.register_property_btree(ty, prop);
+        e.rebuild_indexes().unwrap();
+        e
+    }
+
+    #[test]
+    fn low_memory_query_matches_default() {
+        let dir = temp_dir("lm_match");
+        let ty = TypeId::new(1);
+        let prop = PropertyId::new(2);
+        {
+            let mut e = Engine::create(&dir).unwrap();
+            e.register_property_btree(ty, prop);
+            for v in [10i64, 250, 30, 999, 7, 250, 88] {
+                put_cites(&mut e, EntityId::now_v7(), ty, prop, v);
+                e.flush().unwrap(); // one SSTable + sidecar per value
+            }
+            e.close().unwrap();
+        }
+        // Single-process LOCK → open one engine at a time. Collect default
+        // results, close, then compare against low-memory.
+        let (mut d_find, mut d_range, d_top) = {
+            let def = reopen_registered(&dir, ty, prop, EngineConfig::default());
+            let f = def.property_lookup(ty, prop, &Value::I64(250));
+            let r = def.property_range(ty, prop, Some(&Value::I64(30)), Some(&Value::I64(300)));
+            let t = def.property_top_k(ty, prop, 3);
+            def.close().unwrap();
+            (f, r, t)
+        };
+        d_find.sort();
+        d_range.sort();
+
+        let lm = reopen_registered(&dir, ty, prop, EngineConfig::low_memory(64 * 1024 * 1024));
+        assert!(lm.config().mmap_indexes);
+        let mut l_find = lm.property_lookup(ty, prop, &Value::I64(250));
+        l_find.sort();
+        assert_eq!(d_find, l_find);
+        assert_eq!(l_find.len(), 2);
+        let mut l_range = lm.property_range(ty, prop, Some(&Value::I64(30)), Some(&Value::I64(300)));
+        l_range.sort();
+        assert_eq!(d_range, l_range);
+        assert_eq!(d_top, lm.property_top_k(ty, prop, 3));
+        lm.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn low_memory_mvcc_update_and_tombstone() {
+        let dir = temp_dir("lm_mvcc");
+        let ty = TypeId::new(1);
+        let prop = PropertyId::new(2);
+        let updated = EntityId::now_v7();
+        let deleted = EntityId::now_v7();
+        let stable = EntityId::now_v7();
+        {
+            let mut e = Engine::create(&dir).unwrap();
+            e.register_property_btree(ty, prop);
+            put_cites(&mut e, updated, ty, prop, 10);
+            put_cites(&mut e, deleted, ty, prop, 20);
+            put_cites(&mut e, stable, ty, prop, 30);
+            e.flush().unwrap();
+            // Update `updated` to 999, tombstone `deleted`; flush again.
+            put_cites(&mut e, updated, ty, prop, 999);
+            let mut txn = e.begin_write();
+            txn.delete(deleted.into_uuid());
+            txn.commit().unwrap();
+            e.flush().unwrap();
+            e.close().unwrap();
+        }
+        let lm = reopen_registered(&dir, ty, prop, EngineConfig::low_memory(64 * 1024 * 1024));
+        // Stale value gone, current value present.
+        assert!(lm.property_lookup(ty, prop, &Value::I64(10)).is_empty());
+        assert_eq!(lm.property_lookup(ty, prop, &Value::I64(999)), vec![updated]);
+        // Tombstoned entity excluded everywhere.
+        assert!(lm.property_lookup(ty, prop, &Value::I64(20)).is_empty());
+        assert_eq!(lm.property_lookup(ty, prop, &Value::I64(30)), vec![stable]);
+        // top_k by CURRENT value: 999 (updated), 30 (stable); deleted gone.
+        assert_eq!(lm.property_top_k(ty, prop, 5), vec![updated, stable]);
+        // Range honours current values too.
+        assert_eq!(
+            lm.property_range(ty, prop, Some(&Value::I64(500)), None),
+            vec![updated]
+        );
+        lm.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn low_memory_property_ram_bounded_after_flushes() {
+        let dir = temp_dir("lm_bounded");
+        let ty = TypeId::new(1);
+        let prop = PropertyId::new(2);
+        {
+            let mut e = Engine::create(&dir).unwrap();
+            e.register_property_btree(ty, prop);
+            for i in 0..2000i64 {
+                put_cites(&mut e, EntityId::now_v7(), ty, prop, i);
+                if i % 200 == 199 {
+                    e.flush().unwrap();
+                }
+            }
+            e.flush().unwrap();
+            e.close().unwrap();
+        }
+        // One engine at a time (single-process LOCK).
+        let (dpb, d_top1, d_find) = {
+            let def = reopen_registered(&dir, ty, prop, EngineConfig::default());
+            let r = (
+                def.index_memory_stats().property_btree,
+                def.property_top_k(ty, prop, 1),
+                def.property_lookup(ty, prop, &Value::I64(1500)),
+            );
+            def.close().unwrap();
+            r
+        };
+        let lm = reopen_registered(&dir, ty, prop, EngineConfig::low_memory(64 * 1024 * 1024));
+        let lpb = lm.index_memory_stats().property_btree;
+        assert!(dpb > 10_000, "default holds full property index, got {dpb}");
+        assert!(
+            lpb * 4 < dpb,
+            "low-memory RAM property mirror should be far smaller: lm={lpb} def={dpb}"
+        );
+        assert_eq!(lm.property_top_k(ty, prop, 1), d_top1);
+        assert_eq!(lm.property_lookup(ty, prop, &Value::I64(1500)), d_find);
+        lm.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn low_memory_compaction_keeps_sidecar_and_correctness() {
+        let dir = temp_dir("lm_compact");
+        let ty = TypeId::new(1);
+        let prop = PropertyId::new(2);
+        let top = EntityId::now_v7();
+        {
+            let mut e = Engine::create(&dir).unwrap();
+            e.register_property_btree(ty, prop);
+            put_cites(&mut e, top, ty, prop, 5000);
+            e.flush().unwrap();
+            for i in 0..50i64 {
+                put_cites(&mut e, EntityId::now_v7(), ty, prop, i);
+                e.flush().unwrap();
+            }
+            e.compact().unwrap(); // merges all → single SSTable + one .pidx
+            e.close().unwrap();
+        }
+        let lm = reopen_registered(&dir, ty, prop, EngineConfig::low_memory(64 * 1024 * 1024));
+        assert_eq!(lm.property_top_k(ty, prop, 1), vec![top]);
+        assert_eq!(lm.property_lookup(ty, prop, &Value::I64(5000)), vec![top]);
+        lm.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

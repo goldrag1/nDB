@@ -12,7 +12,9 @@ use std::path::PathBuf;
 
 use ndb_engine::record::{EntityRecord, HyperEdgeRecord};
 use ndb_engine::value::Value;
-use ndb_engine::{Engine, EntityId, HyperedgeId, PropertyId, RoleId, TxId, TypeId};
+use ndb_engine::{
+    Engine, EngineConfig, EntityId, HyperedgeId, PropertyId, RoleId, TxId, TypeId,
+};
 
 const TYPE_PAPER: u32 = 1;
 const PROP_NAME: u32 = 1; // lookup key
@@ -105,25 +107,53 @@ fn build_and_measure(n: usize) {
         engine.close().unwrap();
     }
 
-    // Reopen → rebuild_indexes (the RAM hog under measurement).
-    let rss_before = rss_mb();
-    let engine = Engine::open(&dir).unwrap();
-    let s = engine.index_memory_stats();
-    let rss_after = rss_mb();
     let mb = |b: usize| b as f64 / 1_048_576.0;
-    println!(
-        "N={n:>7}  RSS {rss_before:6.0}->{rss_after:6.0} MB | indexes est {:7.1} MB \
-         [lk {:.1} adj {:.1} tc {:.1} etc {:.1} vec {:.1} pbt {:.1}] memtable {:.1}",
-        mb(s.index_total()),
-        mb(s.lookup_key),
-        mb(s.adjacency),
-        mb(s.type_cluster),
-        mb(s.entity_type_cluster),
-        mb(s.vector),
-        mb(s.property_btree),
-        mb(s.memtable),
-    );
-    drop(engine);
+
+    // (a) Default open → full RAM rebuild (the hog under measurement).
+    let s_def = {
+        let engine = Engine::open(&dir).unwrap();
+        let s = engine.index_memory_stats();
+        println!(
+            "N={n:>7} default   | indexes est {:7.1} MB \
+             [lk {:.1} adj {:.1} tc {:.1} etc {:.1} vec {:.1} pbt {:.1}]",
+            mb(s.index_total()),
+            mb(s.lookup_key),
+            mb(s.adjacency),
+            mb(s.type_cluster),
+            mb(s.entity_type_cluster),
+            mb(s.vector),
+            mb(s.property_btree),
+        );
+        engine
+            .index_memory_stats()
+            .property_btree
+            .max(s.property_btree)
+    };
+
+    // (b) Low-memory open → property B-tree served from .pidx sidecars
+    //     (Phase 1c). Register + rebuild like the langgraph server does.
+    {
+        let mut engine =
+            Engine::open_with_config(&dir, EngineConfig::low_memory(2 * 1024 * 1024 * 1024)).unwrap();
+        engine.register_property_btree(TypeId::new(TYPE_PAPER), PropertyId::new(PROP_CITES));
+        engine.rebuild_indexes().unwrap();
+        let s = engine.index_memory_stats();
+        println!(
+            "N={n:>7} lowmemory | indexes est {:7.1} MB \
+             [lk {:.1} adj {:.1} tc {:.1} etc {:.1} vec {:.1} pbt {:.1}]  \
+             ← property index now on disk (pbt {:.1}->{:.1} MB)",
+            mb(s.index_total()),
+            mb(s.lookup_key),
+            mb(s.adjacency),
+            mb(s.type_cluster),
+            mb(s.entity_type_cluster),
+            mb(s.vector),
+            mb(s.property_btree),
+            mb(s_def),
+            mb(s.property_btree),
+        );
+        drop(engine);
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 

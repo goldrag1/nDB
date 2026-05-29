@@ -147,11 +147,33 @@ verified end-to-end.
 
 ## Phases / commit plan
 
-0. Config + `open_with_config` + per-index `heap_bytes()` + baseline. ✅ first.
-1. `.pidx` property index on disk; served from mmap; gather+verify; not
+0. ✅ Config + `open_with_config` + per-index `heap_bytes()` + baseline.
+1. ✅ `.pidx` property index on disk; served from mmap; gather+verify; not
    rebuilt in RAM under `mmap_indexes`. The proof.
-2. Remaining indexes on disk (incl. mmap'd vector).
-3. Bounded block cache enforcing `max_cache_bytes`.
+   - 1a ✅ on-disk file format (`property_index_file.rs`, 15 TDD tests).
+   - 1b ✅ write `.pidx` at flush + compaction; delete with the SSTable.
+   - 1c ✅ read path under `mmap_indexes`: open sidecars, skip RAM rebuild
+     of sidecar-backed property data, gather candidates from sidecars +
+     the memtable mirror, MVCC-verify against the latest snapshot. The RAM
+     property mirror holds only memtable + sidecar-less data.
+2. ⏳ Remaining indexes on disk, in RAM-payoff order: **vector first**
+   (embeddings dominate resident RAM — the 10 GB win hinges on this),
+   then entity_type_cluster, type_cluster, adjacency, lookup_key.
+3. ⏳ Bounded block cache enforcing `max_cache_bytes` (hard cap).
 
-Then: build a real ~10 GB LangGraph nDB and verify RSS held ~2–3 GB with
-bounded query latency, recorded.
+Then: wire `langgraph-server` to `open_with_config(low_memory(..))`, build a
+real ~10 GB LangGraph nDB, verify RSS held ~2–3 GB with bounded query
+latency, recorded.
+
+**Note on the 10 GB RSS target:** Phase 1 bounds only the property index.
+The vector + adjacency indexes still rebuild in RAM, so the "RSS ≤ 3 GB at
+10 GB" acceptance needs Phase 2 (especially the vector index). Phase 1 is
+the validated proof of the mechanism on one index.
+
+### Phase 1 measured result (examples/index_mem_baseline.rs)
+
+The property B-tree component of resident RAM drops to the memtable-only
+mirror (≈0 in steady state) under `low_memory`, served instead from mmap'd
+`.pidx` files — while find/range/top_k return identical results to the
+default in-RAM path (verified by `low_memory_query_matches_default` +
+MVCC update/tombstone tests).
