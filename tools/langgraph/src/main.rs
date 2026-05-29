@@ -394,6 +394,120 @@ fn ingest_papers(engine: &mut Engine, papers: &[Paper]) -> Ingested {
 /// force layout can render them. Authors inherit the earliest year of
 /// any paper they wrote, so the time scrubber reveals them with their
 /// debut.
+/// Derive the small cluster aggregate (top-18 fields + "Other", counts,
+/// max citations, year range) by a bounded streaming scan and write it to
+/// `<db_dir>/clusters.json`. The server reads this instead of materialising
+/// every paper. Keys mirror the in-server lean reader.
+/// Stream-ingest `n` synthetic papers (+ a CITES chain) in batches so a
+/// large langgraph-schema nDB can be built for the scale/RSS test without
+/// holding millions of `Paper` structs in RAM. Uses the same schema as
+/// `ingest_papers`, so `langgraph-server` reads it identically.
+fn synthetic_ingest(engine: &mut Engine, n: usize) {
+    const FIELDS: [&str; 20] = [
+        "Artificial intelligence", "Machine translation", "Computer vision", "Reinforcement learning",
+        "Natural language processing", "Speech recognition", "Robotics", "Optimization",
+        "Graph theory", "Information retrieval", "Bioinformatics", "Cryptography",
+        "Distributed systems", "Databases", "Computer graphics", "Quantum computing",
+        "Statistics", "Signal processing", "Recommender systems", "Knowledge graphs",
+    ];
+    const BATCH: usize = 5000;
+    const FLUSH_EVERY: usize = 250_000;
+    let mut prev: Option<EntityId> = None;
+    let mut since_flush = 0usize;
+    let mut i = 0usize;
+    while i < n {
+        let mut tx = engine.begin_write();
+        let end = (i + BATCH).min(n);
+        for j in i..end {
+            let eid = EntityId::now_v7();
+            let field = FIELDS[j % FIELDS.len()];
+            let title = format!("Synthetic paper {j} on {field}");
+            tx.put_entity(EntityRecord {
+                entity_id: eid,
+                type_id: TypeId::new(TYPE_PAPER),
+                tx_id_assert: TxId::new(0),
+                tx_id_supersede: TxId::ACTIVE,
+                properties: vec![
+                    (PropertyId::new(PROP_NAME), Value::String(title.clone())),
+                    (PropertyId::new(PROP_KIND), Value::String("paper".into())),
+                    (PropertyId::new(PROP_YEAR), Value::I64(2012 + (j % 14) as i64)),
+                    (PropertyId::new(PROP_CITATIONS), Value::I64(((j.wrapping_mul(2_654_435_761)) % 100_000) as i64)),
+                    (PropertyId::new(PROP_FIELD), Value::String(field.into())),
+                    (PropertyId::new(PROP_OAID), Value::String(format!("W{j}"))),
+                    (PropertyId::new(PROP_DOI), Value::String(String::new())),
+                    (PropertyId::new(PROP_EMBED), Value::Vector(embed(&title))),
+                ],
+            });
+            if let Some(p) = prev {
+                tx.put_hyperedge(HyperEdgeRecord {
+                    hyperedge_id: HyperedgeId::now_v7(),
+                    type_id: TypeId::new(TYPE_CITES),
+                    tx_id_assert: TxId::new(0),
+                    tx_id_supersede: TxId::ACTIVE,
+                    roles: vec![(RoleId::new(ROLE_CITING), eid), (RoleId::new(ROLE_CITED), p)],
+                    hyperedge_roles: vec![],
+                    properties: vec![],
+                });
+            }
+            prev = Some(eid);
+            since_flush += 1;
+        }
+        tx.commit().unwrap();
+        if since_flush >= FLUSH_EVERY {
+            engine.flush().unwrap();
+            since_flush = 0;
+            eprintln!("  {} papers ingested", end);
+        }
+        i = end;
+    }
+    engine.flush().unwrap();
+}
+
+fn write_clusters_meta(engine: &Engine, db_dir: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use std::collections::BTreeMap;
+    let mut field_count: HashMap<String, usize> = HashMap::new();
+    let mut max_cit: i64 = 1;
+    let mut min_year = i64::MAX;
+    let mut max_year = i64::MIN;
+    let mut total = 0usize;
+    for item in engine.snapshot_iter_streaming(TxId::ACTIVE) {
+        let Ok(Record::Entity(e)) = item else { continue };
+        if e.type_id != TypeId::new(TYPE_PAPER) {
+            continue;
+        }
+        total += 1;
+        let f = e.properties.iter().find(|(p, _)| p.get() == PROP_FIELD)
+            .and_then(|(_, v)| if let Value::String(s) = v { Some(s.clone()) } else { None })
+            .unwrap_or_default();
+        *field_count.entry(f).or_default() += 1;
+        for (p, v) in &e.properties {
+            match (p.get(), v) {
+                (PROP_CITATIONS, Value::I64(n)) => max_cit = max_cit.max(*n),
+                (PROP_YEAR, Value::I64(y)) if *y > 0 => {
+                    min_year = min_year.min(*y);
+                    max_year = max_year.max(*y);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut fc: Vec<(String, usize)> = field_count.into_iter().collect();
+    fc.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let top: std::collections::HashSet<String> = fc.iter().take(18).map(|(f, _)| f.clone()).collect();
+    let mut coarse: BTreeMap<String, usize> = BTreeMap::new();
+    for (f, c) in &fc {
+        *coarse.entry(if top.contains(f) { f.clone() } else { "Other".into() }).or_default() += c;
+    }
+    let clusters: Vec<(String, usize)> = coarse.into_iter().collect();
+    if min_year == i64::MAX { min_year = 2020; max_year = 2020; }
+    let meta = serde_json::json!({
+        "clusters": clusters, "max_cit": max_cit,
+        "min_year": min_year, "max_year": max_year, "total": total,
+    });
+    std::fs::write(format!("{db_dir}/clusters.json"), serde_json::to_vec(&meta)?)?;
+    Ok(())
+}
+
 fn export_graph(engine: &Engine, path: &str) -> Result<(usize, usize), Box<dyn std::error::Error>> {
     use serde_json::json;
     let records = engine.snapshot_iter(TxId::ACTIVE)?;
@@ -678,6 +792,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = std::fs::remove_dir_all(&db_dir);
     std::fs::create_dir_all(&db_dir)?;
 
+    // --synthetic N: stream-ingest N synthetic papers for the scale/RSS
+    // test (no cache, no graph.json export — doesn't touch the committed
+    // demo). Implies low-memory so the on-disk sidecars are written.
+    if let Some(n) = args.iter().position(|a| a == "--synthetic")
+        .and_then(|i| args.get(i + 1)).and_then(|s| s.parse::<usize>().ok())
+    {
+        let mut engine =
+            Engine::create_with_config(&db_dir, EngineConfig::low_memory(2 * 1024 * 1024 * 1024))?;
+        register_schema(&mut engine);
+        let t = std::time::Instant::now();
+        synthetic_ingest(&mut engine, n);
+        write_clusters_meta(&engine, &db_dir)?;
+        let sz: u64 = std::fs::read_dir(&db_dir).map(|rd| rd.flatten()
+            .filter_map(|e| e.metadata().ok().map(|m| m.len())).sum()).unwrap_or(0);
+        println!("synthetic ingest: {n} papers, {:.2} GB on disk, {:.0}s → {db_dir}",
+            sz as f64 / 1.073_741_824e9, t.elapsed().as_secs_f64());
+        return Ok(());
+    }
+
     let papers = load_cache().unwrap_or_else(|| {
         eprintln!("no cache at {CACHE_PATH} — run `--fetch` first; using synthetic fallback");
         synthetic_papers()
@@ -692,6 +825,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ing = ingest_papers(&mut engine, &papers);
     println!("→ {db_dir}");
     demo_reads(&engine, &ing);
+
+    // Tiny cluster-aggregate sidecar so langgraph-server can serve
+    // /view/clusters + compute galaxy positions WITHOUT scanning the whole
+    // DB or holding per-paper metadata in RAM (bounded server at scale).
+    write_clusters_meta(&engine, &db_dir)?;
 
     // Emit the viz feed for the static 3D explorer (docs/langgraph/).
     let (n, l) = export_graph(&engine, "docs/langgraph/graph.json")?;

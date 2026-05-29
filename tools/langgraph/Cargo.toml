@@ -22,6 +22,7 @@ path = "src/server.rs"
 ndb-engine = { path = "../../crates/ndb-engine" }
 serde      = { workspace = true }
 serde_json = { workspace = true }
+uuid       = { workspace = true }
 # Outbound HTTPS to the LLM extraction / embedding endpoint. ureq (blocking,
 # no async runtime) is right-sized for a build-time tool; isolated to this
 # crate so it never touches the engine's dependency tree.

@@ -28,7 +28,7 @@
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation,
          clippy::cast_sign_loss, clippy::too_many_lines)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
@@ -51,34 +51,31 @@ const RING: f64 = 850.0;
 const SPREAD: f64 = 320.0;
 const ZSCALE: f64 = 16.0;
 
-/// Per-paper metadata, loaded once at startup into the app-side index.
-/// Embeddings are NOT cached here — kNN goes to the engine's vector index
-/// (registered + rebuilt on open), so server RAM doesn't carry a second
-/// copy of every embedding (the dominant per-node cost at scale).
-struct Paper {
-    eid: EntityId,        // for per-tile snapshot_read of display fields
+/// A paper's display fields, read on demand from nDB for the ≤K nodes a
+/// tile returns — never held in bulk. Built from ONE `snapshot_read`.
+struct PaperView {
     uuid: String,
+    label: String,
+    field: String, // coarse cluster field
     year: i64,
     citations: i64,
-    field: String,        // coarse cluster field (layout + bucketing)
+    oaid: String,
+    doi: String,
 }
 
-/// The app-layer index built on top of the generic engine at startup.
-/// Holds lightweight per-paper metadata + id-level indexes; kNN delegates
-/// to the engine's on-disk vector index — the application optimising its
-/// own access on top of the generic core, without duplicating the heavy
-/// embedding data.
+/// Lean app-layer index: holds ONLY the engine + a tiny cluster aggregate
+/// (≤19 fields). Every tile is served from the engine's (on-disk under
+/// `--low-memory`) indexes + per-node `snapshot_read` — NO per-paper RAM,
+/// so server memory is bounded regardless of graph size. This is the
+/// "constant-RAM" form of the view server.
 struct Index {
     engine: Engine,
-    by_eid: HashMap<EntityId, usize>,   // engine EntityId → paper index (for vector_search)
-    papers: Vec<Paper>,                 // all papers (lightweight — no embeddings/strings)
-    by_field: HashMap<String, Vec<usize>>, // coarse field → indices (cit desc)
-    by_uuid: HashMap<String, usize>,    // uuid → index
-    cite_out: HashMap<usize, Vec<usize>>, // citing → cited (paper indices)
-    clusters: Vec<(String, usize)>,     // (field, count), ring order
+    clusters: Vec<(String, usize)>,        // (coarse field, count), ring order
     cluster_pos: HashMap<String, (f64, f64)>,
+    top_fields: HashSet<String>,           // named (non-Other) fields → coarsening
     max_cit: f64,
     mid_year: f64,
+    total_papers: usize,
 }
 
 fn str_prop(props: &[(PropertyId, Value)], pid: u32) -> String {
@@ -113,91 +110,104 @@ fn hash_str(s: &str) -> u64 {
     h
 }
 
+/// Cluster aggregate read from `<db>/clusters.json` (written by the
+/// ingestor) — or computed by a bounded streaming scan if absent.
+struct ClusterMeta {
+    clusters: Vec<(String, usize)>,
+    max_cit: f64,
+    min_year: i64,
+    max_year: i64,
+    total: usize,
+}
+
+fn load_cluster_meta(engine: &Engine, db: &str) -> ClusterMeta {
+    // Fast path: the tiny sidecar written at ingest.
+    if let Ok(bytes) = std::fs::read(format!("{db}/clusters.json"))
+        && let Ok(j) = serde_json::from_slice::<serde_json::Value>(&bytes)
+    {
+        let clusters = j["clusters"].as_array().map(|a| a.iter().filter_map(|e| {
+            let f = e.get(0)?.as_str()?.to_string();
+            let c = e.get(1)?.as_u64()? as usize;
+            Some((f, c))
+        }).collect()).unwrap_or_default();
+        return ClusterMeta {
+            clusters,
+            max_cit: j["max_cit"].as_f64().unwrap_or(1.0).max(1.0),
+            min_year: j["min_year"].as_i64().unwrap_or(2020),
+            max_year: j["max_year"].as_i64().unwrap_or(2020),
+            total: j["total"].as_u64().unwrap_or(0) as usize,
+        };
+    }
+    // Fallback: bounded streaming scan (field counts only — no per-paper RAM).
+    eprintln!("clusters.json missing — computing via one streaming scan");
+    let mut fcount: HashMap<String, usize> = HashMap::new();
+    let (mut max_cit, mut min_year, mut max_year, mut total) = (1i64, i64::MAX, i64::MIN, 0usize);
+    for item in engine.snapshot_iter_streaming(TxId::ACTIVE) {
+        let Ok(Record::Entity(e)) = item else { continue };
+        if e.type_id != TypeId::new(TYPE_PAPER) { continue; }
+        total += 1;
+        *fcount.entry(str_prop(&e.properties, PROP_FIELD)).or_default() += 1;
+        let c = i64_prop(&e.properties, PROP_CITATIONS);
+        if c > max_cit { max_cit = c; }
+        let y = i64_prop(&e.properties, PROP_YEAR);
+        if y > 0 { min_year = min_year.min(y); max_year = max_year.max(y); }
+    }
+    let mut fc: Vec<(String, usize)> = fcount.into_iter().collect();
+    fc.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let top: HashSet<String> = fc.iter().take(18).map(|(f, _)| f.clone()).collect();
+    let mut coarse: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for (f, c) in &fc { *coarse.entry(if top.contains(f) { f.clone() } else { "Other".into() }).or_default() += c; }
+    if min_year == i64::MAX { min_year = 2020; max_year = 2020; }
+    ClusterMeta { clusters: coarse.into_iter().collect(), max_cit: max_cit as f64, min_year, max_year, total }
+}
+
 impl Index {
-    fn build(engine: Engine) -> Self {
-        // STREAMING scan: papers + CITES edges, never collecting every record
-        // into RAM at once. Per-paper we keep only lightweight metadata — no
-        // embeddings (those live in the engine's vector index, queried live).
-        let mut papers = Vec::new();
-        let mut by_uuid = HashMap::new();
-        let mut by_eid: HashMap<EntityId, usize> = HashMap::new();
-        let mut raw_cites: Vec<(String, String)> = Vec::new();
-
-        for item in engine.snapshot_iter_streaming(TxId::ACTIVE) {
-            let r = match item { Ok(r) => r, Err(_) => continue };
-            match &r {
-                Record::Entity(e) if e.type_id == TypeId::new(TYPE_PAPER) => {
-                    let uuid = e.entity_id.into_uuid().to_string();
-                    let idx = papers.len();
-                    by_uuid.insert(uuid.clone(), idx);
-                    by_eid.insert(e.entity_id, idx);
-                    papers.push(Paper {
-                        eid: e.entity_id,
-                        uuid,
-                        year: i64_prop(&e.properties, PROP_YEAR),
-                        citations: i64_prop(&e.properties, PROP_CITATIONS),
-                        field: str_prop(&e.properties, PROP_FIELD),
-                    });
-                }
-                Record::HyperEdge(h) if h.type_id == TypeId::new(TYPE_CITES) => {
-                    let mut citing = None; let mut cited = None;
-                    for (rid, eid) in &h.roles {
-                        if rid.get() == 30 { citing = Some(eid.into_uuid().to_string()); }
-                        else if rid.get() == 31 { cited = Some(eid.into_uuid().to_string()); }
-                    }
-                    if let (Some(a), Some(b)) = (citing, cited) { raw_cites.push((a, b)); }
-                }
-                _ => {}
-            }
-        }
-
-        // Coarse clusters: top-18 fields by paper count (+ "Other").
-        let mut field_count: HashMap<String, usize> = HashMap::new();
-        for p in &papers { *field_count.entry(p.field.clone()).or_default() += 1; }
-        let mut fc: Vec<(String, usize)> = field_count.into_iter().collect();
-        fc.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-        let top: std::collections::HashSet<String> = fc.iter().take(18).map(|(f, _)| f.clone()).collect();
-        for p in &mut papers {
-            if !top.contains(&p.field) { p.field = "Other".to_string(); }
-        }
-
-        // Cluster ring positions + counts (ordered for stable angles).
-        let mut cl_count: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
-        for p in &papers { *cl_count.entry(p.field.clone()).or_default() += 1; }
-        let clusters: Vec<(String, usize)> = cl_count.into_iter().collect();
-        let k = clusters.len().max(1);
+    fn build(engine: Engine, db: &str) -> Self {
+        let m = load_cluster_meta(&engine, db);
+        let k = m.clusters.len().max(1);
         let mut cluster_pos = HashMap::new();
-        for (i, (field, _)) in clusters.iter().enumerate() {
+        for (i, (field, _)) in m.clusters.iter().enumerate() {
             let ang = std::f64::consts::TAU * (i as f64) / (k as f64);
             cluster_pos.insert(field.clone(), (RING * ang.cos(), RING * ang.sin()));
         }
-
-        // Sorted indices.
-        let mut by_cit: Vec<usize> = (0..papers.len()).collect();
-        by_cit.sort_by(|&a, &b| papers[b].citations.cmp(&papers[a].citations));
-        let mut by_field: HashMap<String, Vec<usize>> = HashMap::new();
-        for &i in &by_cit { by_field.entry(papers[i].field.clone()).or_default().push(i); }
-
-        // Citation adjacency (paper idx → cited paper idxs).
-        let mut cite_out: HashMap<usize, Vec<usize>> = HashMap::new();
-        for (a, b) in &raw_cites {
-            if let (Some(&ia), Some(&ib)) = (by_uuid.get(a), by_uuid.get(b)) {
-                cite_out.entry(ia).or_default().push(ib);
-            }
+        let top_fields: HashSet<String> =
+            m.clusters.iter().map(|(f, _)| f.clone()).filter(|f| f != "Other").collect();
+        let mid_year = (m.min_year + m.max_year) as f64 / 2.0;
+        eprintln!("served lean: {} papers, {} clusters (no per-paper RAM)", m.total, m.clusters.len());
+        Index {
+            engine,
+            clusters: m.clusters,
+            cluster_pos,
+            top_fields,
+            max_cit: m.max_cit.max(1.0),
+            mid_year,
+            total_papers: m.total,
         }
-
-        let max_cit = papers.iter().map(|p| p.citations).max().unwrap_or(1).max(1) as f64;
-        let years: Vec<i64> = papers.iter().map(|p| p.year).filter(|y| *y > 0).collect();
-        let mid_year = if years.is_empty() { 2020.0 }
-            else { (years.iter().min().unwrap() + years.iter().max().unwrap()) as f64 / 2.0 };
-
-        eprintln!("indexed {} papers, {} cite-edges, {} clusters",
-            papers.len(), cite_out.values().map(Vec::len).sum::<usize>(), clusters.len());
-        Index { engine, by_eid, papers, by_field, by_uuid, cite_out, clusters, cluster_pos, max_cit, mid_year }
     }
 
-    /// Deterministic galaxy position for a paper (cluster anchor + offset).
-    fn pos(&self, p: &Paper) -> (f64, f64, f64) {
+    fn coarse(&self, field: &str) -> String {
+        if self.top_fields.contains(field) { field.to_string() } else { "Other".to_string() }
+    }
+
+    /// Read one paper's display fields from nDB (one bounded snapshot_read).
+    /// `None` if the entity is absent/deleted.
+    fn view(&self, eid: EntityId) -> Option<PaperView> {
+        let props = match self.engine.snapshot_read(&eid.into_uuid(), TxId::ACTIVE) {
+            Ok(ndb_engine::Resolved::Live(Record::Entity(e))) => e.properties,
+            _ => return None,
+        };
+        Some(PaperView {
+            uuid: eid.into_uuid().to_string(),
+            label: str_prop(&props, PROP_NAME),
+            field: self.coarse(&str_prop(&props, PROP_FIELD)),
+            year: i64_prop(&props, PROP_YEAR),
+            citations: i64_prop(&props, PROP_CITATIONS),
+            oaid: str_prop(&props, PROP_OAID),
+            doi: str_prop(&props, PROP_DOI),
+        })
+    }
+
+    fn pos(&self, p: &PaperView) -> (f64, f64, f64) {
         let (ax, ay) = *self.cluster_pos.get(&p.field).unwrap_or(&(0.0, 0.0));
         let imp = (p.citations as f64 + 1.0).ln() / (self.max_cit + 1.0).ln();
         let r = SPREAD * (1.0 - imp);
@@ -206,36 +216,28 @@ impl Index {
         (ax + r * theta.cos(), ay + r * theta.sin(), z)
     }
 
-    /// Live per-tile read of one paper's display fields from nDB — these
-    /// are NOT cached in server RAM, only fetched for the ≤K nodes a tile
-    /// actually returns (bounded snapshot_read per node).
-    fn props(&self, eid: EntityId) -> Vec<(PropertyId, Value)> {
-        match self.engine.snapshot_read(&eid.into_uuid(), TxId::ACTIVE) {
-            Ok(ndb_engine::Resolved::Live(Record::Entity(e))) => e.properties,
-            _ => Vec::new(),
-        }
-    }
-
-    fn node_json(&self, i: usize) -> serde_json::Value {
-        let p = &self.papers[i];
+    fn node_json(&self, p: &PaperView) -> serde_json::Value {
         let (x, y, z) = self.pos(p);
-        let props = self.props(p.eid);     // title / oaid / doi fetched live, not cached
         serde_json::json!({
-            "id": p.uuid, "label": str_prop(&props, PROP_NAME), "kind": "paper", "cluster": p.field,
-            "field": str_prop(&props, PROP_FIELD), "year": p.year, "citations": p.citations,
-            "oaid": str_prop(&props, PROP_OAID), "doi": str_prop(&props, PROP_DOI),
+            "id": p.uuid, "label": p.label, "kind": "paper", "cluster": p.field, "field": p.field,
+            "year": p.year, "citations": p.citations, "oaid": p.oaid, "doi": p.doi,
             "x": x, "y": y, "z": z,
         })
     }
 
-    /// CITES edges among a set of paper indices.
-    fn internal_cites(&self, set: &std::collections::HashSet<usize>) -> Vec<serde_json::Value> {
+    /// Entities this paper CITES (role 30 = citing == eid → role 31 = cited),
+    /// via the engine's (on-disk) adjacency index + a snapshot_read per edge.
+    fn cites_out(&self, eid: EntityId) -> Vec<EntityId> {
         let mut out = Vec::new();
-        for &i in set {
-            if let Some(cited) = self.cite_out.get(&i) {
-                for &j in cited {
-                    if set.contains(&j) {
-                        out.push(serde_json::json!({"source": self.papers[i].uuid, "target": self.papers[j].uuid, "kind": "cites"}));
+        for hid in self.engine.hyperedges_for_entity(eid) {
+            if let Ok(ndb_engine::Resolved::Live(Record::HyperEdge(h))) =
+                self.engine.snapshot_read(&hid.into_uuid(), TxId::ACTIVE)
+                && h.type_id == TypeId::new(TYPE_CITES)
+            {
+                let citing = h.roles.iter().find(|(r, _)| r.get() == 30).map(|(_, e)| *e);
+                if citing == Some(eid) {
+                    if let Some((_, cited)) = h.roles.iter().find(|(r, _)| r.get() == 31) {
+                        out.push(*cited);
                     }
                 }
             }
@@ -243,10 +245,32 @@ impl Index {
         out
     }
 
-    fn nodes_and_cites(&self, idxs: &[usize]) -> serde_json::Value {
-        let set: std::collections::HashSet<usize> = idxs.iter().copied().collect();
-        let nodes: Vec<_> = idxs.iter().map(|&i| self.node_json(i)).collect();
-        serde_json::json!({ "nodes": nodes, "links": self.internal_cites(&set) })
+    /// Build the {nodes, links} tile for a set of entity ids: one
+    /// snapshot_read per node (bounded by the set size), plus internal CITES
+    /// links discovered via the adjacency index.
+    fn tile(&self, eids: &[EntityId]) -> serde_json::Value {
+        let set: HashSet<EntityId> = eids.iter().copied().collect();
+        let mut nodes = Vec::with_capacity(eids.len());
+        let mut by_uuid: HashMap<EntityId, String> = HashMap::new();
+        for &e in eids {
+            if let Some(v) = self.view(e) {
+                by_uuid.insert(e, v.uuid.clone());
+                nodes.push(self.node_json(&v));
+            }
+        }
+        let mut links = Vec::new();
+        for &e in eids {
+            if let Some(src) = by_uuid.get(&e) {
+                for cited in self.cites_out(e) {
+                    if set.contains(&cited)
+                        && let Some(dst) = by_uuid.get(&cited)
+                    {
+                        links.push(serde_json::json!({"source": src, "target": dst, "kind": "cites"}));
+                    }
+                }
+            }
+        }
+        serde_json::json!({ "nodes": nodes, "links": links })
     }
 
     // ── endpoint handlers ─────────────────────────────────────────────
@@ -257,64 +281,73 @@ impl Index {
                 "field": field, "count": count, "year": 0, "citations": 0, "x": x, "y": y, "z": 0.0})
         }).collect();
         serde_json::json!({ "nodes": nodes, "links": [],
-            "meta": {"total_papers": self.papers.len(), "clusters": self.clusters.len()} })
+            "meta": {"total_papers": self.total_papers, "clusters": self.clusters.len()} })
     }
 
     fn top_view(&self, limit: usize, as_of: Option<i64>) -> serde_json::Value {
-        // Generic ordered top-K straight from the engine's citation B-tree —
-        // no in-RAM sorted list held server-side. Over-fetch a little to
-        // absorb the as_of year filter.
+        // Ordered top-K straight from the engine's citation index — no
+        // in-RAM sorted list. Over-fetch to absorb the as_of year filter.
         let fetch = if as_of.is_some() { limit * 3 } else { limit };
         let hits = self.engine.property_top_k(TypeId::new(TYPE_PAPER), PropertyId::new(PROP_CITATIONS), fetch);
-        let idxs: Vec<usize> = hits.iter()
-            .filter_map(|e| self.by_eid.get(e).copied())
-            .filter(|&i| as_of.is_none_or(|y| self.papers[i].year <= y))
+        let eids: Vec<EntityId> = hits.iter().copied()
+            .filter(|&e| as_of.is_none_or(|y| self.view(e).is_some_and(|v| v.year <= y)))
             .take(limit).collect();
-        let mut v = self.nodes_and_cites(&idxs);
-        v["meta"] = serde_json::json!({"total_papers": self.papers.len(), "returned": idxs.len()});
+        let mut v = self.tile(&eids);
+        v["meta"] = serde_json::json!({"total_papers": self.total_papers, "returned": eids.len()});
         v
     }
 
     fn cluster_papers_view(&self, field: &str, limit: usize, as_of: Option<i64>) -> serde_json::Value {
-        let idxs: Vec<usize> = self.by_field.get(field).map(|v| v.iter().copied()
-            .filter(|&i| as_of.is_none_or(|y| self.papers[i].year <= y))
-            .take(limit).collect()).unwrap_or_default();
-        let mut v = self.nodes_and_cites(&idxs);
-        v["meta"] = serde_json::json!({"field": field, "total_in_field": self.by_field.get(field).map_or(0, Vec::len), "returned": idxs.len()});
+        // No (field, citations) compound index — walk the global citation
+        // top-K and keep those in this field, capped so it stays bounded.
+        let cap = (limit * 40).max(4000);
+        let hits = self.engine.property_top_k(TypeId::new(TYPE_PAPER), PropertyId::new(PROP_CITATIONS), cap);
+        let mut eids = Vec::new();
+        for e in hits {
+            if let Some(v) = self.view(e) {
+                if v.field == field && as_of.is_none_or(|y| v.year <= y) {
+                    eids.push(e);
+                    if eids.len() >= limit { break; }
+                }
+            }
+        }
+        let mut v = self.tile(&eids);
+        v["meta"] = serde_json::json!({"field": field, "returned": eids.len(), "scanned_cap": cap});
         v
     }
 
     fn neighbors_view(&self, uuid: &str, depth: usize, limit: usize) -> serde_json::Value {
-        let Some(&start) = self.by_uuid.get(uuid) else {
-            return serde_json::json!({"nodes": [], "links": [], "meta": {"error": "not found"}});
+        let Ok(parsed) = uuid.parse::<uuid::Uuid>() else {
+            return serde_json::json!({"nodes": [], "links": [], "meta": {"error": "bad uuid"}});
         };
-        let mut seen = std::collections::HashSet::from([start]);
+        let start = EntityId::from_uuid(parsed);
+        if self.view(start).is_none() {
+            return serde_json::json!({"nodes": [], "links": [], "meta": {"error": "not found"}});
+        }
+        let mut seen: HashSet<EntityId> = HashSet::from([start]);
         let mut frontier = vec![start];
         for _ in 0..depth {
             let mut next = Vec::new();
-            for &i in &frontier {
-                if let Some(c) = self.cite_out.get(&i) {
-                    for &j in c { if seen.insert(j) { next.push(j); if seen.len() >= limit { break; } } }
+            for &e in &frontier {
+                for cited in self.cites_out(e) {
+                    if seen.insert(cited) { next.push(cited); if seen.len() >= limit { break; } }
                 }
                 if seen.len() >= limit { break; }
             }
             if seen.len() >= limit { break; }
             frontier = next;
         }
-        let idxs: Vec<usize> = seen.into_iter().collect();
-        let mut v = self.nodes_and_cites(&idxs);
-        v["meta"] = serde_json::json!({"root": uuid, "depth": depth, "returned": idxs.len()});
+        let eids: Vec<EntityId> = seen.into_iter().collect();
+        let mut v = self.tile(&eids);
+        v["meta"] = serde_json::json!({"root": uuid, "depth": depth, "returned": eids.len()});
         v
     }
 
     fn knn_view(&self, q: &str, k: usize) -> serde_json::Value {
-        // Delegate to the engine's vector index (registered + rebuilt on
-        // open). Server RAM carries no embeddings — the index does, on the
-        // engine side, and scales there.
         let hits = self.engine.vector_search(PropertyId::new(PROP_EMBED), &embed(q), k, Distance::Cosine);
-        let idxs: Vec<usize> = hits.iter().filter_map(|(e, _)| self.by_eid.get(e).copied()).collect();
-        let mut v = self.nodes_and_cites(&idxs);
-        v["meta"] = serde_json::json!({"q": q, "returned": idxs.len()});
+        let eids: Vec<EntityId> = hits.iter().map(|(e, _)| *e).collect();
+        let mut v = self.tile(&eids);
+        v["meta"] = serde_json::json!({"q": q, "returned": eids.len()});
         v
     }
 }
@@ -345,7 +378,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     engine.register_vector_property(PropertyId::new(PROP_EMBED));
     engine.register_property_btree(TypeId::new(TYPE_PAPER), PropertyId::new(PROP_CITATIONS));
     engine.rebuild_indexes()?;
-    let index = Arc::new(Index::build(engine));
+    let index = Arc::new(Index::build(engine, &db));
 
     let listener = TcpListener::bind(&bind)?;
     eprintln!("langgraph-server on http://{bind}");
@@ -377,7 +410,7 @@ fn handle(index: &Index, mut stream: TcpStream) -> std::io::Result<()> {
     let limit = num("limit", DEFAULT_LIMIT).min(2000);
 
     let body: serde_json::Value = match path {
-        "/health" => serde_json::json!({"status": "ok", "papers": index.papers.len()}),
+        "/health" => serde_json::json!({"status": "ok", "papers": index.total_papers}),
         "/view/clusters" => index.clusters_view(),
         "/view/top" => index.top_view(limit, as_of),
         "/view/knn" => index.knn_view(qp.get("q").map_or("", String::as_str), num("k", 8)),
