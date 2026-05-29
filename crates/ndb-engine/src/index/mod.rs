@@ -47,6 +47,7 @@ pub mod adjacency;
 pub mod entity_type_cluster;
 pub mod lookup_key;
 pub mod property_btree;
+pub mod property_index_file;
 pub mod type_cluster;
 pub mod vector;
 
