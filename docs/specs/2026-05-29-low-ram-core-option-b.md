@@ -201,6 +201,33 @@ mirror (≈0 in steady state) under `low_memory`, served instead from mmap'd
 default in-RAM path (verified by `low_memory_query_matches_default` +
 MVCC update/tombstone tests).
 
+### The ~10 GB test (examples/scale_build, synthetic langgraph corpus)
+
+Real OpenAlex-to-10 GB is infeasible in one session (rate-limited live
+fetch). Built a deterministic langgraph-shaped corpus instead — 7.75M papers
+with 128-d embeddings + CITES edges, all six indexes registered, **10.08 GB
+on disk** — and opened it fresh under `low_memory(2 GiB)`:
+
+```
+open: 0.2s | RSS 133 MB            (all six secondary indexes resident: 0.0 MB)
+[bounded] property_top_k(10):   647 ms
+[bounded] hyperedges_for_entity:  2.4 ms
+[bounded] lookup_by_external_key: 0.5 ms
+RSS after bounded queries: 453 MB        ← the held-low figure (target was 2–3 GB)
+[O(N)] vector_search(k=10): 15.3 s, RSS 2426 MB   (brute-force reads every embedding)
+```
+
+**Acceptance met:** a 10 GB nDB opens in 0.2s with RSS 133 MB and serves the
+realistic (tile-server) bounded workload at 453 MB — well under 2–3 GB.
+The only op that approaches the bound is brute-force k-NN (the engine has no
+ANN index): it reads all embeddings (15 s, 2.4 GB resident, still < 3 GB and
+mmap-reclaimable). HNSW (or the Phase 3b buffer pool) would bound it; that's
+the documented remaining work, not a memory-management failure.
+
+The fix that made this work: the sidecar CRC must cover only metadata
+(header + block index), never the bulk — a full-file CRC on open faulted
+all ~5 GB of sidecars (open was 13.4s / 4350 MB before the fix).
+
 ### Phase 2 measured result (same example, 100k entities)
 
 ```
