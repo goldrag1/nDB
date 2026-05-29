@@ -406,14 +406,34 @@ fn fetch_year_histogram(
     agent: &ureq::Agent,
     base_filter: &str,
 ) -> Result<Vec<(i32, u64)>, Box<dyn std::error::Error>> {
-    let v: serde_json::Value = agent
-        .get("https://api.openalex.org/works")
-        .query("filter", base_filter)
-        .query("group_by", "publication_year")
-        .query("mailto", OA_MAIL)
-        .set("User-Agent", &format!("langgraph-demo (mailto:{OA_MAIL})"))
-        .call()?
-        .into_json()?;
+    // Retry/backoff — a transient 429 here must NOT kill the whole sharded
+    // run (it's the first call; without this a single rate-limit bounce sends
+    // the supervisor into a restart→429 storm). 429 = slow down → back off
+    // hard (starts 5s, doubles to 60s).
+    let ua = format!("langgraph-demo (mailto:{OA_MAIL})");
+    let mut v: Option<serde_json::Value> = None;
+    let mut delay = 5u64;
+    for attempt in 0..7 {
+        match agent
+            .get("https://api.openalex.org/works")
+            .query("filter", base_filter)
+            .query("group_by", "publication_year")
+            .query("mailto", OA_MAIL)
+            .set("User-Agent", &ua)
+            .call()
+        {
+            Ok(resp) => {
+                v = Some(resp.into_json()?);
+                break;
+            }
+            Err(e) => {
+                eprintln!("  histogram error ({e}); retry {}/7 in {delay}s", attempt + 1);
+                std::thread::sleep(Duration::from_secs(delay));
+                delay = (delay * 2).min(60);
+            }
+        }
+    }
+    let v = v.ok_or("histogram: exhausted retries")?;
     let mut hist: Vec<(i32, u64)> = v["group_by"]
         .as_array()
         .cloned()
@@ -465,20 +485,41 @@ fn spool_sharded(
     n_shards: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(dir)?;
-    let agent = build_agent();
-    let hist = fetch_year_histogram(&agent, base_filter)?;
-    let shards = partition_year_shards(&hist, n_shards);
-    let total: u64 = hist.iter().map(|(_, c)| c).sum();
-    eprintln!("sharded spool: {} works over {} year-shards", total, shards.len());
+    // Cache the shard ranges in shards.json: they're stable across the whole
+    // run, so a supervisor restart must NOT re-call the histogram (that's the
+    // request that 429-storms). Compute once (with retry), persist, then every
+    // resume loads it and goes straight to the shard threads.
+    let shards_path = format!("{dir}/shards.json");
+    let shards: Vec<(i32, i32)> = match std::fs::read(&shards_path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Vec<(i32, i32)>>(&b).ok())
+    {
+        Some(s) if !s.is_empty() => {
+            eprintln!("sharded spool: loaded {} cached shard ranges from shards.json", s.len());
+            s
+        }
+        _ => {
+            let agent = build_agent();
+            let hist = fetch_year_histogram(&agent, base_filter)?;
+            let total: u64 = hist.iter().map(|(_, c)| c).sum();
+            let s = partition_year_shards(&hist, n_shards);
+            eprintln!("sharded spool: {total} works over {} year-shards (computed + cached)", s.len());
+            let _ = std::fs::write(&shards_path, serde_json::to_vec(&s).unwrap_or_default());
+            s
+        }
+    };
     for (lo, hi) in &shards {
         eprintln!("  shard {lo}-{hi}");
     }
 
     let mut handles = Vec::new();
-    for (lo, hi) in shards.clone() {
+    for (i, (lo, hi)) in shards.clone().into_iter().enumerate() {
         let dir = dir.to_string();
         let bf = base_filter.to_string();
         handles.push(std::thread::spawn(move || {
+            // Stagger starts so 10 shards don't fire their first request in
+            // the same instant (avoids the startup burst that trips the 429).
+            std::thread::sleep(Duration::from_millis(400 * i as u64));
             let shard_dir = format!("{dir}/shard_{lo:04}_{hi:04}");
             let filter = format!("{bf},publication_year:{lo}-{hi}");
             if let Err(e) = spool_fetch(&shard_dir, &filter, None) {
