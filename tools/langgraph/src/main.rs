@@ -490,15 +490,23 @@ fn spool_sharded(
 }
 
 // ─── Schema registration + ingest ──────────────────────────────────────
-fn register_schema(engine: &mut Engine) {
+/// Index registrations that decide which sidecars (.pidx / .vidx / .lkp) get
+/// emitted by `write_index_sidecars` — at flush AND at compaction. EVERY
+/// writer that flushes or compacts this DB (ingest + `--compact`) MUST apply
+/// these first, or the matching sidecar is silently dropped and the reader
+/// falls back to a RAM rebuild (defeats low-memory serving). Single source of
+/// truth — keep `--compact` and `register_schema` in sync via this helper.
+fn register_index_props(engine: &mut Engine) {
     engine.register_lookup_key(PropertyId::new(PROP_NAME));
     // citations drives langgraph-server's /view/top (property_top_k); field
-    // is kept for completeness. Both must be registered HERE (write time) so
-    // the .pidx sidecar covers them when the server opens --low-memory and
-    // queries them — a reader can't index pairs the sidecar doesn't hold.
+    // is kept for completeness. A reader can't index pairs the sidecar omits.
     engine.register_property_btree(TypeId::new(TYPE_PAPER), PropertyId::new(PROP_CITATIONS));
     engine.register_property_btree(TypeId::new(TYPE_PAPER), PropertyId::new(PROP_FIELD));
     engine.register_vector_property(PropertyId::new(PROP_EMBED));
+}
+
+fn register_schema(engine: &mut Engine) {
+    register_index_props(engine);
 
     let mut tx = engine.begin_write();
     for (id, name) in [
@@ -1098,6 +1106,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "fetched {} papers ({} with internal citations) → {CACHE_PATH}",
             papers.len(), connected
+        );
+        return Ok(());
+    }
+
+    // --compact <db>: merge the DB's SSTables (and their per-SSTable index
+    // sidecars) down to one. A low-memory ingest leaves one SSTable + one set
+    // of .pidx/.vidx sidecars PER FLUSH — hundreds at 10 GB. `property_top_k`
+    // / `vector_search` then iterate every sidecar (the 21.8 s `/view/top`
+    // wall). Compaction collapses them to a single sidecar, so those become
+    // a single-source top-k. ONE-TIME offline maintenance: it builds the
+    // record set in RAM during the merge (spikes to ~DB-size), unlike the
+    // bounded serving path — run it after ingest, before serving, NOT on a
+    // live low-RAM server. Must precede the db-dir wipe below.
+    if args.first().map(String::as_str) == Some("--compact") {
+        let db_dir = args.iter().skip(1).find(|a| !a.starts_with("--")).cloned()
+            .unwrap_or_else(|| ".demo-data/langgraph-ndb".to_string());
+        let cache_mb: usize = args.iter().position(|a| a == "--cache-mb")
+            .and_then(|i| args.get(i + 1)).and_then(|s| s.parse().ok()).unwrap_or(2048);
+        eprintln!("opening {db_dir} (low-memory) for compaction…");
+        let mut engine = Engine::open_with_config(
+            &db_dir, EngineConfig::low_memory(cache_mb * 1024 * 1024))?;
+        // Re-declare the indexed (type, prop) pairs so the post-compaction
+        // SSTable's .pidx/.vidx/.lkp sidecars are rewritten — without this,
+        // compaction deletes the old sidecars and emits none (reader then
+        // RAM-rebuilds, breaking bounded-memory serving).
+        register_index_props(&mut engine);
+        let before = engine.sstable_count();
+        let t = std::time::Instant::now();
+        let stats = engine.compact()?;
+        // Stale top-k cache (built against the pre-compaction layout) must be
+        // dropped so the server rebuilds it from the single compacted sidecar.
+        let _ = std::fs::remove_file(format!("{db_dir}/top.json"));
+        println!(
+            "compacted {db_dir}: {before} → {} SSTable(s) ({} → {} records) in {:.0}s",
+            engine.sstable_count(), stats.records_in, stats.records_out, t.elapsed().as_secs_f64()
         );
         return Ok(());
     }
