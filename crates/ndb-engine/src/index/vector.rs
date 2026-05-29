@@ -76,6 +76,24 @@ impl VectorIndex {
         Self::default()
     }
 
+    /// Rough estimate of resident heap bytes (diagnostic; walks the
+    /// buckets). The embeddings dominate: D × 4 bytes per vector.
+    #[must_use]
+    pub fn heap_bytes(&self) -> usize {
+        const OVH: usize = 32;
+        let mut n = self.registered.len() * (4 + OVH);
+        for bucket in self.buckets.values() {
+            for v in bucket.vectors.values() {
+                n += 16 + 24 + OVH + v.len() * 4; // EntityId + Vec<f32>
+            }
+        }
+        for props in self.entity_props.values() {
+            n += 16 + 24 + OVH + props.len() * 4;
+        }
+        n += self.latest_tx.len() * (16 + 8 + OVH);
+        n
+    }
+
     /// Declare `property_id` as carrying vector embeddings. Subsequent
     /// commits will index it. Already-committed entities are NOT
     /// retroactively indexed; call `Engine::rebuild_indexes` to backfill.

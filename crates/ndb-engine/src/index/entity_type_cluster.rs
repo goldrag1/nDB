@@ -33,6 +33,20 @@ impl EntityTypeIndex {
     #[must_use]
     pub fn new() -> Self { Self::default() }
 
+    /// Rough estimate of resident heap bytes (diagnostic; walks the maps).
+    #[must_use]
+    pub fn heap_bytes(&self) -> usize {
+        const OVH: usize = 32;
+        let mut n = 0usize;
+        for set in self.forward.values() {
+            n += 4 + 24 + OVH; // TypeId key + BTreeSet header
+            n += set.len() * (16 + OVH); // EntityId per member
+        }
+        n += self.by_entity.len() * (16 + 4 + OVH);
+        n += self.latest_tx.len() * (16 + 8 + OVH);
+        n
+    }
+
     /// All entities of a given type, in ascending entity-id order.
     pub fn by_type(&self, type_id: TypeId) -> impl Iterator<Item = EntityId> + '_ {
         self.forward.get(&type_id).into_iter().flat_map(|set| set.iter().copied())

@@ -82,6 +82,28 @@ impl PropertyBTreeIndex {
         self.forward.is_empty()
     }
 
+    /// Rough estimate of resident heap bytes held by this index. Walks
+    /// the maps (O(N)); intended for the diagnostic
+    /// `Engine::index_memory_stats` call, not the hot path. Captures the
+    /// dominant terms (key/value bytes + per-entry container overhead).
+    #[must_use]
+    pub fn heap_bytes(&self) -> usize {
+        const OVH: usize = 32;
+        let mut n = self.registered.len() * (8 + OVH);
+        for (k, set) in &self.forward {
+            n += 8 + k.2.len() + OVH; // (TypeId, PropertyId) + value bytes
+            n += set.len() * (16 + OVH); // EntityId per bucket member
+        }
+        for keys in self.by_entity.values() {
+            n += 16 + 24 + OVH; // EntityId key + Vec header
+            for k in keys {
+                n += 8 + k.2.len() + 16;
+            }
+        }
+        n += self.latest_tx.len() * (16 + 8 + OVH);
+        n
+    }
+
     /// Point lookup: every entity of `type_id` whose `property_id`
     /// equals `value`.
     #[must_use]

@@ -53,6 +53,24 @@ impl LookupKeyIndex {
         Self::default()
     }
 
+    /// Rough estimate of resident heap bytes (diagnostic; walks the maps).
+    #[must_use]
+    pub fn heap_bytes(&self) -> usize {
+        const OVH: usize = 32;
+        let mut n = self.registered_properties.len() * (4 + OVH);
+        for k in self.forward.keys() {
+            n += 4 + k.1.len() + 16 + OVH; // (PropertyId, value bytes) -> EntityId
+        }
+        for keys in self.by_entity.values() {
+            n += 16 + 24 + OVH;
+            for k in keys {
+                n += 4 + k.1.len() + 16;
+            }
+        }
+        n += self.latest_tx.len() * (16 + 8 + OVH);
+        n
+    }
+
     /// Declare a property as a lookup key. Idempotent. Must be called
     /// BEFORE the first record using this property is applied; otherwise
     /// the historical record won't be indexed (re-open of the engine

@@ -60,8 +60,8 @@ pub use db::{
     Manifest, ManifestEntry, manifest_filename, parse_manifest_filename,
 };
 pub use engine::{
-    CompactionStats, Engine, EngineError, IsolationLevel, MigrationStats, RetentionPolicy,
-    WriteTxn,
+    CompactionStats, DEFAULT_MAX_CACHE_BYTES, Engine, EngineConfig, EngineError,
+    IndexMemoryStats, IsolationLevel, MigrationStats, RetentionPolicy, WriteTxn,
 };
 pub use shared::SharedEngine;
 pub use error::{DecodeError, EncodeError};

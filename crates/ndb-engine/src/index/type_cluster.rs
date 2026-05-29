@@ -35,6 +35,20 @@ impl HyperEdgeTypeIndex {
         Self::default()
     }
 
+    /// Rough estimate of resident heap bytes (diagnostic; walks the maps).
+    #[must_use]
+    pub fn heap_bytes(&self) -> usize {
+        const OVH: usize = 32;
+        let mut n = 0usize;
+        for set in self.forward.values() {
+            n += 4 + 24 + OVH; // TypeId key + BTreeSet header
+            n += set.len() * (16 + OVH); // HyperedgeId per member
+        }
+        n += self.by_hyperedge.len() * (16 + 4 + OVH);
+        n += self.latest_tx.len() * (16 + 8 + OVH);
+        n
+    }
+
     /// All hyperedges of a given type, in ascending hyperedge-id order.
     pub fn by_type(&self, type_id: TypeId) -> impl Iterator<Item = HyperedgeId> + '_ {
         self.forward

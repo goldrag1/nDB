@@ -54,6 +54,23 @@ impl AdjacencyIndex {
         Self::default()
     }
 
+    /// Rough estimate of resident heap bytes (diagnostic; walks the maps).
+    #[must_use]
+    pub fn heap_bytes(&self) -> usize {
+        const OVH: usize = 32;
+        let mut n = 0usize;
+        for set in self.forward.values() {
+            n += 16 + 24 + OVH; // EntityId key + BTreeSet header
+            n += set.len() * (16 + OVH); // HyperedgeId per neighbour
+        }
+        for ents in self.by_hyperedge.values() {
+            n += 16 + 24 + OVH;
+            n += ents.len() * 16;
+        }
+        n += self.latest_tx.len() * (16 + 8 + OVH);
+        n
+    }
+
     /// All hyperedges currently referencing `entity`. Returns an empty
     /// iterator if the entity has no neighbors. Order is by hyperedge id
     /// ascending (BTreeSet iteration).

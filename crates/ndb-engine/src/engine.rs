@@ -233,6 +233,107 @@ pub enum RetentionPolicy {
 }
 
 // ---------------------------------------------------------------------------
+// Engine configuration (low-RAM core, Option B — see
+// docs/specs/2026-05-29-low-ram-core-option-b.md)
+// ---------------------------------------------------------------------------
+
+/// Default block-cache budget: 2 GiB.
+pub const DEFAULT_MAX_CACHE_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
+/// Tunables controlling resident-memory behaviour. Built so that the
+/// `Default` value reproduces the historical engine behaviour exactly —
+/// `Engine::open` is `open_with_config(path, EngineConfig::default())`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EngineConfig {
+    /// Hard ceiling for the Phase-3 bounded block cache, in bytes.
+    /// Inert until the block cache lands; carried now so the surface is
+    /// stable. Default [`DEFAULT_MAX_CACHE_BYTES`] (2 GiB).
+    pub max_cache_bytes: usize,
+    /// Serve on-disk-capable secondary indexes from mmap'd sidecars
+    /// instead of rebuilding them in RAM on `open`. Default `false`
+    /// (historical behaviour). `low_memory` forces this on.
+    pub mmap_indexes: bool,
+    /// Convenience preset for memory-constrained deployments. Implies
+    /// `mmap_indexes` and a tighter cache budget via [`Self::resolved`].
+    pub low_memory: bool,
+}
+
+impl Default for EngineConfig {
+    fn default() -> Self {
+        Self {
+            max_cache_bytes: DEFAULT_MAX_CACHE_BYTES,
+            mmap_indexes: false,
+            low_memory: false,
+        }
+    }
+}
+
+impl EngineConfig {
+    /// A config tuned for low-RAM operation: mmap'd indexes + the given
+    /// cache budget.
+    #[must_use]
+    pub fn low_memory(max_cache_bytes: usize) -> Self {
+        Self {
+            max_cache_bytes,
+            mmap_indexes: true,
+            low_memory: true,
+        }
+    }
+
+    /// Normalise interdependent fields: `low_memory` implies
+    /// `mmap_indexes`. Returns the effective config the engine acts on.
+    #[must_use]
+    pub fn resolved(self) -> Self {
+        Self {
+            mmap_indexes: self.mmap_indexes || self.low_memory,
+            ..self
+        }
+    }
+}
+
+/// Per-index resident heap estimate (bytes), returned by
+/// [`Engine::index_memory_stats`]. Drives the RAM-vs-DB-size baseline
+/// curve the low-RAM work is reducing. Estimates capture dominant terms
+/// (key/value bytes + per-entry container overhead), not exact allocator
+/// footprint.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IndexMemoryStats {
+    /// Lookup-key reverse index.
+    pub lookup_key: usize,
+    /// Adjacency (entity → hyperedges).
+    pub adjacency: usize,
+    /// Hyperedge-type clustering.
+    pub type_cluster: usize,
+    /// Entity-type clustering.
+    pub entity_type_cluster: usize,
+    /// Brute-force vector index (embeddings dominate).
+    pub vector: usize,
+    /// Property B-tree.
+    pub property_btree: usize,
+    /// Memtable size estimate (already on-disk-bounded by flush threshold).
+    pub memtable: usize,
+}
+
+impl IndexMemoryStats {
+    /// Total secondary-index resident estimate (excludes memtable).
+    #[must_use]
+    pub fn index_total(&self) -> usize {
+        self.lookup_key
+            + self.adjacency
+            + self.type_cluster
+            + self.entity_type_cluster
+            + self.vector
+            + self.property_btree
+    }
+
+    /// Grand total including the memtable estimate.
+    #[must_use]
+    pub fn total(&self) -> usize {
+        self.index_total() + self.memtable
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Engine
 // ---------------------------------------------------------------------------
 
@@ -285,6 +386,9 @@ pub struct Engine {
     /// group. Types not present default to `LatestOnly`. Same in-memory
     /// caveat as `commit_timestamps` — v1 session-local; v2 persists.
     retention: HashMap<TypeId, RetentionPolicy>,
+    /// Resident-memory tunables. `EngineConfig::default()` reproduces the
+    /// historical behaviour; opt into low-RAM mode via `open_with_config`.
+    config: EngineConfig,
 }
 
 impl Engine {
@@ -333,6 +437,7 @@ impl Engine {
             db,
             commit_timestamps: std::collections::BTreeMap::new(),
             retention: HashMap::new(),
+            config: EngineConfig::default(),
         })
     }
 
@@ -360,6 +465,16 @@ impl Engine {
         Self::open_with_cipher(path, None)
     }
 
+    /// Open with an explicit [`EngineConfig`] (low-RAM core opt-in).
+    /// `open_with_config(path, EngineConfig::default())` is identical to
+    /// `open(path)`.
+    pub fn open_with_config<P: AsRef<Path>>(
+        path: P,
+        config: EngineConfig,
+    ) -> Result<Self, EngineError> {
+        Self::open_with_cipher_config(path, None, config)
+    }
+
     /// Open an existing database with an explicit cipher hint. The
     /// hint is reconciled against the on-disk `.encryption` marker via
     /// [`resolve_cipher_against_marker`]; mismatches raise
@@ -368,6 +483,17 @@ impl Engine {
         path: P,
         hint: Option<Cipher>,
     ) -> Result<Self, EngineError> {
+        Self::open_with_cipher_config(path, hint, EngineConfig::default())
+    }
+
+    /// Open with both an explicit cipher hint and an [`EngineConfig`].
+    /// All other `open*` entry points funnel here.
+    pub fn open_with_cipher_config<P: AsRef<Path>>(
+        path: P,
+        hint: Option<Cipher>,
+        config: EngineConfig,
+    ) -> Result<Self, EngineError> {
+        let config = config.resolved();
         let mut db = Database::open(path)?;
 
         // Reconcile the supplied cipher (if any) against the marker on
@@ -446,6 +572,7 @@ impl Engine {
             db,
             commit_timestamps: std::collections::BTreeMap::new(),
             retention: HashMap::new(),
+            config,
         };
         // Indexes are in-memory in v1 — rebuild them from the primary
         // store (SSTables in newest-first order) and the memtable
@@ -750,6 +877,28 @@ impl Engine {
     #[must_use]
     pub fn memtable_stats(&self) -> (u64, u64) {
         (self.memtable.record_count(), self.memtable.size_bytes())
+    }
+
+    /// The resolved [`EngineConfig`] this engine is operating under.
+    #[must_use]
+    pub fn config(&self) -> EngineConfig {
+        self.config
+    }
+
+    /// Per-index resident heap estimate. Diagnostic — walks the indexes
+    /// (O(N)); use for the RAM-vs-DB-size baseline curve, not the hot
+    /// path. See [`IndexMemoryStats`].
+    #[must_use]
+    pub fn index_memory_stats(&self) -> IndexMemoryStats {
+        IndexMemoryStats {
+            lookup_key: self.lookup_key.heap_bytes(),
+            adjacency: self.adjacency.heap_bytes(),
+            type_cluster: self.type_cluster.heap_bytes(),
+            entity_type_cluster: self.entity_type_cluster.heap_bytes(),
+            vector: self.vector.heap_bytes(),
+            property_btree: self.property_btree.heap_bytes(),
+            memtable: usize::try_from(self.memtable.size_bytes()).unwrap_or(usize::MAX),
+        }
     }
 
     /// Start a write transaction. The returned [`WriteTxn`] holds an
@@ -2040,6 +2189,76 @@ mod tests {
             tx_id_supersede: TxId::ACTIVE,
             properties: vec![(PropertyId::new(1), Value::String(prop.into()))],
         }
+    }
+
+    #[test]
+    fn engine_config_default_is_back_compat() {
+        // open == open_with_config(default); default reproduces historical
+        // behaviour (RAM rebuild, no mmap indexes).
+        let cfg = EngineConfig::default();
+        assert_eq!(cfg.max_cache_bytes, DEFAULT_MAX_CACHE_BYTES);
+        assert!(!cfg.mmap_indexes);
+        assert!(!cfg.low_memory);
+        // resolved() leaves a plain default untouched.
+        assert_eq!(cfg.resolved(), cfg);
+    }
+
+    #[test]
+    fn low_memory_preset_resolves_mmap_indexes() {
+        let cfg = EngineConfig {
+            low_memory: true,
+            ..EngineConfig::default()
+        };
+        // low_memory implies mmap_indexes once resolved.
+        assert!(!cfg.mmap_indexes);
+        assert!(cfg.resolved().mmap_indexes);
+        // helper sets both directly.
+        let lm = EngineConfig::low_memory(512 * 1024 * 1024);
+        assert!(lm.mmap_indexes);
+        assert!(lm.low_memory);
+        assert_eq!(lm.max_cache_bytes, 512 * 1024 * 1024);
+    }
+
+    #[test]
+    fn open_with_config_round_trips_config() {
+        let dir = temp_dir("open_with_config");
+        Engine::create(&dir).unwrap().close().unwrap();
+        let cfg = EngineConfig::low_memory(123 * 1024 * 1024);
+        let engine = Engine::open_with_config(&dir, cfg).unwrap();
+        assert_eq!(engine.config(), cfg.resolved());
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn index_memory_stats_grows_with_data() {
+        let dir = temp_dir("index_mem_stats");
+        let mut engine = Engine::create(&dir).unwrap();
+        let cust = TypeId::new(1);
+        let age = PropertyId::new(1);
+        engine.register_property_btree(cust, age);
+        let empty = engine.index_memory_stats();
+        // Only the registration entry costs anything before data lands.
+        assert!(empty.entity_type_cluster == 0);
+        for i in 0..500u64 {
+            let mut txn = engine.begin_write();
+            txn.put_entity(EntityRecord {
+                entity_id: EntityId::now_v7(),
+                type_id: cust,
+                tx_id_assert: TxId::new(0),
+                tx_id_supersede: TxId::ACTIVE,
+                properties: vec![(age, Value::I64(i64::try_from(i).unwrap()))],
+            });
+            txn.commit().unwrap();
+        }
+        let stats = engine.index_memory_stats();
+        // Entity-type cluster + property-btree both populated.
+        assert!(stats.entity_type_cluster > 0);
+        assert!(stats.property_btree > 0);
+        assert!(stats.index_total() > empty.index_total());
+        assert!(stats.total() >= stats.index_total());
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
