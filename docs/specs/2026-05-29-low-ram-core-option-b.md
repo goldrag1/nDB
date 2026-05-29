@@ -228,6 +228,31 @@ The fix that made this work: the sidecar CRC must cover only metadata
 (header + block index), never the bulk — a full-file CRC on open faulted
 all ~5 GB of sidecars (open was 13.4s / 4350 MB before the fix).
 
+### Exact / approximate / auto kNN (application layer)
+
+`langgraph-server` gains `--knn exact|approx|auto`:
+- **exact** = `engine.vector_search` (on-disk brute-force, bounded RAM, O(N), perfect recall).
+- **approx** = in-RAM HNSW (`ndb-index-vector-hnsw`): O(log N), ~95–99% tunable recall.
+- **auto** = approx iff the vectors fit the cache budget (`N×(dim*4+~128) ≤ max_cache_bytes/2`), else exact.
+
+**Two structural facts that shaped this:**
+1. **In-RAM HNSW costs RAM, doesn't save it.** `instant-distance` keeps every
+   vector resident (≈N×dim×4) plus the graph — so approx is the *fast-when-it-fits*
+   choice, and `auto` picks it only when the budget covers the vectors (the
+   inverse of "big DB → approximate"). Bounded-RAM approximate would need an
+   on-disk HNSW (future work).
+2. **HNSW is application-layer, not engine.** `ndb-index-vector-hnsw` depends
+   on `ndb-engine` (it implements the engine's `Index` trait), so the engine
+   can't depend on it — the mode/auto logic lives in the app, matching the
+   "generic engine, apps compose" principle. The engine stays exact-only.
+
+Industry context: approximate ANN (HNSW) is the default in every production
+vector store (pgvector, Qdrant, Milvus, Weaviate, FAISS, …); exact is reserved
+for small or exactness-critical data. So offering both (manual + auto) is the
+standard, not a compromise. Verified at 2,500 papers: all three modes serve,
+auto resolves correctly, and approx vs exact **recall = 100%@20** (HNSW is
+near-exact at this scale; it dips to ~95–99% only at large scale/high dim).
+
 ### The langgraph SERVER at scale (lean, low-memory)
 
 `langgraph-server` was refactored to be **uniformly lean** — it no longer

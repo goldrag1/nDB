@@ -20,6 +20,9 @@ path = "src/server.rs"
 
 [dependencies]
 ndb-engine = { path = "../../crates/ndb-engine" }
+# App-layer ANN index (depends on ndb-engine) — the optional "approximate"
+# kNN backend; the engine itself stays exact-only / generic.
+ndb-index-vector-hnsw = { path = "../../crates/ndb-index-vector-hnsw" }
 serde      = { workspace = true }
 serde_json = { workspace = true }
 uuid       = { workspace = true }

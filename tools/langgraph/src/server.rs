@@ -31,10 +31,12 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use ndb_engine::index::Index as IndexTrait; // .apply() to populate the HNSW
 use ndb_engine::record::Record;
 use ndb_engine::{Distance, Engine, EngineConfig, EntityId, PropertyId, TxId, TypeId, Value};
+use ndb_index_vector_hnsw::HnswVectorIndex;
 
 const TYPE_PAPER: u32 = 310;
 const TYPE_CITES: u32 = 410;
@@ -76,6 +78,13 @@ struct Index {
     max_cit: f64,
     mid_year: f64,
     total_papers: usize,
+    /// Optional ANN backend for /view/knn. `Some` = approximate (HNSW,
+    /// embeddings held in RAM — fast, ~95-99% recall); `None` = exact
+    /// (engine.vector_search over the on-disk .vidx — bounded RAM, O(N)).
+    /// Chosen by the --knn flag (exact|approx|auto). Mutex because the
+    /// crate's search() is &mut (lazy graph build).
+    knn_hnsw: Option<Mutex<HnswVectorIndex>>,
+    knn_mode: &'static str,
 }
 
 fn str_prop(props: &[(PropertyId, Value)], pid: u32) -> String {
@@ -162,7 +171,7 @@ fn load_cluster_meta(engine: &Engine, db: &str) -> ClusterMeta {
 }
 
 impl Index {
-    fn build(engine: Engine, db: &str) -> Self {
+    fn build(engine: Engine, db: &str, knn_pref: &str, cache_bytes: usize) -> Self {
         let m = load_cluster_meta(&engine, db);
         let k = m.clusters.len().max(1);
         let mut cluster_pos = HashMap::new();
@@ -174,6 +183,38 @@ impl Index {
             m.clusters.iter().map(|(f, _)| f.clone()).filter(|f| f != "Other").collect();
         let mid_year = (m.min_year + m.max_year) as f64 / 2.0;
         eprintln!("served lean: {} papers, {} clusters (no per-paper RAM)", m.total, m.clusters.len());
+
+        // Resolve the kNN backend. Approx (HNSW) loads every embedding into
+        // RAM — fast + tunable recall, but NOT bounded — so `auto` only
+        // picks it when the vectors comfortably fit the cache budget
+        // (vector RAM ≈ N × (dim*4 + ~128 graph bytes); EMBED_DIM is fixed).
+        let est_vec_ram = m.total.saturating_mul(EMBED_DIM * 4 + 128);
+        let use_approx = match knn_pref {
+            "approx" => true,
+            "exact" => false,
+            _ /* auto */ => m.total > 0 && est_vec_ram <= cache_bytes / 2,
+        };
+        let (knn_hnsw, knn_mode) = if use_approx {
+            eprintln!(
+                "kNN = approx (HNSW): loading {} embeddings into RAM (~{} MB est)…",
+                m.total, est_vec_ram / 1_048_576
+            );
+            let mut h = HnswVectorIndex::new();
+            h.register_property(PropertyId::new(PROP_EMBED));
+            for item in engine.snapshot_iter_streaming(TxId::ACTIVE) {
+                if let Ok(rec) = item {
+                    h.apply(&rec, TxId::ACTIVE);
+                }
+            }
+            // Trigger the graph build once so the first real query isn't slow.
+            let _ = h.search(PropertyId::new(PROP_EMBED), &embed("warmup"), 1, Distance::Cosine);
+            eprintln!("kNN = approx (HNSW): graph ready");
+            (Some(Mutex::new(h)), "approx-hnsw")
+        } else {
+            eprintln!("kNN = exact (engine brute-force over on-disk .vidx, bounded RAM)");
+            (None, "exact-bruteforce")
+        };
+
         Index {
             engine,
             clusters: m.clusters,
@@ -182,6 +223,8 @@ impl Index {
             max_cit: m.max_cit.max(1.0),
             mid_year,
             total_papers: m.total,
+            knn_hnsw,
+            knn_mode,
         }
     }
 
@@ -344,10 +387,16 @@ impl Index {
     }
 
     fn knn_view(&self, q: &str, k: usize) -> serde_json::Value {
-        let hits = self.engine.vector_search(PropertyId::new(PROP_EMBED), &embed(q), k, Distance::Cosine);
+        let qv = embed(q);
+        let hits = match &self.knn_hnsw {
+            // Approximate: HNSW (embeddings in RAM). Lock for the &mut search.
+            Some(h) => h.lock().unwrap().search(PropertyId::new(PROP_EMBED), &qv, k, Distance::Cosine),
+            // Exact: engine brute-force over the on-disk .vidx (bounded RAM).
+            None => self.engine.vector_search(PropertyId::new(PROP_EMBED), &qv, k, Distance::Cosine),
+        };
         let eids: Vec<EntityId> = hits.iter().map(|(e, _)| *e).collect();
         let mut v = self.tile(&eids);
-        v["meta"] = serde_json::json!({"q": q, "returned": eids.len()});
+        v["meta"] = serde_json::json!({"q": q, "returned": eids.len(), "knn_mode": self.knn_mode});
         v
     }
 }
@@ -364,6 +413,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // below is the remaining (smaller) RAM term — a future reduction.
     let low_memory = args.iter().any(|a| a == "--low-memory");
     let cache_mb: usize = arg("--cache-mb", "2048").parse().unwrap_or(2048);
+    // kNN backend: exact (engine brute-force, bounded RAM) | approx (HNSW,
+    // embeddings in RAM, fast, ~95-99% recall) | auto (approx iff the
+    // vectors fit the cache budget, else exact). Default auto.
+    let knn = arg("--knn", "auto");
 
     eprintln!("opening nDB at {db}{}", if low_memory { " (low-memory)" } else { "" });
     let mut engine = if low_memory {
@@ -373,12 +426,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     // Register the vector index for the embedding property, then rebuild so
     // it's populated from the store (registration isn't persisted; rebuild
-    // scans memtable + sstables). This is what lets kNN run on the engine
-    // instead of a RAM copy of every embedding.
+    // scans memtable + sstables). This is what lets exact kNN run on the
+    // engine instead of a RAM copy of every embedding.
     engine.register_vector_property(PropertyId::new(PROP_EMBED));
     engine.register_property_btree(TypeId::new(TYPE_PAPER), PropertyId::new(PROP_CITATIONS));
     engine.rebuild_indexes()?;
-    let index = Arc::new(Index::build(engine, &db));
+    let index = Arc::new(Index::build(engine, &db, &knn, cache_mb * 1024 * 1024));
 
     let listener = TcpListener::bind(&bind)?;
     eprintln!("langgraph-server on http://{bind}");
