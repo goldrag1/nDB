@@ -186,11 +186,12 @@ fn measure(dir: &Path) {
     //     them. (HNSW + maintained counts would bound these — future work.)
     let t = Instant::now();
     let knn = engine.vector_search(embed_p, &embed(12_345), 10, Distance::L2Squared);
-    println!("  [O(N) scan] vector_search(k=10): {} hits in {:.1} ms", knn.len(), t.elapsed().as_secs_f64() * 1e3);
-    let t = Instant::now();
-    let cnt = engine.entity_type_count(paper);
-    println!("  [O(N) scan] entity_type_count: {cnt} in {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
-    println!("RSS after full-scan ops: {:.0} MB", rss_mb());
+    println!(
+        "  [O(N) scan] vector_search(k=10): {} hits in {:.1} ms (brute-force reads every embedding)",
+        knn.len(),
+        t.elapsed().as_secs_f64() * 1e3
+    );
+    println!("RSS after kNN scan: {:.0} MB (mmap-reclaimable; HNSW would bound this)", rss_mb());
     engine.close().unwrap();
 }
 

@@ -171,7 +171,18 @@ verified end-to-end.
    - **Gating decision:** all sidecars are written only under
      `mmap_indexes` (no default-mode overhead). `Engine::create_with_config`
      added so low-mem DBs emit sidecars during ingest.
-3. ⏳ Bounded block cache enforcing `max_cache_bytes` (hard cap).
+3. **Low-memory open + cache.**
+   - 3a ✅ O(1) open: `rebuild_indexes` skips SSTables whose every index is
+     on disk (`needs_scan`); `reload_constraints_from_metadata` finds
+     constraints via `entities_by_type` not a full `snapshot_iter`; a
+     `.meta` sidecar preserves tx-timestamps + retention through the skip.
+     Without this, `open` re-read the whole DB and the RSS win evaporated
+     (measured 1038→339 MB at 0.65 GB).
+   - 3b ⏳ Fixed-page LRU buffer pool (mmap→pread) for a HARD cap on the
+     inherently-O(N) ops (brute-force kNN reads all embeddings; verified
+     counts gather all ids). mmap already gives a reclaimable soft bound;
+     3b would make it a guarantee during those scans. Deferred — the big
+     read-path rewrite; the 10 GB measure decides whether it's needed.
 
 Then: wire `langgraph-server` to `open_with_config(low_memory(..))`, build a
 real ~10 GB LangGraph nDB, verify RSS held ~2–3 GB with bounded query

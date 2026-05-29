@@ -240,9 +240,14 @@ impl PropertyIndexBuilder {
             out.extend_from_slice(&off.to_le_bytes());
         }
 
-        // 4. CRC trailer.
+        // 4. CRC trailer over header + block-index region ONLY (not the
+        //    entries bulk) — so a reader can verify integrity without
+        //    faulting the whole mmap'd file on open. The entries region is
+        //    covered by the SSTable's own per-record CRCs + atomic write.
+        let bi_start = HEADER_LEN + entries.len();
         let mut h = Hasher::new();
-        h.update(&out);
+        h.update(&out[..HEADER_LEN]);
+        h.update(&out[bi_start..]);
         out.extend_from_slice(&h.finalize().to_le_bytes());
         out
     }
@@ -378,10 +383,13 @@ impl PropertyIndexFile {
             return Err(PropertyIndexError::Malformed("entries region overruns file"));
         }
 
-        // CRC over everything before the trailer.
+        // CRC over header + block-index region only (matches the writer) —
+        // verifying integrity of the structures we actually read into RAM
+        // without faulting the entries bulk.
         let stored = u32::from_le_bytes(bytes[trailer_off..].try_into().unwrap());
         let mut h = Hasher::new();
-        h.update(&bytes[..trailer_off]);
+        h.update(&bytes[..HEADER_LEN]);
+        h.update(&bytes[bi_off..trailer_off]);
         let computed = h.finalize();
         if stored != computed {
             return Err(PropertyIndexError::CrcMismatch { stored, computed });

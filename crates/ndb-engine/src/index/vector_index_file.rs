@@ -163,8 +163,12 @@ impl VectorIndexBuilder {
                 }
             }
         }
+        // CRC over the fixed header only — the embeddings bulk (3+ GB at
+        // scale) must NOT be hashed on open or it would fault the whole
+        // mmap'd file. Section headers are bounds-checked on parse; the
+        // vectors rely on the atomic write + being rebuildable.
         let mut h = Hasher::new();
-        h.update(&out);
+        h.update(&out[..HEADER_LEN]);
         out.extend_from_slice(&h.finalize().to_le_bytes());
         out
     }
@@ -282,10 +286,11 @@ impl VectorIndexFile {
         let property_count = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
         let trailer_off = total - 4;
 
-        // CRC over everything before the trailer.
+        // CRC over the fixed header only (matches the writer) — avoids
+        // faulting the embeddings bulk on open.
         let stored = u32::from_le_bytes(bytes[trailer_off..].try_into().unwrap());
         let mut h = Hasher::new();
-        h.update(&bytes[..trailer_off]);
+        h.update(&bytes[..HEADER_LEN]);
         let computed = h.finalize();
         if stored != computed {
             return Err(VectorIndexError::CrcMismatch { stored, computed });

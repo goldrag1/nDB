@@ -167,14 +167,18 @@ impl IdListIndexBuilder {
         out.extend_from_slice(&u32::try_from(block_index.len()).unwrap_or(u32::MAX).to_le_bytes());
         out.extend_from_slice(&[0u8; 4]);
         debug_assert_eq!(out.len(), HEADER_LEN);
+        let bi_start = HEADER_LEN + entries.len();
         out.extend_from_slice(&entries);
         for (key, off) in &block_index {
             out.extend_from_slice(&u16::try_from(key.len()).unwrap_or(u16::MAX).to_le_bytes());
             out.extend_from_slice(key);
             out.extend_from_slice(&off.to_le_bytes());
         }
+        // CRC over header + block-index region only (not the entries bulk),
+        // so open never faults the whole mmap'd file.
         let mut h = Hasher::new();
-        h.update(&out);
+        h.update(&out[..HEADER_LEN]);
+        h.update(&out[bi_start..]);
         out.extend_from_slice(&h.finalize().to_le_bytes());
         out
     }
@@ -290,7 +294,8 @@ impl IdListIndexFile {
         }
         let stored = u32::from_le_bytes(bytes[trailer_off..].try_into().unwrap());
         let mut h = Hasher::new();
-        h.update(&bytes[..trailer_off]);
+        h.update(&bytes[..HEADER_LEN]);
+        h.update(&bytes[bi_off..trailer_off]);
         let computed = h.finalize();
         if stored != computed {
             return Err(IdListIndexError::CrcMismatch { stored, computed });
