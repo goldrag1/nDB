@@ -76,7 +76,7 @@
         placeholder="e.g. transformer attention, diffusion, graph neural net" />
       <div id="suggest"></div>
     </div>
-    <div class="hint">Type to get title + semantic suggestions; ↑↓ to pick, Enter to jump. Embeds your text the same way nDB indexed each paper.</div>
+    <div class="hint">Title + semantic suggestions as you type. ↑↓ navigate · Tab accept · Enter search. Embeds your text the same way nDB indexed each paper.</div>
   </div>
 
   <div class="row">
@@ -444,7 +444,15 @@ fetch("./graph.json", { cache: "no-store" })
       if (box.style.display === "none") { if (e.key === "Enter") highlightMatches(sIn.value, true); return; }
       if (e.key === "ArrowDown") { sugIdx = Math.min(sugIdx + 1, sugItems.length - 1); markActive(); e.preventDefault(); }
       else if (e.key === "ArrowUp") { sugIdx = Math.max(sugIdx - 1, 0); markActive(); e.preventDefault(); }
-      else if (e.key === "Enter") { chooseSuggest(sugIdx >= 0 ? sugIdx : 0); e.preventDefault(); }
+      // Tab = accept the suggestion (active, else the top one) — the
+      // autocomplete convention. Enter = submit: accept if you've arrowed
+      // onto one, otherwise run the typed text as a free-text kNN search.
+      else if (e.key === "Tab") { chooseSuggest(sugIdx >= 0 ? sugIdx : 0); e.preventDefault(); }
+      else if (e.key === "Enter") {
+        if (sugIdx >= 0) chooseSuggest(sugIdx);
+        else { box.style.display = "none"; highlightMatches(sIn.value, true); }
+        e.preventDefault();
+      }
       else if (e.key === "Escape") { box.style.display = "none"; }
     });
     sIn.addEventListener("focus", () => { if (sIn.value.trim()) renderSuggest(buildSuggestions(sIn.value)); });
