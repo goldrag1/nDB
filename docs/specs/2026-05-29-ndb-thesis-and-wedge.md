@@ -168,7 +168,35 @@ The server must serve a 10GB graph at <1s/tile. Concretely:
 Until this lands, the explorer at 10GB falls back to the static graph.json. The committed 2.5k
 real-OpenAlex demo is unaffected (small, fast).
 
+#### M1 first cut — LANDED 2026-05-29 (commits 21bb8f2 + 4426ee7)
+- **Server-side top-cited cache** (`langgraph-server`): pre-rank top-20k cited papers ONCE at startup
+  → `<db>/top.json` (uuid + coarse field + year + citations; ~1.6 MB, bounded at any graph size).
+  `/view/top` (default tile) and `/view/cluster/*` are now an **O(cache) slice (~5-10 ms)** instead of
+  a live `property_top_k` per request. `as_of` time-travel + per-field filtering run on the cached
+  year/field in place. Persisted → instant restart. (Clusters were already cached via `clusters.json`.)
+- **Sidecar compaction** (`langgraph-ingest --compact <db>`): merges the per-flush SSTables + their
+  `.pidx/.vidx/.idx` sidecars (hundreds at 10 GB) down to **one** via the engine's snapshot-aware
+  `compact()`, so `property_top_k`/`vector_search` become single-source. Re-declares the indexed
+  `(type,prop)` pairs first (else compaction deletes the old sidecars and writes none → reader silently
+  RAM-rebuilds; caught + fixed in test). Invalidates a stale `top.json`.
+- **Verified at 700k synthetic** (3 SSTables): default tile 5-10 ms; compaction 3→1 SSTable preserves
+  all 1.4M records with **byte-identical top/cluster fingerprints** pre vs post; server RSS 302 MB.
+  Serving a cached tile is O(cache)+O(limit snapshot_reads), **independent of graph size** — so the
+  `<1s/tile at 10GB` target is structural, not just measured-at-700k.
+- **Still pending for M1:** (a) confirm the absolute 10 GB number on a free machine (deferred — the
+  real-OpenAlex spool is currently downloading; see M2); (b) **on-disk (bounded) HNSW** so `/view/knn`
+  is O(log N) bounded — today it's exact brute-force (bounded RAM, ~15 s O(N)) or in-RAM HNSW (fast,
+  unbounded RAM); the bounded-fast option is unbuilt. (c) **compaction RAM caveat:** `compact()` builds
+  the record set in RAM during the merge → needs ~DB-size RAM. Fine as one-time offline maintenance on
+  a sufficient box; a true bounded-RAM (external-merge) compaction is future work.
+
 ### Milestone 2 — Real OpenAlex proof (the wedge made real)
+**IN PROGRESS 2026-05-29:** acquisition started — `langgraph-ingest --spool-sharded` (commit 3cd6b7c)
+is fetching the citation-backbone slice (`cited_by_count:>50`, ~12.3M works) via the API with
+server-side filter + select-projection + on-wire gzip + 10 parallel year-shards. NOTE: switched from
+the S3 full-snapshot plan to the filtered API — S3 has no server-side filter, so a coherent slice from
+the 639 GB snapshot means downloading all 639 GB; the API downloads only the ~12.6 GB kept. `--from-spool`
+ingest (spool → nDB at bounded RAM) is the next unbuilt piece.
 Build a real (not synthetic) ~10GB OpenAlex langgraph nDB via the S3 snapshot (free, CC0, not the
 rate-limited API). See [next-real-openalex memory]. Then the explorer over real data, served by the
 M1 engine, is the first credible public artifact of the thesis.
