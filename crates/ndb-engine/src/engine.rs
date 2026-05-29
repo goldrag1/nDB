@@ -50,6 +50,7 @@ use crate::index::property_index_file::{
 };
 use crate::index::vector_index_file::{
     VectorIndexBuilder, VectorIndexFile, sidecar_path_for as vidx_sidecar_path_for,
+    write_streaming_single as write_vsnap_streaming,
 };
 use crate::index::id_list_index_file::{
     IdListIndexBuilder, IdListIndexFile, sidecar_path_for as idl_sidecar_path_for,
@@ -1264,35 +1265,56 @@ impl Engine {
     /// memory; persisted, so a restart just re-mmaps it. Returns the vector
     /// count. NOTE: read-mostly contract — call again after writes to refresh.
     pub fn build_vector_snapshot(&mut self, property: PropertyId) -> Result<usize, EngineError> {
-        let mut builder = VectorIndexBuilder::new();
-        let mut n = 0usize;
+        let path = self.vsnap_path(property);
+
+        // Pass 1 (counting): find the property's dim (first vector's length)
+        // and the number of current vectors at that dim. Bounded — no vectors
+        // retained.
+        let mut dim = 0usize;
+        let mut count = 0usize;
         for item in self.snapshot_iter_streaming(TxId::ACTIVE) {
             let Ok(Record::Entity(e)) = item else { continue };
             for (pid, val) in &e.properties {
                 if *pid == property
                     && let Value::Vector(v) = val
                 {
-                    builder.observe(property, e.entity_id, v);
-                    n += 1;
+                    if dim == 0 {
+                        dim = v.len();
+                    }
+                    if v.len() == dim {
+                        count += 1;
+                    }
                 }
             }
         }
-        let path = self.vsnap_path(property);
-        if builder.is_empty() {
+        if count == 0 || dim == 0 {
             // Nothing to index — drop any stale snapshot so search falls back.
             let _ = std::fs::remove_file(&path);
             self.vector_snapshots.remove(&property.get());
             return Ok(0);
         }
-        builder
-            .finish(&path)
+
+        // Pass 2 (streaming write): emit each current vector directly to the
+        // .vsnap as it streams — one vector resident at a time, NOT 2×N like
+        // the in-RAM builder (keeps the snapshot build under the app RAM cap).
+        let entries = self.snapshot_iter_streaming(TxId::ACTIVE).filter_map(move |item| {
+            let Ok(Record::Entity(e)) = item else { return None };
+            e.properties.iter().find_map(|(pid, val)| match val {
+                Value::Vector(v) if *pid == property && v.len() == dim => {
+                    Some((e.entity_id, v.clone()))
+                }
+                _ => None,
+            })
+        });
+        write_vsnap_streaming(&path, property, dim, count, entries)
             .map_err(|e| EngineError::Io(std::io::Error::other(format!("vsnap write {}: {e}", path.display()))))?;
+
         if let Some(f) = VectorIndexFile::open(&path)
             .map_err(|e| EngineError::Io(std::io::Error::other(format!("vsnap open {}: {e}", path.display()))))?
         {
             self.vector_snapshots.insert(property.get(), f);
         }
-        Ok(n)
+        Ok(count)
     }
 
     /// Open an already-built `.vsnap` for `property` into memory (mmap) if it

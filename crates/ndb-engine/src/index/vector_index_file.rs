@@ -197,6 +197,71 @@ impl VectorIndexBuilder {
     }
 }
 
+/// Stream-write a single-property `.vidx` directly to disk in BOUNDED memory:
+/// the entries are written one at a time as `iter` yields them, never
+/// accumulated (unlike [`VectorIndexBuilder`], which holds every vector +
+/// re-encodes to a second buffer — ~2×N RAM, too much at 10 GB). `dim` and
+/// `count` must be known up front (a cheap counting pre-pass); vectors whose
+/// length != `dim` are skipped. Same on-disk format + atomic write as
+/// [`VectorIndexBuilder::finish`]. Used to build the global current-vector
+/// snapshot under the app RAM cap.
+pub fn write_streaming_single(
+    path: &Path,
+    property: PropertyId,
+    dim: usize,
+    count: usize,
+    iter: impl Iterator<Item = (EntityId, Vec<f32>)>,
+) -> Result<(), VectorIndexError> {
+    let tmp = tmp_sibling(path);
+    let file = OpenOptions::new().write(true).create(true).truncate(true).open(&tmp)?;
+    let mut w = BufWriter::new(file);
+
+    // Header (16 bytes) — one property section.
+    let mut header = Vec::with_capacity(HEADER_LEN);
+    header.extend_from_slice(VECTOR_INDEX_MAGIC);
+    header.push(VECTOR_INDEX_FORMAT_VERSION);
+    header.extend_from_slice(&[0u8; 3]);
+    header.extend_from_slice(&1u32.to_le_bytes()); // property_count
+    header.extend_from_slice(&[0u8; 4]); // reserved2
+    debug_assert_eq!(header.len(), HEADER_LEN);
+    w.write_all(&header)?;
+
+    // Property section header.
+    w.write_all(&property.get().to_le_bytes())?;
+    w.write_all(&u32::try_from(dim).unwrap_or(u32::MAX).to_le_bytes())?;
+    w.write_all(&u32::try_from(count).unwrap_or(u32::MAX).to_le_bytes())?;
+
+    // Entries, streamed — one vector resident at a time.
+    let mut written = 0usize;
+    for (eid, v) in iter {
+        if v.len() != dim {
+            continue;
+        }
+        w.write_all(eid.as_bytes())?;
+        for f in &v {
+            w.write_all(&f.to_le_bytes())?;
+        }
+        written += 1;
+    }
+    debug_assert_eq!(written, count, "streamed entry count diverged from the pre-pass");
+
+    // CRC over the fixed header only (matches the reader + VectorIndexBuilder).
+    let mut h = Hasher::new();
+    h.update(&header);
+    w.write_all(&h.finalize().to_le_bytes())?;
+
+    w.flush()?;
+    let f = w
+        .into_inner()
+        .map_err(|e| std::io::Error::other(format!("BufWriter into_inner: {e}")))?;
+    f.sync_data()?;
+    std::fs::rename(&tmp, path)?;
+    if let Some(parent) = path.parent() {
+        let _ = File::open(parent).and_then(|d| d.sync_all());
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Reader
 // ---------------------------------------------------------------------------
