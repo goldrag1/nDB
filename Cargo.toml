@@ -12,6 +12,7 @@ members = [
     "crates/ndb-client-rust",
     "crates/ndb-query",
     "crates/bench-race-sqlite-rust",
+    "tools/langgraph",
 ]
 
 [workspace.package]

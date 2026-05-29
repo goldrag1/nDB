@@ -1,0 +1,24 @@
+[package]
+name         = "langgraph"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+authors.workspace      = true
+repository.workspace   = true
+license.workspace      = true
+description  = "Rust-native GraphRAG-style language-graph ingestor for nDB demos — writes through the embedded engine, no seed.json hop"
+
+[[bin]]
+name = "langgraph-ingest"
+path = "src/main.rs"
+
+[dependencies]
+ndb-engine = { path = "../../crates/ndb-engine" }
+serde_json = { workspace = true }
+# Outbound HTTPS to the LLM extraction / embedding endpoint. ureq (blocking,
+# no async runtime) is right-sized for a build-time tool; isolated to this
+# crate so it never touches the engine's dependency tree.
+ureq = { version = "2", features = ["json"] }
+
+[lints]
+workspace = true
