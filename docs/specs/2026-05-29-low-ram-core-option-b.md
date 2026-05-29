@@ -228,6 +228,34 @@ The fix that made this work: the sidecar CRC must cover only metadata
 (header + block index), never the bulk — a full-file CRC on open faulted
 all ~5 GB of sidecars (open was 13.4s / 4350 MB before the fix).
 
+### The langgraph SERVER at scale (lean, low-memory)
+
+`langgraph-server` was refactored to be **uniformly lean** — it no longer
+holds an app-side `papers` Vec / adjacency / by-field maps (which were
+~1.5–2 GB at millions, the real bottleneck once the engine indexes moved
+to disk). It now keeps only the engine + a tiny cluster aggregate
+(`<db>/clusters.json`) and serves every `/view` tile from the engine's
+on-disk indexes + a bounded `snapshot_read` per returned node.
+
+Measured against a **9M-paper / 5.4 GB** langgraph nDB
+(`langgraph-ingest --synthetic 9000000`), opened `--low-memory`:
+
+```
+server RSS right after open:            116 MB   (no per-paper RAM, no scan)
++ /view/clusters + a /view/top:         337 MB
++ /view/neighbors (bounded BFS):        337 MB   (no growth)
++ brute-force /view/knn (all embeds):  ~1057 MB  (reclaimable; < target)
+```
+
+Before the refactor the server needed ~2 GB *just to start*. Now open is
+116 MB and the realistic bounded workload sits ~337 MB — under the 2–3 GB
+target. (16-d demo embeddings cap the synthetic corpus at 5.4 GB for 9M
+papers; the engine itself was proven at the full 10.08 GB above. Server RSS
+is scale-independent at open, so corpus size doesn't move it.) Two O(N)
+ops remain: brute-force kNN (no HNSW) and `property_top_k` across many
+uncompacted sidecars (each `top_k` reverse-scans its whole bucket — a
+compaction pass would collapse the 22 sidecars to one and bound it).
+
 ### Phase 2 measured result (same example, 100k entities)
 
 ```
