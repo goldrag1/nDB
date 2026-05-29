@@ -56,14 +56,11 @@ const ZSCALE: f64 = 16.0;
 /// (registered + rebuilt on open), so server RAM doesn't carry a second
 /// copy of every embedding (the dominant per-node cost at scale).
 struct Paper {
+    eid: EntityId,        // for per-tile snapshot_read of display fields
     uuid: String,
-    title: String,
     year: i64,
     citations: i64,
-    field: String,        // coarse cluster field
-    raw_field: String,    // original (for display)
-    oaid: String,
-    doi: String,
+    field: String,        // coarse cluster field (layout + bucketing)
 }
 
 /// The app-layer index built on top of the generic engine at startup.
@@ -74,8 +71,7 @@ struct Paper {
 struct Index {
     engine: Engine,
     by_eid: HashMap<EntityId, usize>,   // engine EntityId → paper index (for vector_search)
-    papers: Vec<Paper>,                 // all papers (lightweight — no embeddings)
-    by_cit: Vec<usize>,                 // paper indices, citations desc
+    papers: Vec<Paper>,                 // all papers (lightweight — no embeddings/strings)
     by_field: HashMap<String, Vec<usize>>, // coarse field → indices (cit desc)
     by_uuid: HashMap<String, usize>,    // uuid → index
     cite_out: HashMap<usize, Vec<usize>>, // citing → cited (paper indices)
@@ -136,14 +132,11 @@ impl Index {
                     by_uuid.insert(uuid.clone(), idx);
                     by_eid.insert(e.entity_id, idx);
                     papers.push(Paper {
+                        eid: e.entity_id,
                         uuid,
-                        title: str_prop(&e.properties, PROP_NAME),
                         year: i64_prop(&e.properties, PROP_YEAR),
                         citations: i64_prop(&e.properties, PROP_CITATIONS),
                         field: str_prop(&e.properties, PROP_FIELD),
-                        raw_field: str_prop(&e.properties, PROP_FIELD),
-                        oaid: str_prop(&e.properties, PROP_OAID),
-                        doi: str_prop(&e.properties, PROP_DOI),
                     });
                 }
                 Record::HyperEdge(h) if h.type_id == TypeId::new(TYPE_CITES) => {
@@ -200,7 +193,7 @@ impl Index {
 
         eprintln!("indexed {} papers, {} cite-edges, {} clusters",
             papers.len(), cite_out.values().map(Vec::len).sum::<usize>(), clusters.len());
-        Index { engine, by_eid, papers, by_cit, by_field, by_uuid, cite_out, clusters, cluster_pos, max_cit, mid_year }
+        Index { engine, by_eid, papers, by_field, by_uuid, cite_out, clusters, cluster_pos, max_cit, mid_year }
     }
 
     /// Deterministic galaxy position for a paper (cluster anchor + offset).
@@ -213,13 +206,24 @@ impl Index {
         (ax + r * theta.cos(), ay + r * theta.sin(), z)
     }
 
+    /// Live per-tile read of one paper's display fields from nDB — these
+    /// are NOT cached in server RAM, only fetched for the ≤K nodes a tile
+    /// actually returns (bounded snapshot_read per node).
+    fn props(&self, eid: EntityId) -> Vec<(PropertyId, Value)> {
+        match self.engine.snapshot_read(&eid.into_uuid(), TxId::ACTIVE) {
+            Ok(ndb_engine::Resolved::Live(Record::Entity(e))) => e.properties,
+            _ => Vec::new(),
+        }
+    }
+
     fn node_json(&self, i: usize) -> serde_json::Value {
         let p = &self.papers[i];
         let (x, y, z) = self.pos(p);
+        let props = self.props(p.eid);     // title / oaid / doi fetched live, not cached
         serde_json::json!({
-            "id": p.uuid, "label": p.title, "kind": "paper", "cluster": p.field,
-            "field": p.raw_field, "year": p.year, "citations": p.citations,
-            "oaid": p.oaid, "doi": p.doi,
+            "id": p.uuid, "label": str_prop(&props, PROP_NAME), "kind": "paper", "cluster": p.field,
+            "field": str_prop(&props, PROP_FIELD), "year": p.year, "citations": p.citations,
+            "oaid": str_prop(&props, PROP_OAID), "doi": str_prop(&props, PROP_DOI),
             "x": x, "y": y, "z": z,
         })
     }
@@ -257,7 +261,13 @@ impl Index {
     }
 
     fn top_view(&self, limit: usize, as_of: Option<i64>) -> serde_json::Value {
-        let idxs: Vec<usize> = self.by_cit.iter().copied()
+        // Generic ordered top-K straight from the engine's citation B-tree —
+        // no in-RAM sorted list held server-side. Over-fetch a little to
+        // absorb the as_of year filter.
+        let fetch = if as_of.is_some() { limit * 3 } else { limit };
+        let hits = self.engine.property_top_k(TypeId::new(TYPE_PAPER), PropertyId::new(PROP_CITATIONS), fetch);
+        let idxs: Vec<usize> = hits.iter()
+            .filter_map(|e| self.by_eid.get(e).copied())
             .filter(|&i| as_of.is_none_or(|y| self.papers[i].year <= y))
             .take(limit).collect();
         let mut v = self.nodes_and_cites(&idxs);
@@ -323,6 +333,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // scans memtable + sstables). This is what lets kNN run on the engine
     // instead of a RAM copy of every embedding.
     engine.register_vector_property(PropertyId::new(PROP_EMBED));
+    engine.register_property_btree(TypeId::new(TYPE_PAPER), PropertyId::new(PROP_CITATIONS));
     engine.rebuild_indexes()?;
     let index = Arc::new(Index::build(engine));
 

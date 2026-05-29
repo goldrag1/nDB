@@ -705,6 +705,20 @@ impl Engine {
         self.property_btree.range(type_id, property_id, low, high)
     }
 
+    /// Top-`k` entities of `type_id` by `property_id`, highest value first.
+    /// Bounded ordered scan over the property B-tree — stops at `k` without
+    /// materialising the whole column. Lets an application serve "top-N by
+    /// X" (e.g. most-cited) without keeping its own sorted copy.
+    #[must_use]
+    pub fn property_top_k(
+        &self,
+        type_id: TypeId,
+        property_id: PropertyId,
+        k: usize,
+    ) -> Vec<EntityId> {
+        self.property_btree.top_k(type_id, property_id, k)
+    }
+
     /// k-nearest-neighbor search over a vector-indexed property. Returns
     /// up to `k` entries sorted ascending by distance. Empty if the
     /// property isn't registered, no vectors are indexed, or the query

@@ -142,6 +142,35 @@ impl PropertyBTreeIndex {
         out
     }
 
+    /// Top-`k` entities of `type_id` by `property_id`, **highest value
+    /// first**. Walks only the tail of the bucket and stops at `k`
+    /// (O(k + log N)), never materialising the whole column — the generic
+    /// ordered-top-K primitive an application can use for "most X" without
+    /// holding its own sorted list. Values must be of an order-preserving
+    /// kind (numeric / timestamp), as for `range`.
+    #[must_use]
+    pub fn top_k(&self, type_id: TypeId, property_id: PropertyId, k: usize) -> Vec<EntityId> {
+        if k == 0 {
+            return Vec::new();
+        }
+        let start = std::ops::Bound::Included((type_id, property_id, Vec::new()));
+        let end = if property_id.get() == u32::MAX {
+            std::ops::Bound::Unbounded
+        } else {
+            std::ops::Bound::Excluded((type_id, PropertyId::new(property_id.get() + 1), Vec::new()))
+        };
+        let mut out = Vec::with_capacity(k);
+        for (_, set) in self.forward.range((start, end)).rev() {
+            for e in set {
+                out.push(*e);
+                if out.len() >= k {
+                    return out;
+                }
+            }
+        }
+        out
+    }
+
     fn remove_entries_for(&mut self, entity: &EntityId) {
         if let Some(keys) = self.by_entity.remove(entity) {
             for key in keys {
@@ -291,6 +320,30 @@ mod tests {
         assert_eq!(hits, vec![a]);
         let none = idx.find(cust, age, &Value::I64(99));
         assert!(none.is_empty());
+    }
+
+    #[test]
+    fn top_k_returns_highest_values_first() {
+        let mut idx = PropertyBTreeIndex::new();
+        let cust = TypeId::new(1);
+        let cit = PropertyId::new(10);
+        idx.register(cust, cit);
+        let mut by_val = std::collections::HashMap::new();
+        for v in [5_i64, 100, 30, 999, 7, 250] {
+            let id = EntityId::now_v7();
+            by_val.insert(id, v);
+            idx.apply(&entity(id, 1, v as u64, vec![(10, Value::I64(v))]), TxId::new(v as u64));
+        }
+        // top 3 by citations → 999, 250, 100 (descending)
+        let top = idx.top_k(cust, cit, 3);
+        let vals: Vec<i64> = top.iter().map(|id| by_val[id]).collect();
+        assert_eq!(vals, vec![999, 250, 100]);
+        // k larger than the column returns all, still descending
+        let all = idx.top_k(cust, cit, 100);
+        assert_eq!(all.len(), 6);
+        assert_eq!(by_val[&all[0]], 999);
+        assert_eq!(by_val[&all[5]], 5);
+        assert!(idx.top_k(cust, cit, 0).is_empty());
     }
 
     #[test]
