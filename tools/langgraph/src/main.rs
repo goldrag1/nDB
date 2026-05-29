@@ -341,6 +341,116 @@ fn ingest_papers(engine: &mut Engine, papers: &[Paper]) -> Ingested {
     }
 }
 
+/// Export the whole graph to a viz-ready JSON the static 3D explorer
+/// reads. nDB produces the feed: nodes carry the five demo dimensions
+/// (year / field / citations / embedding + kind); links flatten CITES
+/// (paper→paper) and the N-ary AUTHORED edge (paper→each author) so a
+/// force layout can render them. Authors inherit the earliest year of
+/// any paper they wrote, so the time scrubber reveals them with their
+/// debut.
+fn export_graph(engine: &Engine, path: &str) -> Result<(usize, usize), Box<dyn std::error::Error>> {
+    use serde_json::json;
+    let records = engine.snapshot_iter(TxId::ACTIVE)?;
+
+    let uuid = |e: EntityId| e.into_uuid().to_string();
+    let str_prop = |props: &[(PropertyId, Value)], pid: u32| -> Option<String> {
+        props.iter().find(|(p, _)| p.get() == pid).and_then(|(_, v)| match v {
+            Value::String(s) => Some(s.clone()),
+            _ => None,
+        })
+    };
+    let i64_prop = |props: &[(PropertyId, Value)], pid: u32| -> i64 {
+        props.iter().find(|(p, _)| p.get() == pid).and_then(|(_, v)| match v {
+            Value::I64(n) => Some(*n),
+            _ => None,
+        }).unwrap_or(0)
+    };
+    let vec_prop = |props: &[(PropertyId, Value)], pid: u32| -> Vec<f32> {
+        props.iter().find(|(p, _)| p.get() == pid).and_then(|(_, v)| match v {
+            Value::Vector(x) => Some(x.clone()),
+            _ => None,
+        }).unwrap_or_default()
+    };
+
+    let mut nodes = Vec::new();
+    let mut links = Vec::new();
+    let mut author_year: HashMap<String, i64> = HashMap::new();
+
+    // Pass 1: entities → nodes.
+    for r in &records {
+        if let Record::Entity(e) = r {
+            let id = uuid(e.entity_id);
+            if e.type_id == TypeId::new(TYPE_PAPER) {
+                nodes.push(json!({
+                    "id": id,
+                    "label": str_prop(&e.properties, PROP_NAME).unwrap_or_default(),
+                    "kind": "paper",
+                    "year": i64_prop(&e.properties, PROP_YEAR),
+                    "field": str_prop(&e.properties, PROP_FIELD).unwrap_or_else(|| "Unknown".into()),
+                    "citations": i64_prop(&e.properties, PROP_CITATIONS),
+                    "embedding": vec_prop(&e.properties, PROP_EMBED),
+                }));
+            } else if e.type_id == TypeId::new(TYPE_AUTHOR) {
+                nodes.push(json!({
+                    "id": id,
+                    "label": str_prop(&e.properties, PROP_NAME).unwrap_or_default(),
+                    "kind": "author",
+                    "year": 0, // filled in pass 2 from authorship
+                    "field": "Author",
+                    "citations": 0,
+                    "embedding": vec_prop(&e.properties, PROP_EMBED),
+                }));
+            }
+        }
+    }
+    // paper id → year, for author-debut inheritance.
+    let paper_year: HashMap<String, i64> = records.iter().filter_map(|r| match r {
+        Record::Entity(e) if e.type_id == TypeId::new(TYPE_PAPER) =>
+            Some((uuid(e.entity_id), i64_prop(&e.properties, PROP_YEAR))),
+        _ => None,
+    }).collect();
+
+    // Pass 2: hyperedges → links.
+    for r in &records {
+        if let Record::HyperEdge(h) = r {
+            let role = |rid: u32| h.roles.iter().find(|(r, _)| r.get() == rid).map(|(_, e)| uuid(*e));
+            if h.type_id == TypeId::new(TYPE_CITES) {
+                if let (Some(s), Some(t)) = (role(ROLE_CITING), role(ROLE_CITED)) {
+                    links.push(json!({"source": s, "target": t, "kind": "cites"}));
+                }
+            } else if h.type_id == TypeId::new(TYPE_AUTHORED) {
+                if let Some(paper) = role(ROLE_PAPER) {
+                    let py = paper_year.get(&paper).copied().unwrap_or(0);
+                    for (rid, aid) in &h.roles {
+                        if rid.get() == ROLE_AUTHOR {
+                            let a = uuid(*aid);
+                            links.push(json!({"source": paper.clone(), "target": a.clone(), "kind": "authored"}));
+                            let e = author_year.entry(a).or_insert(i64::MAX);
+                            if py > 0 { *e = (*e).min(py); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Backfill author debut years.
+    for n in &mut nodes {
+        if n["kind"] == "author" {
+            if let Some(y) = author_year.get(n["id"].as_str().unwrap_or("")) {
+                n["year"] = json!(if *y == i64::MAX { 0 } else { *y });
+            }
+        }
+    }
+
+    let doc = json!({ "nodes": nodes, "links": links });
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, serde_json::to_vec(&doc)?)?;
+    Ok((doc["nodes"].as_array().map_or(0, Vec::len), doc["links"].as_array().map_or(0, Vec::len)))
+}
+
 /// Count `PAPER` entities visible at a snapshot — the time-travel probe.
 fn count_papers_at(engine: &Engine, tx: TxId) -> usize {
     engine
@@ -440,6 +550,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ing = ingest_papers(&mut engine, &papers);
     println!("→ {db_dir}");
     demo_reads(&engine, &ing);
+
+    // Emit the viz feed for the static 3D explorer (docs/langgraph/).
+    let (n, l) = export_graph(&engine, "docs/langgraph/graph.json")?;
+    println!("\nexported {n} nodes + {l} links → docs/langgraph/graph.json");
     Ok(())
 }
 
