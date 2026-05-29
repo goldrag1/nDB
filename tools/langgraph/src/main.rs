@@ -784,10 +784,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // (possibly large) graph can later be SERVED with bounded RAM
     // (`langgraph-server --low-memory`). The db dir is the first non-flag arg.
     let low_memory = args.iter().any(|a| a == "--low-memory");
+    // db dir = first positional arg, skipping flags AND the value that
+    // follows --synthetic (the only flag that takes a value).
+    let synth_val_idx = args.iter().position(|a| a == "--synthetic").map(|i| i + 1);
     let db_dir = args
         .iter()
-        .find(|a| !a.starts_with("--"))
-        .cloned()
+        .enumerate()
+        .find(|(i, a)| !a.starts_with("--") && Some(*i) != synth_val_idx)
+        .map(|(_, a)| a.clone())
         .unwrap_or_else(|| ".demo-data/langgraph-ndb".to_string());
     let _ = std::fs::remove_dir_all(&db_dir);
     std::fs::create_dir_all(&db_dir)?;
