@@ -45,6 +45,7 @@ use crate::record::Record;
 
 pub mod adjacency;
 pub mod entity_type_cluster;
+pub mod id_list_index_file;
 pub mod lookup_key;
 pub mod property_btree;
 pub mod property_index_file;
