@@ -196,9 +196,8 @@ const Graph = ForceGraph3D()($("graph"))
   .linkDirectionalArrowRelPos(0.9)
   .linkDirectionalArrowColor(() => "rgba(93,176,255,0.8)")
   .linkDirectionalParticles(0)                          // baseline 0 — no idle "fireworks"
-  .nodeVisibility(n => n.year > 0 && n.year <= curYear)
-  .linkVisibility(l => endYear(l.source) <= curYear && endYear(l.target) <= curYear
-                    && endYear(l.source) > 0 && endYear(l.target) > 0)
+  .nodeVisibility(nodeVisible)
+  .linkVisibility(linkVisible)
   .cooldownTicks(220)
   .onNodeClick(onNodeClick)
   .onNodeHover(onNodeHover);
@@ -209,6 +208,28 @@ Graph.onEngineStop(() => {
 });
 
 function endYear(end) { const n = typeof end === "object" ? end : nodeById.get(end); return n ? n.year : 0; }
+function resolveEnd(e) { return typeof e === "object" ? e : nodeById.get(e); }
+
+// ── Semantic zoom (level-of-detail) ───────────────────────────────────────
+// Each node has an importance score `imp` ∈ [0,1] (papers by citations,
+// authors by how many papers they bridge). The camera distance sets a
+// visibility threshold: zoom OUT → high threshold → only hubs survive;
+// zoom IN → threshold drops → the long tail + authors fade in. The
+// on-screen node count stays bounded at every zoom, so it's smooth no
+// matter how much nDB holds — and clusters (when present) stand in for a
+// whole field until you zoom into them.
+let lodThreshold = 0;   // current importance cutoff
+let lodBaseDist = 0;    // captured initial camera distance, for calibration
+function nodeVisible(n) {
+  if (!n) return false;
+  if (n.year > 0 && n.year > curYear) return false;          // time-travel filter
+  return n.imp === undefined || n.imp >= lodThreshold;        // LOD filter
+}
+function linkVisible(l) {
+  // Cluster edges show only at far zoom; detail edges only once detail shows.
+  const s = resolveEnd(l.source), t = resolveEnd(l.target);
+  return nodeVisible(s) && nodeVisible(t);
+}
 
 function nodeColor(n) {
   if (highlight.size && !highlight.has(n.id)) return "rgba(120,128,148,0.12)";
@@ -223,17 +244,25 @@ function linkColor(l) {
 function repaint() { Graph.nodeColor(nodeColor).linkColor(linkColor); }
 
 function updateCounts() {
-  const ns = Graph.graphData().nodes.filter(n => n.year > 0 && n.year <= curYear);
+  const ns = Graph.graphData().nodes.filter(nodeVisible);
   $("nPapers").textContent = ns.filter(n => n.kind === "paper").length;
   $("nAuthors").textContent = ns.filter(n => n.kind === "author").length;
-  const ls = Graph.graphData().links.filter(l =>
-    endYear(l.source) > 0 && endYear(l.target) > 0 &&
-    endYear(l.source) <= curYear && endYear(l.target) <= curYear);
-  $("nLinks").textContent = ls.length;
+  $("nLinks").textContent = Graph.graphData().links.filter(linkVisible).length;
 }
 function refreshVisibility() {
-  Graph.nodeVisibility(Graph.nodeVisibility()).linkVisibility(Graph.linkVisibility());
+  Graph.nodeVisibility(nodeVisible).linkVisibility(linkVisible);
   updateCounts();
+}
+// Recompute the LOD threshold from the current camera distance.
+function updateLOD() {
+  const cp = Graph.cameraPosition();
+  const dist = Math.hypot(cp.x || 0, cp.y || 0, cp.z || 0);
+  if (!lodBaseDist) lodBaseDist = dist || 1;
+  const near = lodBaseDist * 0.42, far = lodBaseDist * 1.7;
+  lodThreshold = Math.max(0, Math.min(0.9, (dist - near) / Math.max(1, far - near)));
+  const farView = lodThreshold > 0.33;
+  Graph.linkDirectionalArrowLength(l => (!farView && l.kind === "cites") ? 3.6 : 0);
+  refreshVisibility();
 }
 
 // ── interactions ────────────────────────────────────────────────────────
@@ -442,6 +471,18 @@ fetch("./graph.json", { cache: "no-store" })
       if (l.kind === "cites") { push(citeAdj, l.source, l.target); push(citedByAdj, l.target, l.source); }
       else if (l.kind === "authored") { push(paperAuthors, l.source, l.target); push(authorPapers, l.target, l.source); }
     }
+    // Importance for level-of-detail. Papers: log-scaled citations.
+    // Authors: low base, raised by how many papers they bridge. Clusters
+    // (field super-nodes, if present) sit at the very top so they're the
+    // last things standing when you zoom all the way out.
+    let maxCit = 1;
+    for (const n of data.nodes) if (n.kind === "paper" && n.citations > maxCit) maxCit = n.citations;
+    const ln = Math.log1p(maxCit);
+    for (const n of data.nodes) {
+      if (n.kind === "cluster") n.imp = 1.0;
+      else if (n.kind === "paper") n.imp = Math.log1p(n.citations || 0) / ln;
+      else n.imp = 0.12 + 0.45 * Math.min(1, ((authorPapers.get(n.id) || []).length - 1) / 6);
+    }
     const years = data.nodes.filter(n => n.year > 0).map(n => n.year);
     const minY = Math.min(...years), maxY = Math.max(...years);
     const slider = $("year");
@@ -458,8 +499,17 @@ fetch("./graph.json", { cache: "no-store" })
         `and scales to millions; the in-browser 3D view is the only limit. See the <a href="/bench.html" style="color:var(--accent)">bench</a>.`;
     }
     window.Graph = Graph;                 // console / test affordance
-    window.__lg = { runSearch, focusNodeById, get highlight() { return highlight; }, data: () => DATA };
+    window.__lg = { runSearch, focusNodeById, updateLOD, get highlight() { return highlight; }, get lod() { return lodThreshold; }, data: () => DATA };
     startTwinkle();
+
+    // Drive level-of-detail from camera distance (zoom). Debounced on the
+    // controls' change event; primed once after the initial fit.
+    let lodTimer;
+    const ctrls = Graph.controls && Graph.controls();
+    if (ctrls && ctrls.addEventListener) {
+      ctrls.addEventListener("change", () => { clearTimeout(lodTimer); lodTimer = setTimeout(updateLOD, 90); });
+    }
+    setTimeout(updateLOD, 1300);
 
     const sIn = $("search");
     let sugTimer;
