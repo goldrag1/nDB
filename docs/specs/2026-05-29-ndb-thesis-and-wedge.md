@@ -183,12 +183,27 @@ real-OpenAlex demo is unaffected (small, fast).
   all 1.4M records with **byte-identical top/cluster fingerprints** pre vs post; server RSS 302 MB.
   Serving a cached tile is O(cache)+O(limit snapshot_reads), **independent of graph size** — so the
   `<1s/tile at 10GB` target is structural, not just measured-at-700k.
-- **Still pending for M1:** (a) confirm the absolute 10 GB number on a free machine (deferred — the
-  real-OpenAlex spool is currently downloading; see M2); (b) **on-disk (bounded) HNSW** so `/view/knn`
-  is O(log N) bounded — today it's exact brute-force (bounded RAM, ~15 s O(N)) or in-RAM HNSW (fast,
-  unbounded RAM); the bounded-fast option is unbuilt. (c) **compaction RAM caveat:** `compact()` builds
-  the record set in RAM during the merge → needs ~DB-size RAM. Fine as one-time offline maintenance on
-  a sufficient box; a true bounded-RAM (external-merge) compaction is future work.
+- **kNN at scale — FIXED via a global current-vector snapshot (2026-05-30, commits in ndb-engine).**
+  Measurement reframed the problem: kNN's slowness was NOT the vector scan (0.1 s at 3M) but the
+  per-SSTable fan-out — `vector_search` gathers candidates from every `.vidx` sidecar then MVCC-verifies
+  each (O(sidecars×k) random reads). Fix: `engine.build_vector_snapshot(property)` collapses all CURRENT
+  vectors into ONE mmap'd `.vsnap` (bounded TWO-PASS streaming build — no 2×N RAM spike);
+  `vector_search_snapshot` reads only that file (no fan-out, no verify). `langgraph-server --knn snapshot`
+  (auto prefers it). **Measured at 17M / 68 sidecars / 10.16 GB (`--bench-knn`):** exact cold 1.96 s /
+  warm 1.12 s → snapshot cold **0.35 s** / warm **0.30 s**, `same_set=true` 20/20 (exact, no recall
+  loss), committed RAM (RssAnon) 150 MB / 2 MB, build 17M vecs in 96.5 s @ RssAnon 2 MB. Snapshot is
+  O(1) in sidecar count (exact scales with it → ~40× at the old 408-sidecar config). **Note `VmRSS` is
+  misleading here** — the engine's committed memory is RssAnon (≤150 MB at 17M); the multi-GB `VmRSS`
+  is reclaimable file-backed mmap, NOT a cap violation. (in-RAM HNSW `--knn approx` remains for
+  ≥95-99%-recall when vectors fit RAM; exact multi-sidecar kept as fallback.)
+- **Still pending for M1:** (a) **heavy index builds block server startup** — both the top-cache and
+  the `.vsnap` are built lazily in `Index::build`, so a cold 10 GB serve waits minutes (the top-cache's
+  `property_top_k` over 68 sidecars + ~1.36M verifies took >6 min at 17M and never bound the listener
+  in a 90 s health-wait). FIX: make them explicit OFFLINE build steps (a `--build-indexes` CLI, like
+  `--compact`) so serving just loads + binds fast. This is the next concrete task. (b) confirm the
+  absolute 10 GB `/view/top` tile latency once (a) lands. (c) **compaction RAM caveat:** `compact()`
+  builds the record set in RAM during the merge → needs ~DB-size RAM. Fine as one-time offline
+  maintenance on a sufficient box; a true bounded-RAM (external-merge) compaction is future work.
 
 ### Milestone 2 — Real OpenAlex proof (the wedge made real)
 **IN PROGRESS 2026-05-29:** acquisition started — `langgraph-ingest --spool-sharded` (commit 3cd6b7c)
