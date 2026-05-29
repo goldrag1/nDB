@@ -253,7 +253,7 @@ fn load_or_build_top(engine: &Engine, db: &str, top_fields: &HashSet<String>) ->
 }
 
 impl Index {
-    fn build(engine: Engine, db: &str, knn_pref: &str, cache_bytes: usize) -> Self {
+    fn build(mut engine: Engine, db: &str, knn_pref: &str, _cache_bytes: usize) -> Self {
         let m = load_cluster_meta(&engine, db);
         let k = m.clusters.len().max(1);
         let mut cluster_pos = HashMap::new();
@@ -271,17 +271,43 @@ impl Index {
         // multi-sidecar property_top_k walk per request.
         let top = load_or_build_top(&engine, db, &top_fields);
 
-        // Resolve the kNN backend. Approx (HNSW) loads every embedding into
-        // RAM — fast + tunable recall, but NOT bounded — so `auto` only
-        // picks it when the vectors comfortably fit the cache budget
-        // (vector RAM ≈ N × (dim*4 + ~128 graph bytes); EMBED_DIM is fixed).
+        // Resolve the kNN backend. Three modes:
+        //  snapshot/auto — global current-vector .vsnap: ONE mmap'd file,
+        //    searched with no sidecar fan-out + no per-candidate MVCC verify
+        //    (the O(sidecars×k) wall that made kNN ~15 s at 10 GB). Exact +
+        //    bounded + fast. Built once (full scan) + persisted.
+        //  approx — in-RAM HNSW: fast, ~95-99% recall, but NOT bounded.
+        //  exact — engine brute-force over the per-SSTable .vidx sidecars
+        //    (bounded, but O(sidecars×k); the slow path kept for comparison).
         let est_vec_ram = m.total.saturating_mul(EMBED_DIM * 4 + 128);
-        let use_approx = match knn_pref {
-            "approx" => true,
-            "exact" => false,
-            _ /* auto */ => m.total > 0 && est_vec_ram <= cache_bytes / 2,
-        };
-        let (knn_hnsw, knn_mode) = if use_approx {
+        let want_snapshot = matches!(knn_pref, "snapshot" | "ondisk" | "auto") && m.total > 0;
+        let mut knn_hnsw: Option<Mutex<HnswVectorIndex>> = None;
+        let mut knn_mode = "exact-bruteforce";
+        if want_snapshot {
+            let pid = PropertyId::new(PROP_EMBED);
+            let ready = match engine.load_vector_snapshot(pid) {
+                Ok(true) => {
+                    eprintln!("kNN = snapshot: loaded existing .vsnap (mmap, bounded)");
+                    true
+                }
+                _ => {
+                    eprintln!("kNN = snapshot: building global current-vector .vsnap (one-time full scan)…");
+                    match engine.build_vector_snapshot(pid) {
+                        Ok(n) => {
+                            eprintln!("kNN = snapshot: {n} vectors → .vsnap (mmap, bounded, no verify)");
+                            n > 0
+                        }
+                        Err(e) => {
+                            eprintln!("kNN = snapshot: build failed ({e}); falling back to exact");
+                            false
+                        }
+                    }
+                }
+            };
+            if ready {
+                knn_mode = "ondisk-snapshot";
+            }
+        } else if knn_pref == "approx" {
             eprintln!(
                 "kNN = approx (HNSW): loading {} embeddings into RAM (~{} MB est)…",
                 m.total, est_vec_ram / 1_048_576
@@ -296,11 +322,11 @@ impl Index {
             // Trigger the graph build once so the first real query isn't slow.
             let _ = h.search(PropertyId::new(PROP_EMBED), &embed("warmup"), 1, Distance::Cosine);
             eprintln!("kNN = approx (HNSW): graph ready");
-            (Some(Mutex::new(h)), "approx-hnsw")
+            knn_hnsw = Some(Mutex::new(h));
+            knn_mode = "approx-hnsw";
         } else {
-            eprintln!("kNN = exact (engine brute-force over on-disk .vidx, bounded RAM)");
-            (None, "exact-bruteforce")
-        };
+            eprintln!("kNN = exact (engine brute-force over on-disk .vidx sidecars, bounded RAM)");
+        }
 
         Index {
             engine,
@@ -476,11 +502,16 @@ impl Index {
 
     fn knn_view(&self, q: &str, k: usize) -> serde_json::Value {
         let qv = embed(q);
-        let hits = match &self.knn_hnsw {
+        let pid = PropertyId::new(PROP_EMBED);
+        let hits = if let Some(h) = &self.knn_hnsw {
             // Approximate: HNSW (embeddings in RAM). Lock for the &mut search.
-            Some(h) => h.lock().unwrap().search(PropertyId::new(PROP_EMBED), &qv, k, Distance::Cosine),
-            // Exact: engine brute-force over the on-disk .vidx (bounded RAM).
-            None => self.engine.vector_search(PropertyId::new(PROP_EMBED), &qv, k, Distance::Cosine),
+            h.lock().unwrap().search(pid, &qv, k, Distance::Cosine)
+        } else if let Some(r) = self.engine.vector_search_snapshot(pid, &qv, k, Distance::Cosine) {
+            // Global current-vector snapshot: one mmap'd file, no fan-out/verify.
+            r
+        } else {
+            // Exact: engine brute-force over the per-SSTable .vidx sidecars.
+            self.engine.vector_search(pid, &qv, k, Distance::Cosine)
         };
         let eids: Vec<EntityId> = hits.iter().map(|(e, _)| *e).collect();
         let mut v = self.tile(&eids);

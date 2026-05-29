@@ -490,6 +490,15 @@ pub struct Engine {
     /// lifecycle + fallback as `property_index_files`. Embeddings are the
     /// dominant resident-RAM term, so this is the main low-RAM win.
     vector_index_files: HashMap<PathBuf, VectorIndexFile>,
+    /// Optional global current-vector SNAPSHOT per property: every SSTable
+    /// flush writes its own `<seq>.vidx`, so `vector_search` fans out across
+    /// hundreds of sidecars + MVCC-verifies each candidate (the O(sidecars×k)
+    /// random-read wall — ~15 s at 10 GB). A snapshot collapses all CURRENT
+    /// vectors into ONE mmap'd `.vsnap` (same format), searched directly with
+    /// NO fan-out and NO per-candidate verify. Built once + persisted (like
+    /// the app's top cache); valid for read-mostly serving — rebuild after
+    /// writes. property_id → reader.
+    vector_snapshots: HashMap<u32, VectorIndexFile>,
     /// mmap'd id-list sidecars for the four remaining secondary indexes
     /// (entity→hyperedges, type→hyperedges, type→entities, key→entity).
     /// Same lifecycle + fallback as the others; populated only under
@@ -571,6 +580,7 @@ impl Engine {
             config,
             property_index_files: HashMap::new(),
             vector_index_files: HashMap::new(),
+            vector_snapshots: HashMap::new(),
             adjacency_files: HashMap::new(),
             type_cluster_files: HashMap::new(),
             entity_type_files: HashMap::new(),
@@ -713,6 +723,7 @@ impl Engine {
             config,
             property_index_files: HashMap::new(),
             vector_index_files: HashMap::new(),
+            vector_snapshots: HashMap::new(),
             adjacency_files: HashMap::new(),
             type_cluster_files: HashMap::new(),
             entity_type_files: HashMap::new(),
@@ -1232,6 +1243,95 @@ impl Engine {
         scored.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         scored.truncate(k);
         scored.into_iter().map(|(d, e)| (e, d)).collect()
+    }
+
+    // -----------------------------------------------------------------
+    // Global current-vector snapshot (fast bounded kNN at scale)
+    // -----------------------------------------------------------------
+
+    /// Path of the `.vsnap` for `property` (one merged current-vector file,
+    /// distinct from the per-SSTable `<seq>.vidx` sidecars).
+    fn vsnap_path(&self, property: PropertyId) -> PathBuf {
+        self.db.path().join(format!("vsnap-{}.vsnap", property.get()))
+    }
+
+    /// Build (or rebuild) the global current-vector snapshot for `property`:
+    /// stream every CURRENT entity once, collect its vector into a single
+    /// `.vsnap` (the `.vidx` format), then mmap it. Subsequent
+    /// [`vector_search_snapshot`] reads ONLY this file — no per-sidecar
+    /// fan-out, no per-candidate MVCC verify (the snapshot already holds the
+    /// resolved-current vectors). One-time full scan (like a flush), bounded
+    /// memory; persisted, so a restart just re-mmaps it. Returns the vector
+    /// count. NOTE: read-mostly contract — call again after writes to refresh.
+    pub fn build_vector_snapshot(&mut self, property: PropertyId) -> Result<usize, EngineError> {
+        let mut builder = VectorIndexBuilder::new();
+        let mut n = 0usize;
+        for item in self.snapshot_iter_streaming(TxId::ACTIVE) {
+            let Ok(Record::Entity(e)) = item else { continue };
+            for (pid, val) in &e.properties {
+                if *pid == property
+                    && let Value::Vector(v) = val
+                {
+                    builder.observe(property, e.entity_id, v);
+                    n += 1;
+                }
+            }
+        }
+        let path = self.vsnap_path(property);
+        if builder.is_empty() {
+            // Nothing to index — drop any stale snapshot so search falls back.
+            let _ = std::fs::remove_file(&path);
+            self.vector_snapshots.remove(&property.get());
+            return Ok(0);
+        }
+        builder
+            .finish(&path)
+            .map_err(|e| EngineError::Io(std::io::Error::other(format!("vsnap write {}: {e}", path.display()))))?;
+        if let Some(f) = VectorIndexFile::open(&path)
+            .map_err(|e| EngineError::Io(std::io::Error::other(format!("vsnap open {}: {e}", path.display()))))?
+        {
+            self.vector_snapshots.insert(property.get(), f);
+        }
+        Ok(n)
+    }
+
+    /// Open an already-built `.vsnap` for `property` into memory (mmap) if it
+    /// exists on disk. Returns whether one was loaded. Cheap — re-mmaps the
+    /// file; the vectors stay OS-paged.
+    pub fn load_vector_snapshot(&mut self, property: PropertyId) -> Result<bool, EngineError> {
+        let path = self.vsnap_path(property);
+        match VectorIndexFile::open(&path)
+            .map_err(|e| EngineError::Io(std::io::Error::other(format!("vsnap open {}: {e}", path.display()))))?
+        {
+            Some(f) => {
+                self.vector_snapshots.insert(property.get(), f);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    /// Whether a current-vector snapshot is loaded for `property`.
+    #[must_use]
+    pub fn has_vector_snapshot(&self, property: PropertyId) -> bool {
+        self.vector_snapshots.contains_key(&property.get())
+    }
+
+    /// k-NN over the global current-vector snapshot — one mmap'd file, no
+    /// fan-out, no verify. `None` if no snapshot is loaded for `property`
+    /// (caller falls back to [`vector_search`]). Bounded memory + exact (it
+    /// brute-forces the snapshot, which holds exactly the current vectors).
+    #[must_use]
+    pub fn vector_search_snapshot(
+        &self,
+        property: PropertyId,
+        query: &[f32],
+        k: usize,
+        metric: Distance,
+    ) -> Option<Vec<(EntityId, f32)>> {
+        self.vector_snapshots
+            .get(&property.get())
+            .map(|f| f.search(property, query, k, metric))
     }
 
     /// Database directory path.
