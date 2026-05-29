@@ -54,6 +54,8 @@ const PROP_EMBED: u32 = 52; // vector indexed
 const PROP_YEAR: u32 = 55;
 const PROP_CITATIONS: u32 = 56;
 const PROP_FIELD: u32 = 57; // property-btree indexed (top concept)
+const PROP_OAID: u32 = 58; // OpenAlex work id (e.g. W2163605009) — "see more" link
+const PROP_DOI: u32 = 59; // full DOI URL or "" — "read the paper" link
 
 const ROLE_CITING: u32 = 30;
 const ROLE_CITED: u32 = 31;
@@ -72,6 +74,9 @@ struct Paper {
     year: i64,
     citations: i64,
     field: String,
+    /// Full DOI URL (https://doi.org/…) or "" — the "read the paper" link.
+    #[serde(default)]
+    doi: String,
     authors: Vec<String>,
     /// Ids of cited papers — kept only when the target is also in the set,
     /// so the cache is an internally-connected subgraph.
@@ -116,7 +121,7 @@ fn short_id(openalex_url: &str) -> String {
 /// internally-connected citation subgraph.
 fn fetch_openalex(query: &str, per_page: usize) -> Result<Vec<Paper>, Box<dyn std::error::Error>> {
     let url = format!(
-        "https://api.openalex.org/works?filter=default.search:{q},from_publication_date:2012-01-01&sort=cited_by_count:desc&per-page={n}&select=id,display_name,publication_year,cited_by_count,referenced_works,concepts,authorships",
+        "https://api.openalex.org/works?filter=default.search:{q},from_publication_date:2012-01-01&sort=cited_by_count:desc&per-page={n}&select=id,doi,display_name,publication_year,cited_by_count,referenced_works,concepts,authorships",
         q = query.replace(' ', "%20"),
         n = per_page.min(200),
     );
@@ -170,7 +175,8 @@ fn fetch_openalex(query: &str, per_page: usize) -> Result<Vec<Paper>, Box<dyn st
         if year == 0 {
             continue;
         }
-        papers.push(Paper { id, title, year, citations, field, authors, cites });
+        let doi = w["doi"].as_str().unwrap_or("").to_string();
+        papers.push(Paper { id, title, year, citations, field, doi, authors, cites });
     }
     Ok(papers)
 }
@@ -210,6 +216,8 @@ fn register_schema(engine: &mut Engine) {
         (PROP_YEAR, "year"),
         (PROP_CITATIONS, "citations"),
         (PROP_FIELD, "field"),
+        (PROP_OAID, "openalex_id"),
+        (PROP_DOI, "doi"),
     ] {
         tx.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(id), name: name.into() }));
     }
@@ -283,6 +291,8 @@ fn ingest_papers(engine: &mut Engine, papers: &[Paper]) -> Ingested {
                     (PropertyId::new(PROP_YEAR), Value::I64(p.year)),
                     (PropertyId::new(PROP_CITATIONS), Value::I64(p.citations)),
                     (PropertyId::new(PROP_FIELD), Value::String(p.field.clone())),
+                    (PropertyId::new(PROP_OAID), Value::String(p.id.clone())),
+                    (PropertyId::new(PROP_DOI), Value::String(p.doi.clone())),
                     (PropertyId::new(PROP_EMBED), Value::Vector(embed(&format!("{} {}", p.title, p.field)))),
                 ],
             });
@@ -388,6 +398,8 @@ fn export_graph(engine: &Engine, path: &str) -> Result<(usize, usize), Box<dyn s
                     "year": i64_prop(&e.properties, PROP_YEAR),
                     "field": str_prop(&e.properties, PROP_FIELD).unwrap_or_else(|| "Unknown".into()),
                     "citations": i64_prop(&e.properties, PROP_CITATIONS),
+                    "oaid": str_prop(&e.properties, PROP_OAID).unwrap_or_default(),
+                    "doi": str_prop(&e.properties, PROP_DOI).unwrap_or_default(),
                     "embedding": vec_prop(&e.properties, PROP_EMBED),
                 }));
             } else if e.type_id == TypeId::new(TYPE_AUTHOR) {
@@ -469,6 +481,7 @@ fn synthetic_papers() -> Vec<Paper> {
         year,
         citations: cites_n,
         field: field.into(),
+        doi: String::new(),
         authors: authors.iter().map(|s| (*s).to_string()).collect(),
         cites: cites.iter().map(|s| (*s).to_string()).collect(),
     };
