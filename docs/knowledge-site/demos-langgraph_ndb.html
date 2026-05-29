@@ -76,6 +76,33 @@
     chains and the per-year history all live in the same nDB instance.
   </p>
 
+  <h2>Where nDB does the work: the store and the engine</h2>
+  <p>Two layers, one process — that's the whole point of this demo.</p>
+  <ul>
+    <li>
+      <strong>The database (how it's stored).</strong> One append-only log
+      of entities and <em>N-ary hyperedges</em>. A paper's authorship is a
+      single <code>AUTHORED</code> record holding the paper and all its
+      authors — not a junction table — and each abstract embedding is a
+      vector stored on the paper itself, not in a sidecar service. Because
+      the store is MVCC append-only, every per-year ingest leaves the prior
+      state intact: the history <em>is</em> the storage model, so there's
+      nothing extra to keep in sync for time-travel. The graph, vector and
+      B-tree indexes are all rebuilt from that one log.
+    </li>
+    <li>
+      <strong>The engine (how it's answered).</strong> Each interaction is
+      one query against those indexes — no ETL between systems. Citation
+      ancestry is a recursive <code>relation+</code> walk over the in-memory
+      adjacency index; the type-ahead's semantic ranking is a
+      <code>vector_search</code> k-NN over the vector index; the year slider
+      is a <code>snapshot_read</code> as-of a transaction. One engine serves
+      graph traversal, vector retrieval and temporal queries together — the
+      combination you'd otherwise assemble from a graph database, a vector
+      database, and a temporal/audit layer, and keep in sync by hand.
+    </li>
+  </ul>
+
   <img class="screenshot" src="/static/images/heroes/hero-langgraph.png" alt="langgraph_ndb — 3D citation graph with directional CITES arrows over a twinkling field">
   <p class="caption">Papers coloured by field, sized by citation count; directional arrows run citing → cited. Authors are the small grey nodes binding co-authored papers together.</p>
 
@@ -109,6 +136,17 @@
     Rust-native database, built in Rust. The explorer itself is one
     self-contained HTML file (<code>3d-force-graph</code> over WebGL), no
     build step.
+  </p>
+
+  <h2>Data &amp; thanks</h2>
+  <p>
+    The corpus is a slice of <a href="https://openalex.org" target="_blank" rel="noreferrer">OpenAlex</a>'s
+    scholarly catalogue, released under <strong>CC0</strong> (public domain).
+    Huge thanks to the OpenAlex team — an open, freely-reusable knowledge
+    graph of the world's research is exactly what makes a demo like this
+    possible without licensing strings. Titles, authors, citations,
+    concepts and publication years are all theirs; nDB just gives them a
+    place to be queried as a graph.
   </p>
 
   <div class="cta-row" style="margin-top: 22px;">
