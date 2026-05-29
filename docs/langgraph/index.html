@@ -474,6 +474,9 @@ function chooseSuggest(i) {
 }
 
 function setMode(m) {
+  // In live mode the server owns positions (galaxy layout) and ships no
+  // embeddings, so the semantic-projection toggle doesn't apply.
+  if (LIVE) return;
   mode = m;
   $("layCite").classList.toggle("on", m === "cite");
   $("laySem").classList.toggle("on", m === "sem");
@@ -629,7 +632,10 @@ function setup(data, isLive) {
     slider.value = slider.max; curYear = +slider.max; $("yearval").textContent = curYear;
     slider.addEventListener("input", () => { curYear = +slider.value; $("yearval").textContent = curYear; refreshVisibility(); });
 
-    if (isLive) Graph.cooldownTicks(0);
+    if (isLive) {
+      Graph.cooldownTicks(0);                          // positions are server-authoritative
+      const lrow = $("layCite").closest(".row"); if (lrow) lrow.style.display = "none";
+    }
     Graph.graphData(data);
     updateCounts();
     if (isLive) { updateLiveCounts(); }

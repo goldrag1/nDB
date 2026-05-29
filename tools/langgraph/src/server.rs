@@ -34,7 +34,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 
 use ndb_engine::record::Record;
-use ndb_engine::{Engine, PropertyId, TxId, TypeId, Value};
+use ndb_engine::{Distance, Engine, EntityId, PropertyId, TxId, TypeId, Value};
 
 const TYPE_PAPER: u32 = 310;
 const TYPE_CITES: u32 = 410;
@@ -52,6 +52,9 @@ const SPREAD: f64 = 320.0;
 const ZSCALE: f64 = 16.0;
 
 /// Per-paper metadata, loaded once at startup into the app-side index.
+/// Embeddings are NOT cached here — kNN goes to the engine's vector index
+/// (registered + rebuilt on open), so server RAM doesn't carry a second
+/// copy of every embedding (the dominant per-node cost at scale).
 struct Paper {
     uuid: String,
     title: String,
@@ -61,15 +64,17 @@ struct Paper {
     raw_field: String,    // original (for display)
     oaid: String,
     doi: String,
-    embedding: Vec<f32>,
 }
 
 /// The app-layer index built on top of the generic engine at startup.
-/// Loaded once from one nDB scan, then serves every bounded view from its
-/// own citation-sorted / field-bucketed / cosine structures — the
-/// application optimising its own access on top of the generic core.
+/// Holds lightweight per-paper metadata + id-level indexes; kNN delegates
+/// to the engine's on-disk vector index — the application optimising its
+/// own access on top of the generic core, without duplicating the heavy
+/// embedding data.
 struct Index {
-    papers: Vec<Paper>,                 // all papers
+    engine: Engine,
+    by_eid: HashMap<EntityId, usize>,   // engine EntityId → paper index (for vector_search)
+    papers: Vec<Paper>,                 // all papers (lightweight — no embeddings)
     by_cit: Vec<usize>,                 // paper indices, citations desc
     by_field: HashMap<String, Vec<usize>>, // coarse field → indices (cit desc)
     by_uuid: HashMap<String, usize>,    // uuid → index
@@ -87,10 +92,6 @@ fn str_prop(props: &[(PropertyId, Value)], pid: u32) -> String {
 fn i64_prop(props: &[(PropertyId, Value)], pid: u32) -> i64 {
     props.iter().find(|(p, _)| p.get() == pid).and_then(|(_, v)| match v {
         Value::I64(n) => Some(*n), _ => None }).unwrap_or(0)
-}
-fn vec_prop(props: &[(PropertyId, Value)], pid: u32) -> Vec<f32> {
-    props.iter().find(|(p, _)| p.get() == pid).and_then(|(_, v)| match v {
-        Value::Vector(x) => Some(x.clone()), _ => None }).unwrap_or_default()
 }
 
 /// Matches the Rust ingestor + the JS explorer's embed() byte-for-byte.
@@ -118,18 +119,22 @@ fn hash_str(s: &str) -> u64 {
 
 impl Index {
     fn build(engine: Engine) -> Self {
-        // One scan: papers + CITES edges (authors omitted from view tiles).
-        let records = engine.snapshot_iter(TxId::ACTIVE).expect("snapshot_iter");
+        // STREAMING scan: papers + CITES edges, never collecting every record
+        // into RAM at once. Per-paper we keep only lightweight metadata — no
+        // embeddings (those live in the engine's vector index, queried live).
         let mut papers = Vec::new();
         let mut by_uuid = HashMap::new();
-        let mut raw_cites: Vec<(String, String)> = Vec::new(); // (citing uuid, cited uuid)
+        let mut by_eid: HashMap<EntityId, usize> = HashMap::new();
+        let mut raw_cites: Vec<(String, String)> = Vec::new();
 
-        for r in &records {
-            match r {
+        for item in engine.snapshot_iter_streaming(TxId::ACTIVE) {
+            let r = match item { Ok(r) => r, Err(_) => continue };
+            match &r {
                 Record::Entity(e) if e.type_id == TypeId::new(TYPE_PAPER) => {
                     let uuid = e.entity_id.into_uuid().to_string();
                     let idx = papers.len();
                     by_uuid.insert(uuid.clone(), idx);
+                    by_eid.insert(e.entity_id, idx);
                     papers.push(Paper {
                         uuid,
                         title: str_prop(&e.properties, PROP_NAME),
@@ -139,7 +144,6 @@ impl Index {
                         raw_field: str_prop(&e.properties, PROP_FIELD),
                         oaid: str_prop(&e.properties, PROP_OAID),
                         doi: str_prop(&e.properties, PROP_DOI),
-                        embedding: vec_prop(&e.properties, PROP_EMBED),
                     });
                 }
                 Record::HyperEdge(h) if h.type_id == TypeId::new(TYPE_CITES) => {
@@ -196,7 +200,7 @@ impl Index {
 
         eprintln!("indexed {} papers, {} cite-edges, {} clusters",
             papers.len(), cite_out.values().map(Vec::len).sum::<usize>(), clusters.len());
-        Index { papers, by_cit, by_field, by_uuid, cite_out, clusters, cluster_pos, max_cit, mid_year }
+        Index { engine, by_eid, papers, by_cit, by_field, by_uuid, cite_out, clusters, cluster_pos, max_cit, mid_year }
     }
 
     /// Deterministic galaxy position for a paper (cluster anchor + offset).
@@ -215,7 +219,7 @@ impl Index {
         serde_json::json!({
             "id": p.uuid, "label": p.title, "kind": "paper", "cluster": p.field,
             "field": p.raw_field, "year": p.year, "citations": p.citations,
-            "oaid": p.oaid, "doi": p.doi, "embedding": p.embedding,
+            "oaid": p.oaid, "doi": p.doi,
             "x": x, "y": y, "z": z,
         })
     }
@@ -294,20 +298,11 @@ impl Index {
     }
 
     fn knn_view(&self, q: &str, k: usize) -> serde_json::Value {
-        // App-side cosine over the loaded embeddings — same 16-d space the
-        // ingestor + explorer use. Linear scan is microseconds at demo
-        // scale; beyond RAM this would call the engine's vector index.
-        let qv = embed(q);
-        let mut scored: Vec<(usize, f32)> = self.papers.iter().enumerate()
-            .filter(|(_, p)| p.embedding.len() == EMBED_DIM)
-            .map(|(i, p)| {
-                let mut dot = 0f32;
-                for j in 0..EMBED_DIM { dot += qv[j] * p.embedding[j]; }
-                (i, 1.0 - dot)
-            })
-            .collect();
-        scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        let idxs: Vec<usize> = scored.into_iter().take(k).map(|(i, _)| i).collect();
+        // Delegate to the engine's vector index (registered + rebuilt on
+        // open). Server RAM carries no embeddings — the index does, on the
+        // engine side, and scales there.
+        let hits = self.engine.vector_search(PropertyId::new(PROP_EMBED), &embed(q), k, Distance::Cosine);
+        let idxs: Vec<usize> = hits.iter().filter_map(|(e, _)| self.by_eid.get(e).copied()).collect();
         let mut v = self.nodes_and_cites(&idxs);
         v["meta"] = serde_json::json!({"q": q, "returned": idxs.len()});
         v
@@ -322,7 +317,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bind = arg("--bind", "127.0.0.1:8791");
 
     eprintln!("opening nDB at {db}");
-    let engine = Engine::open(&db)?;
+    let mut engine = Engine::open(&db)?;
+    // Register the vector index for the embedding property, then rebuild so
+    // it's populated from the store (registration isn't persisted; rebuild
+    // scans memtable + sstables). This is what lets kNN run on the engine
+    // instead of a RAM copy of every embedding.
+    engine.register_vector_property(PropertyId::new(PROP_EMBED));
+    engine.rebuild_indexes()?;
     let index = Arc::new(Index::build(engine));
 
     let listener = TcpListener::bind(&bind)?;
