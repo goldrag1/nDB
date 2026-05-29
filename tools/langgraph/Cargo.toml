@@ -12,6 +12,12 @@ description  = "Rust-native GraphRAG-style language-graph ingestor for nDB demos
 name = "langgraph-ingest"
 path = "src/main.rs"
 
+# Application-layer view server: embeds the nDB core and serves bounded,
+# zoom-driven /view/* tiles. Generic engine, app-specific query shapes.
+[[bin]]
+name = "langgraph-server"
+path = "src/server.rs"
+
 [dependencies]
 ndb-engine = { path = "../../crates/ndb-engine" }
 serde      = { workspace = true }
