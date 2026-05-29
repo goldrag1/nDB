@@ -78,6 +78,75 @@ const ETC_MAGIC: [u8; 4] = *b"NETC";
 const ETC_EXT: &str = "etcx";
 const LKP_MAGIC: [u8; 4] = *b"NLKP";
 const LKP_EXT: &str = "lkpx";
+// Metadata sidecar: TxTimestamp + RetentionPolicy records, so a low-RAM
+// open can populate commit_timestamps + retention WITHOUT scanning every
+// SSTable (the needs_scan skip in rebuild_indexes).
+const META_MAGIC: &[u8; 4] = b"NDMT";
+const META_EXT: &str = "meta";
+
+/// Encode the per-SSTable metadata sidecar.
+fn encode_meta(ts: &[(u64, i64)], ret: &[(u32, u8, u32)]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(16 + ts.len() * 16 + ret.len() * 9 + 4);
+    out.extend_from_slice(META_MAGIC);
+    out.push(1); // version
+    out.extend_from_slice(&[0u8; 3]);
+    out.extend_from_slice(&u32::try_from(ts.len()).unwrap_or(u32::MAX).to_le_bytes());
+    for (tx, t) in ts {
+        out.extend_from_slice(&tx.to_le_bytes());
+        out.extend_from_slice(&t.to_le_bytes());
+    }
+    out.extend_from_slice(&u32::try_from(ret.len()).unwrap_or(u32::MAX).to_le_bytes());
+    for (ty, kind, n) in ret {
+        out.extend_from_slice(&ty.to_le_bytes());
+        out.push(*kind);
+        out.extend_from_slice(&n.to_le_bytes());
+    }
+    let mut h = crc32fast::Hasher::new();
+    h.update(&out);
+    out.extend_from_slice(&h.finalize().to_le_bytes());
+    out
+}
+
+/// `(tx_id, timestamp_us)` rows in a `.meta` sidecar.
+type MetaTimestamps = Vec<(u64, i64)>;
+/// `(type_id, policy_kind, keep_last_n)` rows in a `.meta` sidecar.
+type MetaRetention = Vec<(u32, u8, u32)>;
+
+/// Decode a metadata sidecar → (tx timestamps, retention rows). Returns
+/// `None` on any corruption (caller falls back to a full rebuild scan).
+fn decode_meta(bytes: &[u8]) -> Option<(MetaTimestamps, MetaRetention)> {
+    if bytes.len() < 16 || &bytes[0..4] != META_MAGIC || bytes[4] != 1 {
+        return None;
+    }
+    let trailer = bytes.len().checked_sub(4)?;
+    let stored = u32::from_le_bytes(bytes[trailer..].try_into().ok()?);
+    let mut h = crc32fast::Hasher::new();
+    h.update(&bytes[..trailer]);
+    if stored != h.finalize() {
+        return None;
+    }
+    let mut pos = 8;
+    let ts_count = u32::from_le_bytes(bytes.get(pos..pos + 4)?.try_into().ok()?) as usize;
+    pos += 4;
+    let mut ts = Vec::with_capacity(ts_count);
+    for _ in 0..ts_count {
+        let tx = u64::from_le_bytes(bytes.get(pos..pos + 8)?.try_into().ok()?);
+        let t = i64::from_le_bytes(bytes.get(pos + 8..pos + 16)?.try_into().ok()?);
+        ts.push((tx, t));
+        pos += 16;
+    }
+    let ret_count = u32::from_le_bytes(bytes.get(pos..pos + 4)?.try_into().ok()?) as usize;
+    pos += 4;
+    let mut ret = Vec::with_capacity(ret_count);
+    for _ in 0..ret_count {
+        let ty = u32::from_le_bytes(bytes.get(pos..pos + 4)?.try_into().ok()?);
+        let kind = *bytes.get(pos + 4)?;
+        let n = u32::from_le_bytes(bytes.get(pos + 5..pos + 9)?.try_into().ok()?);
+        ret.push((ty, kind, n));
+        pos += 9;
+    }
+    Some((ts, ret))
+}
 
 /// Statistics returned by [`Engine::compact`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -682,6 +751,19 @@ impl Engine {
     /// to pick up the changes.
     pub fn reload_constraints_from_metadata(&mut self) -> Result<usize, EngineError> {
         let snap = TxId::new(self.db.manifest().last_tx_id);
+        // Low-RAM: find the (rare) constraint entities by type via the
+        // on-disk entity-type index instead of materialising every record —
+        // otherwise `open` would scan + materialise the whole DB.
+        if self.entity_type_served_from_disk() {
+            let ids = self.entities_by_type(crate::validation::TYPE_VALIDATION_CONSTRAINT);
+            let mut recs = Vec::with_capacity(ids.len());
+            for id in ids {
+                if let Ok(Resolved::Live(rec)) = self.snapshot_read(&id.into_uuid(), snap) {
+                    recs.push(rec);
+                }
+            }
+            return Ok(self.validation.load_from_metadata(&recs));
+        }
         let records = self.snapshot_iter(snap)?;
         Ok(self.validation.load_from_metadata(&records))
     }
@@ -716,6 +798,18 @@ impl Engine {
             let tyc_on_disk = mm && self.type_cluster_files.contains_key(sst.path());
             let etc_on_disk = mm && self.entity_type_files.contains_key(sst.path());
             let lkp_on_disk = mm && self.lookup_key_files.contains_key(sst.path());
+            // If every index that could have data here is on disk, there's
+            // nothing to apply in RAM — skip the scan entirely. This is what
+            // keeps `open` O(1) (no full-DB read, no RSS spike) at scale.
+            let needs_scan = !adj_on_disk
+                || !tyc_on_disk
+                || !etc_on_disk
+                || (self.lookup_key.has_registrations() && !lkp_on_disk)
+                || (self.vector.has_registrations() && !vector_on_disk)
+                || (self.property_btree.has_registrations() && !property_on_disk);
+            if !needs_scan {
+                continue;
+            }
             for item in sst.iter() {
                 let (rec, _) = item?;
                 let tx = match &rec {
@@ -783,6 +877,10 @@ impl Engine {
             self.vector.apply(rec, tx);
             self.property_btree.apply(rec, tx);
         }
+        // Low-RAM mode: SSTables skipped above (all indexes on disk) still
+        // contributed tx timestamps + retention — load those from the
+        // `.meta` sidecars so as-of-timestamp + retention stay correct.
+        self.load_meta_sidecars();
         Ok(())
     }
 
@@ -1200,9 +1298,18 @@ impl Engine {
         let mut tyc = IdListIndexBuilder::new(TYC_MAGIC);
         let mut etc = IdListIndexBuilder::new(ETC_MAGIC);
         let mut lkp = IdListIndexBuilder::new(LKP_MAGIC);
+        let mut meta_ts: Vec<(u64, i64)> = Vec::new();
+        let mut meta_ret: Vec<(u32, u8, u32)> = Vec::new();
         let path = reader.path();
         for item in reader.iter() {
             let (rec, _) = item?;
+            match &rec {
+                Record::TxTimestamp(t) => meta_ts.push((t.tx_id.get(), t.timestamp_us)),
+                Record::RetentionPolicy(rp) => {
+                    meta_ret.push((rp.type_id.get(), rp.policy_kind, rp.keep_last_n));
+                }
+                _ => {}
+            }
             match &rec {
                 Record::Entity(e) => {
                     // entity_type_cluster: type → entity (always indexed).
@@ -1264,7 +1371,41 @@ impl Engine {
                     .map_err(|e| std::io::Error::other(format!("{label} index sidecar: {e}")))?;
             }
         }
+        // Metadata sidecar (tx timestamps + retention) so a low-RAM open
+        // can skip scanning this SSTable yet still resolve as-of-timestamp
+        // + honour retention.
+        if !meta_ts.is_empty() || !meta_ret.is_empty() {
+            let bytes = encode_meta(&meta_ts, &meta_ret);
+            let mp = idl_sidecar_path_for(path, META_EXT);
+            let tmp = mp.with_extension("meta.tmp");
+            std::fs::write(&tmp, &bytes)?;
+            std::fs::rename(&tmp, &mp)?;
+        }
         Ok(())
+    }
+
+    /// Populate `commit_timestamps` + `retention` from the per-SSTable
+    /// `.meta` sidecars (low-RAM mode). Lets `rebuild_indexes` skip the
+    /// full SSTable scan while keeping as-of-timestamp + retention correct.
+    fn load_meta_sidecars(&mut self) {
+        if !self.config.mmap_indexes {
+            return;
+        }
+        let paths: Vec<PathBuf> = self.sstables.iter().map(|s| s.path().to_path_buf()).collect();
+        for p in paths {
+            let mp = idl_sidecar_path_for(&p, META_EXT);
+            let Ok(bytes) = std::fs::read(&mp) else { continue };
+            if let Some((ts, ret)) = decode_meta(&bytes) {
+                for (tx, t) in ts {
+                    self.commit_timestamps.insert(TxId::new(tx), t);
+                }
+                for (ty, kind, n) in ret {
+                    if let Some(p) = decode_retention_policy(kind, n) {
+                        self.retention.insert(TypeId::new(ty), p);
+                    }
+                }
+            }
+        }
     }
 
     /// Open each SSTable's `.pidx` sidecar into `property_index_files`.
@@ -2053,7 +2194,7 @@ impl Engine {
             let _ = std::fs::remove_file(crate::block_index::sidecar_path_for(&p));
             let _ = std::fs::remove_file(pidx_sidecar_path_for(&p));
             let _ = std::fs::remove_file(vidx_sidecar_path_for(&p));
-            for ext in [ADJ_EXT, TYC_EXT, ETC_EXT, LKP_EXT] {
+            for ext in [ADJ_EXT, TYC_EXT, ETC_EXT, LKP_EXT, META_EXT] {
                 let _ = std::fs::remove_file(idl_sidecar_path_for(&p, ext));
             }
         }
@@ -3479,6 +3620,42 @@ mod tests {
         assert!(lm.lookup_by_external_key(name, &Value::String("p2".into())).is_none());
         assert_eq!(lm.lookup_by_external_key(name, &Value::String("p0".into())), Some(p0));
         lm.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn low_memory_open_preserves_meta_via_sidecar() {
+        // The needs_scan skip means a low-RAM open does NOT scan SSTables
+        // whose indexes are all on disk — so tx timestamps + retention must
+        // survive via the .meta sidecar instead.
+        let dir = temp_dir("lm_meta");
+        let ty = TypeId::new(1);
+        let mut tx_ids = Vec::new();
+        {
+            let mut e =
+                Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
+            e.set_retention_policy(ty, RetentionPolicy::Audited);
+            for i in 0..3 {
+                let mut tx = e.begin_write();
+                tx.put_entity(make_entity(EntityId::now_v7(), &format!("x{i}")));
+                tx_ids.push(tx.commit().unwrap());
+            }
+            e.flush().unwrap();
+            e.close().unwrap();
+        }
+        // Reopen low-RAM: timestamps + retention restored from .meta.
+        let e = Engine::open_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
+        for tid in &tx_ids {
+            assert!(
+                e.commit_timestamp_us(*tid).is_some(),
+                "tx {tid:?} timestamp lost after low-mem reopen"
+            );
+        }
+        assert!(
+            matches!(e.retention_policy(ty), RetentionPolicy::Audited),
+            "retention lost after low-mem reopen"
+        );
+        e.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
