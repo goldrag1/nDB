@@ -91,6 +91,29 @@
     is an attribute on either. That's the whole data model.
   </p>
 
+  <h2>A generic core, applications on top</h2>
+  <p>
+    nDB is split in two, on purpose. The <strong>core</strong> is a reusable,
+    domain-agnostic database — append-only LSM storage, MVCC time-travel, and
+    the adjacency / type-cluster / property-B-tree / vector indexes, with a
+    query executor over them. It knows nothing about proteins, earthquakes,
+    or research papers.
+  </p>
+  <p>
+    Each <strong>application</strong> embeds that core and builds its own thin
+    server on top — composing the core's primitives (ordered scans, bounded
+    traversals, vector kNN, <code>as&nbsp;of</code> snapshots) into exactly the
+    query shapes and caches its workload needs. The
+    <a href="/langgraph_ndb/">language-graph demo</a>, for instance, runs a
+    small app-layer server that turns "zoom level" into a bounded view query
+    and keeps its own citation-sorted index — so the browser stays fluid over
+    an arbitrarily large graph while the engine underneath stays general.
+    That's the point of the split: <strong>one engine, many applications,
+    each free to optimise its own access without forking the database.</strong>
+    Generic capabilities live in the core; domain-specific composition lives
+    in the app.
+  </p>
+
   <h2>Read next</h2>
   <div class="card-grid">
 
