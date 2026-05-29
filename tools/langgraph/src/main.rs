@@ -502,6 +502,50 @@ fn export_graph(engine: &Engine, path: &str) -> Result<(usize, usize), Box<dyn s
         }
     }
 
+    // ── Cluster super-nodes (Step 2 / far-zoom tier) ──────────────────
+    // Coarsen fields to the top-K by paper count (rest → "Other"), make one
+    // fixed super-node per coarse field on a ring, and add invisible
+    // paper→cluster "member" springs so the force layout pulls papers into
+    // field "galaxies". When zoomed out the explorer shows only these
+    // clusters; zoom in and they give way to the papers. This is what lets
+    // the view stay bounded — and meaningful — at any nДB size.
+    use std::collections::BTreeMap;
+    let mut field_count: HashMap<String, usize> = HashMap::new();
+    for n in &nodes {
+        if n["kind"] == "paper" {
+            *field_count.entry(n["field"].as_str().unwrap_or("Unknown").to_string()).or_default() += 1;
+        }
+    }
+    let mut fc: Vec<(String, usize)> = field_count.into_iter().collect();
+    fc.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let top_fields: std::collections::HashSet<String> = fc.iter().take(18).map(|(f, _)| f.clone()).collect();
+    let coarse = |f: &str| if top_fields.contains(f) { f.to_string() } else { "Other".to_string() };
+
+    let mut cluster_count: BTreeMap<String, usize> = BTreeMap::new();
+    for n in &nodes {
+        if n["kind"] == "paper" {
+            *cluster_count.entry(coarse(n["field"].as_str().unwrap_or("Unknown"))).or_default() += 1;
+        }
+    }
+    let k = cluster_count.len().max(1);
+    let ring = 850.0_f64;
+    for (i, (field, count)) in cluster_count.iter().enumerate() {
+        let ang = std::f64::consts::TAU * (i as f64) / (k as f64);
+        nodes.push(json!({
+            "id": format!("cluster:{field}"), "label": field, "kind": "cluster",
+            "field": field, "count": count, "year": 0, "citations": 0,
+            "fx": ring * ang.cos(), "fy": ring * ang.sin(), "fz": 0.0,
+        }));
+    }
+    // Tag papers with their coarse cluster (for colour) + emit member springs.
+    for n in &mut nodes {
+        if n["kind"] == "paper" {
+            let f = coarse(n["field"].as_str().unwrap_or("Unknown"));
+            n["cluster"] = json!(f);
+            links.push(json!({"source": n["id"].clone(), "target": format!("cluster:{f}"), "kind": "member"}));
+        }
+    }
+
     let papers_n = nodes.iter().filter(|n| n["kind"] == "paper").count();
     let authors_shown = nodes.iter().filter(|n| n["kind"] == "author").count();
     let doc = json!({

@@ -182,7 +182,7 @@ let mode = "cite";
 const Graph = ForceGraph3D()($("graph"))
   .backgroundColor("#0b0d12")
   .nodeLabel(() => "")                                  // we use a custom tooltip
-  .nodeVal(n => n.kind === "paper" ? 1 + Math.sqrt(n.citations) / 40 : 0.6)
+  .nodeVal(n => n.kind === "cluster" ? 9 + Math.sqrt(n.count || 1) : n.kind === "paper" ? 1 + Math.sqrt(n.citations) / 40 : 0.6)
   .nodeColor(nodeColor)
   .nodeOpacity(0.92)
   .linkColor(linkColor)
@@ -222,18 +222,19 @@ let lodThreshold = 0;   // current importance cutoff
 let lodBaseDist = 0;    // captured initial camera distance, for calibration
 function nodeVisible(n) {
   if (!n) return false;
+  if (n.kind === "cluster") return lodThreshold >= 0.42;     // field galaxies: far-zoom tier
   if (n.year > 0 && n.year > curYear) return false;          // time-travel filter
   return n.imp === undefined || n.imp >= lodThreshold;        // LOD filter
 }
 function linkVisible(l) {
-  // Cluster edges show only at far zoom; detail edges only once detail shows.
+  if (l.kind === "member") return false;                     // invisible cluster springs
   const s = resolveEnd(l.source), t = resolveEnd(l.target);
   return nodeVisible(s) && nodeVisible(t);
 }
 
 function nodeColor(n) {
   if (highlight.size && !highlight.has(n.id)) return "rgba(120,128,148,0.12)";
-  return fieldColor(n.field);
+  return fieldColor(n.kind === "paper" ? (n.cluster || n.field) : n.field);
 }
 function linkColor(l) {
   const s = typeof l.source === "object" ? l.source.id : l.source;
@@ -270,6 +271,14 @@ function onNodeClick(node) { focusNode(node); }
 function focusNodeById(id) { const n = nodeById.get(id); if (n) focusNode(n); }
 
 function focusNode(node) {
+  // Cluster (field galaxy): dive in — flying close drops the LOD threshold
+  // so the field's papers materialise around you.
+  if (node.kind === "cluster") {
+    highlight = new Set(); repaint();
+    flyTo(node, 130);
+    setTimeout(updateLOD, 950);
+    return;
+  }
   // Highlight: paper → recursive citation ancestry (relation+, depth 3);
   // author → their papers + co-authors.
   highlight = new Set([node.id]);
@@ -347,7 +356,9 @@ const tip = $("tip");
 function onNodeHover(node) {
   if (!node) { tip.style.display = "none"; return; }
   tip.style.display = "block";
-  tip.innerHTML = node.kind === "paper"
+  tip.innerHTML = node.kind === "cluster"
+    ? `<b>${esc(node.label)}</b><br>field · ${(node.count || 0).toLocaleString()} papers — zoom in to open`
+    : node.kind === "paper"
     ? `<b>${esc(node.label)}</b><br>${esc(node.field)} · ${node.year} · ${node.citations.toLocaleString()} citations`
     : `<b>${esc(node.label)}</b><br>author · since ${node.year}`;
 }
