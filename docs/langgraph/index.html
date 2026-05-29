@@ -44,6 +44,17 @@
   #details .item .y { color:var(--muted); font-variant-numeric:tabular-nums; }
   #details .close { position:absolute; top:12px; right:14px; cursor:pointer; color:var(--muted); font-size:18px; line-height:1; }
   #details .close:hover { color:var(--ink); }
+  .searchwrap { position:relative; }
+  #suggest { position:absolute; top:calc(100% + 4px); left:0; right:0; z-index:30; background:#0e1118;
+    border:1px solid var(--line); border-radius:8px; max-height:240px; overflow:auto; display:none;
+    box-shadow:0 10px 28px rgba(0,0,0,.5); }
+  #suggest .sug { padding:7px 10px; cursor:pointer; border-bottom:1px solid rgba(38,43,56,.5);
+    display:flex; flex-direction:column; gap:1px; }
+  #suggest .sug:last-child { border-bottom:none; }
+  #suggest .sug.active, #suggest .sug:hover { background:rgba(93,176,255,.14); }
+  #suggest .sug .t { font-size:12.5px; line-height:1.3; }
+  #suggest .sug .m { font-size:10.5px; color:var(--muted); }
+  #suggest .sug .m .kn { color:var(--accent); }
   .dims { font-size:11px; color:var(--muted); border-top:1px solid var(--line); margin-top:12px; padding-top:10px; }
   .dims code { color:var(--accent); }
   button.clear { width:100%; margin-top:6px; padding:6px; background:#0e1118; border:1px solid var(--line);
@@ -60,8 +71,12 @@
 
   <div class="row">
     <label>Semantic search <span style="text-transform:none">(vector kNN)</span></label>
-    <input id="search" type="text" placeholder="e.g. transformer attention, diffusion, graph neural net" />
-    <div class="hint">Embeds your text the same way nDB indexed each paper, ranks by cosine.</div>
+    <div class="searchwrap">
+      <input id="search" type="text" autocomplete="off" spellcheck="false"
+        placeholder="e.g. transformer attention, diffusion, graph neural net" />
+      <div id="suggest"></div>
+    </div>
+    <div class="hint">Type to get title + semantic suggestions; ↑↓ to pick, Enter to jump. Embeds your text the same way nDB indexed each paper.</div>
   </div>
 
   <div class="row">
@@ -287,22 +302,76 @@ function onNodeHover(node) {
 document.addEventListener("mousemove", e => { tip.style.left = (e.clientX + 14) + "px"; tip.style.top = (e.clientY + 14) + "px"; });
 const esc = s => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
-function runSearch(q) {
-  q = q.trim();
-  if (!q) { highlight = new Set(); repaint(); return; }
+function flyTo(node, dist) {
+  const r = 1 + Math.hypot(node.x || 1, node.y || 1, node.z || 1);
+  Graph.cameraPosition({ x: node.x * (1 + dist / r), y: node.y * (1 + dist / r), z: node.z * (1 + dist / r) }, node, 900);
+}
+
+// Semantic kNN papers nearest to a free-text query.
+function semanticRank(q, k) {
   const qv = embed(q);
-  const ranked = Graph.graphData().nodes
+  return Graph.graphData().nodes
     .filter(n => n.kind === "paper" && n.embedding && n.embedding.length === DIM)
     .map(n => ({ n, d: cosineDist(qv, n.embedding) }))
     .sort((a, b) => a.d - b.d)
-    .slice(0, 6);
+    .slice(0, k);
+}
+
+// Highlight the semantic matches (used while typing); fly only on demand.
+function highlightMatches(q, fly) {
+  q = q.trim();
+  if (!q) { highlight = new Set(); repaint(); return; }
+  const ranked = semanticRank(q, 6);
   highlight = new Set(ranked.map(r => r.n.id));
   repaint();
-  if (ranked.length) {
-    const top = ranked[0].n;
-    const r = 1 + Math.hypot(top.x || 1, top.y || 1, top.z || 1);
-    Graph.cameraPosition({ x: top.x * (1 + 230 / r), y: top.y * (1 + 230 / r), z: top.z * (1 + 230 / r) }, top, 900);
+  if (fly && ranked.length) flyTo(ranked[0].n, 230);
+}
+function runSearch(q) { highlightMatches(q, true); }  // test/console affordance
+
+// ── type-ahead suggestions: literal title/author matches (prefix-ranked)
+//    blended with semantic kNN, so you can SEE and pick what matched. ──
+let sugItems = [], sugIdx = -1;
+function buildSuggestions(q) {
+  q = q.trim().toLowerCase();
+  if (!q) return [];
+  const lit = [];
+  for (const n of DATA.nodes) {
+    const lc = n.label.toLowerCase();
+    if (lc.includes(q)) lit.push(n);
   }
+  lit.sort((a, b) => {
+    const ap = a.label.toLowerCase().startsWith(q) ? 0 : 1;
+    const bp = b.label.toLowerCase().startsWith(q) ? 0 : 1;
+    if (ap !== bp) return ap - bp;                         // prefix matches first
+    return (b.citations || 0) - (a.citations || 0);       // then by impact
+  });
+  const litTop = lit.slice(0, 6);
+  const have = new Set(litTop.map(n => n.id));
+  const sem = semanticRank(q, 6).map(r => r.n).filter(n => !have.has(n.id)).slice(0, 4);
+  return litTop.map(n => ({ n, kn: false })).concat(sem.map(n => ({ n, kn: true }))).slice(0, 9);
+}
+function renderSuggest(items) {
+  sugItems = items; sugIdx = -1;
+  const box = $("suggest");
+  if (!items.length) { box.style.display = "none"; box.innerHTML = ""; return; }
+  box.innerHTML = items.map(({ n, kn }, i) =>
+    `<div class="sug" data-i="${i}"><span class="t">${esc(n.label)}</span>` +
+    `<span class="m">${n.kind === "paper" ? esc(n.field) + " · " + n.year : "author"}` +
+    (kn ? ` · <span class="kn">≈ semantic</span>` : "") + `</span></div>`).join("");
+  box.style.display = "block";
+  box.querySelectorAll(".sug").forEach(el =>
+    el.addEventListener("mousedown", e => { e.preventDefault(); chooseSuggest(+el.dataset.i); }));
+}
+function markActive() {
+  const els = $("suggest").querySelectorAll(".sug");
+  els.forEach((el, i) => el.classList.toggle("active", i === sugIdx));
+  if (sugIdx >= 0 && els[sugIdx]) els[sugIdx].scrollIntoView({ block: "nearest" });
+}
+function chooseSuggest(i) {
+  const it = sugItems[i]; if (!it) return;
+  $("search").value = it.n.label;
+  $("suggest").style.display = "none";
+  focusNodeById(it.n.id);
 }
 
 function setMode(m) {
@@ -363,8 +432,24 @@ fetch("./graph.json", { cache: "no-store" })
     window.__lg = { runSearch, focusNodeById, get highlight() { return highlight; }, data: () => DATA };
     startTwinkle();
 
-    $("search").addEventListener("input", e => runSearch(e.target.value));
-    $("clear").addEventListener("click", () => { highlight = new Set(); $("search").value = ""; repaint(); });
+    const sIn = $("search");
+    let sugTimer;
+    sIn.addEventListener("input", e => {
+      const q = e.target.value;
+      clearTimeout(sugTimer);
+      sugTimer = setTimeout(() => { renderSuggest(buildSuggestions(q)); highlightMatches(q, false); }, 110);
+    });
+    sIn.addEventListener("keydown", e => {
+      const box = $("suggest");
+      if (box.style.display === "none") { if (e.key === "Enter") highlightMatches(sIn.value, true); return; }
+      if (e.key === "ArrowDown") { sugIdx = Math.min(sugIdx + 1, sugItems.length - 1); markActive(); e.preventDefault(); }
+      else if (e.key === "ArrowUp") { sugIdx = Math.max(sugIdx - 1, 0); markActive(); e.preventDefault(); }
+      else if (e.key === "Enter") { chooseSuggest(sugIdx >= 0 ? sugIdx : 0); e.preventDefault(); }
+      else if (e.key === "Escape") { box.style.display = "none"; }
+    });
+    sIn.addEventListener("focus", () => { if (sIn.value.trim()) renderSuggest(buildSuggestions(sIn.value)); });
+    sIn.addEventListener("blur", () => setTimeout(() => { $("suggest").style.display = "none"; }, 150));
+    $("clear").addEventListener("click", () => { highlight = new Set(); sIn.value = ""; $("suggest").style.display = "none"; repaint(); });
     $("layCite").addEventListener("click", () => setMode("cite"));
     $("laySem").addEventListener("click", () => setMode("sem"));
   })
