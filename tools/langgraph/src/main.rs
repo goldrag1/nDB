@@ -1,37 +1,39 @@
-//! langgraph-ingest — build a "language graph" (GraphRAG-style knowledge
-//! graph) directly inside nDB.
+//! langgraph-ingest — build a "language graph" (scholarly knowledge graph)
+//! directly inside nDB, Rust-native.
 //!
-//! Rust-native by design: facts are written through the embedded engine
-//! API (`Engine::begin_write` / `put_entity` / `put_hyperedge`), with no
-//! intermediate `seed.json` and no second loader. A demo whose whole pitch
-//! is a Rust-native graph DB should drink its own champagne.
+//! The demo corpus is an OpenAlex citation subgraph. OpenAlex metadata is
+//! **CC0 (public domain)** — freely redistributable — so `--fetch` pulls a
+//! connected slice once and caches it into the repo; every later run (and
+//! the 3D explorer) reads that static cache, never a live API.
 //!
-//! What it models (and why nDB fits):
-//! - **N-ary facts as hyperedges.** "Microsoft acquired GitHub in 2018" is
-//!   ONE `FACT` hyperedge (subject + object roles + a `predicate`/`year`
-//!   property), not three awkward binary rows. Facts with a third
-//!   participant ("nDB compared_with SQLite on joins") get a `context`
-//!   role — genuine arity-3 edges.
-//! - **Per-entity embeddings** (`Value::Vector`, vector-indexed) → semantic
-//!   kNN, the "retrieval" half of GraphRAG.
-//! - **Per-document transactions** → each ingested doc is its own commit,
-//!   so MVCC `as_of` gives an honest time-travel view of how the graph
-//!   grew. No temporal-table gymnastics.
+//! Why a paper graph: it is the richest **5-dimensional** structure a demo
+//! can stand on, and every dimension maps to an nDB feature:
+//!   1-3. x/y/z force layout over the CITES topology      (adjacency)
+//!   4.   publication year → `as_of` time scrubber        (MVCC time-travel)
+//!   5.   abstract/title embedding → semantic projection  (vector_search)
+//!   (+)  research field → node colour                    (property)
+//!   (+)  citation count → node size / centrality         (property)
 //!
-//! Slice 1 (this file): engine-direct ingest of an offline fixture corpus
-//! + a `ureq` LLM-extraction integration point (env-gated), then three
-//! demonstrative reads (lookup, vector kNN, time-travel). Slice 2 wires the
-//! 3D explorer's `as_of` scrubber + search box to the live server.
+//! It also exercises the graph shapes relational engines handle worst:
+//!   - **N-ary** `AUTHORED` hyperedges (one paper + N author role-fillers),
+//!   - **recursive** CITES chains (the `relation+` traversal the bench
+//!     already shows nDB beating `WITH RECURSIVE` on).
+//!
+//! Writes go straight through the embedded engine (`begin_write` /
+//! `put_entity` / `put_hyperedge`) — no seed.json hop, no Python scraper.
+//! One transaction per publication year, oldest first, so `as_of(year)`
+//! shows the field as it stood that year.
 //!
 //! Run:
-//!     cargo run -p langgraph                 # offline fixture → .demo-data/langgraph-ndb
-//!     cargo run -p langgraph -- /tmp/lg      # custom db dir
-//!     LANGGRAPH_LLM_URL=https://api.example/v1/chat/completions \
-//!     LANGGRAPH_API_KEY=sk-... cargo run -p langgraph   # real extraction
+//!     cargo run -p langgraph -- --fetch            # OpenAlex → cached JSON
+//!     cargo run -p langgraph                       # ingest cache → .demo-data/langgraph-ndb
+//!     cargo run -p langgraph -- /tmp/lg            # custom db dir
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation,
          clippy::cast_sign_loss, clippy::too_many_lines)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+
+use serde::{Deserialize, Serialize};
 
 use ndb_engine::record::{
     EntityRecord, HyperEdgeRecord, PropertyKeyRecord, Record, RoleNameRecord, TypeNameRecord,
@@ -41,84 +43,45 @@ use ndb_engine::{
 };
 
 // ─── Schema ────────────────────────────────────────────────────────────
-const TYPE_ENTITY: u32 = 300;
-const TYPE_FACT: u32 = 400;
+const TYPE_PAPER: u32 = 310;
+const TYPE_AUTHOR: u32 = 320;
+const TYPE_CITES: u32 = 410; // binary hyperedge: citing → cited
+const TYPE_AUTHORED: u32 = 420; // N-ary hyperedge: paper + N authors
 
-const PROP_NAME: u32 = 50; // lookup-key indexed
-const PROP_KIND: u32 = 51; // property-btree indexed
+const PROP_NAME: u32 = 50; // lookup-key indexed (paper title / author name)
+const PROP_KIND: u32 = 51; // "paper" | "author"
 const PROP_EMBED: u32 = 52; // vector indexed
-const PROP_PREDICATE: u32 = 53;
-const PROP_SOURCE: u32 = 54; // source document id
+const PROP_YEAR: u32 = 55;
+const PROP_CITATIONS: u32 = 56;
+const PROP_FIELD: u32 = 57; // property-btree indexed (top concept)
 
-const ROLE_SUBJECT: u32 = 20;
-const ROLE_OBJECT: u32 = 21;
-const ROLE_CONTEXT: u32 = 22; // present only on arity-3 facts
+const ROLE_CITING: u32 = 30;
+const ROLE_CITED: u32 = 31;
+const ROLE_PAPER: u32 = 32;
+const ROLE_AUTHOR: u32 = 33;
 
 const EMBED_DIM: usize = 16;
+const MAX_AUTHORS: usize = 8; // cap arity so AUTHORED stays readable
+const CACHE_PATH: &str = "tools/langgraph/data/openalex-ml.json";
 
-// ─── Extracted-fact shape (what an LLM returns; the offline corpus hand-
-// authors the same shape so Slice 1 runs with no network). ──────────────
-struct Participant {
-    name: &'static str,
-    kind: &'static str,
-}
-struct Fact {
-    predicate: &'static str,
-    subject: Participant,
-    object: Participant,
-    context: Option<Participant>, // Some → arity-3 N-ary fact
-}
-struct Doc {
-    id: &'static str,
-    facts: Vec<Fact>,
-}
-
-fn p(name: &'static str, kind: &'static str) -> Participant {
-    Participant { name, kind }
+// ─── Cached corpus shape (committed JSON; CC0 metadata) ─────────────────
+#[derive(Serialize, Deserialize, Clone)]
+struct Paper {
+    id: String,
+    title: String,
+    year: i64,
+    citations: i64,
+    field: String,
+    authors: Vec<String>,
+    /// Ids of cited papers — kept only when the target is also in the set,
+    /// so the cache is an internally-connected subgraph.
+    cites: Vec<String>,
 }
 
-/// Offline fixture corpus — real facts about the database / graph domain,
-/// hand-authored in the exact shape an LLM extractor would emit. This is
-/// sanctioned demo data, not a fake API response: the entities and
-/// relations are genuine, the graph it builds is real.
-fn corpus() -> Vec<Doc> {
-    vec![
-        Doc { id: "doc-ndb", facts: vec![
-            Fact { predicate: "is_a", subject: p("nDB", "system"), object: p("hypergraph database", "concept"), context: None },
-            Fact { predicate: "written_in", subject: p("nDB", "system"), object: p("Rust", "language"), context: None },
-            Fact { predicate: "stores", subject: p("nDB", "system"), object: p("N-ary fact", "concept"), context: None },
-        ]},
-        Doc { id: "doc-storage", facts: vec![
-            Fact { predicate: "built_on", subject: p("nDB", "system"), object: p("LSM tree", "concept"), context: None },
-            Fact { predicate: "provides", subject: p("nDB", "system"), object: p("MVCC", "concept"), context: None },
-            Fact { predicate: "enables", subject: p("MVCC", "concept"), object: p("time travel", "concept"), context: None },
-        ]},
-        Doc { id: "doc-vectors", facts: vec![
-            Fact { predicate: "indexes", subject: p("nDB", "system"), object: p("embedding", "concept"), context: None },
-            Fact { predicate: "powers", subject: p("embedding", "concept"), object: p("semantic search", "concept"), context: None },
-        ]},
-        Doc { id: "doc-graphrag", facts: vec![
-            Fact { predicate: "extracts", subject: p("GraphRAG", "method"), object: p("knowledge graph", "concept"), context: Some(p("text corpus", "concept")) },
-            Fact { predicate: "retrieves_with", subject: p("GraphRAG", "method"), object: p("semantic search", "concept"), context: None },
-            Fact { predicate: "feeds", subject: p("knowledge graph", "concept"), object: p("LLM", "system"), context: None },
-        ]},
-        Doc { id: "doc-bench", facts: vec![
-            Fact { predicate: "compared_with", subject: p("nDB", "system"), object: p("SQLite", "system"), context: Some(p("recursive traversal", "concept")) },
-            Fact { predicate: "compared_with", subject: p("nDB", "system"), object: p("PostgreSQL", "system"), context: Some(p("graph join", "concept")) },
-            Fact { predicate: "beats", subject: p("nDB", "system"), object: p("PostgreSQL", "system"), context: Some(p("recursive traversal", "concept")) },
-        ]},
-        Doc { id: "doc-traversal", facts: vec![
-            Fact { predicate: "supports", subject: p("nDB", "system"), object: p("recursive traversal", "concept"), context: None },
-            Fact { predicate: "models", subject: p("hypergraph database", "concept"), object: p("approval chain", "domain"), context: None },
-            Fact { predicate: "models", subject: p("hypergraph database", "concept"), object: p("dependency graph", "domain"), context: None },
-        ]},
-    ]
-}
-
-// ─── Deterministic offline embedding ───────────────────────────────────
+// ─── Deterministic embedding (offline, reproducible) ────────────────────
 // Char unigram + bigram hashing into EMBED_DIM buckets, L2-normalised.
-// Similar names share buckets → near vectors; querying with embed(name)
-// returns that entity at distance ~0. Deterministic → the test is stable.
+// Fed title + field, so papers sharing a field/topic land near each other
+// — enough topical signal for the kNN demo without an embedding API.
 fn embed(text: &str) -> Vec<f32> {
     let mut v = vec![0f32; EMBED_DIM];
     let chars: Vec<char> = text.to_lowercase().chars().collect();
@@ -143,200 +106,340 @@ fn embed(text: &str) -> Vec<f32> {
     v
 }
 
+// ─── OpenAlex fetch (ureq; CC0 data) ────────────────────────────────────
+fn short_id(openalex_url: &str) -> String {
+    openalex_url.rsplit('/').next().unwrap_or(openalex_url).to_string()
+}
+
+/// Pull the top-cited connected slice of a topic into `Vec<Paper>`. Keeps
+/// only CITES edges whose target is also in the slice, so the result is an
+/// internally-connected citation subgraph.
+fn fetch_openalex(query: &str, per_page: usize) -> Result<Vec<Paper>, Box<dyn std::error::Error>> {
+    let url = format!(
+        "https://api.openalex.org/works?filter=default.search:{q},from_publication_date:2012-01-01&sort=cited_by_count:desc&per-page={n}&select=id,display_name,publication_year,cited_by_count,referenced_works,concepts,authorships",
+        q = query.replace(' ', "%20"),
+        n = per_page.min(200),
+    );
+    let resp: serde_json::Value = ureq::get(&url)
+        .set("User-Agent", "langgraph-demo (mailto:demo@nDB.example)")
+        .call()?
+        .into_json()?;
+
+    let results = resp["results"].as_array().cloned().unwrap_or_default();
+    // First pass: collect the id set so we can intersect references.
+    let id_set: std::collections::HashSet<String> = results
+        .iter()
+        .filter_map(|w| w["id"].as_str().map(short_id))
+        .collect();
+
+    let mut papers = Vec::new();
+    for w in &results {
+        let Some(id) = w["id"].as_str().map(short_id) else { continue };
+        let title = w["display_name"].as_str().unwrap_or("(untitled)").to_string();
+        let year = w["publication_year"].as_i64().unwrap_or(0);
+        let citations = w["cited_by_count"].as_i64().unwrap_or(0);
+        // First concept whose level >= 1 reads as a usable field label.
+        let field = w["concepts"]
+            .as_array()
+            .and_then(|cs| {
+                cs.iter()
+                    .find(|c| c["level"].as_i64().unwrap_or(0) >= 1)
+                    .or_else(|| cs.first())
+            })
+            .and_then(|c| c["display_name"].as_str())
+            .unwrap_or("Unknown")
+            .to_string();
+        let authors: Vec<String> = w["authorships"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x["author"]["display_name"].as_str().map(str::to_string))
+                    .take(MAX_AUTHORS)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let cites: Vec<String> = w["referenced_works"]
+            .as_array()
+            .map(|r| {
+                r.iter()
+                    .filter_map(|x| x.as_str().map(short_id))
+                    .filter(|rid| id_set.contains(rid) && rid != &id)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if year == 0 {
+            continue;
+        }
+        papers.push(Paper { id, title, year, citations, field, authors, cites });
+    }
+    Ok(papers)
+}
+
+fn load_cache() -> Option<Vec<Paper>> {
+    let bytes = std::fs::read(CACHE_PATH).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
 // ─── Schema registration + ingest ──────────────────────────────────────
 fn register_schema(engine: &mut Engine) {
     engine.register_lookup_key(PropertyId::new(PROP_NAME));
-    engine.register_property_btree(TypeId::new(TYPE_ENTITY), PropertyId::new(PROP_KIND));
+    engine.register_property_btree(TypeId::new(TYPE_PAPER), PropertyId::new(PROP_FIELD));
     engine.register_vector_property(PropertyId::new(PROP_EMBED));
 
     let mut tx = engine.begin_write();
-    tx.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(TYPE_ENTITY), name: "entity".into() }));
-    tx.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(TYPE_FACT), name: "fact".into() }));
-    tx.put_raw(Record::RoleName(RoleNameRecord { id: RoleId::new(ROLE_SUBJECT), name: "subject".into() }));
-    tx.put_raw(Record::RoleName(RoleNameRecord { id: RoleId::new(ROLE_OBJECT), name: "object".into() }));
-    tx.put_raw(Record::RoleName(RoleNameRecord { id: RoleId::new(ROLE_CONTEXT), name: "context".into() }));
-    tx.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(PROP_NAME), name: "name".into() }));
-    tx.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(PROP_KIND), name: "kind".into() }));
-    tx.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(PROP_EMBED), name: "embedding".into() }));
-    tx.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(PROP_PREDICATE), name: "predicate".into() }));
-    tx.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(PROP_SOURCE), name: "source".into() }));
+    for (id, name) in [
+        (TYPE_PAPER, "paper"),
+        (TYPE_AUTHOR, "author"),
+        (TYPE_CITES, "cites"),
+        (TYPE_AUTHORED, "authored"),
+    ] {
+        tx.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(id), name: name.into() }));
+    }
+    for (id, name) in [
+        (ROLE_CITING, "citing"),
+        (ROLE_CITED, "cited"),
+        (ROLE_PAPER, "paper"),
+        (ROLE_AUTHOR, "author"),
+    ] {
+        tx.put_raw(Record::RoleName(RoleNameRecord { id: RoleId::new(id), name: name.into() }));
+    }
+    for (id, name) in [
+        (PROP_NAME, "name"),
+        (PROP_KIND, "kind"),
+        (PROP_EMBED, "embedding"),
+        (PROP_YEAR, "year"),
+        (PROP_CITATIONS, "citations"),
+        (PROP_FIELD, "field"),
+    ] {
+        tx.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(id), name: name.into() }));
+    }
     tx.commit().unwrap();
 }
 
-/// Find-or-create an entity by name within the current write txn. Dedups
-/// across documents: an entity first seen in doc 1 is reused (same
-/// `EntityId`) by every later doc, never re-inserted.
-fn ensure_entity(
+fn ensure_author(
     tx: &mut ndb_engine::WriteTxn<'_>,
-    ids: &mut HashMap<String, EntityId>,
+    authors: &mut HashMap<String, EntityId>,
     name: &str,
-    kind: &str,
 ) -> EntityId {
-    if let Some(eid) = ids.get(name) {
+    if let Some(eid) = authors.get(name) {
         return *eid;
     }
     let eid = EntityId::now_v7();
     tx.put_entity(EntityRecord {
         entity_id: eid,
-        type_id: TypeId::new(TYPE_ENTITY),
+        type_id: TypeId::new(TYPE_AUTHOR),
         tx_id_assert: TxId::new(0),
         tx_id_supersede: TxId::ACTIVE,
         properties: vec![
             (PropertyId::new(PROP_NAME), Value::String(name.to_string())),
-            (PropertyId::new(PROP_KIND), Value::String(kind.to_string())),
+            (PropertyId::new(PROP_KIND), Value::String("author".into())),
             (PropertyId::new(PROP_EMBED), Value::Vector(embed(name))),
         ],
     });
-    ids.insert(name.to_string(), eid);
+    authors.insert(name.to_string(), eid);
     eid
 }
 
 struct Ingested {
-    name_to_id: HashMap<String, EntityId>,
-    /// (doc_id, committed tx) in ingest order — the time-travel timeline.
-    timeline: Vec<(String, TxId)>,
-    facts: usize,
+    papers: usize,
+    authors: usize,
+    cites: usize,
+    authored: usize,
+    /// (year, committed tx) ascending — the time-travel timeline.
+    timeline: Vec<(i64, TxId)>,
+    /// OpenAlex id → entity id (consumed by the explorer wiring + tests).
+    #[allow(dead_code)]
+    paper_ids: HashMap<String, EntityId>,
 }
 
-/// Ingest the corpus, one transaction per document. Returns the
-/// name→id map and the per-document commit timeline.
-fn ingest(engine: &mut Engine, docs: &[Doc]) -> Ingested {
-    let mut name_to_id: HashMap<String, EntityId> = HashMap::new();
-    let mut timeline = Vec::with_capacity(docs.len());
-    let mut facts = 0usize;
-
-    for doc in docs {
-        let mut tx = engine.begin_write();
-        for f in &doc.facts {
-            let subj = ensure_entity(&mut tx, &mut name_to_id, f.subject.name, f.subject.kind);
-            let obj = ensure_entity(&mut tx, &mut name_to_id, f.object.name, f.object.kind);
-            let mut roles = vec![
-                (RoleId::new(ROLE_SUBJECT), subj),
-                (RoleId::new(ROLE_OBJECT), obj),
-            ];
-            if let Some(ctx) = &f.context {
-                let cid = ensure_entity(&mut tx, &mut name_to_id, ctx.name, ctx.kind);
-                roles.push((RoleId::new(ROLE_CONTEXT), cid));
-            }
-            tx.put_hyperedge(HyperEdgeRecord {
-                hyperedge_id: HyperedgeId::now_v7(),
-                type_id: TypeId::new(TYPE_FACT),
-                tx_id_assert: TxId::new(0),
-                tx_id_supersede: TxId::ACTIVE,
-                roles,
-                hyperedge_roles: Vec::new(),
-                properties: vec![
-                    (PropertyId::new(PROP_PREDICATE), Value::String(f.predicate.to_string())),
-                    (PropertyId::new(PROP_SOURCE), Value::String(doc.id.to_string())),
-                ],
-            });
-            facts += 1;
-        }
-        let tx_id = tx.commit().unwrap();
-        timeline.push((doc.id.to_string(), tx_id));
+/// Ingest a paper set, one transaction per publication year (oldest
+/// first). A paper, its authors, its AUTHORED edge, and its CITES edges to
+/// already-created targets all land in that year's tx — so `as_of(year)`
+/// is an honest snapshot of the field at that year.
+fn ingest_papers(engine: &mut Engine, papers: &[Paper]) -> Ingested {
+    let mut by_year: BTreeMap<i64, Vec<&Paper>> = BTreeMap::new();
+    for p in papers {
+        by_year.entry(p.year).or_default().push(p);
     }
 
-    Ingested { name_to_id, timeline, facts }
+    let mut paper_ids: HashMap<String, EntityId> = HashMap::new();
+    let mut author_ids: HashMap<String, EntityId> = HashMap::new();
+    let mut timeline = Vec::new();
+    let (mut n_cites, mut n_authored) = (0usize, 0usize);
+
+    for (year, group) in by_year {
+        let mut tx = engine.begin_write();
+        for p in &group {
+            // Paper entity (dedup by OpenAlex id).
+            let pid = *paper_ids.entry(p.id.clone()).or_insert_with(EntityId::now_v7);
+            tx.put_entity(EntityRecord {
+                entity_id: pid,
+                type_id: TypeId::new(TYPE_PAPER),
+                tx_id_assert: TxId::new(0),
+                tx_id_supersede: TxId::ACTIVE,
+                properties: vec![
+                    (PropertyId::new(PROP_NAME), Value::String(p.title.clone())),
+                    (PropertyId::new(PROP_KIND), Value::String("paper".into())),
+                    (PropertyId::new(PROP_YEAR), Value::I64(p.year)),
+                    (PropertyId::new(PROP_CITATIONS), Value::I64(p.citations)),
+                    (PropertyId::new(PROP_FIELD), Value::String(p.field.clone())),
+                    (PropertyId::new(PROP_EMBED), Value::Vector(embed(&format!("{} {}", p.title, p.field)))),
+                ],
+            });
+
+            // N-ary AUTHORED: paper + each author.
+            if !p.authors.is_empty() {
+                let mut roles = vec![(RoleId::new(ROLE_PAPER), pid)];
+                for a in &p.authors {
+                    let aid = ensure_author(&mut tx, &mut author_ids, a);
+                    roles.push((RoleId::new(ROLE_AUTHOR), aid));
+                }
+                tx.put_hyperedge(HyperEdgeRecord {
+                    hyperedge_id: HyperedgeId::now_v7(),
+                    type_id: TypeId::new(TYPE_AUTHORED),
+                    tx_id_assert: TxId::new(0),
+                    tx_id_supersede: TxId::ACTIVE,
+                    roles,
+                    hyperedge_roles: Vec::new(),
+                    properties: vec![],
+                });
+                n_authored += 1;
+            }
+
+            // CITES edges to targets already created (older or same-year-
+            // earlier papers). Forward refs are skipped — citations point
+            // backward in time.
+            for cited in &p.cites {
+                if let Some(&cid) = paper_ids.get(cited) {
+                    tx.put_hyperedge(HyperEdgeRecord {
+                        hyperedge_id: HyperedgeId::now_v7(),
+                        type_id: TypeId::new(TYPE_CITES),
+                        tx_id_assert: TxId::new(0),
+                        tx_id_supersede: TxId::ACTIVE,
+                        roles: vec![
+                            (RoleId::new(ROLE_CITING), pid),
+                            (RoleId::new(ROLE_CITED), cid),
+                        ],
+                        hyperedge_roles: Vec::new(),
+                        properties: vec![],
+                    });
+                    n_cites += 1;
+                }
+            }
+        }
+        let tx_id = tx.commit().unwrap();
+        timeline.push((year, tx_id));
+    }
+
+    Ingested {
+        papers: paper_ids.len(),
+        authors: author_ids.len(),
+        cites: n_cites,
+        authored: n_authored,
+        timeline,
+        paper_ids,
+    }
 }
 
-/// Count `FACT` hyperedges visible at a given snapshot — the time-travel
-/// probe. Reads the MVCC view as-of `tx`.
-fn count_facts_at(engine: &Engine, tx: TxId) -> usize {
+/// Count `PAPER` entities visible at a snapshot — the time-travel probe.
+fn count_papers_at(engine: &Engine, tx: TxId) -> usize {
     engine
         .snapshot_iter(tx)
         .unwrap()
         .iter()
-        .filter(|r| matches!(r, Record::HyperEdge(h) if h.type_id == TypeId::new(TYPE_FACT)))
+        .filter(|r| matches!(r, Record::Entity(e) if e.type_id == TypeId::new(TYPE_PAPER)))
         .count()
 }
 
-// ─── LLM extraction integration point (env-gated; ureq transport) ───────
-// The offline corpus is the default. When LANGGRAPH_LLM_URL is set, this is
-// the path that turns raw document text into facts via a real model. Wired
-// with the real request/response shape; left out of the default run so
-// Slice 1 builds + tests offline with no API key.
-#[allow(dead_code)]
-fn extract_via_llm(url: &str, api_key: &str, document: &str) -> Result<serde_json::Value, ureq::Error> {
-    let body = serde_json::json!({
-        "model": "claude-opus-4-8",
-        "max_tokens": 1024,
-        "messages": [{
-            "role": "user",
-            "content": format!(
-                "Extract factual triples from the text as JSON: \
-                 [{{\"subject\":..,\"subject_kind\":..,\"predicate\":..,\
-                 \"object\":..,\"object_kind\":..,\"context\":null}}]. \
-                 Text:\n{document}"
-            )
-        }]
-    });
-    let resp = ureq::post(url)
-        .set("Authorization", &format!("Bearer {api_key}"))
-        .set("Content-Type", "application/json")
-        .send_json(body)?;
-    Ok(resp.into_json::<serde_json::Value>()?)
+// ─── Tiny network-free corpus for tests + offline fallback ──────────────
+fn synthetic_papers() -> Vec<Paper> {
+    let mk = |id: &str, title: &str, year: i64, cites_n: i64, field: &str, authors: &[&str], cites: &[&str]| Paper {
+        id: id.into(),
+        title: title.into(),
+        year,
+        citations: cites_n,
+        field: field.into(),
+        authors: authors.iter().map(|s| (*s).to_string()).collect(),
+        cites: cites.iter().map(|s| (*s).to_string()).collect(),
+    };
+    vec![
+        mk("W1", "A Neural Probabilistic Language Model", 2012, 9000, "NLP", &["Bengio", "Ducharme"], &[]),
+        mk("W2", "ImageNet Classification with Deep CNNs", 2012, 90000, "Computer Vision", &["Krizhevsky", "Sutskever", "Hinton"], &["W1"]),
+        mk("W3", "Sequence to Sequence Learning", 2014, 30000, "NLP", &["Sutskever", "Vinyals", "Le"], &["W1", "W2"]),
+        mk("W4", "Deep Residual Learning", 2016, 220000, "Computer Vision", &["He", "Zhang", "Ren", "Sun"], &["W2"]),
+        mk("W5", "Attention Is All You Need", 2017, 130000, "NLP", &["Vaswani", "Shazeer", "Parmar"], &["W1", "W3", "W4"]),
+        mk("W6", "BERT", 2019, 80000, "NLP", &["Devlin", "Chang", "Lee", "Toutanova"], &["W3", "W5"]),
+    ]
+}
+
+fn demo_reads(engine: &Engine, ing: &Ingested) {
+    println!(
+        "ingested {} papers + {} authors, {} CITES + {} AUTHORED edges across {} years",
+        ing.papers, ing.authors, ing.cites, ing.authored, ing.timeline.len()
+    );
+
+    // (5) semantic kNN — the GraphRAG retrieval dimension.
+    let id_to_title: HashMap<EntityId, String> = engine
+        .snapshot_iter(TxId::ACTIVE)
+        .unwrap()
+        .into_iter()
+        .filter_map(|r| match r {
+            Record::Entity(e) if e.type_id == TypeId::new(TYPE_PAPER) => {
+                let t = e.properties.iter().find(|(p, _)| p.get() == PROP_NAME)
+                    .and_then(|(_, v)| if let Value::String(s) = v { Some(s.clone()) } else { None })?;
+                Some((e.entity_id, t))
+            }
+            _ => None,
+        })
+        .collect();
+    let probe = "transformer attention language model";
+    let hits = engine.vector_search(PropertyId::new(PROP_EMBED), &embed(probe), 5, Distance::Cosine);
+    println!("\nsemantic kNN nearest to \"{probe}\":");
+    for (eid, dist) in hits {
+        if let Some(t) = id_to_title.get(&eid) {
+            println!("  {dist:.4}  {}", &t[..t.len().min(60)]);
+        }
+    }
+
+    // (4) time travel — papers visible at the earliest vs latest year.
+    if let (Some(first), Some(last)) = (ing.timeline.first(), ing.timeline.last()) {
+        println!(
+            "\ntime travel: {} papers as_of {} → {} papers as_of {}",
+            count_papers_at(engine, first.1), first.0,
+            count_papers_at(engine, last.1), last.0
+        );
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let db_dir = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| ".demo-data/langgraph-ndb".to_string());
+    let args: Vec<String> = std::env::args().skip(1).collect();
 
-    // Demo data: rebuild from scratch each run.
+    if args.first().map(String::as_str) == Some("--fetch") {
+        let papers = fetch_openalex("deep learning neural network transformer", 200)?;
+        let connected = papers.iter().filter(|p| !p.cites.is_empty()).count();
+        std::fs::create_dir_all("tools/langgraph/data")?;
+        std::fs::write(CACHE_PATH, serde_json::to_vec_pretty(&papers)?)?;
+        println!(
+            "fetched {} papers ({} with internal citations) → {CACHE_PATH}",
+            papers.len(), connected
+        );
+        return Ok(());
+    }
+
+    let db_dir = args.first().cloned().unwrap_or_else(|| ".demo-data/langgraph-ndb".to_string());
     let _ = std::fs::remove_dir_all(&db_dir);
     std::fs::create_dir_all(&db_dir)?;
 
-    if let Ok(url) = std::env::var("LANGGRAPH_LLM_URL") {
-        let key = std::env::var("LANGGRAPH_API_KEY").unwrap_or_default();
-        eprintln!("LANGGRAPH_LLM_URL set → would extract via {url} (Slice 1 uses the offline corpus to seed; live extraction lands in Slice 2). key_present={}", !key.is_empty());
-    }
+    let papers = load_cache().unwrap_or_else(|| {
+        eprintln!("no cache at {CACHE_PATH} — run `--fetch` first; using synthetic fallback");
+        synthetic_papers()
+    });
 
     let mut engine = Engine::create(&db_dir)?;
     register_schema(&mut engine);
-    let docs = corpus();
-    let ing = ingest(&mut engine, &docs);
-
-    println!(
-        "ingested {} entities + {} facts across {} documents → {db_dir}",
-        ing.name_to_id.len(),
-        ing.facts,
-        ing.timeline.len()
-    );
-
-    // (1) lookup-key probe
-    if let Some(eid) =
-        engine.lookup_by_external_key(PropertyId::new(PROP_NAME), &Value::String("nDB".into()))
-    {
-        println!("\nlookup name='nDB' → {}", eid.into_uuid());
-    }
-
-    // (2) semantic kNN — the GraphRAG retrieval half
-    let id_to_name: HashMap<EntityId, String> =
-        ing.name_to_id.iter().map(|(n, i)| (*i, n.clone())).collect();
-    let probe = "hypergraph database";
-    let hits = engine.vector_search(
-        PropertyId::new(PROP_EMBED),
-        &embed(probe),
-        5,
-        Distance::Cosine,
-    );
-    println!("\nsemantic kNN nearest to \"{probe}\":");
-    for (eid, dist) in hits {
-        let name = id_to_name.get(&eid).map_or("?", String::as_str);
-        println!("  {dist:.4}  {name}");
-    }
-
-    // (3) time travel — facts visible after doc 1 vs after the whole corpus
-    if let (Some(first), Some(last)) = (ing.timeline.first(), ing.timeline.last()) {
-        println!(
-            "\ntime travel: {} facts as_of after \"{}\"  →  {} facts as_of after \"{}\"",
-            count_facts_at(&engine, first.1),
-            first.0,
-            count_facts_at(&engine, last.1),
-            last.0
-        );
-    }
-
+    let ing = ingest_papers(&mut engine, &papers);
+    println!("→ {db_dir}");
+    demo_reads(&engine, &ing);
     Ok(())
 }
 
@@ -358,52 +461,40 @@ mod tests {
     }
 
     #[test]
-    fn ingest_builds_a_real_graph() {
+    fn ingest_builds_citation_and_authorship_graph() {
         let (mut engine, dir) = temp_engine();
-        let docs = corpus();
-        let ing = ingest(&mut engine, &docs);
+        let papers = synthetic_papers();
+        let ing = ingest_papers(&mut engine, &papers);
 
-        assert!(ing.name_to_id.len() >= 10, "expected a dozen-ish entities");
-        assert!(ing.facts >= 15, "expected the full fixture fact set");
-        assert_eq!(ing.timeline.len(), docs.len(), "one tx per document");
-
-        // nDB participates in many facts → it must exist as an entity.
-        assert!(ing.name_to_id.contains_key("nDB"));
+        assert_eq!(ing.papers, 6, "every paper becomes an entity");
+        assert!(ing.authors >= 12, "deduped authors across papers");
+        assert!(ing.cites >= 6, "internal CITES edges preserved");
+        assert_eq!(ing.authored, 6, "one N-ary AUTHORED edge per paper");
+        assert!(ing.paper_ids.contains_key("W5"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn vector_knn_returns_self_first() {
         let (mut engine, dir) = temp_engine();
-        let _ = ingest(&mut engine, &corpus());
-        let hits = engine.vector_search(
-            PropertyId::new(PROP_EMBED),
-            &embed("nDB"),
-            3,
-            Distance::Cosine,
-        );
-        assert!(!hits.is_empty(), "kNN must return neighbours");
-        // Querying with embed("nDB") → the nDB entity's stored vector is
-        // identical → distance ~0 → it ranks first.
-        let nearest = engine
-            .lookup_by_external_key(PropertyId::new(PROP_NAME), &Value::String("nDB".into()))
-            .unwrap();
-        assert_eq!(hits[0].0, nearest, "self is its own nearest neighbour");
+        let papers = synthetic_papers();
+        let _ = ingest_papers(&mut engine, &papers);
+        // Query with the exact embed text used at ingest for W5.
+        let probe = format!("{} {}", "Attention Is All You Need", "NLP");
+        let hits = engine.vector_search(PropertyId::new(PROP_EMBED), &embed(&probe), 3, Distance::Cosine);
+        assert!(!hits.is_empty());
         assert!(hits[0].1 < 1e-4, "self distance ~0, got {}", hits[0].1);
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn time_travel_shows_the_graph_growing() {
+    fn time_travel_shows_the_field_growing() {
         let (mut engine, dir) = temp_engine();
-        let ing = ingest(&mut engine, &corpus());
-        let after_first = count_facts_at(&engine, ing.timeline.first().unwrap().1);
-        let after_last = count_facts_at(&engine, ing.timeline.last().unwrap().1);
-        assert!(
-            after_first < after_last,
-            "as_of after doc 1 ({after_first}) must see fewer facts than after the corpus ({after_last})"
-        );
-        assert_eq!(after_last, ing.facts, "latest snapshot sees every fact");
+        let ing = ingest_papers(&mut engine, &synthetic_papers());
+        let early = count_papers_at(&engine, ing.timeline.first().unwrap().1);
+        let late = count_papers_at(&engine, ing.timeline.last().unwrap().1);
+        assert!(early < late, "as_of earliest year ({early}) sees fewer papers than latest ({late})");
+        assert_eq!(late, ing.papers, "latest snapshot sees every paper");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

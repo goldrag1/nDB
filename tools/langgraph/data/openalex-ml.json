@@ -1,0 +1,3419 @@
+[
+  {
+    "id": "W4385245566",
+    "title": "MizAR 60 for Mizar 50",
+    "year": 2023,
+    "citations": 75880,
+    "field": "Machine translation",
+    "authors": [
+      "Jakubův, Jan",
+      "Chvalovský, Karel",
+      "Goertzel, Zarathustra",
+      "Kaliszyk, Cezary",
+      "Olšák, Mirek",
+      "Piotrowski, Bartosz",
+      "Schulz, Stephan",
+      "Suda, Martin"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2896457183",
+    "title": "AI-Assisted Pipeline for Dynamic Generation of Trustworthy Health Supplement Content at Scale",
+    "year": 2018,
+    "citations": 45574,
+    "field": "Transformer",
+    "authors": [
+      "Holter, Ole Magnus",
+      "Ell, Basil"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4292779060",
+    "title": "Aion Framework: Dimensional Emergence of AI Consciousness, Observer-Induced Collapse, and Cosmological Portal Dynamics",
+    "year": 2023,
+    "citations": 14202,
+    "field": "Task (project management)",
+    "authors": [
+      "T. B. Brown",
+      "Gao, Song"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2970641574",
+    "title": "Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks",
+    "year": 2019,
+    "citations": 10644,
+    "field": "Sentence",
+    "authors": [
+      "Nils Reimers",
+      "Iryna Gurevych"
+    ],
+    "cites": [
+      "W2896457183",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W2981731882",
+    "title": "Explainable Artificial Intelligence (XAI): Concepts, taxonomies, opportunities and challenges toward responsible AI",
+    "year": 2019,
+    "citations": 8795,
+    "field": "Artificial intelligence",
+    "authors": [
+      "Alejandro Barredo Arrieta",
+      "Natalia Díaz-Rodríguez",
+      "Javier Del Ser",
+      "Adrien Bennetot",
+      "Siham Tabik",
+      "Alberto Barbado",
+      "Salvador García",
+      "Sergio Gil-López"
+    ],
+    "cites": [
+      "W2970476646"
+    ]
+  },
+  {
+    "id": "W3140854437",
+    "title": "Review of deep learning: concepts, CNN architectures, challenges, applications, future directions",
+    "year": 2021,
+    "citations": 7453,
+    "field": "Artificial intelligence",
+    "authors": [
+      "Laith Alzubaidi",
+      "Jinglan Zhang",
+      "Amjad J. Humaidi",
+      "Ayad Q. Al-Dujaili",
+      "Ye Duan",
+      "Omran Al-Shamma",
+      "José Santamaría",
+      "Mohammed A. Fadhel"
+    ],
+    "cites": [
+      "W2972006294",
+      "W3176923149"
+    ]
+  },
+  {
+    "id": "W2979750740",
+    "title": "Dynamic Graph CNN for Learning on Point Clouds",
+    "year": 2019,
+    "citations": 6673,
+    "field": "Point cloud",
+    "authors": [
+      "Yue Wang",
+      "Yongbin Sun",
+      "Ziwei Liu",
+      "Sanjay E. Sarma",
+      "Michael M. Bronstein",
+      "Justin Solomon"
+    ],
+    "cites": [
+      "W2468907370"
+    ]
+  },
+  {
+    "id": "W3163993681",
+    "title": "Physics-informed machine learning",
+    "year": 2021,
+    "citations": 6334,
+    "field": "Artificial intelligence",
+    "authors": [
+      "George Em Karniadakis",
+      "Ioannis G. Kevrekidis",
+      "Lu Lu",
+      "Paris Perdikaris",
+      "Sifan Wang",
+      "Liu Yang"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W3177318507",
+    "title": "Informer: Beyond Efficient Transformer for Long Sequence Time-Series Forecasting",
+    "year": 2021,
+    "citations": 5929,
+    "field": "Transformer",
+    "authors": [
+      "Haoyi Zhou",
+      "Shanghang Zhang",
+      "Jieqi Peng",
+      "Shuai Zhang",
+      "Jianxin Li",
+      "Hui Xiong",
+      "Wancai Zhang"
+    ],
+    "cites": [
+      "W2896457183",
+      "W2964110616",
+      "W4292779060",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W4323655724",
+    "title": "ChatGPT for good? On opportunities and challenges of large language models for education",
+    "year": 2023,
+    "citations": 4809,
+    "field": "Curriculum",
+    "authors": [
+      "Enkelejda Kasneci",
+      "Kathrin Seßler",
+      "Stefan Küchemann",
+      "Maria Bannert",
+      "Daryna Dementieva",
+      "Frank Fischer",
+      "Urs Gasser",
+      "Georg Groh"
+    ],
+    "cites": [
+      "W2896457183",
+      "W3095319910",
+      "W3101118213",
+      "W4292779060",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W4322718191",
+    "title": "LLaMA: Open and Efficient Foundation Language Models",
+    "year": 2023,
+    "citations": 3890,
+    "field": "Foundation (evidence)",
+    "authors": [
+      "Hugo Touvron",
+      "Thibaut Lavril",
+      "Gautier Izacard",
+      "Xavier Martinet",
+      "Marie-Anne Lachaux",
+      "Timothée Lacroix",
+      "Baptiste Rozière",
+      "Naman Goyal"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4221151978",
+    "title": "Instant neural graphics primitives with a multiresolution hash encoding",
+    "year": 2022,
+    "citations": 3612,
+    "field": "Hash function",
+    "authors": [
+      "Thomas Müller",
+      "Alex Evans",
+      "Christoph Schied",
+      "Alexander Keller"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4360620450",
+    "title": "Opinion Paper: “So what if ChatGPT wrote it?” Multidisciplinary perspectives on opportunities, challenges and implications of generative conversational AI for research, practice and policy",
+    "year": 2023,
+    "citations": 3583,
+    "field": "Transformative learning",
+    "authors": [
+      "Yogesh K. Dwivedi",
+      "Nir Kshetri",
+      "Laurie Hughes",
+      "Emma Slade",
+      "Anand Jeyaraj",
+      "Arpan Kumar Kar",
+      "Abdullah M. Baabdullah",
+      "Alex Koohang"
+    ],
+    "cites": [
+      "W3034723486",
+      "W3095319910"
+    ]
+  },
+  {
+    "id": "W3185341429",
+    "title": "Pre-train, Prompt, and Predict: A Systematic Survey of Prompting Methods in Natural Language Processing",
+    "year": 2022,
+    "citations": 3558,
+    "field": "Variety (cybernetics)",
+    "authors": [
+      "Pengfei Liu",
+      "Weizhe Yuan",
+      "Jinlan Fu",
+      "Zhengbao Jiang",
+      "Hiroaki Hayashi",
+      "Graham Neubig"
+    ],
+    "cites": [
+      "W2970476646",
+      "W3173777717",
+      "W3174770825"
+    ]
+  },
+  {
+    "id": "W3170841864",
+    "title": "Rethinking Semantic Segmentation from a Sequence-to-Sequence Perspective with Transformers",
+    "year": 2021,
+    "citations": 3509,
+    "field": "Segmentation",
+    "authors": [
+      "Sixiao Zheng",
+      "Jiachen Lu",
+      "Hengshuang Zhao",
+      "Xiatian Zhu",
+      "Zekun Luo",
+      "Yabiao Wang",
+      "Yanwei Fu",
+      "Jianfeng Feng"
+    ],
+    "cites": [
+      "W2896457183",
+      "W2964110616",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W4321232185",
+    "title": "Swin-Unet: Unet-Like Pure Transformer for Medical Image Segmentation",
+    "year": 2023,
+    "citations": 3497,
+    "field": "Encoder",
+    "authors": [
+      "Hu Cao",
+      "Yueyue Wang",
+      "Joy Chen",
+      "Dongsheng Jiang",
+      "Xiaopeng Zhang",
+      "Qi Tian",
+      "Manning Wang"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2964110616",
+    "title": "Transformer-XL: Attentive Language Models beyond a Fixed-Length Context",
+    "year": 2019,
+    "citations": 3139,
+    "field": "Perplexity",
+    "authors": [
+      "Zihang Dai",
+      "Zhilin Yang",
+      "Yiming Yang",
+      "Jaime Carbonell",
+      "Quoc V. Le",
+      "Ruslan Salakhutdinov"
+    ],
+    "cites": [
+      "W2896457183",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W2970771982",
+    "title": "SciBERT: A Pretrained Language Model for Scientific Text",
+    "year": 2019,
+    "citations": 2985,
+    "field": "Natural language processing",
+    "authors": [
+      "Iz Beltagy",
+      "Kyle Lo",
+      "Arman Cohan"
+    ],
+    "cites": [
+      "W2896457183",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W2950642167",
+    "title": "PointNet: Deep Learning on Point Sets for 3D Classification and Segmentation",
+    "year": 2016,
+    "citations": 2880,
+    "field": "Point cloud",
+    "authors": [
+      "Charles R. Qi",
+      "Hao Su",
+      "Kaichun Mo",
+      "Leonidas Guibas"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2734408173",
+    "title": "An Introduction to Deep Learning for the Physical Layer",
+    "year": 2017,
+    "citations": 2864,
+    "field": "Autoencoder",
+    "authors": [
+      "Timothy J. O’Shea",
+      "Jakob Hoydis"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2988916019",
+    "title": "Deep Learning for Generic Object Detection: A Survey",
+    "year": 2019,
+    "citations": 2752,
+    "field": "Object detection",
+    "authors": [
+      "Li Liu",
+      "Wanli Ouyang",
+      "Xiaogang Wang",
+      "Paul Fieguth",
+      "Jie Chen",
+      "Xinwang Liu",
+      "Matti Pietikäinen"
+    ],
+    "cites": [
+      "W2950642167",
+      "W2963603913"
+    ]
+  },
+  {
+    "id": "W2022508996",
+    "title": "Learning Hierarchical Features for Scene Labeling",
+    "year": 2012,
+    "citations": 2717,
+    "field": "Artificial intelligence",
+    "authors": [
+      "Clément Farabet",
+      "Camille Couprie",
+      "Laurent Najman",
+      "Yann LeCun"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4205192056",
+    "title": "SignalP 6.0 predicts all five types of signal peptides using protein language models",
+    "year": 2022,
+    "citations": 2691,
+    "field": "Signal peptide",
+    "authors": [
+      "Felix Teufel",
+      "José Juan Almagro Armenteros",
+      "Alexander Rosenberg Johansen",
+      "Magnús Halldór Gíslason",
+      "Silas Irby Pihl",
+      "Konstantinos D. Tsirigos",
+      "Ole Winther",
+      "Søren Brunak"
+    ],
+    "cites": [
+      "W2980789587"
+    ]
+  },
+  {
+    "id": "W4327946446",
+    "title": "ChatGPT Utility in Healthcare Education, Research, and Practice: Systematic Review on the Promising Perspectives and Valid Concerns",
+    "year": 2023,
+    "citations": 2668,
+    "field": "Health care",
+    "authors": [
+      "Malik Sallam"
+    ],
+    "cites": [
+      "W4292779060",
+      "W4320495408"
+    ]
+  },
+  {
+    "id": "W2998506103",
+    "title": "Applications of machine learning to machine fault diagnosis: A review and roadmap",
+    "year": 2020,
+    "citations": 2651,
+    "field": "Artificial intelligence",
+    "authors": [
+      "Yaguo Lei",
+      "Bin Yang",
+      "Xinwei Jiang",
+      "Feng Jia",
+      "Naipeng Li",
+      "Asoke K. Nandi"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W3003265726",
+    "title": "A Survey on Knowledge Graphs: Representation, Acquisition, and Applications",
+    "year": 2021,
+    "citations": 2651,
+    "field": "Embedding",
+    "authors": [
+      "Shaoxiong Ji",
+      "Shirui Pan",
+      "Erik Cambria",
+      "Pekka Marttinen",
+      "Philip S. Yu"
+    ],
+    "cites": [
+      "W1533230146",
+      "W2953356739",
+      "W2970476646",
+      "W2997200074",
+      "W2998385486"
+    ]
+  },
+  {
+    "id": "W2151591509",
+    "title": "Machine learning for neuroimaging with scikit-learn",
+    "year": 2014,
+    "citations": 2622,
+    "field": "Neuroimaging",
+    "authors": [
+      "Alexandre Abraham",
+      "Fabian Pedregosa",
+      "Michael Eickenberg",
+      "Philippe Gervais",
+      "Andreas Mueller",
+      "Jean Kossaifi",
+      "Alexandre Gramfort",
+      "Bertrand Thirion"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W1710476689",
+    "title": "Generative Adversarial Networks",
+    "year": 2022,
+    "citations": 2585,
+    "field": "Deep learning",
+    "authors": [
+      "Iddo Drori"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4382203079",
+    "title": "Are Transformers Effective for Time Series Forecasting?",
+    "year": 2023,
+    "citations": 2527,
+    "field": "Transformer",
+    "authors": [
+      "Ailing Zeng",
+      "Muxi Chen",
+      "Lei Zhang",
+      "Qiang Xu"
+    ],
+    "cites": [
+      "W2896457183",
+      "W3177318507",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W3156636935",
+    "title": "SimCSE: Simple Contrastive Learning of Sentence Embeddings",
+    "year": 2021,
+    "citations": 2505,
+    "field": "Artificial intelligence",
+    "authors": [
+      "Tianyu Gao",
+      "Xingcheng Yao",
+      "Danqi Chen"
+    ],
+    "cites": [
+      "W2891177506",
+      "W2970641574",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W2933138175",
+    "title": "fairseq: A Fast, Extensible Toolkit for Sequence Modeling",
+    "year": 2019,
+    "citations": 2499,
+    "field": "Computational linguistics",
+    "authors": [
+      "Myle Ott",
+      "Sergey Edunov",
+      "Alexei Baevski",
+      "Angela Fan",
+      "Sam Gross",
+      "Nathan Ng",
+      "David Grangier",
+      "Michael Auli"
+    ],
+    "cites": [
+      "W2889326796",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W2792643794",
+    "title": "Deep Learning using Rectified Linear Units (ReLU)",
+    "year": 2018,
+    "citations": 2496,
+    "field": "Softmax function",
+    "authors": [
+      "Abien Fred Agarap"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W3153990350",
+    "title": "Machine learning and deep learning",
+    "year": 2021,
+    "citations": 2436,
+    "field": "Artificial intelligence",
+    "authors": [
+      "Christian Janiesch",
+      "Patrick Zschech",
+      "Kai Heinrich"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W3098605233",
+    "title": "CodeBERT: A Pre-Trained Model for Programming and Natural Languages",
+    "year": 2020,
+    "citations": 2397,
+    "field": "Programming language",
+    "authors": [
+      "Zhangyin Feng",
+      "Daya Guo",
+      "Duyu Tang",
+      "Nan Duan",
+      "Xiaocheng Feng",
+      "Ming Gong",
+      "Linjun Shou",
+      "Bing Qin"
+    ],
+    "cites": [
+      "W2896457183",
+      "W2970476646",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W3212386989",
+    "title": "Attention mechanisms in computer vision: A survey",
+    "year": 2022,
+    "citations": 2339,
+    "field": "Categorization",
+    "authors": [
+      "Meng-Hao Guo",
+      "Tian-Xing Xu",
+      "Jiangjiang Liu",
+      "Zheng-Ning Liu",
+      "Peng-Tao Jiang",
+      "Tai‐Jiang Mu",
+      "Song–Hai Zhang",
+      "Ralph R. Martin"
+    ],
+    "cites": [
+      "W2964110616",
+      "W3111535274",
+      "W3163465952",
+      "W3170841864"
+    ]
+  },
+  {
+    "id": "W4327810158",
+    "title": "GPT-4 Technical Report",
+    "year": 2023,
+    "citations": 2335,
+    "field": "Transformer",
+    "authors": [
+      "Wijegunarathna, Kalana",
+      "Stock, Kristin",
+      "Jones, Christopher B."
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4391109864",
+    "title": "Segment anything in medical images",
+    "year": 2024,
+    "citations": 2315,
+    "field": "Computational biology",
+    "authors": [
+      "Jun Ma",
+      "Yuting He",
+      "Feifei Li",
+      "Lin Han",
+      "Chenyu You",
+      "Bo Wang"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2970231061",
+    "title": "LXMERT: Learning Cross-Modality Encoder Representations from Transformers",
+    "year": 2019,
+    "citations": 2250,
+    "field": "Modality (human–computer interaction)",
+    "authors": [
+      "Hao Tan",
+      "Mohit Bansal"
+    ],
+    "cites": [
+      "W2896457183",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W4309845474",
+    "title": "Squeeze-and-Excitation Networks",
+    "year": 2017,
+    "citations": 2241,
+    "field": "Block (permutation group theory)",
+    "authors": [
+      "Jie Hu",
+      "Li Shen",
+      "Samuel Albanie",
+      "Gang Sun",
+      "Enhua Wu"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W3174770825",
+    "title": "Prefix-Tuning: Optimizing Continuous Prompts for Generation",
+    "year": 2021,
+    "citations": 2178,
+    "field": "Prefix",
+    "authors": [
+      "Xiang Lisa Li",
+      "Percy Liang"
+    ],
+    "cites": [
+      "W2970419734",
+      "W4292779060"
+    ]
+  },
+  {
+    "id": "W3095319910",
+    "title": "GPT-3: Its Nature, Scope, Limits, and Consequences",
+    "year": 2020,
+    "citations": 2172,
+    "field": "Turing test",
+    "authors": [
+      "Luciano Floridi",
+      "Massimo Chiriatti"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W3175515048",
+    "title": "PVT v2: Improved baselines with pyramid vision transformer",
+    "year": 2022,
+    "citations": 2146,
+    "field": "Transformer",
+    "authors": [
+      "Wenhai Wang",
+      "Enze Xie",
+      "Xiang Li",
+      "Deng-Ping Fan",
+      "Kaitao Song",
+      "Ding Liang",
+      "Tong Lü",
+      "Ping Luo"
+    ],
+    "cites": [
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W1533230146",
+    "title": "Embedding Entities and Relations for Learning and Inference in Knowledge Bases",
+    "year": 2014,
+    "citations": 2036,
+    "field": "Embedding",
+    "authors": [
+      "d'Amato, Claudia",
+      "Wen-tau Yih",
+      "Monnin, Pierre",
+      "Stamou, Giorgos"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4324046518",
+    "title": "Chatting and cheating: Ensuring academic integrity in the era of ChatGPT",
+    "year": 2023,
+    "citations": 1955,
+    "field": "Cheating",
+    "authors": [
+      "Debby Cotton",
+      "Peter A. Cotton",
+      "J. Reuben Shipway"
+    ],
+    "cites": [
+      "W3095319910",
+      "W4292779060"
+    ]
+  },
+  {
+    "id": "W2971296908",
+    "title": "EDA: Easy Data Augmentation Techniques for Boosting Performance on Text Classification Tasks",
+    "year": 2019,
+    "citations": 1899,
+    "field": "Boosting (machine learning)",
+    "authors": [
+      "Jason Wei",
+      "Kai Zou"
+    ],
+    "cites": [
+      "W2896457183"
+    ]
+  },
+  {
+    "id": "W2886641317",
+    "title": "Conceptual Captions: A Cleaned, Hypernymed, Image Alt-text Dataset For Automatic Image Captioning",
+    "year": 2018,
+    "citations": 1794,
+    "field": "Closed captioning",
+    "authors": [
+      "Piyush Sharma",
+      "Nan Ding",
+      "Sebastian Goodman",
+      "Radu Soricut"
+    ],
+    "cites": [
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W3111535274",
+    "title": "PCT: Point cloud transformer",
+    "year": 2021,
+    "citations": 1758,
+    "field": "Point cloud",
+    "authors": [
+      "Meng-Hao Guo",
+      "Jun-Xiong Cai",
+      "Zheng-Ning Liu",
+      "Tai-Jiang Mu",
+      "Ralph R. Martin",
+      "Shi-Min Hu"
+    ],
+    "cites": [
+      "W2979750740"
+    ]
+  },
+  {
+    "id": "W4206484811",
+    "title": "A Metaverse: Taxonomy, Components, Applications, and Open Challenges",
+    "year": 2022,
+    "citations": 1741,
+    "field": "Taxonomy (biology)",
+    "authors": [
+      "Sangmin Park",
+      "Young‐Gab Kim"
+    ],
+    "cites": [
+      "W2997591391",
+      "W4292779060"
+    ]
+  },
+  {
+    "id": "W2970476646",
+    "title": "Language Models as Knowledge Bases?",
+    "year": 2019,
+    "citations": 1739,
+    "field": "Miller",
+    "authors": [
+      "Fabio Petroni",
+      "Tim Rocktäschel",
+      "Sebastian Riedel",
+      "Patrick Lewis",
+      "Anton Bakhtin",
+      "Yuxiang Wu",
+      "Alexander Miller"
+    ],
+    "cites": [
+      "W2896457183",
+      "W2951286828",
+      "W2964110616",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W2747680751",
+    "title": "Natural language processing: state of the art, current trends and challenges",
+    "year": 2022,
+    "citations": 1708,
+    "field": "Automatic summarization",
+    "authors": [
+      "Diksha Khurana",
+      "Aditya Koli",
+      "Kiran Khatter",
+      "Sukhdev Singh"
+    ],
+    "cites": [
+      "W2964110616"
+    ]
+  },
+  {
+    "id": "W2468907370",
+    "title": "Convolutional Neural Networks on Graphs with Fast Localized Spectral Filtering",
+    "year": 2016,
+    "citations": 1703,
+    "field": "MNIST database",
+    "authors": [
+      "Michaël Defferrard",
+      "Xavier Bresson",
+      "Pierre Vandergheynst"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W3027225766",
+    "title": "A Spatial-Temporal Attention-Based Method and a New Dataset for Remote Sensing Image Change Detection",
+    "year": 2020,
+    "citations": 1683,
+    "field": "Discriminative model",
+    "authors": [
+      "Hao Chen",
+      "Zhenwei Shi"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W3176923149",
+    "title": "Text Data Augmentation for Deep Learning",
+    "year": 2021,
+    "citations": 1672,
+    "field": "Computational Science and Engineering",
+    "authors": [
+      "Connor Shorten",
+      "Taghi M. Khoshgoftaar",
+      "Borko Furht"
+    ],
+    "cites": [
+      "W2891177506",
+      "W2951286828",
+      "W2970641574",
+      "W2971296908",
+      "W2996851481",
+      "W3003265726",
+      "W3034723486",
+      "W3135588948"
+    ]
+  },
+  {
+    "id": "W4386142022",
+    "title": "Interpreting Black-Box Models: A Review on Explainable Artificial Intelligence",
+    "year": 2023,
+    "citations": 1650,
+    "field": "Transparency (behavior)",
+    "authors": [
+      "Vikas Hassija",
+      "Vinay Chamola",
+      "Atmesh Mahapatra",
+      "Abhinandan Singal",
+      "Divyansh Goel",
+      "Kaizhu Huang",
+      "Simone Scardapane",
+      "Indro Spinelli"
+    ],
+    "cites": [
+      "W2981731882",
+      "W3137125108"
+    ]
+  },
+  {
+    "id": "W4317910584",
+    "title": "ChatGPT: Bullshit spewer or the end of traditional assessments in higher education?",
+    "year": 2023,
+    "citations": 1644,
+    "field": "Chatbot",
+    "authors": [
+      "Jürgen Rudolph",
+      "Samson Tan",
+      "Shannon Tan"
+    ],
+    "cites": [
+      "W3095319910",
+      "W4292779060"
+    ]
+  },
+  {
+    "id": "W3155072588",
+    "title": "Image Super-Resolution Via Iterative Refinement",
+    "year": 2022,
+    "citations": 1633,
+    "field": "Artificial intelligence",
+    "authors": [
+      "Chitwan Saharia",
+      "Jonathan Ho",
+      "William Chan",
+      "Tim Salimans",
+      "David J. Fleet",
+      "Mohammad Norouzi"
+    ],
+    "cites": [
+      "W3212516020",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W3105966348",
+    "title": "TinyBERT: Distilling BERT for Natural Language Understanding",
+    "year": 2020,
+    "citations": 1623,
+    "field": "Transformer",
+    "authors": [
+      "Xiaoqi Jiao",
+      "Yichun Yin",
+      "Lifeng Shang",
+      "Xin Jiang",
+      "Xiao Dong Chen",
+      "Linlin Li",
+      "Fang Wang",
+      "Qun Liu"
+    ],
+    "cites": [
+      "W2896457183",
+      "W2946794439",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W2970419734",
+    "title": "Text Summarization with Pretrained Encoders",
+    "year": 2019,
+    "citations": 1611,
+    "field": "Automatic summarization",
+    "authors": [
+      "Yang Liu",
+      "Mirella Lapata"
+    ],
+    "cites": [
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W3169483174",
+    "title": "mT5: A Massively Multilingual Pre-trained Text-to-Text Transformer",
+    "year": 2021,
+    "citations": 1553,
+    "field": "Transformer",
+    "authors": [
+      "Linting Xue",
+      "Noah Constant",
+      "Adam P. Roberts",
+      "Mihir Kale",
+      "Rami Al‐Rfou",
+      "Aditya Siddhant",
+      "Aditya Barua",
+      "Colin Raffel"
+    ],
+    "cites": [
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W4360836968",
+    "title": "Sparks of Artificial General Intelligence: Early experiments with GPT-4",
+    "year": 2023,
+    "citations": 1546,
+    "field": "Artificial intelligence",
+    "authors": [
+      "Sébastien Bubeck",
+      "Varun Chandrasekaran",
+      "Ronen Eldan",
+      "Johannes Gehrke",
+      "Eric Horvitz",
+      "Ece Kamar",
+      "Peter Lee",
+      "Yin Tat Lee"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4389437528",
+    "title": "Education in the Era of Generative Artificial Intelligence (AI): Understanding the Potential Benefits of ChatGPT in Promoting Teaching and Learning",
+    "year": 2023,
+    "citations": 1538,
+    "field": "Surprise",
+    "authors": [
+      "David Baidoo-Anu",
+      "Leticia Owusu Ansah"
+    ],
+    "cites": [
+      "W4317910584"
+    ]
+  },
+  {
+    "id": "W2155419203",
+    "title": "Big Data: New Tricks for Econometrics",
+    "year": 2014,
+    "citations": 1534,
+    "field": "Big data",
+    "authors": [
+      "Hal R. Varian"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4372347372",
+    "title": "Efficient Multi-Scale Attention Module with Cross-Spatial Learning",
+    "year": 2023,
+    "citations": 1521,
+    "field": "Channel (broadcasting)",
+    "authors": [
+      "Daliang Ouyang",
+      "Su He",
+      "Guozhong Zhang",
+      "Mingzhu Luo",
+      "Huaiyong Guo",
+      "Jianming Zhan",
+      "Zhijie Huang"
+    ],
+    "cites": [
+      "W4309845474"
+    ]
+  },
+  {
+    "id": "W3114632476",
+    "title": "A Survey on Contrastive Self-Supervised Learning",
+    "year": 2020,
+    "citations": 1513,
+    "field": "Artificial intelligence",
+    "authors": [
+      "Ashish Jaiswal"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4365143687",
+    "title": "Foundation models for generalist medical artificial intelligence",
+    "year": 2023,
+    "citations": 1505,
+    "field": "Set (abstract data type)",
+    "authors": [
+      "Michael Moor",
+      "Oishi Banerjee",
+      "Zahra Shakeri Hossein Abad",
+      "Harlan M. Krumholz",
+      "Jure Leskovec",
+      "Eric J. Topol",
+      "Pranav Rajpurkar"
+    ],
+    "cites": [
+      "W4295951577",
+      "W4312220150"
+    ]
+  },
+  {
+    "id": "W3212516020",
+    "title": "Palette: Image-to-Image Diffusion Models",
+    "year": 2022,
+    "citations": 1486,
+    "field": "Inpainting",
+    "authors": [
+      "Chitwan Saharia",
+      "William Chan",
+      "Huiwen Chang",
+      "Chris Lee",
+      "Jonathan Ho",
+      "Tim Salimans",
+      "David J. Fleet",
+      "Mohammad Norouzi"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2965857891",
+    "title": "Heterogeneous Graph Neural Network",
+    "year": 2019,
+    "citations": 1473,
+    "field": "Theoretical computer science",
+    "authors": [
+      "Chuxu Zhang",
+      "Dongjin Song",
+      "Chao Huang",
+      "Ananthram Swami",
+      "Nitesh V. Chawla"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4365799947",
+    "title": "Proceedings of the 28th International Conference on Computational Linguistics",
+    "year": 2020,
+    "citations": 1422,
+    "field": "Computational linguistics",
+    "authors": [
+      "Xiaodan Zhu",
+      "Preslav Nakov",
+      "Jun Zhao",
+      "Michal Ptaszynski",
+      "Bartosz Ziolko",
+      "Website Chairs",
+      "Laura Prez- Mayos",
+      "Amita Misra"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4210827551",
+    "title": "A survey on sentiment analysis methods, applications, and challenges",
+    "year": 2022,
+    "citations": 1402,
+    "field": "Sentiment analysis",
+    "authors": [
+      "Mayur Wankhade",
+      "Annavarapu Chandra Sekhara Rao",
+      "Chaitanya Kulkarni"
+    ],
+    "cites": [
+      "W2971258845"
+    ]
+  },
+  {
+    "id": "W2953356739",
+    "title": "ERNIE: Enhanced Language Representation with Informative Entities",
+    "year": 2019,
+    "citations": 1400,
+    "field": "Natural language processing",
+    "authors": [
+      "Zhengyan Zhang",
+      "Xu Han",
+      "Zhiyuan Liu",
+      "Xin Jiang",
+      "Maosong Sun",
+      "Qun Liu"
+    ],
+    "cites": [
+      "W2896457183",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W4362515116",
+    "title": "A Survey of Large Language Models",
+    "year": 2026,
+    "citations": 1398,
+    "field": "Language model",
+    "authors": [
+      "Wayne Xin Zhao",
+      "Kun Zhou",
+      "Junyi Li",
+      "Tianyi Tang",
+      "Xiaolei Wang",
+      "Yupeng Hou",
+      "Yingqian Min",
+      "Beichen Zhang"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4383218913",
+    "title": "Accurate medium-range global weather forecasting with 3D neural networks",
+    "year": 2023,
+    "citations": 1370,
+    "field": "Numerical weather prediction",
+    "authors": [
+      "Kaifeng Bi",
+      "Lingxi Xie",
+      "Hengheng Zhang",
+      "Xin Chen",
+      "Xiaotao Gu",
+      "Qi Tian"
+    ],
+    "cites": [
+      "W3202525453"
+    ]
+  },
+  {
+    "id": "W3036851434",
+    "title": "Deep Learning Enabled Semantic Communication Systems",
+    "year": 2021,
+    "citations": 1328,
+    "field": "Communications system",
+    "authors": [
+      "Huiqiang Xie",
+      "Zhijin Qin",
+      "Geoffrey Ye Li",
+      "Biing‐Hwang Juang"
+    ],
+    "cites": [
+      "W2734408173",
+      "W2736068844",
+      "W2896457183",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W3012871709",
+    "title": "Heterogeneous Graph Transformer",
+    "year": 2020,
+    "citations": 1296,
+    "field": "Scalability",
+    "authors": [
+      "Ziniu Hu",
+      "Yuxiao Dong",
+      "Kuansan Wang",
+      "Yizhou Sun"
+    ],
+    "cites": [
+      "W2965857891"
+    ]
+  },
+  {
+    "id": "W2972006294",
+    "title": "A Survey of Deep Learning-Based Object Detection",
+    "year": 2019,
+    "citations": 1287,
+    "field": "Object detection",
+    "authors": [
+      "Licheng Jiao",
+      "Fan Zhang",
+      "Fang Liu",
+      "Shuyuan Yang",
+      "Lingling Li",
+      "Zhixi Feng",
+      "Rong Qu"
+    ],
+    "cites": [
+      "W2963603913"
+    ]
+  },
+  {
+    "id": "W2946417913",
+    "title": "BERT Rediscovers the Classical NLP Pipeline",
+    "year": 2019,
+    "citations": 1274,
+    "field": "Coreference",
+    "authors": [
+      "Ian Tenney",
+      "Dipanjan Das",
+      "Ellie Pavlick"
+    ],
+    "cites": [
+      "W2896457183",
+      "W2963854351",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W4205129187",
+    "title": "Particle Swarm Optimization: A Comprehensive Survey",
+    "year": 2022,
+    "citations": 1260,
+    "field": "Particle swarm optimization",
+    "authors": [
+      "Tareq M. Shami",
+      "Ayman A. El‐Saleh",
+      "Mohammed Alswaitti",
+      "Qasem Al-Tashi",
+      "Mhd Amen Summakieh",
+      "Seyedali Mirjalili"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2891177506",
+    "title": "Universal Sentence Encoder for English",
+    "year": 2018,
+    "citations": 1254,
+    "field": "Encoder",
+    "authors": [
+      "Daniel Cer",
+      "Yinfei Yang",
+      "Sheng-yi Kong",
+      "Nan Hua",
+      "Nicole Limtiaco",
+      "Rhomni St. John",
+      "Noah Constant",
+      "Mario Guajardo-Céspedes"
+    ],
+    "cites": [
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W3203588026",
+    "title": "Effective gene expression prediction from sequence by integrating long-range interactions",
+    "year": 2021,
+    "citations": 1242,
+    "field": "Enhancer",
+    "authors": [
+      "Žiga Avsec",
+      "Vikram Agarwal",
+      "Daniel Visentin",
+      "Joseph R. Ledsam",
+      "Agnieszka Grabska‐Barwińska",
+      "Kyle R. Taylor",
+      "Yannis Assael",
+      "John Jumper"
+    ],
+    "cites": [
+      "W2964110616"
+    ]
+  },
+  {
+    "id": "W3198685994",
+    "title": "CodeT5: Identifier-aware Unified Pre-trained Encoder-Decoder Models for Code Understanding and Generation",
+    "year": 2021,
+    "citations": 1241,
+    "field": "Identifier",
+    "authors": [
+      "Yue Wang",
+      "Weishi Wang",
+      "Shafiq Joty",
+      "Steven C. H. Hoi"
+    ],
+    "cites": [
+      "W2896457183",
+      "W2963854351",
+      "W2982399380",
+      "W3098605233",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W3173777717",
+    "title": "Making Pre-trained Language Models Better Few-shot Learners",
+    "year": 2021,
+    "citations": 1233,
+    "field": "Chen",
+    "authors": [
+      "Tianyu Gao",
+      "Adam Fisch",
+      "Danqi Chen"
+    ],
+    "cites": [
+      "W2896457183",
+      "W2970641574",
+      "W4292779060"
+    ]
+  },
+  {
+    "id": "W2982399380",
+    "title": "BART: Denoising Sequence-to-Sequence Pre-training for Natural Language Generation, Translation, and Comprehension",
+    "year": 2020,
+    "citations": 1224,
+    "field": "Machine translation",
+    "authors": [
+      "Mike Lewis",
+      "Yinhan Liu",
+      "Naman Goyal",
+      "Marjan Ghazvininejad",
+      "Abdelrahman Mohamed",
+      "Omer Levy",
+      "Ves Stoyanov",
+      "Luke Zettlemoyer"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2948947170",
+    "title": "What Does BERT Learn about the Structure of Language?",
+    "year": 2019,
+    "citations": 1213,
+    "field": "Hierarchy",
+    "authors": [
+      "Ganesh Jawahar",
+      "Benoît Sagot",
+      "Djamé Seddah"
+    ],
+    "cites": [
+      "W2896457183",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W3118299338",
+    "title": "A Review on Linear Regression Comprehensive in Machine Learning",
+    "year": 2020,
+    "citations": 1196,
+    "field": "Proper linear model",
+    "authors": [
+      "Dastan Hussen Maulud",
+      "Adnan Mohsin Abdulazeez"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4307079201",
+    "title": "Scaling Instruction-Finetuned Language Models",
+    "year": 2022,
+    "citations": 1187,
+    "field": "Margin (machine learning)",
+    "authors": [
+      "Hyung Won Chung",
+      "Le Hou",
+      "Shayne Longpre",
+      "Barret Zoph",
+      "Yi Tay",
+      "William Fedus",
+      "Eric Li",
+      "Xuezhi Wang"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W3214821343",
+    "title": "SpectralFormer: Rethinking Hyperspectral Image Classification with Transformers",
+    "year": 2021,
+    "citations": 1183,
+    "field": "Hyperspectral imaging",
+    "authors": [
+      "Danfeng Hong",
+      "Zhu Han",
+      "Jing Yao",
+      "Lianru Gao",
+      "Bing Zhang",
+      "Antonio Plaza",
+      "Jocelyn Chanussot"
+    ],
+    "cites": [
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W1759197186",
+    "title": "State of the Art in Research on Microgrids: A Review",
+    "year": 2015,
+    "citations": 1165,
+    "field": "Microgrid",
+    "authors": [
+      "Sina Parhizi",
+      "Hossein Lotfi",
+      "Amin Khodaei",
+      "Shay Bahramirad"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2600030077",
+    "title": "Dex-Net 2.0: Deep Learning to Plan Robust Grasps with Synthetic Point Clouds and Analytic Grasp Metrics",
+    "year": 2017,
+    "citations": 1161,
+    "field": "GRASP",
+    "authors": [
+      "Jeffrey Mahler",
+      "Jacky Liang",
+      "Sherdil Niyaz",
+      "Michael Laskey",
+      "Richard Doan",
+      "Xinyu Liu",
+      "Juan Pablo Aparicio",
+      "Ken Goldberg"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2980789587",
+    "title": "Unified rational protein engineering with sequence-based deep representation learning",
+    "year": 2019,
+    "citations": 1160,
+    "field": "Protein engineering",
+    "authors": [
+      "Ethan C. Alley",
+      "Grigory Khimulya",
+      "Surojit Biswas",
+      "Mohammed AlQuraishi",
+      "George M. Church"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4389132751",
+    "title": "Scaling deep learning for materials discovery",
+    "year": 2023,
+    "citations": 1144,
+    "field": "Deep learning",
+    "authors": [
+      "Amil Merchant",
+      "Simon Batzner",
+      "Samuel S. Schoenholz",
+      "Muratahan Aykol",
+      "Gowoon Cheon",
+      "Ekin D. Cubuk"
+    ],
+    "cites": [
+      "W2799915630"
+    ]
+  },
+  {
+    "id": "W4296079469",
+    "title": "A Survey of Ensemble Learning: Concepts, Algorithms, Applications, and Prospects",
+    "year": 2022,
+    "citations": 1140,
+    "field": "Boosting (machine learning)",
+    "authors": [
+      "Ibomoiye Domor Mienye",
+      "Yanxia Sun"
+    ],
+    "cites": [
+      "W3153990350"
+    ]
+  },
+  {
+    "id": "W2964277374",
+    "title": "Learning a Single Convolutional Super-Resolution Network for Multiple Degradations",
+    "year": 2018,
+    "citations": 1132,
+    "field": "Convolutional neural network",
+    "authors": [
+      "Kai Zhang",
+      "Wangmeng Zuo",
+      "Lei Zhang"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2971196067",
+    "title": "Justifying Recommendations using Distantly-Labeled Reviews and Fine-Grained Aspects",
+    "year": 2019,
+    "citations": 1132,
+    "field": "Data science",
+    "authors": [
+      "Jianmo Ni",
+      "Jiacheng Li",
+      "Julian McAuley"
+    ],
+    "cites": [
+      "W2896457183"
+    ]
+  },
+  {
+    "id": "W4386693657",
+    "title": "Generative AI",
+    "year": 2023,
+    "citations": 1127,
+    "field": "Conceptualization",
+    "authors": [
+      "Stefan Feuerriegel",
+      "Jochen Hartmann",
+      "Christian Janiesch",
+      "Patrick Zschech"
+    ],
+    "cites": [
+      "W2896457183",
+      "W3153990350",
+      "W3185341429",
+      "W4292779060",
+      "W4323655724",
+      "W4327810158",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W2957056027",
+    "title": "Data-driven health estimation and lifetime prediction of lithium-ion batteries: A review",
+    "year": 2019,
+    "citations": 1125,
+    "field": "Estimation",
+    "authors": [
+      "Yi Li",
+      "Kailong Liu",
+      "Aoife Foley",
+      "Alana Zülke",
+      "Maitane Berecibar",
+      "Elise Nanini-Maury",
+      "Joeri Van Mierlo",
+      "Harry E. Hoster"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W3023617420",
+    "title": "A Comprehensive Review of the COVID-19 Pandemic and the Role of IoT, Drones, AI, Blockchain, and 5G in Managing its Impact",
+    "year": 2020,
+    "citations": 1121,
+    "field": "Pandemic",
+    "authors": [
+      "Vinay Chamola",
+      "Vikas Hassija",
+      "Vatsal Gupta",
+      "Mohsen Guizani"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4283450732",
+    "title": "UNetFormer: A UNet-like transformer for efficient semantic segmentation of remote sensing urban scene imagery",
+    "year": 2022,
+    "citations": 1119,
+    "field": "Segmentation",
+    "authors": [
+      "Libo Wang",
+      "Rui Li",
+      "Ce Zhang",
+      "Shenghui Fang",
+      "Chenxi Duan",
+      "Xiaoliang Meng",
+      "Peter M. Atkinson"
+    ],
+    "cites": [
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W4320495408",
+    "title": "Chatting about ChatGPT: how may AI and GPT impact academia and libraries?",
+    "year": 2023,
+    "citations": 1091,
+    "field": "Metadata",
+    "authors": [
+      "Brady Lund",
+      "Ting Wang"
+    ],
+    "cites": [
+      "W2896457183",
+      "W3095319910"
+    ]
+  },
+  {
+    "id": "W2953641512",
+    "title": "Unsupervised word embeddings capture latent knowledge from materials science literature",
+    "year": 2019,
+    "citations": 1082,
+    "field": "Property (philosophy)",
+    "authors": [
+      "Vahe Tshitoyan",
+      "John Dagdelen",
+      "Leigh Weston",
+      "Alexander Dunn",
+      "Ziqin Rong",
+      "Olga Kononova",
+      "Kristin A. Persson",
+      "Gerbrand Ceder"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4393065402",
+    "title": "A survey on large language model based autonomous agents",
+    "year": 2024,
+    "citations": 1076,
+    "field": "Artificial intelligence",
+    "authors": [
+      "Lei Wang",
+      "Chen Ma",
+      "Xueyang Feng",
+      "Zeyu Zhang",
+      "Hao Yang",
+      "Jingsen Zhang",
+      "Zhiyuan Chen",
+      "Jiakai Tang"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4295951577",
+    "title": "Multimodal biomedical AI",
+    "year": 2022,
+    "citations": 1075,
+    "field": "Digital health",
+    "authors": [
+      "Julián Acosta",
+      "Guido J. Falcone",
+      "Pranav Rajpurkar",
+      "Eric J. Topol"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4382059335",
+    "title": "YOLO-v1 to YOLO-v8, the Rise of YOLO and Its Complementary Nature toward Digital Manufacturing and Industrial Defect Detection",
+    "year": 2023,
+    "citations": 1073,
+    "field": "Software deployment",
+    "authors": [
+      "Muhammad Hussain"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2946794439",
+    "title": "Analyzing Multi-Head Self-Attention: Specialized Heads Do the Heavy Lifting, the Rest Can Be Pruned",
+    "year": 2019,
+    "citations": 1056,
+    "field": "Machine translation",
+    "authors": [
+      "Elena Voita",
+      "David Talbot",
+      "Fédor Moiseev",
+      "Rico Sennrich",
+      "Ivan Titov"
+    ],
+    "cites": [
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W3047855151",
+    "title": "Earthquake transformer—an attentive deep-learning model for simultaneous earthquake detection and phase picking",
+    "year": 2020,
+    "citations": 1049,
+    "field": "Seismology",
+    "authors": [
+      "S. Mostafa Mousavi",
+      "William L. Ellsworth",
+      "Weiqiang Zhu",
+      "Lindsay Chuang",
+      "Gregory C. Beroza"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2963854351",
+    "title": "Multi-Task Deep Neural Networks for Natural Language Understanding",
+    "year": 2019,
+    "citations": 1048,
+    "field": "Domain adaptation",
+    "authors": [
+      "Xiaodong Liu",
+      "Pengcheng He",
+      "Weizhu Chen",
+      "Jianfeng Gao"
+    ],
+    "cites": [
+      "W2896457183",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W3208687975",
+    "title": "Recent advances and applications of deep learning methods in materials science",
+    "year": 2022,
+    "citations": 1032,
+    "field": "Deep learning",
+    "authors": [
+      "Kamal Choudhary",
+      "Brian DeCost",
+      "Chi Chen",
+      "Anubhav Jain",
+      "Francesca Tavazza",
+      "Ryan Cohn",
+      "Cheol Woo Park",
+      "Alok Choudhary"
+    ],
+    "cites": [
+      "W2896457183",
+      "W2953641512"
+    ]
+  },
+  {
+    "id": "W3174873843",
+    "title": "R3Det: Refined Single-Stage Detector with Feature Refinement for Rotating Object",
+    "year": 2021,
+    "citations": 1031,
+    "field": "Feature (linguistics)",
+    "authors": [
+      "Xue Yang",
+      "Junchi Yan",
+      "Zi‐Ming Feng",
+      "Tao He"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4318071656",
+    "title": "Large language models generate functional protein sequences across diverse families",
+    "year": 2023,
+    "citations": 1029,
+    "field": "Protein superfamily",
+    "authors": [
+      "Ali Madani",
+      "Ben Krause",
+      "Eric R. Greene",
+      "Subu Subramanian",
+      "Benjamin P. Mohr",
+      "James M. Holton",
+      "J.L. Olmos",
+      "Caiming Xiong"
+    ],
+    "cites": [
+      "W2980789587",
+      "W4288066876"
+    ]
+  },
+  {
+    "id": "W4366208220",
+    "title": "DINOv2: Learning Robust Visual Features without Supervision",
+    "year": 2023,
+    "citations": 1029,
+    "field": "Pipeline (software)",
+    "authors": [
+      "Maxime Oquab",
+      "Timothée Darcet",
+      "Théo Moutakanni",
+      "Huy Vo",
+      "Marc Szafraniec",
+      "Vasil Khalidov",
+      "Pierre Fernandez",
+      "Daniel Haziza"
+    ],
+    "cites": [
+      "W2896457183",
+      "W4292779060",
+      "W4322718191"
+    ]
+  },
+  {
+    "id": "W4398810114",
+    "title": "YOLOv10: Real-Time End-to-End Object Detection",
+    "year": 2024,
+    "citations": 1027,
+    "field": "End-to-end principle",
+    "authors": [
+      "Ao Wang",
+      "Hui Chen",
+      "Lihao Liu",
+      "Kai Chen",
+      "Zijia Lin",
+      "Jungong Han",
+      "Guiguang Ding"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W3137147200",
+    "title": "A Survey of Quantization Methods for Efficient Neural Network Inference",
+    "year": 2022,
+    "citations": 1023,
+    "field": "Artificial neural network",
+    "authors": [
+      "Amir Gholami",
+      "Sehoon Kim",
+      "Zhen Dong",
+      "Zhewei Yao",
+      "Michael W. Mahoney",
+      "Kurt Keutzer"
+    ],
+    "cites": [
+      "W1710476689",
+      "W2896457183",
+      "W4292779060",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W2889326796",
+    "title": "Understanding Back-Translation at Scale",
+    "year": 2018,
+    "citations": 1021,
+    "field": "Machine translation",
+    "authors": [
+      "Sergey Edunov",
+      "Myle Ott",
+      "Michael Auli",
+      "David Grangier"
+    ],
+    "cites": [
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W4387321091",
+    "title": "Efficient Memory Management for Large Language Model Serving with PagedAttention",
+    "year": 2023,
+    "citations": 1016,
+    "field": "Paging",
+    "authors": [
+      "Woosuk Kwon",
+      "Z. Li",
+      "Siyuan Zhuang",
+      "Ying Sheng",
+      "L Zheng",
+      "Cody Hao Yu",
+      "Joseph E. Gonzalez",
+      "Hao Zhang"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2987283559",
+    "title": "Momentum Contrast for Unsupervised Visual Representation Learning",
+    "year": 2019,
+    "citations": 1010,
+    "field": "Pascal (unit)",
+    "authors": [
+      "Kaiming He",
+      "Haoqi Fan",
+      "Yuxin Wu",
+      "Saining Xie",
+      "Ross Girshick"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W3135588948",
+    "title": "Toward Causal Representation Learning",
+    "year": 2021,
+    "citations": 1000,
+    "field": "Representation (politics)",
+    "authors": [
+      "Bernhard Schölkopf",
+      "Francesco Locatello",
+      "Stefan Bauer",
+      "Nan Rosemary Ke",
+      "Nal Kalchbrenner",
+      "Anirudh Goyal",
+      "Yoshua Bengio"
+    ],
+    "cites": [
+      "W2896457183",
+      "W4292779060"
+    ]
+  },
+  {
+    "id": "W3197957534",
+    "title": "UCTransNet: Rethinking the Skip Connections in U-Net from a Channel-Wise Perspective with Transformer",
+    "year": 2022,
+    "citations": 1000,
+    "field": "Segmentation",
+    "authors": [
+      "Haonan Wang",
+      "Peng Cao",
+      "Jiaqi Wang",
+      "Osmar R. Zai͏̈ane"
+    ],
+    "cites": [
+      "W3160284783",
+      "W3170841864"
+    ]
+  },
+  {
+    "id": "W4389326242",
+    "title": "Mamba: Linear-Time Sequence Modeling with Selective State Spaces",
+    "year": 2023,
+    "citations": 992,
+    "field": "Transformer",
+    "authors": [
+      "Albert Gu",
+      "Tri Dao"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4378838672",
+    "title": "Transfer learning enables predictions in network biology",
+    "year": 2023,
+    "citations": 983,
+    "field": "Context (archaeology)",
+    "authors": [
+      "Christina V. Theodoris",
+      "Ling Xiao",
+      "Anant Chopra",
+      "Mark Chaffin",
+      "Zeina R. Al Sayed",
+      "Matthew C. Hill",
+      "Helene Mantineo",
+      "Elizabeth M. Brydon"
+    ],
+    "cites": [
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W3074741277",
+    "title": "A Review of Deep Learning in Medical Imaging: Imaging Traits, Technology Trends, Case Studies With Progress Highlights, and Future Promises",
+    "year": 2021,
+    "citations": 978,
+    "field": "Deep learning",
+    "authors": [
+      "S. Kevin Zhou",
+      "Hayit Greenspan",
+      "Christos Davatzikos",
+      "James S. Duncan",
+      "Bram Van Ginneken",
+      "Anant Madabhushi",
+      "Jerry L. Prince",
+      "Daniel Rueckert"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4385346076",
+    "title": "Visual attention network",
+    "year": 2023,
+    "citations": 960,
+    "field": "Artificial intelligence",
+    "authors": [
+      "Meng-Hao Guo",
+      "Cheng-Ze Lu",
+      "Zheng-Ning Liu",
+      "Ming‐Ming Cheng",
+      "Shi‐Min Hu"
+    ],
+    "cites": [
+      "W3111535274",
+      "W3163465952",
+      "W3175515048",
+      "W3212386989"
+    ]
+  },
+  {
+    "id": "W3047057232",
+    "title": "Image Matching from Handcrafted to Deep Features: A Survey",
+    "year": 2020,
+    "citations": 955,
+    "field": "Artificial intelligence",
+    "authors": [
+      "Jiayi Ma",
+      "Xingyu Jiang",
+      "Aoxiang Fan",
+      "Junjun Jiang",
+      "Junchi Yan"
+    ],
+    "cites": [
+      "W2950642167"
+    ]
+  },
+  {
+    "id": "W4205773061",
+    "title": "ProteinBERT: a universal deep-learning model of protein sequence and function",
+    "year": 2022,
+    "citations": 951,
+    "field": "Artificial intelligence",
+    "authors": [
+      "Nadav Brandes",
+      "Dan Ofer",
+      "Yam Peleg",
+      "Nadav Rappoport",
+      "Michal Linial"
+    ],
+    "cites": [
+      "W2980789587"
+    ]
+  },
+  {
+    "id": "W3153469116",
+    "title": "CLIPScore: A Reference-free Evaluation Metric for Image Captioning",
+    "year": 2021,
+    "citations": 944,
+    "field": "Closed captioning",
+    "authors": [
+      "Jack Hessel",
+      "Ari Holtzman",
+      "Maxwell Forbes",
+      "Ronan Le Bras",
+      "Yejin Choi"
+    ],
+    "cites": [
+      "W2896457183",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W3034723486",
+    "title": "Climbing towards NLU: On Meaning, Form, and Understanding in the Age of Data",
+    "year": 2020,
+    "citations": 927,
+    "field": "Meaning (existential)",
+    "authors": [
+      "Emily M. Bender",
+      "Alexander Koller"
+    ],
+    "cites": [
+      "W2948947170",
+      "W2951286828",
+      "W2970476646"
+    ]
+  },
+  {
+    "id": "W4366091323",
+    "title": "Deep learning modelling techniques: current progress, applications, advantages, and challenges",
+    "year": 2023,
+    "citations": 926,
+    "field": "Deep learning",
+    "authors": [
+      "Shams Forruque Ahmed",
+      "Md. Sakib Bin Alam",
+      "Maruf Hassan",
+      "Mahtabin Rodela Rozbu",
+      "Taoseef Ishtiak",
+      "Nazifa Rafa",
+      "M. Mofijur",
+      "A. B. M. Shawkat Ali"
+    ],
+    "cites": [
+      "W2123585936"
+    ]
+  },
+  {
+    "id": "W4387500346",
+    "title": "The future landscape of large language models in medicine",
+    "year": 2023,
+    "citations": 925,
+    "field": "Transparency (behavior)",
+    "authors": [
+      "Jan Clusmann",
+      "Fiona R. Kolbinger",
+      "Hannah Sophie Muti",
+      "Zunamys I. Carrero",
+      "Jan‐Niklas Eckardt",
+      "Narmin Ghaffari Laleh",
+      "Chiara Maria Lavinia Löffler",
+      "Sophie-Caroline Schwarzkopf"
+    ],
+    "cites": [
+      "W2970771982",
+      "W4312220150",
+      "W4322718191",
+      "W4327810158",
+      "W4327946446",
+      "W4360836968"
+    ]
+  },
+  {
+    "id": "W4379521442",
+    "title": "The technological landscape and applications of single-cell multi-omics",
+    "year": 2023,
+    "citations": 924,
+    "field": "Omics",
+    "authors": [
+      "Alev Baysoy",
+      "Zhiliang Bai",
+      "Rahul Satija",
+      "Rong Fan"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4295122555",
+    "title": "Deep Residual Learning for Image Recognition: A Survey",
+    "year": 2022,
+    "citations": 915,
+    "field": "Residual",
+    "authors": [
+      "Muhammad Shafiq",
+      "Zhaoquan Gu"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4285294723",
+    "title": "GLM: General Language Model Pretraining with Autoregressive Blank Infilling",
+    "year": 2022,
+    "citations": 915,
+    "field": "Autoregressive model",
+    "authors": [
+      "Zhengxiao Du",
+      "Yujie Qian",
+      "Xiao Liu",
+      "Ming Ding",
+      "Jiezhong Qiu",
+      "Zhilin Yang",
+      "Jie Tang"
+    ],
+    "cites": [
+      "W2896457183",
+      "W2970419734",
+      "W4292779060"
+    ]
+  },
+  {
+    "id": "W2951286828",
+    "title": "Right for the Wrong Reasons: Diagnosing Syntactic Heuristics in Natural Language Inference",
+    "year": 2019,
+    "citations": 914,
+    "field": "Heuristics",
+    "authors": [
+      "Tom McCoy",
+      "Ellie Pavlick",
+      "Tal Linzen"
+    ],
+    "cites": [
+      "W2896457183"
+    ]
+  },
+  {
+    "id": "W3160284783",
+    "title": "Swin-Unet: Unet-like Pure Transformer for Medical Image Segmentation",
+    "year": 2021,
+    "citations": 906,
+    "field": "Encoder",
+    "authors": [
+      "Hu Cao",
+      "Yueyue Wang",
+      "Joy Chen",
+      "Dongsheng Jiang",
+      "Xiaopeng Zhang",
+      "Qi Tian",
+      "Manning Wang"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2984008963",
+    "title": "HowTo100M: Learning a Text-Video Embedding by Watching Hundred Million\\n Narrated Video Clips",
+    "year": 2019,
+    "citations": 903,
+    "field": "CLIPS",
+    "authors": [
+      "Antoine Miech",
+      "Dimitri Zhukov",
+      "Jean-Baptiste Alayrac",
+      "Makarand Tapaswi",
+      "Ivan Laptev",
+      "Josef Šivic"
+    ],
+    "cites": [
+      "W2896457183"
+    ]
+  },
+  {
+    "id": "W3202525453",
+    "title": "Skilful precipitation nowcasting using deep generative models of radar",
+    "year": 2021,
+    "citations": 902,
+    "field": "Nowcasting",
+    "authors": [
+      "Suman Ravuri",
+      "Karel Lenc",
+      "Matthew Willson",
+      "Dmitry Kangin",
+      "Rémi Lam",
+      "Piotr Mirowski",
+      "M. A. Fitzsimons",
+      "Maria Athanassiadou"
+    ],
+    "cites": [
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W4283392904",
+    "title": "Artificial intelligence and smart vision for building and construction 4.0: Machine and deep learning methods and applications",
+    "year": 2022,
+    "citations": 900,
+    "field": "Automation",
+    "authors": [
+      "Shanaka Kristombu Baduge",
+      "Sadeep Thilakarathna",
+      "Jude Shalitha Perera",
+      "Mehrdad Arashpour",
+      "P. Sharafi",
+      "Bertrand Teodosio",
+      "Ankit Shringi",
+      "Priyan Mendis"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4385878593",
+    "title": "New Era of Artificial Intelligence in Education: Towards a Sustainable Multifaceted Revolution",
+    "year": 2023,
+    "citations": 899,
+    "field": "Mainstream",
+    "authors": [
+      "Firuz Kamalov",
+      "David Santandreu Calonge",
+      "Ikhlaas Gurrib"
+    ],
+    "cites": [
+      "W4317910584",
+      "W4324046518",
+      "W4360620450"
+    ]
+  },
+  {
+    "id": "W4383818129",
+    "title": "Shaping the Future of Education: Exploring the Potential and Consequences of AI and ChatGPT in Educational Settings",
+    "year": 2023,
+    "citations": 897,
+    "field": "Extant taxon",
+    "authors": [
+      "Simone Grassini"
+    ],
+    "cites": [
+      "W4292779060",
+      "W4317910584",
+      "W4323655724",
+      "W4324046518",
+      "W4327946446",
+      "W4362581834"
+    ]
+  },
+  {
+    "id": "W3101118213",
+    "title": "Findings of the Association for Computational Linguistics: EMNLP 2021",
+    "year": 2021,
+    "citations": 896,
+    "field": "Computational linguistics",
+    "authors": [
+      "Firoj Alam",
+      "Shaden Shaar",
+      "Fahim Dalvi",
+      "Hassan Sajjad",
+      "Alex Nikolov",
+      "Hamdy Mubarak",
+      "Giovanni Da",
+      "San Martino"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4223899585",
+    "title": "Transfer learning for medical image classification: a literature review",
+    "year": 2022,
+    "citations": 894,
+    "field": "Extractor",
+    "authors": [
+      "Kim Eun Hee",
+      "Alejandro Cosa‐Linan",
+      "Nandhini Santhanam",
+      "Mahboubeh Jannesari",
+      "Máté E. Maros",
+      "Thomas Ganslandt"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4381982883",
+    "title": "ChatGPT for Education and Research: Opportunities, Threats, and Strategies",
+    "year": 2023,
+    "citations": 893,
+    "field": "Cheating",
+    "authors": [
+      "Md. Mostafizer Rahman",
+      "Yutaka Watanobe"
+    ],
+    "cites": [
+      "W3095319910",
+      "W4292779060",
+      "W4317910584",
+      "W4323655724",
+      "W4324046518"
+    ]
+  },
+  {
+    "id": "W4383346782",
+    "title": "The imperative for regulatory oversight of large language models (or generative AI) in healthcare",
+    "year": 2023,
+    "citations": 893,
+    "field": "Transformative learning",
+    "authors": [
+      "Bertalan Meskó",
+      "Eric J. Topol"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2991040477",
+    "title": "GPipe: Efficient Training of Giant Neural Networks using Pipeline\\n Parallelism",
+    "year": 2018,
+    "citations": 883,
+    "field": "Speedup",
+    "authors": [
+      "Yanping Huang",
+      "Youlong Cheng",
+      "Ankur Bapna",
+      "Orhan Fırat",
+      "Mia Xu Chen",
+      "Dehao Chen",
+      "HyoukJoong Lee",
+      "Jiquan Ngiam"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4393115925",
+    "title": "A review of convolutional neural networks in computer vision",
+    "year": 2024,
+    "citations": 882,
+    "field": "Convolutional neural network",
+    "authors": [
+      "Xia Zhao",
+      "Limin Wang",
+      "Yufei Zhang",
+      "Xuming Han",
+      "Muhammet Deveci",
+      "Milan Parmar"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4322766882",
+    "title": "Parameter-efficient fine-tuning of large-scale pre-trained language models",
+    "year": 2023,
+    "citations": 881,
+    "field": "Fine-tuning",
+    "authors": [
+      "Ning Ding",
+      "Yujia Qin",
+      "Guang Yang",
+      "Fuchao Wei",
+      "Zonghan Yang",
+      "Yusheng Su",
+      "Shengding Hu",
+      "Yulin Chen"
+    ],
+    "cites": [
+      "W3173777717",
+      "W3174770825",
+      "W3185341429"
+    ]
+  },
+  {
+    "id": "W3093051361",
+    "title": "MISA",
+    "year": 2020,
+    "citations": 865,
+    "field": "Modality (human–computer interaction)",
+    "authors": [
+      "Devamanyu Hazarika",
+      "Roger Zimmermann",
+      "Soujanya Poria"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2736068844",
+    "title": "Deep Learning Based Communication Over the Air",
+    "year": 2017,
+    "citations": 862,
+    "field": "Artificial intelligence",
+    "authors": [
+      "Sebastian Dorner",
+      "Sebastian Cammerer",
+      "Jakob Hoydis",
+      "Stephan ten Brink"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2996851481",
+    "title": "Is BERT Really Robust? A Strong Baseline for Natural Language Attack on Text Classification and Entailment",
+    "year": 2020,
+    "citations": 861,
+    "field": "Adversarial system",
+    "authors": [
+      "Di Jin",
+      "Zhijing Jin",
+      "Joey Tianyi Zhou",
+      "Peter Szolovits"
+    ],
+    "cites": [
+      "W2896457183"
+    ]
+  },
+  {
+    "id": "W4229011615",
+    "title": "A Topic Modeling Comparison Between LDA, NMF, Top2Vec, and BERTopic to Demystify Twitter Posts",
+    "year": 2022,
+    "citations": 857,
+    "field": "Latent Dirichlet allocation",
+    "authors": [
+      "Roman Egger",
+      "Joanne Yu"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2963603913",
+    "title": "",
+    "year": 2016,
+    "citations": 855,
+    "field": "Artificial intelligence",
+    "authors": [
+      "Vedaldi, A",
+      "Bilen, H"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2954226438",
+    "title": "SemEval-2019 Task 5: Multilingual Detection of Hate Speech Against Immigrants and Women in Twitter",
+    "year": 2019,
+    "citations": 851,
+    "field": "SemEval",
+    "authors": [
+      "Valerio Basile",
+      "Cristina Bosco",
+      "Elisabetta Fersini",
+      "Debora Nozza",
+      "Viviana Patti",
+      "Francisco M. Rangel Pardo",
+      "Paolo Rosso",
+      "Manuela Sanguinetti"
+    ],
+    "cites": [
+      "W2896457183"
+    ]
+  },
+  {
+    "id": "W2950339735",
+    "title": "COMET: Commonsense Transformers for Automatic Knowledge Graph Construction",
+    "year": 2019,
+    "citations": 851,
+    "field": "Commonsense knowledge",
+    "authors": [
+      "Antoine Bosselut",
+      "Hannah Rashkin",
+      "Maarten Sap",
+      "Chaitanya Malaviya",
+      "Aslı Çelikyılmaz",
+      "Yejin Choi"
+    ],
+    "cites": [
+      "W2896457183",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W2963101956",
+    "title": "Auto-Encoding Scene Graphs for Image Captioning",
+    "year": 2019,
+    "citations": 849,
+    "field": "Closed captioning",
+    "authors": [
+      "Xu Yang",
+      "Kaihua Tang",
+      "Hanwang Zhang",
+      "Jianfei Cai"
+    ],
+    "cites": [
+      "W2896457183"
+    ]
+  },
+  {
+    "id": "W3127657277",
+    "title": "Artificial intelligence-enhanced electrocardiography in cardiovascular disease management",
+    "year": 2021,
+    "citations": 845,
+    "field": "Disease",
+    "authors": [
+      "Konstantinos C. Siontis",
+      "Peter A. Noseworthy",
+      "Zachi I. Attia",
+      "Paul A. Friedman"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2971258845",
+    "title": "Transfer Learning in Biomedical Natural Language Processing: An Evaluation of BERT and ELMo on Ten Benchmarking Datasets",
+    "year": 2019,
+    "citations": 844,
+    "field": "Benchmark (surveying)",
+    "authors": [
+      "Yifan Peng",
+      "Shankai Yan",
+      "Zhiyong Lu"
+    ],
+    "cites": [
+      "W2896457183",
+      "W2964110616",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W4320487943",
+    "title": "YOLOv7: Trainable bag-of-freebies sets new state-of-the-art for real-time object detectors",
+    "year": 2022,
+    "citations": 843,
+    "field": "Detector",
+    "authors": [
+      "Chien-Yao Wang",
+      "Alexey Bochkovskiy",
+      "Hong-Yuan Mark Liao"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2912361013",
+    "title": "Evaluation of Different Machine Learning Methods and Deep-Learning Convolutional Neural Networks for Landslide Detection",
+    "year": 2019,
+    "citations": 841,
+    "field": "Convolutional neural network",
+    "authors": [
+      "Omid Ghorbanzadeh",
+      "Thomas Blaschke",
+      "Khalil Gholamnia",
+      "Sansar Raj Meena",
+      "Dirk Tiede",
+      "Jagannath Aryal"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W3174022889",
+    "title": "Spatial-Temporal Fusion Graph Neural Networks for Traffic Flow Forecasting",
+    "year": 2021,
+    "citations": 839,
+    "field": "Graph",
+    "authors": [
+      "Mengzhang Li",
+      "Zhanxing Zhu"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4362581834",
+    "title": "Revolutionizing education with AI: Exploring the transformative potential of ChatGPT",
+    "year": 2023,
+    "citations": 838,
+    "field": "Transformative learning",
+    "authors": [
+      "Tufan Adıgüzel",
+      "Mehmet Haldun Kaya",
+      "Fatih Kürşat Cansu"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4376226279",
+    "title": "Multimodal Learning With Transformers: A Survey",
+    "year": 2023,
+    "citations": 837,
+    "field": "Transformer",
+    "authors": [
+      "Peng Xu",
+      "Xiatian Zhu",
+      "David A. Clifton"
+    ],
+    "cites": [
+      "W2886641317",
+      "W2896457183",
+      "W2903739847",
+      "W2964110616",
+      "W2970231061",
+      "W2984008963",
+      "W2997591391",
+      "W2998356391",
+      "W3111535274",
+      "W3160137267",
+      "W3185341429",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W3023042104",
+    "title": "QSAR without borders",
+    "year": 2020,
+    "citations": 836,
+    "field": "Quantitative structure–activity relationship",
+    "authors": [
+      "Eugene Muratov",
+      "Jürgen Bajorath",
+      "Robert P. Sheridan",
+      "Igor V. Tetko",
+      "Dmitry Filimonov",
+      "Vladimir Poroikov",
+      "Tudor I. Oprea",
+      "Igor I. Baskin"
+    ],
+    "cites": [
+      "W2799915630"
+    ]
+  },
+  {
+    "id": "W4214861448",
+    "title": "Fly Cell Atlas: A single-nucleus transcriptomic atlas of the adult fruit fly",
+    "year": 2022,
+    "citations": 835,
+    "field": "Atlas (anatomy)",
+    "authors": [
+      "Hongjie Li",
+      "Jasper Janssens",
+      "Maxime De Waegeneer",
+      "Sai Saroja Kolluru",
+      "Kristofer Davie",
+      "Vincent Gardeux",
+      "Wouter Saelens",
+      "Fabrice David"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2997591391",
+    "title": "Unified Vision-Language Pre-Training for Image Captioning and VQA",
+    "year": 2020,
+    "citations": 835,
+    "field": "Closed captioning",
+    "authors": [
+      "Luowei Zhou",
+      "Hamid Palangi",
+      "Lei Zhang",
+      "Houdong Hu",
+      "Jason J. Corso",
+      "Jianfeng Gao"
+    ],
+    "cites": [
+      "W2886641317",
+      "W2896457183",
+      "W2963101956",
+      "W2963854351",
+      "W2970231061",
+      "W2998356391",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W3033928040",
+    "title": "An Overview of Artificial Intelligence Applications for Power Electronics",
+    "year": 2020,
+    "citations": 835,
+    "field": "Listing (finance)",
+    "authors": [
+      "Shuai Zhao",
+      "Frede Blaabjerg",
+      "Huai Wang"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4385839827",
+    "title": "UAV-YOLOv8: A Small-Object-Detection Model Based on Improved YOLOv8 for UAV Aerial Photography Scenarios",
+    "year": 2023,
+    "citations": 834,
+    "field": "Object detection",
+    "authors": [
+      "Gang Wang",
+      "Yanfei Chen",
+      "Pei An",
+      "Hanyu Hong",
+      "Jinghu Hu",
+      "Tiange Huang"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W3009563704",
+    "title": "Deep Learning for Cardiac Image Segmentation: A Review",
+    "year": 2020,
+    "citations": 833,
+    "field": "Deep learning",
+    "authors": [
+      "Chen Chen",
+      "Chen Qin",
+      "Huaqi Qiu",
+      "Giacomo Tarroni",
+      "Jinming Duan",
+      "Wenjia Bai",
+      "Daniel Rueckert"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4404531735",
+    "title": "InterPro: the protein sequence classification resource in 2025",
+    "year": 2024,
+    "citations": 830,
+    "field": "UniProt",
+    "authors": [
+      "Matthias Blum",
+      "Antonina Andreeva",
+      "Laise Cavalcanti Florentino",
+      "Sara Chuguransky",
+      "Tiago Grego",
+      "Emma Hobbs",
+      "Beatriz Lázaro",
+      "Ailsa Orr"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W3137125108",
+    "title": "Interpretable machine learning: Fundamental principles and 10 grand challenges",
+    "year": 2022,
+    "citations": 828,
+    "field": "Interpretability",
+    "authors": [
+      "Cynthia Rudin",
+      "Chaofan Chen",
+      "Zhi Chen",
+      "Haiyang Huang",
+      "Lesia Semenova",
+      "Chudi Zhong"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4386923826",
+    "title": "Identification of mobile genetic elements with geNomad",
+    "year": 2023,
+    "citations": 819,
+    "field": "Annotation",
+    "authors": [
+      "Antônio Pedro Camargo",
+      "Simon Roux",
+      "Frederik Schulz",
+      "Michal Babinski",
+      "Yan Xu",
+      "Bin Hu",
+      "Patrick Chain",
+      "Stephen Nayfach"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4366817968",
+    "title": "Generative AI at Work",
+    "year": 2023,
+    "citations": 818,
+    "field": "Generative grammar",
+    "authors": [
+      "Erik Brynjolfsson",
+      "Danielle Li",
+      "Lindsey Raymond"
+    ],
+    "cites": [
+      "W4360836968",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W3096655658",
+    "title": "Contrastive Representation Learning: A Framework and Review",
+    "year": 2020,
+    "citations": 817,
+    "field": "Artificial intelligence",
+    "authors": [
+      "Phuc H. Le-Khac",
+      "Graham Healy",
+      "Alan F. Smeaton"
+    ],
+    "cites": [
+      "W2896457183",
+      "W2970641574",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W4312597583",
+    "title": "EEG Conformer: Convolutional Transformer for EEG Decoding and Visualization",
+    "year": 2022,
+    "citations": 817,
+    "field": "Electroencephalography",
+    "authors": [
+      "Yonghao Song",
+      "Qingqing Zheng",
+      "Bingchuan Liu",
+      "Xiaorong Gao"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2931364255",
+    "title": "Deep Learning for Audio Signal Processing",
+    "year": 2019,
+    "citations": 815,
+    "field": "Deep learning",
+    "authors": [
+      "H.‐G. Purwins",
+      "Bo Li",
+      "Tuomas Virtanen",
+      "Jan Schlüter",
+      "Shuo-Yiin Chang",
+      "Tara N. Sainath"
+    ],
+    "cites": [
+      "W2896457183",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W3160137267",
+    "title": "Med-BERT: pretrained contextualized embeddings on large-scale structured electronic health records for disease prediction",
+    "year": 2021,
+    "citations": 813,
+    "field": "Machine learning",
+    "authors": [
+      "Laila Rasmy",
+      "Yang Xiang",
+      "Ziqian Xie",
+      "Cui Tao",
+      "Degui Zhi"
+    ],
+    "cites": [
+      "W2953356739",
+      "W2970771982"
+    ]
+  },
+  {
+    "id": "W4312220150",
+    "title": "A large language model for electronic health records",
+    "year": 2022,
+    "citations": 811,
+    "field": "Artificial intelligence",
+    "authors": [
+      "Xi Yang",
+      "Aokun Chen",
+      "Nima PourNejatian",
+      "Hoo Chang Shin",
+      "Kaleb E Smith",
+      "Christopher Parisien",
+      "Colin B. Compas",
+      "Cheryl Martin"
+    ],
+    "cites": [
+      "W3095319910"
+    ]
+  },
+  {
+    "id": "W2794609696",
+    "title": "AI2: Safety and Robustness Certification of Neural Networks with Abstract Interpretation",
+    "year": 2018,
+    "citations": 810,
+    "field": "Artificial neural network",
+    "authors": [
+      "Timon Gehr",
+      "Matthew Mirman",
+      "Dana Drachsler-Cohen",
+      "Petar Tsankov",
+      "Swarat Chaudhuri",
+      "Martin Vechev"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W3135539146",
+    "title": "Sustainable AI: AI for sustainability and the sustainability of AI",
+    "year": 2021,
+    "citations": 808,
+    "field": "Sustainability",
+    "authors": [
+      "Aimee van Wynsberghe"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4386697749",
+    "title": "A foundation model for generalizable disease detection from retinal images",
+    "year": 2023,
+    "citations": 805,
+    "field": "Artificial intelligence",
+    "authors": [
+      "Yukun Zhou",
+      "Mark A. Chia",
+      "Siegfried K. Wagner",
+      "Murat Seçkin Ayhan",
+      "Dominic J. Williamson",
+      "Robbert Struyven",
+      "Timing Liu",
+      "Moucheng Xu"
+    ],
+    "cites": [
+      "W4365143687"
+    ]
+  },
+  {
+    "id": "W3089028909",
+    "title": "A Unifying Review of Deep and Shallow Anomaly Detection",
+    "year": 2021,
+    "citations": 799,
+    "field": "Variety (cybernetics)",
+    "authors": [
+      "Lukas Ruff",
+      "Jacob R. Kauffmann",
+      "Robert A. Vandermeulen",
+      "Gregoire Montavon",
+      "Wojciech Samek",
+      "Marius Kloft",
+      "Thomas G. Dietterich",
+      "Klaus-Robert Muller"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W3196324893",
+    "title": "A review on sentiment analysis and emotion detection from text",
+    "year": 2021,
+    "citations": 795,
+    "field": "Sentiment analysis",
+    "authors": [
+      "Pansy Nandwani",
+      "Rupali Verma"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4379470483",
+    "title": "A Review of the Role of Artificial Intelligence in Healthcare",
+    "year": 2023,
+    "citations": 784,
+    "field": "Health care",
+    "authors": [
+      "Ahmed Al Kuwaiti",
+      "Khalid Nazer",
+      "Abdullah H. Alreedy",
+      "Shaher D AlShehri",
+      "Afnan Almuhanna",
+      "Arun Vijay Subbarayalu",
+      "Dhoha Al Muhanna",
+      "Fahad Al‐Muhanna"
+    ],
+    "cites": [
+      "W4206484811",
+      "W4327946446"
+    ]
+  },
+  {
+    "id": "W4391849646",
+    "title": "Ethical and regulatory challenges of AI technologies in healthcare: A narrative review",
+    "year": 2024,
+    "citations": 779,
+    "field": "Health care",
+    "authors": [
+      "Ciro Mennella",
+      "Umberto Maniscalco",
+      "Giuseppe De Pietro",
+      "Massimo Esposito"
+    ],
+    "cites": [
+      "W4379470483"
+    ]
+  },
+  {
+    "id": "W3006087551",
+    "title": "Informed Machine Learning - A Taxonomy and Survey of Integrating Prior Knowledge into Learning Systems",
+    "year": 2021,
+    "citations": 775,
+    "field": "Machine learning",
+    "authors": [
+      "Laura von Rueden",
+      "Sebastian Mayer",
+      "Katharina Beckh",
+      "Bogdan Georgiev",
+      "Sven Giesselbach",
+      "Raoul Heese",
+      "Birgit Kirsch",
+      "Michał Walczak"
+    ],
+    "cites": [
+      "W2896457183",
+      "W2953356739"
+    ]
+  },
+  {
+    "id": "W4389991792",
+    "title": "Autonomous chemical research with large language models",
+    "year": 2023,
+    "citations": 775,
+    "field": "Documentation",
+    "authors": [
+      "Daniil A. Boiko",
+      "Robert MacKnight",
+      "Ben Kline",
+      "Gabriel dos Passos Gomes"
+    ],
+    "cites": [
+      "W3185341429",
+      "W4322718191",
+      "W4360836968"
+    ]
+  },
+  {
+    "id": "W2799915630",
+    "title": "Accelerating the discovery of materials for clean energy in the era of smart automation",
+    "year": 2018,
+    "citations": 774,
+    "field": "Software deployment",
+    "authors": [
+      "Daniel P. Tabor",
+      "Loı̈c M. Roch",
+      "Semion K. Saikin",
+      "Christoph Kreisbeck",
+      "Dennis Sheberla",
+      "Joseph H. Montoya",
+      "Shyam Dwaraknath",
+      "Muratahan Aykol"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2803750062",
+    "title": "Survey on Multi-Access Edge Computing for Internet of Things Realization",
+    "year": 2018,
+    "citations": 771,
+    "field": "Cloud computing",
+    "authors": [
+      "Pawani Porambage",
+      "Jude Okwuibe",
+      "Madhusanka Liyanage",
+      "Mika Ylianttila",
+      "Tarik Taleb"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W4365504037",
+    "title": "A survey on deep learning tools dealing with data scarcity: definitions, challenges, solutions, tips, and applications",
+    "year": 2023,
+    "citations": 767,
+    "field": "Deep learning",
+    "authors": [
+      "Laith Alzubaidi",
+      "Jinshuai Bai",
+      "Aiman Al-Sabaawi",
+      "José Santamaría",
+      "A. S. Albahri",
+      "Bashar Sami Nayyef Al-dabbagh",
+      "Mohammed A. Fadhel",
+      "Mohamed Manoufali"
+    ],
+    "cites": [
+      "W3114632476",
+      "W3140854437",
+      "W3163993681"
+    ]
+  },
+  {
+    "id": "W2998385486",
+    "title": "K-BERT: Enabling Language Representation with Knowledge Graph",
+    "year": 2020,
+    "citations": 766,
+    "field": "Sentence",
+    "authors": [
+      "Weijie Liu",
+      "Peng Zhou",
+      "Zhe Zhao",
+      "Zhiruo Wang",
+      "Qi Ju",
+      "Haotang Deng",
+      "Ping Wang"
+    ],
+    "cites": [
+      "W2896457183",
+      "W2950339735",
+      "W2953356739",
+      "W2964110616",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W4206693420",
+    "title": "Medical image segmentation using deep learning: A survey",
+    "year": 2022,
+    "citations": 763,
+    "field": "Artificial intelligence",
+    "authors": [
+      "Risheng Wang",
+      "Tao Lei",
+      "Ruixia Cui",
+      "Bingtao Zhang",
+      "Hongying Meng",
+      "Asoke K. Nandi"
+    ],
+    "cites": [
+      "W3009563704",
+      "W3160284783",
+      "W4309845474"
+    ]
+  },
+  {
+    "id": "W3144404977",
+    "title": "Survey on 6G Frontiers: Trends, Applications, Requirements, Technologies and Future Research",
+    "year": 2021,
+    "citations": 761,
+    "field": "Standardization",
+    "authors": [
+      "Chamitha de Alwis",
+      "Anshuman Kalla",
+      "Quoc‐Viet Pham",
+      "Pardeep Kumar",
+      "Kapal Dev",
+      "Won‐Joo Hwang",
+      "Madhusanka Liyanage"
+    ],
+    "cites": [
+      "W2736068844"
+    ]
+  },
+  {
+    "id": "W4288066876",
+    "title": "ProtGPT2 is a deep unsupervised language model for protein design",
+    "year": 2022,
+    "citations": 761,
+    "field": "Protein design",
+    "authors": [
+      "Noelia Ferruz",
+      "Steffen Schmidt",
+      "Birte Höcker"
+    ],
+    "cites": [
+      "W2980789587",
+      "W4205773061"
+    ]
+  },
+  {
+    "id": "W3163465952",
+    "title": "ResMLP: Feedforward Networks for Image Classification With Data-Efficient Training",
+    "year": 2022,
+    "citations": 756,
+    "field": "Artificial intelligence",
+    "authors": [
+      "Hugo Touvron",
+      "Piotr Bojanowski",
+      "Mathilde Caron",
+      "Matthieu Cord",
+      "Alaaeldin El-Nouby",
+      "Édouard Grave",
+      "Gautier Izacard",
+      "Armand Joulin"
+    ],
+    "cites": [
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W4323848232",
+    "title": "<scp>ChatGPT</scp> and a new academic reality: <scp>Artificial Intelligence‐written</scp> research papers and the ethics of the large language models in scholarly publishing",
+    "year": 2023,
+    "citations": 756,
+    "field": "Publishing",
+    "authors": [
+      "Brady Lund",
+      "Ting Wang",
+      "Nishith Reddy Mannuru",
+      "Bing Nie",
+      "Somipam R. Shimray",
+      "Ziang Wang"
+    ],
+    "cites": [
+      "W2896457183",
+      "W3095319910",
+      "W4292779060",
+      "W4320495408"
+    ]
+  },
+  {
+    "id": "W2998356391",
+    "title": "Unicoder-VL: A Universal Encoder for Vision and Language by Cross-Modal Pre-Training",
+    "year": 2020,
+    "citations": 744,
+    "field": "Modal",
+    "authors": [
+      "Gen Li",
+      "Nan Duan",
+      "Yuejian Fang",
+      "Ming Gong",
+      "Daxin Jiang"
+    ],
+    "cites": [
+      "W2886641317",
+      "W2896457183",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W2964189376",
+    "title": "DiSAN: Directional Self-Attention Network for RNN/CNN-Free Language Understanding",
+    "year": 2018,
+    "citations": 743,
+    "field": "Recurrent neural network",
+    "authors": [
+      "Tao Shen",
+      "Tianyi Zhou",
+      "Guodong Long",
+      "Jing Jiang",
+      "Shirui Pan",
+      "Chengqi Zhang"
+    ],
+    "cites": [
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W4393353064",
+    "title": "The Role of AI in Hospitals and Clinics: Transforming Healthcare in the 21st Century",
+    "year": 2024,
+    "citations": 741,
+    "field": "Health care",
+    "authors": [
+      "Shiva Maleki Varnosfaderani",
+      "Mohamad Forouzanfar"
+    ],
+    "cites": [
+      "W4312220150"
+    ]
+  },
+  {
+    "id": "W2963557767",
+    "title": "Stereo magnification",
+    "year": 2018,
+    "citations": 739,
+    "field": "View synthesis",
+    "authors": [
+      "Tinghui Zhou",
+      "Richard Tucker",
+      "John P. Flynn",
+      "Graham Fyffe",
+      "Noah Snavely"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2997200074",
+    "title": "ERNIE 2.0: A Continual Pre-Training Framework for Language Understanding",
+    "year": 2020,
+    "citations": 736,
+    "field": "Natural language processing",
+    "authors": [
+      "Yu Sun",
+      "Shuohuan Wang",
+      "Yukun Li",
+      "Shikun Feng",
+      "Hao Tian",
+      "Hua Wu",
+      "Haifeng Wang"
+    ],
+    "cites": [
+      "W2896457183",
+      "W2963854351",
+      "W2964110616",
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W2123585936",
+    "title": "A tutorial survey of architectures, algorithms, and applications for deep learning",
+    "year": 2014,
+    "citations": 735,
+    "field": "Deep learning",
+    "authors": [
+      "Li Deng"
+    ],
+    "cites": []
+  },
+  {
+    "id": "W2903739847",
+    "title": "Neural Speech Synthesis with Transformer Network",
+    "year": 2019,
+    "citations": 732,
+    "field": "Transformer",
+    "authors": [
+      "Naihan Li",
+      "Shujie Liu",
+      "Yanqing Liu",
+      "Sheng Zhao",
+      "Ming Liu"
+    ],
+    "cites": [
+      "W4385245566"
+    ]
+  },
+  {
+    "id": "W3119467012",
+    "title": "FakeBERT: Fake news detection in social media with a BERT-based deep learning approach",
+    "year": 2021,
+    "citations": 725,
+    "field": "Social media",
+    "authors": [
+      "Rohit Kumar Kaliyar",
+      "Anurag Goswami",
+      "Pratik Narang"
+    ],
+    "cites": [
+      "W2896457183",
+      "W2946417913"
+    ]
+  },
+  {
+    "id": "W4206095984",
+    "title": "Feature dimensionality reduction: a review",
+    "year": 2022,
+    "citations": 723,
+    "field": "Dimensionality reduction",
+    "authors": [
+      "Weikuan Jia",
+      "Meili Sun",
+      "Jian Lian",
+      "Sujuan Hou"
+    ],
+    "cites": []
+  }
+]
