@@ -156,11 +156,21 @@ verified end-to-end.
      of sidecar-backed property data, gather candidates from sidecars +
      the memtable mirror, MVCC-verify against the latest snapshot. The RAM
      property mirror holds only memtable + sidecar-less data.
-2. **Vector index on disk** (`.vidx`) — ✅ DONE (the brute-force k-NN is
-   exact, so mmap is lossless). 2a format (11 TDD tests), 2b/2c write at
-   flush/compaction + gather-from-sidecars + MVCC re-score by current
-   embedding. Remaining ⏳: entity_type_cluster, type_cluster, adjacency,
-   lookup_key (entity/hyperedge-id-list sidecars, same shape).
+2. **All six secondary indexes on disk** — ✅ DONE.
+   - Vector (`.vidx`): brute-force k-NN, so mmap is lossless. 2a format +
+     2b/2c write + gather + MVCC re-score by current embedding.
+   - Adjacency / type_cluster / entity_type_cluster / lookup_key: a shared
+     generic id-list sidecar (`key_bytes → [16-byte id]`, Phase 2d) backs
+     all four (Phase 2e). Each query gathers from sidecars + RAM mirror and
+     MVCC-verifies via `snapshot_read` (hyperedge live + references entity;
+     hyperedge live + of type; entity live + of type; entity live +
+     value-matches). `hyperedge_has_type` verifies the record's own type
+     directly. Counts = verified-`find` length (exact, O(N) — the low-mem
+     speed/RAM tradeoff). `adjacency_overview` stays RAM-mirror-based
+     (planner estimate only).
+   - **Gating decision:** all sidecars are written only under
+     `mmap_indexes` (no default-mode overhead). `Engine::create_with_config`
+     added so low-mem DBs emit sidecars during ingest.
 3. ⏳ Bounded block cache enforcing `max_cache_bytes` (hard cap).
 
 Then: wire `langgraph-server` to `open_with_config(low_memory(..))`, build a

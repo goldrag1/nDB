@@ -85,6 +85,12 @@ impl LookupKeyIndex {
         self.registered_properties.contains(&property_id)
     }
 
+    /// True iff any lookup-key property is registered.
+    #[must_use]
+    pub fn has_registrations(&self) -> bool {
+        !self.registered_properties.is_empty()
+    }
+
     /// Look up an entity by `(property_id, value)`. Returns `None` if no
     /// live entity owns this pair.
     #[must_use]
@@ -191,7 +197,7 @@ impl Index for LookupKeyIndex {
 /// Extension values are deliberately excluded — the build doesn't know
 /// their semantics.
 #[allow(clippy::match_same_arms)] // Per-variant arms kept for diff stability when adding new tags.
-fn value_to_index_bytes(v: &Value) -> Option<Vec<u8>> {
+pub(crate) fn value_to_index_bytes(v: &Value) -> Option<Vec<u8>> {
     Some(match v {
         Value::Null => return None,
         Value::Bool(b) => vec![u8::from(*b)],

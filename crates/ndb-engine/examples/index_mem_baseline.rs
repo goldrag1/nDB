@@ -57,7 +57,12 @@ fn build_and_measure(n: usize) {
         uuid::Uuid::now_v7().simple()
     ));
     {
-        let mut engine = Engine::create(&dir).unwrap();
+        // Create in low-RAM mode so flushes emit index sidecars (gated on
+        // mmap_indexes). The default-open measurement below still rebuilds
+        // everything in RAM from the SSTables — sidecars sit unused there.
+        let mut engine =
+            Engine::create_with_config(&dir, EngineConfig::low_memory(2 * 1024 * 1024 * 1024))
+                .unwrap();
         engine.register_lookup_key(PropertyId::new(PROP_NAME));
         engine.register_property_btree(TypeId::new(TYPE_PAPER), PropertyId::new(PROP_CITES));
         engine.register_vector_property(PropertyId::new(PROP_EMBED));
@@ -137,20 +142,20 @@ fn build_and_measure(n: usize) {
             Engine::open_with_config(&dir, EngineConfig::low_memory(2 * 1024 * 1024 * 1024)).unwrap();
         engine.register_property_btree(TypeId::new(TYPE_PAPER), PropertyId::new(PROP_CITES));
         engine.register_vector_property(PropertyId::new(PROP_EMBED));
+        engine.register_lookup_key(PropertyId::new(PROP_NAME));
         engine.rebuild_indexes().unwrap();
         let s = engine.index_memory_stats();
+        let _ = s_def;
         println!(
             "N={n:>7} lowmemory | indexes est {:7.1} MB \
              [lk {:.1} adj {:.1} tc {:.1} etc {:.1} vec {:.1} pbt {:.1}]  \
-             ← property index now on disk (pbt {:.1}->{:.1} MB)",
+             ← ALL six secondary indexes now served from disk",
             mb(s.index_total()),
             mb(s.lookup_key),
             mb(s.adjacency),
             mb(s.type_cluster),
             mb(s.entity_type_cluster),
             mb(s.vector),
-            mb(s.property_btree),
-            mb(s_def),
             mb(s.property_btree),
         );
         drop(engine);

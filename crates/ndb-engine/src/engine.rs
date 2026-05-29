@@ -43,12 +43,16 @@ use crate::encryption::{
 use crate::error::EncodeError;
 use crate::id::{EntityId, HyperedgeId, PropertyId, TX_ACTIVE, TxId, TypeId};
 use crate::index::property_btree::value_to_index_bytes;
+use crate::index::lookup_key::value_to_index_bytes as lookup_value_to_index_bytes;
 use crate::index::vector::distance as vector_distance;
 use crate::index::property_index_file::{
     PropertyIndexBuilder, PropertyIndexFile, sidecar_path_for as pidx_sidecar_path_for,
 };
 use crate::index::vector_index_file::{
     VectorIndexBuilder, VectorIndexFile, sidecar_path_for as vidx_sidecar_path_for,
+};
+use crate::index::id_list_index_file::{
+    IdListIndexBuilder, IdListIndexFile, sidecar_path_for as idl_sidecar_path_for,
 };
 use crate::index::{
     AdjacencyIndex, Distance, EntityTypeIndex, HyperEdgeTypeIndex, Index, LookupKeyIndex,
@@ -64,6 +68,16 @@ use crate::wal::{WalReadError, WalReader, WriteAheadLog, truncate_to};
 
 const WAL_FILENAME_SUFFIX: &str = ".ndblog";
 const SSTABLE_FILENAME_SUFFIX: &str = ".ndb";
+
+// id-list index sidecar tags + extensions (low-RAM core, Phase 2e).
+const ADJ_MAGIC: [u8; 4] = *b"NADJ";
+const ADJ_EXT: &str = "adjx";
+const TYC_MAGIC: [u8; 4] = *b"NTYC";
+const TYC_EXT: &str = "tycx";
+const ETC_MAGIC: [u8; 4] = *b"NETC";
+const ETC_EXT: &str = "etcx";
+const LKP_MAGIC: [u8; 4] = *b"NLKP";
+const LKP_EXT: &str = "lkpx";
 
 /// Statistics returned by [`Engine::compact`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -407,6 +421,14 @@ pub struct Engine {
     /// lifecycle + fallback as `property_index_files`. Embeddings are the
     /// dominant resident-RAM term, so this is the main low-RAM win.
     vector_index_files: HashMap<PathBuf, VectorIndexFile>,
+    /// mmap'd id-list sidecars for the four remaining secondary indexes
+    /// (entity→hyperedges, type→hyperedges, type→entities, key→entity).
+    /// Same lifecycle + fallback as the others; populated only under
+    /// `config.mmap_indexes`.
+    adjacency_files: HashMap<PathBuf, IdListIndexFile>,
+    type_cluster_files: HashMap<PathBuf, IdListIndexFile>,
+    entity_type_files: HashMap<PathBuf, IdListIndexFile>,
+    lookup_key_files: HashMap<PathBuf, IdListIndexFile>,
 }
 
 impl Engine {
@@ -421,6 +443,17 @@ impl Engine {
         Self::create_with_cipher(path, None)
     }
 
+    /// Create with an explicit [`EngineConfig`]. Low-RAM core: the config
+    /// must be set at create time (not just open) for the engine to write
+    /// index sidecars during ingest. `EngineConfig::default()` reproduces
+    /// the historical create.
+    pub fn create_with_config<P: AsRef<Path>>(
+        path: P,
+        config: EngineConfig,
+    ) -> Result<Self, EngineError> {
+        Self::create_with_cipher_config(path, None, config)
+    }
+
     /// Create a fresh database with an explicit at-rest cipher. When
     /// `cipher = Some(_)`, the `.encryption` marker is written before
     /// the first WAL allocation and every subsequent WAL append +
@@ -429,6 +462,17 @@ impl Engine {
         path: P,
         cipher: Option<Cipher>,
     ) -> Result<Self, EngineError> {
+        Self::create_with_cipher_config(path, cipher, EngineConfig::default())
+    }
+
+    /// Create with both an explicit cipher and an [`EngineConfig`]. All
+    /// other `create*` entry points funnel here.
+    pub fn create_with_cipher_config<P: AsRef<Path>>(
+        path: P,
+        cipher: Option<Cipher>,
+        config: EngineConfig,
+    ) -> Result<Self, EngineError> {
+        let config = config.resolved();
         let mut db = Database::create(path)?;
         if let Some(c) = cipher.as_ref() {
             let marker = EncryptionMarker::new(c, DEFAULT_CHUNK_SIZE);
@@ -455,9 +499,13 @@ impl Engine {
             db,
             commit_timestamps: std::collections::BTreeMap::new(),
             retention: HashMap::new(),
-            config: EngineConfig::default(),
+            config,
             property_index_files: HashMap::new(),
             vector_index_files: HashMap::new(),
+            adjacency_files: HashMap::new(),
+            type_cluster_files: HashMap::new(),
+            entity_type_files: HashMap::new(),
+            lookup_key_files: HashMap::new(),
         })
     }
 
@@ -596,12 +644,17 @@ impl Engine {
             config,
             property_index_files: HashMap::new(),
             vector_index_files: HashMap::new(),
+            adjacency_files: HashMap::new(),
+            type_cluster_files: HashMap::new(),
+            entity_type_files: HashMap::new(),
+            lookup_key_files: HashMap::new(),
         };
         // Low-RAM core: open the on-disk index sidecars (under
         // `mmap_indexes`) BEFORE rebuilding RAM indexes, so the rebuild can
         // skip the data already served from disk.
         engine.load_property_index_sidecars();
         engine.load_vector_index_sidecars();
+        engine.load_id_list_sidecars();
         // Indexes are in-memory in v1 — rebuild them from the primary
         // store (SSTables in newest-first order) and the memtable
         // (already populated from WAL replay).
@@ -656,10 +709,13 @@ impl Engine {
         for sst in &mut self.sstables {
             // Under mmap mode, SSTables with a sidecar serve that index from
             // disk — don't duplicate it into the RAM mirror.
-            let property_on_disk =
-                self.config.mmap_indexes && self.property_index_files.contains_key(sst.path());
-            let vector_on_disk =
-                self.config.mmap_indexes && self.vector_index_files.contains_key(sst.path());
+            let mm = self.config.mmap_indexes;
+            let property_on_disk = mm && self.property_index_files.contains_key(sst.path());
+            let vector_on_disk = mm && self.vector_index_files.contains_key(sst.path());
+            let adj_on_disk = mm && self.adjacency_files.contains_key(sst.path());
+            let tyc_on_disk = mm && self.type_cluster_files.contains_key(sst.path());
+            let etc_on_disk = mm && self.entity_type_files.contains_key(sst.path());
+            let lkp_on_disk = mm && self.lookup_key_files.contains_key(sst.path());
             for item in sst.iter() {
                 let (rec, _) = item?;
                 let tx = match &rec {
@@ -680,10 +736,18 @@ impl Engine {
                     }
                     _ => {}
                 }
-                self.lookup_key.apply(&rec, tx);
-                self.adjacency.apply(&rec, tx);
-                self.type_cluster.apply(&rec, tx);
-                self.entity_type_cluster.apply(&rec, tx);
+                if !lkp_on_disk {
+                    self.lookup_key.apply(&rec, tx);
+                }
+                if !adj_on_disk {
+                    self.adjacency.apply(&rec, tx);
+                }
+                if !tyc_on_disk {
+                    self.type_cluster.apply(&rec, tx);
+                }
+                if !etc_on_disk {
+                    self.entity_type_cluster.apply(&rec, tx);
+                }
                 if !vector_on_disk {
                     self.vector.apply(&rec, tx);
                 }
@@ -756,19 +820,68 @@ impl Engine {
         property_id: PropertyId,
         value: &Value,
     ) -> Option<EntityId> {
-        self.lookup_key.lookup(property_id, value)
+        if !self.lookup_served_from_disk() {
+            return self.lookup_key.lookup(property_id, value);
+        }
+        let Some(vb) = lookup_value_to_index_bytes(value) else {
+            return None;
+        };
+        let mut key = property_id.get().to_be_bytes().to_vec();
+        key.extend_from_slice(&vb);
+        let mut cand: HashSet<EntityId> = HashSet::new();
+        for f in self.lookup_key_files.values() {
+            cand.extend(f.find(&key).into_iter().map(EntityId::from_bytes));
+        }
+        if let Some(e) = self.lookup_key.lookup(property_id, value) {
+            cand.insert(e);
+        }
+        // Verify (live + current value matches); deterministic smallest id.
+        cand.into_iter()
+            .filter(|e| self.entity_lookup_matches(*e, property_id, &vb))
+            .min()
     }
 
     /// All hyperedges that reference `entity` in any role.
     #[must_use]
     pub fn hyperedges_for_entity(&self, entity: EntityId) -> Vec<HyperedgeId> {
-        self.adjacency.neighbors_vec(entity)
+        if !self.adjacency_served_from_disk() {
+            return self.adjacency.neighbors_vec(entity);
+        }
+        let mut cand: HashSet<HyperedgeId> = HashSet::new();
+        for f in self.adjacency_files.values() {
+            cand.extend(f.find(entity.as_bytes()).into_iter().map(HyperedgeId::from_bytes));
+        }
+        cand.extend(self.adjacency.neighbors_vec(entity));
+        // Verify: hyperedge live AND still references `entity`.
+        let mut out: Vec<HyperedgeId> = cand
+            .into_iter()
+            .filter(|h| {
+                self.current_hyperedge(*h)
+                    .is_some_and(|hr| hr.roles.iter().any(|(_, e)| *e == entity))
+            })
+            .collect();
+        out.sort();
+        out
     }
 
     /// All hyperedges of the given type.
     #[must_use]
     pub fn hyperedges_by_type(&self, type_id: TypeId) -> Vec<HyperedgeId> {
-        self.type_cluster.by_type_vec(type_id)
+        if !self.type_cluster_served_from_disk() {
+            return self.type_cluster.by_type_vec(type_id);
+        }
+        let key = type_id.get().to_be_bytes();
+        let mut cand: HashSet<HyperedgeId> = HashSet::new();
+        for f in self.type_cluster_files.values() {
+            cand.extend(f.find(&key).into_iter().map(HyperedgeId::from_bytes));
+        }
+        cand.extend(self.type_cluster.by_type_vec(type_id));
+        let mut out: Vec<HyperedgeId> = cand
+            .into_iter()
+            .filter(|h| self.current_hyperedge(*h).is_some_and(|hr| hr.type_id == type_id))
+            .collect();
+        out.sort();
+        out
     }
 
     /// Whether hyperedge `hid` is currently clustered under `type_id`.
@@ -777,6 +890,11 @@ impl Engine {
     /// bucket into a set per query.
     #[must_use]
     pub fn hyperedge_has_type(&self, hid: HyperedgeId, type_id: TypeId) -> bool {
+        if self.type_cluster_served_from_disk() {
+            // The hyperedge's type lives on the record itself — verify
+            // directly (a point read), no sidecar scan needed.
+            return self.current_hyperedge(hid).is_some_and(|h| h.type_id == type_id);
+        }
         self.type_cluster.is_type(type_id, hid)
     }
 
@@ -784,19 +902,39 @@ impl Engine {
     /// by the planner to estimate cardinality without materialising.
     #[must_use]
     pub fn hyperedge_type_count(&self, type_id: TypeId) -> usize {
+        if self.type_cluster_served_from_disk() {
+            return self.hyperedges_by_type(type_id).len();
+        }
         self.type_cluster.count(type_id)
     }
 
     /// All entities of the given type. O(N) in bucket size.
     #[must_use]
     pub fn entities_by_type(&self, type_id: TypeId) -> Vec<EntityId> {
-        self.entity_type_cluster.by_type_vec(type_id)
+        if !self.entity_type_served_from_disk() {
+            return self.entity_type_cluster.by_type_vec(type_id);
+        }
+        let key = type_id.get().to_be_bytes();
+        let mut cand: HashSet<EntityId> = HashSet::new();
+        for f in self.entity_type_files.values() {
+            cand.extend(f.find(&key).into_iter().map(EntityId::from_bytes));
+        }
+        cand.extend(self.entity_type_cluster.by_type_vec(type_id));
+        let mut out: Vec<EntityId> = cand
+            .into_iter()
+            .filter(|e| self.entity_current_type(*e) == Some(type_id))
+            .collect();
+        out.sort();
+        out
     }
 
     /// Count of entities of `type_id`. Constant-time index probe. Used
     /// by the v3 count-aggregate fast path in the query executor.
     #[must_use]
     pub fn entity_type_count(&self, type_id: TypeId) -> usize {
+        if self.entity_type_served_from_disk() {
+            return self.entities_by_type(type_id).len();
+        }
         self.entity_type_cluster.count(type_id)
     }
 
@@ -805,6 +943,9 @@ impl Engine {
     /// with at least one role bound to a concrete entity.
     #[must_use]
     pub fn adjacency_degree(&self, entity: EntityId) -> usize {
+        if self.adjacency_served_from_disk() {
+            return self.hyperedges_for_entity(entity).len();
+        }
         self.adjacency.degree(entity)
     }
 
@@ -1044,40 +1185,84 @@ impl Engine {
     /// surfaced (callers treat it as an engine error), but a *missing*
     /// sidecar at read time simply falls back to a RAM rebuild.
     fn write_index_sidecars(&self, reader: &SSTableReader) -> Result<(), EngineError> {
-        let want_property = self.property_btree.has_registrations();
-        let want_vector = self.vector.has_registrations();
-        if !want_property && !want_vector {
+        // Sidecars are a low-RAM-mode artifact; default mode writes none
+        // (no overhead). A DB must be created/opened with `mmap_indexes`
+        // for its flushes/compactions to emit sidecars.
+        if !self.config.mmap_indexes {
             return Ok(());
         }
+        let want_property = self.property_btree.has_registrations();
+        let want_vector = self.vector.has_registrations();
+        let want_lookup = self.lookup_key.has_registrations();
         let mut pbuilder = PropertyIndexBuilder::new();
         let mut vbuilder = VectorIndexBuilder::new();
+        let mut adj = IdListIndexBuilder::new(ADJ_MAGIC);
+        let mut tyc = IdListIndexBuilder::new(TYC_MAGIC);
+        let mut etc = IdListIndexBuilder::new(ETC_MAGIC);
+        let mut lkp = IdListIndexBuilder::new(LKP_MAGIC);
+        let path = reader.path();
         for item in reader.iter() {
             let (rec, _) = item?;
-            let Record::Entity(e) = &rec else { continue };
-            for (prop, val) in &e.properties {
-                if want_property
-                    && self.property_btree.is_registered(e.type_id, *prop)
-                    && let Some(bytes) = value_to_index_bytes(val)
-                {
-                    pbuilder.observe(e.type_id, *prop, &bytes, e.entity_id);
+            match &rec {
+                Record::Entity(e) => {
+                    // entity_type_cluster: type → entity (always indexed).
+                    etc.observe(&e.type_id.get().to_be_bytes(), *e.entity_id.as_bytes());
+                    for (prop, val) in &e.properties {
+                        if want_property
+                            && self.property_btree.is_registered(e.type_id, *prop)
+                            && let Some(bytes) = value_to_index_bytes(val)
+                        {
+                            pbuilder.observe(e.type_id, *prop, &bytes, e.entity_id);
+                        }
+                        if want_vector
+                            && self.vector.is_registered(*prop)
+                            && let Value::Vector(v) = val
+                        {
+                            vbuilder.observe(*prop, e.entity_id, v);
+                        }
+                        if want_lookup
+                            && self.lookup_key.is_registered(*prop)
+                            && let Some(bytes) = lookup_value_to_index_bytes(val)
+                        {
+                            let mut key = prop.get().to_be_bytes().to_vec();
+                            key.extend_from_slice(&bytes);
+                            lkp.observe(&key, *e.entity_id.as_bytes());
+                        }
+                    }
                 }
-                if want_vector
-                    && self.vector.is_registered(*prop)
-                    && let Value::Vector(v) = val
-                {
-                    vbuilder.observe(*prop, e.entity_id, v);
+                Record::HyperEdge(h) => {
+                    // type_cluster: type → hyperedge; adjacency: entity →
+                    // hyperedge (per role-filler). Always indexed.
+                    tyc.observe(&h.type_id.get().to_be_bytes(), *h.hyperedge_id.as_bytes());
+                    for (_role, entity) in &h.roles {
+                        adj.observe(entity.as_bytes(), *h.hyperedge_id.as_bytes());
+                    }
                 }
+                _ => {}
             }
         }
         if want_property && !pbuilder.is_empty() {
             pbuilder
-                .finish(&pidx_sidecar_path_for(reader.path()))
+                .finish(&pidx_sidecar_path_for(path))
                 .map_err(|e| std::io::Error::other(format!("property index sidecar: {e}")))?;
         }
         if want_vector && !vbuilder.is_empty() {
             vbuilder
-                .finish(&vidx_sidecar_path_for(reader.path()))
+                .finish(&vidx_sidecar_path_for(path))
                 .map_err(|e| std::io::Error::other(format!("vector index sidecar: {e}")))?;
+        }
+        let id_lists = [
+            (adj, ADJ_EXT, "adjacency"),
+            (tyc, TYC_EXT, "type_cluster"),
+            (etc, ETC_EXT, "entity_type"),
+            (lkp, LKP_EXT, "lookup_key"),
+        ];
+        for (builder, ext, label) in id_lists {
+            if !builder.is_empty() {
+                builder
+                    .finish(&idl_sidecar_path_for(path, ext))
+                    .map_err(|e| std::io::Error::other(format!("{label} index sidecar: {e}")))?;
+            }
         }
         Ok(())
     }
@@ -1146,6 +1331,57 @@ impl Engine {
         self.config.mmap_indexes && !self.vector_index_files.is_empty()
     }
 
+    fn adjacency_served_from_disk(&self) -> bool {
+        self.config.mmap_indexes && !self.adjacency_files.is_empty()
+    }
+    fn type_cluster_served_from_disk(&self) -> bool {
+        self.config.mmap_indexes && !self.type_cluster_files.is_empty()
+    }
+    fn entity_type_served_from_disk(&self) -> bool {
+        self.config.mmap_indexes && !self.entity_type_files.is_empty()
+    }
+    fn lookup_served_from_disk(&self) -> bool {
+        self.config.mmap_indexes && !self.lookup_key_files.is_empty()
+    }
+
+    /// Current live hyperedge record at the latest snapshot, or `None`.
+    fn current_hyperedge(&self, hid: HyperedgeId) -> Option<HyperEdgeRecord> {
+        let snap = TxId::new(self.db.manifest().last_tx_id);
+        match self.snapshot_read(&hid.into_uuid(), snap) {
+            Ok(Resolved::Live(Record::HyperEdge(h))) => Some(h),
+            _ => None,
+        }
+    }
+
+    /// Current type of a live entity at the latest snapshot, or `None`.
+    fn entity_current_type(&self, eid: EntityId) -> Option<TypeId> {
+        let snap = TxId::new(self.db.manifest().last_tx_id);
+        match self.snapshot_read(&eid.into_uuid(), snap) {
+            Ok(Resolved::Live(Record::Entity(e))) => Some(e.type_id),
+            _ => None,
+        }
+    }
+
+    /// Whether a live entity's `property_id` currently equals `want_bytes`
+    /// (lookup-key encoding). The verify step behind on-disk lookup-key.
+    fn entity_lookup_matches(
+        &self,
+        eid: EntityId,
+        property_id: PropertyId,
+        want_bytes: &[u8],
+    ) -> bool {
+        let snap = TxId::new(self.db.manifest().last_tx_id);
+        match self.snapshot_read(&eid.into_uuid(), snap) {
+            Ok(Resolved::Live(Record::Entity(e))) => e
+                .properties
+                .iter()
+                .find(|(p, _)| *p == property_id)
+                .and_then(|(_, v)| lookup_value_to_index_bytes(v))
+                .is_some_and(|b| b == want_bytes),
+            _ => false,
+        }
+    }
+
     /// Resolve an entity's *current* embedding for `property_id` at the
     /// latest snapshot, or `None` if deleted / lacking the property. The
     /// MVCC verification step behind on-disk vector search.
@@ -1183,6 +1419,80 @@ impl Engine {
         }
         for (_k, rec) in self.memtable.iter() {
             self.vector.apply(rec, record_index_tx(rec));
+        }
+        Ok(())
+    }
+
+    /// Open the four id-list sidecars for every SSTable (under
+    /// `config.mmap_indexes`). Collects SSTable paths first to avoid
+    /// borrowing `self.sstables` while inserting into the file maps.
+    fn load_id_list_sidecars(&mut self) {
+        self.adjacency_files.clear();
+        self.type_cluster_files.clear();
+        self.entity_type_files.clear();
+        self.lookup_key_files.clear();
+        if !self.config.mmap_indexes {
+            return;
+        }
+        let paths: Vec<PathBuf> = self.sstables.iter().map(|s| s.path().to_path_buf()).collect();
+        for p in paths {
+            self.insert_id_list_sidecars(&p);
+        }
+    }
+
+    /// Open + register the four id-list sidecars for one SSTable path.
+    fn insert_id_list_sidecars(&mut self, sst_path: &Path) {
+        if let Ok(Some(f)) = IdListIndexFile::open(&idl_sidecar_path_for(sst_path, ADJ_EXT), ADJ_MAGIC) {
+            self.adjacency_files.insert(sst_path.to_path_buf(), f);
+        }
+        if let Ok(Some(f)) = IdListIndexFile::open(&idl_sidecar_path_for(sst_path, TYC_EXT), TYC_MAGIC) {
+            self.type_cluster_files.insert(sst_path.to_path_buf(), f);
+        }
+        if let Ok(Some(f)) = IdListIndexFile::open(&idl_sidecar_path_for(sst_path, ETC_EXT), ETC_MAGIC) {
+            self.entity_type_files.insert(sst_path.to_path_buf(), f);
+        }
+        if let Ok(Some(f)) = IdListIndexFile::open(&idl_sidecar_path_for(sst_path, LKP_EXT), LKP_MAGIC) {
+            self.lookup_key_files.insert(sst_path.to_path_buf(), f);
+        }
+    }
+
+    /// Rebuild the four in-RAM id-list indexes to mirror only data WITHOUT
+    /// a sidecar (sidecar-less SSTables + the memtable). Each index skips
+    /// SSTables it has on disk. Bounded footprint in steady state.
+    fn refresh_id_list_ram_mirrors(&mut self) -> Result<(), EngineError> {
+        self.adjacency.clear();
+        self.type_cluster.clear();
+        self.entity_type_cluster.clear();
+        self.lookup_key.clear();
+        for sst in &mut self.sstables {
+            let path = sst.path();
+            let adj_disk = self.adjacency_files.contains_key(path);
+            let tyc_disk = self.type_cluster_files.contains_key(path);
+            let etc_disk = self.entity_type_files.contains_key(path);
+            let lkp_disk = self.lookup_key_files.contains_key(path);
+            for item in sst.iter() {
+                let (rec, _) = item?;
+                let tx = record_index_tx(&rec);
+                if !adj_disk {
+                    self.adjacency.apply(&rec, tx);
+                }
+                if !tyc_disk {
+                    self.type_cluster.apply(&rec, tx);
+                }
+                if !etc_disk {
+                    self.entity_type_cluster.apply(&rec, tx);
+                }
+                if !lkp_disk {
+                    self.lookup_key.apply(&rec, tx);
+                }
+            }
+        }
+        for (_k, rec) in self.memtable.iter() {
+            let tx = record_index_tx(rec);
+            self.adjacency.apply(rec, tx);
+            self.type_cluster.apply(rec, tx);
+            self.entity_type_cluster.apply(rec, tx);
+            self.lookup_key.apply(rec, tx);
         }
         Ok(())
     }
@@ -1537,8 +1847,10 @@ impl Engine {
             if let Ok(Some(f)) = VectorIndexFile::open(&vidx_sidecar_path_for(&sst_path)) {
                 self.vector_index_files.insert(sst_path.clone(), f);
             }
+            self.insert_id_list_sidecars(&sst_path);
             self.refresh_property_ram_mirror()?;
             self.refresh_vector_ram_mirror()?;
+            self.refresh_id_list_ram_mirrors()?;
         }
 
         // Replace WAL.
@@ -1741,6 +2053,9 @@ impl Engine {
             let _ = std::fs::remove_file(crate::block_index::sidecar_path_for(&p));
             let _ = std::fs::remove_file(pidx_sidecar_path_for(&p));
             let _ = std::fs::remove_file(vidx_sidecar_path_for(&p));
+            for ext in [ADJ_EXT, TYC_EXT, ETC_EXT, LKP_EXT] {
+                let _ = std::fs::remove_file(idl_sidecar_path_for(&p, ext));
+            }
         }
 
         // Reload sidecars for the (now single) compacted SSTable before the
@@ -1748,6 +2063,7 @@ impl Engine {
         // RAM mirrors end up holding only the memtable.
         self.load_property_index_sidecars();
         self.load_vector_index_sidecars();
+        self.load_id_list_sidecars();
         // Rebuild indexes since we dropped tombstoned records.
         self.rebuild_indexes()?;
 
@@ -2636,7 +2952,7 @@ mod tests {
         let age = PropertyId::new(1);
         let a = EntityId::now_v7();
         let b = EntityId::now_v7();
-        let mut engine = Engine::create(&dir).unwrap();
+        let mut engine = Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
         engine.register_property_btree(cust, age);
         for (eid, v) in [(a, 30i64), (b, 40)] {
             let mut txn = engine.begin_write();
@@ -2669,7 +2985,7 @@ mod tests {
     fn no_sidecar_when_no_registration() {
         use crate::index::property_index_file::sidecar_path_for;
         let dir = temp_dir("pidx_none");
-        let mut engine = Engine::create(&dir).unwrap();
+        let mut engine = Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
         let mut txn = engine.begin_write();
         txn.put_entity(make_entity(EntityId::now_v7(), "x"));
         txn.commit().unwrap();
@@ -2709,7 +3025,7 @@ mod tests {
         let ty = TypeId::new(1);
         let prop = PropertyId::new(2);
         {
-            let mut e = Engine::create(&dir).unwrap();
+            let mut e = Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
             e.register_property_btree(ty, prop);
             for v in [10i64, 250, 30, 999, 7, 250, 88] {
                 put_cites(&mut e, EntityId::now_v7(), ty, prop, v);
@@ -2753,7 +3069,7 @@ mod tests {
         let deleted = EntityId::now_v7();
         let stable = EntityId::now_v7();
         {
-            let mut e = Engine::create(&dir).unwrap();
+            let mut e = Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
             e.register_property_btree(ty, prop);
             put_cites(&mut e, updated, ty, prop, 10);
             put_cites(&mut e, deleted, ty, prop, 20);
@@ -2791,7 +3107,7 @@ mod tests {
         let ty = TypeId::new(1);
         let prop = PropertyId::new(2);
         {
-            let mut e = Engine::create(&dir).unwrap();
+            let mut e = Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
             e.register_property_btree(ty, prop);
             for i in 0..2000i64 {
                 put_cites(&mut e, EntityId::now_v7(), ty, prop, i);
@@ -2833,7 +3149,7 @@ mod tests {
         let prop = PropertyId::new(2);
         let top = EntityId::now_v7();
         {
-            let mut e = Engine::create(&dir).unwrap();
+            let mut e = Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
             e.register_property_btree(ty, prop);
             put_cites(&mut e, top, ty, prop, 5000);
             e.flush().unwrap();
@@ -2878,7 +3194,7 @@ mod tests {
         let prop = PropertyId::new(3);
         let mut ids = Vec::new();
         {
-            let mut e = Engine::create(&dir).unwrap();
+            let mut e = Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
             e.register_vector_property(prop);
             for i in 0..8u32 {
                 let id = EntityId::now_v7();
@@ -2920,7 +3236,7 @@ mod tests {
         let deleted = EntityId::now_v7();
         let stable = EntityId::now_v7();
         {
-            let mut e = Engine::create(&dir).unwrap();
+            let mut e = Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
             e.register_vector_property(prop);
             put_vec(&mut e, moved, prop, vec![9.0, 9.0]); // initially far
             put_vec(&mut e, deleted, prop, vec![0.0, 0.0]); // initially nearest
@@ -2953,7 +3269,7 @@ mod tests {
         let dir = temp_dir("lm_vec_bounded");
         let prop = PropertyId::new(3);
         {
-            let mut e = Engine::create(&dir).unwrap();
+            let mut e = Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
             e.register_vector_property(prop);
             for i in 0..2000u32 {
                 put_vec(
@@ -2981,6 +3297,224 @@ mod tests {
         assert!(
             lvec * 4 < dvec,
             "low-memory vector RAM should be far smaller: lm={lvec} def={dvec}"
+        );
+        lm.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // --- Phase 2e: id-list indexes served from disk (low-RAM mode) ------
+
+    const T_PAPER: u32 = 1;
+    const T_AUTHOR: u32 = 2;
+    const T_CITES: u32 = 100;
+    const P_NAME: u32 = 1;
+
+    fn put_named(e: &mut Engine, id: EntityId, ty: u32, nm: &str) {
+        let mut tx = e.begin_write();
+        tx.put_entity(EntityRecord {
+            entity_id: id,
+            type_id: TypeId::new(ty),
+            tx_id_assert: TxId::new(0),
+            tx_id_supersede: TxId::ACTIVE,
+            properties: vec![(PropertyId::new(P_NAME), Value::String(nm.into()))],
+        });
+        tx.commit().unwrap();
+    }
+
+    fn put_cites_edge(e: &mut Engine, hid: HyperedgeId, src: EntityId, dst: EntityId) {
+        let mut tx = e.begin_write();
+        tx.put_hyperedge(HyperEdgeRecord {
+            hyperedge_id: hid,
+            type_id: TypeId::new(T_CITES),
+            tx_id_assert: TxId::new(0),
+            tx_id_supersede: TxId::ACTIVE,
+            roles: vec![(RoleId::new(1), src), (RoleId::new(2), dst)],
+            hyperedge_roles: vec![],
+            properties: vec![],
+        });
+        tx.commit().unwrap();
+    }
+
+    fn reopen_full(dir: &PathBuf, cfg: EngineConfig) -> Engine {
+        let mut e = Engine::open_with_config(dir, cfg).unwrap();
+        e.register_lookup_key(PropertyId::new(P_NAME));
+        e.rebuild_indexes().unwrap();
+        e
+    }
+
+    fn build_graph(dir: &PathBuf) -> (Vec<EntityId>, EntityId, Vec<HyperedgeId>) {
+        let mut papers = Vec::new();
+        let mut edges = Vec::new();
+        let mut e =
+            Engine::create_with_config(dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
+        e.register_lookup_key(PropertyId::new(P_NAME));
+        for i in 0..6u32 {
+            let id = EntityId::now_v7();
+            papers.push(id);
+            put_named(&mut e, id, T_PAPER, &format!("paper-{i}"));
+            e.flush().unwrap();
+        }
+        let author = EntityId::now_v7();
+        put_named(&mut e, author, T_AUTHOR, "alice");
+        e.flush().unwrap();
+        for i in 1..6usize {
+            let hid = HyperedgeId::now_v7();
+            edges.push(hid);
+            put_cites_edge(&mut e, hid, papers[i], papers[i - 1]);
+            e.flush().unwrap();
+        }
+        e.close().unwrap();
+        (papers, author, edges)
+    }
+
+    #[test]
+    fn low_memory_id_list_indexes_match_default() {
+        let dir = temp_dir("lm_idlist");
+        let (papers, author, edges) = build_graph(&dir);
+        let paper = TypeId::new(T_PAPER);
+        let author_ty = TypeId::new(T_AUTHOR);
+        let cites = TypeId::new(T_CITES);
+        let name = PropertyId::new(P_NAME);
+
+        let reference = {
+            let e = reopen_full(&dir, EngineConfig::default());
+            let mut nb = e.hyperedges_for_entity(papers[2]);
+            nb.sort();
+            let mut by_t = e.hyperedges_by_type(cites);
+            by_t.sort();
+            let mut ents = e.entities_by_type(paper);
+            ents.sort();
+            let r = (
+                nb,
+                by_t,
+                ents,
+                e.entities_by_type(author_ty),
+                e.lookup_by_external_key(name, &Value::String("paper-3".into())),
+                e.entity_type_count(paper),
+                e.hyperedge_type_count(cites),
+            );
+            e.close().unwrap();
+            r
+        };
+
+        let lm = reopen_full(&dir, EngineConfig::low_memory(64 * 1024 * 1024));
+        assert!(lm.adjacency_served_from_disk());
+        assert!(lm.type_cluster_served_from_disk());
+        assert!(lm.entity_type_served_from_disk());
+        assert!(lm.lookup_served_from_disk());
+
+        let mut nb = lm.hyperedges_for_entity(papers[2]);
+        nb.sort();
+        assert_eq!(nb, reference.0);
+        assert_eq!(nb.len(), 2); // papers[2] in edge[2] (src) + edge[3] (dst)
+        let mut by_t = lm.hyperedges_by_type(cites);
+        by_t.sort();
+        assert_eq!(by_t, reference.1);
+        assert_eq!(by_t.len(), 5);
+        let mut ents = lm.entities_by_type(paper);
+        ents.sort();
+        assert_eq!(ents, reference.2);
+        assert_eq!(ents.len(), 6);
+        assert_eq!(lm.entities_by_type(author_ty), reference.3);
+        assert_eq!(lm.entities_by_type(author_ty), vec![author]);
+        assert_eq!(
+            lm.lookup_by_external_key(name, &Value::String("paper-3".into())),
+            reference.4
+        );
+        assert_eq!(
+            lm.lookup_by_external_key(name, &Value::String("paper-3".into())),
+            Some(papers[3])
+        );
+        assert_eq!(lm.entity_type_count(paper), reference.5);
+        assert_eq!(lm.entity_type_count(paper), 6);
+        assert_eq!(lm.hyperedge_type_count(cites), reference.6);
+        assert_eq!(lm.hyperedge_type_count(cites), 5);
+        assert!(edges.contains(&by_t[0]));
+        lm.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn low_memory_id_list_mvcc_tombstone() {
+        let dir = temp_dir("lm_idlist_mvcc");
+        let paper = TypeId::new(T_PAPER);
+        let cites = TypeId::new(T_CITES);
+        let name = PropertyId::new(P_NAME);
+        let p0 = EntityId::now_v7();
+        let p1 = EntityId::now_v7();
+        let p2 = EntityId::now_v7();
+        let keep_edge = HyperedgeId::now_v7();
+        let drop_edge = HyperedgeId::now_v7();
+        {
+            let mut e =
+                Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
+            e.register_lookup_key(name);
+            put_named(&mut e, p0, T_PAPER, "p0");
+            put_named(&mut e, p1, T_PAPER, "p1");
+            put_named(&mut e, p2, T_PAPER, "p2");
+            put_cites_edge(&mut e, keep_edge, p1, p0);
+            put_cites_edge(&mut e, drop_edge, p2, p1);
+            e.flush().unwrap();
+            let mut tx = e.begin_write();
+            tx.delete(drop_edge.into_uuid());
+            tx.commit().unwrap();
+            let mut tx = e.begin_write();
+            tx.delete(p2.into_uuid());
+            tx.commit().unwrap();
+            e.flush().unwrap();
+            e.close().unwrap();
+        }
+        let lm = reopen_full(&dir, EngineConfig::low_memory(64 * 1024 * 1024));
+        assert_eq!(lm.hyperedges_by_type(cites), vec![keep_edge]);
+        assert_eq!(lm.hyperedge_type_count(cites), 1);
+        assert!(!lm.hyperedge_has_type(drop_edge, cites));
+        assert!(lm.hyperedge_has_type(keep_edge, cites));
+        assert_eq!(lm.hyperedges_for_entity(p1), vec![keep_edge]);
+        let mut papers = lm.entities_by_type(paper);
+        papers.sort();
+        let mut want = vec![p0, p1];
+        want.sort();
+        assert_eq!(papers, want);
+        assert_eq!(lm.entity_type_count(paper), 2);
+        assert!(lm.lookup_by_external_key(name, &Value::String("p2".into())).is_none());
+        assert_eq!(lm.lookup_by_external_key(name, &Value::String("p0".into())), Some(p0));
+        lm.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn low_memory_id_list_ram_bounded() {
+        let dir = temp_dir("lm_idlist_bounded");
+        {
+            let mut e =
+                Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
+            let mut prev: Option<EntityId> = None;
+            for i in 0..2000u32 {
+                let id = EntityId::now_v7();
+                put_named(&mut e, id, T_PAPER, &format!("p{i}"));
+                if let Some(pv) = prev {
+                    put_cites_edge(&mut e, HyperedgeId::now_v7(), id, pv);
+                }
+                prev = Some(id);
+                if i % 200 == 199 {
+                    e.flush().unwrap();
+                }
+            }
+            e.flush().unwrap();
+            e.close().unwrap();
+        }
+        let dadj = {
+            let e = Engine::open(&dir).unwrap();
+            let r = e.index_memory_stats().adjacency;
+            e.close().unwrap();
+            r
+        };
+        let lm = reopen_full(&dir, EngineConfig::low_memory(64 * 1024 * 1024));
+        let ladj = lm.index_memory_stats().adjacency;
+        assert!(dadj > 20_000, "default holds full adjacency, got {dadj}");
+        assert!(
+            ladj * 4 < dadj,
+            "low-memory adjacency RAM should be far smaller: lm={ladj} def={dadj}"
         );
         lm.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
