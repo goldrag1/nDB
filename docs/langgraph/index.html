@@ -32,6 +32,11 @@
   .hint { font-size:11px; color:var(--muted); margin-top:4px; }
   #tip { position:fixed; padding:6px 9px; background:#0e1118; border:1px solid var(--line); border-radius:7px;
     font-size:12px; max-width:300px; pointer-events:none; z-index:20; display:none; }
+  #qlog { position:fixed; bottom:12px; left:14px; width:340px; max-height:150px; overflow:hidden;
+    font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--muted); z-index:10; display:none; }
+  #qlog .ql { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #qlog .ql b { color:var(--accent); }
+  #qlog .hd { color:var(--ink); text-transform:uppercase; letter-spacing:.08em; font-size:10px; margin-bottom:2px; }
   #details { position:fixed; top:14px; right:14px; width:330px; max-height:calc(100vh - 28px); overflow:auto;
     background:rgba(21,24,33,.95); border:1px solid var(--line); border-radius:12px; padding:16px;
     backdrop-filter:blur(6px); z-index:10; display:none; }
@@ -72,6 +77,7 @@
 <div id="graph"></div>
 <div id="tip"></div>
 <div id="details"></div>
+<div id="qlog"></div>
 <div id="panel">
   <a href="/" class="homelink">←&nbsp;nDB</a>
   <h1>nDB Language Graph</h1>
@@ -175,6 +181,15 @@ let paperAuthors = new Map();  // paper id → [author ids]
 let authorPapers = new Map();  // author id → [paper ids]
 let authorIdByName = new Map();// author display name → node id (bridge authors only)
 const push = (m, k, v) => { (m.get(k) || m.set(k, []).get(k)).push(v); };
+
+// ── live mode state (tiles fetched from the app-layer langgraph-server) ──
+let LIVE = false;                 // true → fetch bounded tiles on zoom, not a static dump
+let TOTAL_PAPERS = 0;             // count held in nDB (for the "X of N" counter)
+const fetchedTiles = new Set();   // endpoint keys already fetched (cache)
+const linkSeen = new Set();       // dedupe merged links
+const LN_MAX = Math.log1p(300000);// fixed citation ceiling for live importance
+let tileTimer = 0, fetchOrder = 0;
+const RENDER_CAP = 3000;          // max nodes kept on screen (LRU-dropped beyond)
 let highlight = new Set();     // ids to emphasise (search / recursion); empty = all
 let curYear = 9999;
 let mode = "cite";
@@ -264,6 +279,7 @@ function updateLOD() {
   const farView = lodThreshold > 0.33;
   Graph.linkDirectionalArrowLength(l => (!farView && l.kind === "cites") ? 3.6 : 0);
   refreshVisibility();
+  if (LIVE) { clearTimeout(tileTimer); tileTimer = setTimeout(liveZoomFetch, 140); }
 }
 
 // ── interactions ────────────────────────────────────────────────────────
@@ -275,6 +291,7 @@ function focusNode(node) {
   // so the field's papers materialise around you.
   if (node.kind === "cluster") {
     highlight = new Set(); repaint();
+    if (LIVE) fetchTile("view/cluster/" + encodeURIComponent(node.field) + "?limit=500", "cl:" + node.field);
     flyTo(node, 130);
     setTimeout(updateLOD, 950);
     return;
@@ -282,6 +299,7 @@ function focusNode(node) {
   // Highlight: paper → recursive citation ancestry (relation+, depth 3);
   // author → their papers + co-authors.
   highlight = new Set([node.id]);
+  if (LIVE && node.kind === "paper") fetchTile("view/neighbors/" + node.id + "?depth=2&limit=200", "nb:" + node.id);
   if (node.kind === "paper") {
     let frontier = [node.id];
     for (let depth = 0; depth < 3; depth++) {
@@ -384,6 +402,19 @@ function semanticRank(q, k) {
 function highlightMatches(q, fly) {
   q = q.trim();
   if (!q) { highlight = new Set(); repaint(); return; }
+  if (LIVE) {
+    // Server-side vector kNN — merge the hits as a tile, then highlight.
+    const t0 = performance.now();
+    fetch("api/view/knn?q=" + encodeURIComponent(q) + "&k=8", { cache: "no-store" })
+      .then(r => r.json()).then(d => {
+        logQuery("view/knn", performance.now() - t0, (d.nodes || []).length);
+        mergeTile(d);
+        highlight = new Set((d.nodes || []).map(n => n.id));
+        repaint();
+        if (fly && d.nodes && d.nodes[0]) { const top = nodeById.get(d.nodes[0].id); if (top) flyTo(top, 230); }
+      }).catch(() => {});
+    return;
+  }
   const ranked = semanticRank(q, 6);
   highlight = new Set(ranked.map(r => r.n.id));
   repaint();
@@ -398,8 +429,8 @@ function buildSuggestions(q) {
   q = q.trim().toLowerCase();
   if (!q) return [];
   const lit = [];
-  for (const n of DATA.nodes) {
-    const lc = n.label.toLowerCase();
+  for (const n of Graph.graphData().nodes) {
+    const lc = (n.label || "").toLowerCase();
     if (lc.includes(q)) lit.push(n);
   }
   lit.sort((a, b) => {
@@ -472,11 +503,90 @@ function startTwinkle() {
   })();
 }
 
-// ── boot ──────────────────────────────────────────────────────────────────
-fetch("./graph.json", { cache: "no-store" })
-  .then(r => r.json())
-  .then(data => {
+// ── live tile-manager (used when langgraph-server is reachable) ───────────
+function logQuery(ep, ms, rows) {
+  const box = $("qlog"); box.style.display = "block";
+  if (!box.querySelector(".hd")) { const h = document.createElement("div"); h.className = "hd"; h.textContent = "live nDB queries"; box.appendChild(h); }
+  const line = document.createElement("div"); line.className = "ql";
+  line.innerHTML = `<b>GET</b> /api/${esc(ep.split("?")[0])} → ${rows} rows · ${ms.toFixed(0)}ms`;
+  box.appendChild(line);
+  while (box.querySelectorAll(".ql").length > 7) box.querySelector(".ql").remove();
+}
+function updateLiveCounts() {
+  const rendered = Graph.graphData().nodes.filter(n => n.kind === "paper").length;
+  $("scalenote").innerHTML =
+    `<b>${rendered.toLocaleString()}</b> of <b>${TOTAL_PAPERS.toLocaleString()}</b> papers on screen — ` +
+    `every zoom is a live bounded query to nDB; the rest stay in the store. ` +
+    `Scales to millions — see the <a href="/bench.html" style="color:var(--accent)">bench</a>.`;
+}
+function nodeImp(n) {
+  if (n.kind === "cluster") return 1.0;
+  if (n.kind === "paper") return Math.log1p(n.citations || 0) / LN_MAX;
+  return 0.3;
+}
+function dropFar() {
+  const gd = Graph.graphData();
+  if (gd.nodes.length <= RENDER_CAP) return;
+  const drop = gd.nodes.filter(n => n.kind !== "cluster").sort((a, b) => (a.__ord || 0) - (b.__ord || 0)).slice(0, gd.nodes.length - RENDER_CAP);
+  const ds = new Set(drop.map(n => n.id));
+  for (const id of ds) nodeById.delete(id);
+  gd.nodes = gd.nodes.filter(n => !ds.has(n.id));
+  gd.links = gd.links.filter(l => {
+    const s = typeof l.source === "object" ? l.source.id : l.source, t = typeof l.target === "object" ? l.target.id : l.target;
+    return !ds.has(s) && !ds.has(t);
+  });
+}
+function mergeTile(tile) {
+  if (!tile || !tile.nodes) return;
+  if (tile.meta && tile.meta.total_papers) TOTAL_PAPERS = tile.meta.total_papers;
+  const gd = Graph.graphData();
+  for (const n of tile.nodes) {
+    if (nodeById.has(n.id)) continue;
+    if (n.x !== undefined) { n.fx = n.x; n.fy = n.y; n.fz = n.z; }
+    n.imp = nodeImp(n); n.__ord = fetchOrder++;
+    nodeById.set(n.id, n);
+    if (n.kind === "author") authorIdByName.set(n.label, n.id);
+    gd.nodes.push(n);
+  }
+  for (const l of (tile.links || [])) {
+    const s = typeof l.source === "object" ? l.source.id : l.source, t = typeof l.target === "object" ? l.target.id : l.target;
+    if (!nodeById.has(s) || !nodeById.has(t)) continue;
+    const key = l.kind + s + ">" + t; if (linkSeen.has(key)) continue; linkSeen.add(key);
+    if (l.kind === "cites") { push(citeAdj, s, t); push(citedByAdj, t, s); }
+    gd.links.push(l);
+  }
+  dropFar();
+  Graph.graphData(gd);
+  refreshVisibility();
+  updateLiveCounts();
+}
+function fetchTile(ep, key) {
+  if (fetchedTiles.has(key)) return; fetchedTiles.add(key);
+  const t0 = performance.now();
+  fetch("api/" + ep, { cache: "no-store" }).then(r => r.json()).then(d => { logQuery(ep, performance.now() - t0, (d.nodes || []).length); mergeTile(d); }).catch(() => fetchedTiles.delete(key));
+}
+function centeredCluster() {
+  const cam = Graph.cameraPosition(); let best = null, bd = Infinity;
+  for (const n of Graph.graphData().nodes) {
+    if (n.kind !== "cluster") continue;
+    const d = (n.x - cam.x) ** 2 + (n.y - cam.y) ** 2;
+    if (d < bd) { bd = d; best = n; }
+  }
+  return best ? best.field : null;
+}
+function liveZoomFetch() {
+  if (lodThreshold >= 0.42) return;                                  // far: clusters suffice
+  if (lodThreshold >= 0.25) { fetchTile("view/top?limit=400", "top400"); return; }
+  const field = centeredCluster();
+  if (field) fetchTile("view/cluster/" + encodeURIComponent(field) + "?limit=500", "cl:" + field);
+  fetchTile("view/top?limit=600", "top600");
+}
+
+// ── setup (shared by static + live) ───────────────────────────────────────
+function setup(data, isLive) {
+    LIVE = isLive;
     DATA = data;
+    if (isLive) for (const n of data.nodes) if (n.x !== undefined) { n.fx = n.x; n.fy = n.y; n.fz = n.z; }
     for (const n of data.nodes) { nodeById.set(n.id, n); if (n.kind === "author") authorIdByName.set(n.label, n.id); }
     for (const l of data.links) {
       if (l.kind === "cites") { push(citeAdj, l.source, l.target); push(citedByAdj, l.target, l.source); }
@@ -494,23 +604,24 @@ fetch("./graph.json", { cache: "no-store" })
       else if (n.kind === "paper") n.imp = Math.log1p(n.citations || 0) / ln;
       else n.imp = 0.12 + 0.45 * Math.min(1, ((authorPapers.get(n.id) || []).length - 1) / 6);
     }
-    const years = data.nodes.filter(n => n.year > 0).map(n => n.year);
-    const minY = Math.min(...years), maxY = Math.max(...years);
     const slider = $("year");
-    slider.min = minY; slider.max = maxY; slider.value = maxY; curYear = maxY;
-    $("yearval").textContent = maxY;
+    if (isLive) { slider.min = 2012; slider.max = 2026; }
+    else { const years = data.nodes.filter(n => n.year > 0).map(n => n.year); slider.min = Math.min(...years); slider.max = Math.max(...years); }
+    slider.value = slider.max; curYear = +slider.max; $("yearval").textContent = curYear;
     slider.addEventListener("input", () => { curYear = +slider.value; $("yearval").textContent = curYear; refreshVisibility(); });
 
+    if (isLive) Graph.cooldownTicks(0);
     Graph.graphData(data);
     updateCounts();
-    if (data.meta) {
+    if (isLive) { updateLiveCounts(); }
+    else if (data.meta) {
       $("scalenote").innerHTML =
         `Sample: <b>${data.meta.papers.toLocaleString()}</b> papers + the <b>${data.meta.authors_shown.toLocaleString()}</b> ` +
         `co-authors linking ≥2 of them. nDB holds all <b>${data.meta.authors_total.toLocaleString()}</b> authors here — ` +
         `and scales to millions; the in-browser 3D view is the only limit. See the <a href="/bench.html" style="color:var(--accent)">bench</a>.`;
     }
     window.Graph = Graph;                 // console / test affordance
-    window.__lg = { runSearch, focusNodeById, updateLOD, get highlight() { return highlight; }, get lod() { return lodThreshold; }, data: () => DATA };
+    window.__lg = { runSearch, focusNodeById, updateLOD, fetchTile, get live() { return LIVE; }, get highlight() { return highlight; }, get lod() { return lodThreshold; }, data: () => DATA };
     startTwinkle();
 
     // Drive level-of-detail from camera distance (zoom). Debounced on the
@@ -550,12 +661,27 @@ fetch("./graph.json", { cache: "no-store" })
     $("clear").addEventListener("click", () => { highlight = new Set(); sIn.value = ""; $("suggest").style.display = "none"; repaint(); });
     $("layCite").addEventListener("click", () => setMode("cite"));
     $("laySem").addEventListener("click", () => setMode("sem"));
+}
+
+function bootError(err) {
+  document.getElementById("panel").innerHTML +=
+    `<div style="color:#ff7a90;margin-top:10px">Failed to load — serve this folder over HTTP ` +
+    `(<code>python3 -m http.server</code>), not file://.<br><small>${esc(String(err))}</small></div>`;
+}
+
+// ── boot: prefer the live server (bounded tiles), fall back to the static
+//    graph.json if it isn't reachable. The demo never hard-depends on the
+//    server being up. ──────────────────────────────────────────────────────
+fetch("api/health", { cache: "no-store" })
+  .then(r => (r.ok ? r.json() : Promise.reject(new Error("no server"))))
+  .then(health => {
+    TOTAL_PAPERS = health.papers || 0;
+    return fetch("api/view/clusters", { cache: "no-store" }).then(r => r.json()).then(clusters => {
+      if (clusters.meta && clusters.meta.total_papers) TOTAL_PAPERS = clusters.meta.total_papers;
+      setup(clusters, true);
+    });
   })
-  .catch(err => {
-    document.getElementById("panel").innerHTML +=
-      `<div style="color:#ff7a90;margin-top:10px">Failed to load graph.json — serve this folder over HTTP ` +
-      `(e.g. <code>python3 -m http.server</code>), don't open via file://.<br><small>${esc(String(err))}</small></div>`;
-  });
+  .catch(() => fetch("./graph.json", { cache: "no-store" }).then(r => r.json()).then(d => setup(d, false)).catch(bootError));
 </script>
 </body>
 </html>

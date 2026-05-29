@@ -59,6 +59,9 @@ except Exception:  # noqa: BLE001
 
 LISTEN_HOST = "127.0.0.1"
 LISTEN_PORT = 9880
+# App-layer langgraph view server (bounded /view/* tiles). Optional — the
+# explorer falls back to the static graph.json if it's not running.
+LANGGRAPH_API = "http://127.0.0.1:8791"
 
 SITE_ROOT = Path(__file__).resolve().parent
 
@@ -356,8 +359,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self._proxy_bench(upstream, pre, method, path)
                 return
 
-        # ── langgraph_ndb: static-file demo (client-side 3D explorer +
-        #    committed CC0 graph.json — no upstream nDB server to proxy) ──
+        # ── langgraph_ndb live tiles: proxy /langgraph_ndb/api/* to the
+        #    app-layer langgraph-server (bounded /view/* queries). The
+        #    explorer uses these when reachable, else falls back to the
+        #    committed static graph.json. ──
+        if bare == "/langgraph_ndb/api" or bare.startswith("/langgraph_ndb/api/"):
+            self._proxy_langgraph_api(self.path[len("/langgraph_ndb/api"):] or "/", method)
+            return
+
+        # ── langgraph_ndb: static explorer + committed CC0 graph.json ──
         if bare == "/langgraph_ndb":
             self.send_response(301)
             self.send_header("Location", "/langgraph_ndb/")
@@ -691,6 +701,33 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    # ── langgraph_ndb live-tile proxy → app-layer langgraph-server ──
+    def _proxy_langgraph_api(self, sub: str, method: str):
+        import urllib.request
+        url = LANGGRAPH_API + sub
+        body = None
+        if method == "POST":
+            n = int(self.headers.get("Content-Length", 0) or 0)
+            body = self.rfile.read(n) if n else None
+        try:
+            req = urllib.request.Request(url, data=body, method=method)
+            with urllib.request.urlopen(req, timeout=15) as r:
+                data = r.read()
+                ctype = r.headers.get("Content-Type", "application/json")
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except Exception as e:  # noqa: BLE001 — surface upstream-down to the client
+            msg = json.dumps({"error": "langgraph-server unreachable", "detail": str(e)}).encode()
+            self.send_response(502)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(msg)))
+            self.end_headers()
+            self.wfile.write(msg)
 
     # ── langgraph_ndb static files (docs/langgraph, sibling of SITE_ROOT) ──
     def _serve_langgraph(self, rel: str):
