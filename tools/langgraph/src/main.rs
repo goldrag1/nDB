@@ -293,9 +293,14 @@ fn ingest_papers(engine: &mut Engine, papers: &[Paper]) -> Ingested {
     let mut author_ids: HashMap<String, EntityId> = HashMap::new();
     let mut timeline = Vec::new();
     let (mut n_cites, mut n_authored) = (0usize, 0usize);
+    // Flush the memtable to an SSTable every ~50k records so ingest RAM
+    // stays bounded — without this the whole graph lives in the memtable
+    // and a large (multi-GB) ingest OOMs before it finishes.
+    let mut since_flush = 0usize;
 
     for (year, group) in by_year {
         let mut tx = engine.begin_write();
+        let cites0 = n_cites;
         for p in &group {
             // Paper entity (dedup by OpenAlex id).
             let pid = *paper_ids.entry(p.id.clone()).or_insert_with(EntityId::now_v7);
@@ -358,7 +363,14 @@ fn ingest_papers(engine: &mut Engine, papers: &[Paper]) -> Ingested {
         }
         let tx_id = tx.commit().unwrap();
         timeline.push((year, tx_id));
+        // ~5 records/paper (entity + authors + authored) + cites added.
+        since_flush += group.len() * 5 + (n_cites - cites0);
+        if since_flush >= 50_000 {
+            engine.flush().unwrap();   // promote memtable → SSTable, free RAM
+            since_flush = 0;
+        }
     }
+    engine.flush().unwrap();           // final flush
 
     Ingested {
         papers: paper_ids.len(),
