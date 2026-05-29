@@ -30,6 +30,20 @@
   .hint { font-size:11px; color:var(--muted); margin-top:4px; }
   #tip { position:fixed; padding:6px 9px; background:#0e1118; border:1px solid var(--line); border-radius:7px;
     font-size:12px; max-width:300px; pointer-events:none; z-index:20; display:none; }
+  #details { position:fixed; top:14px; right:14px; width:330px; max-height:calc(100vh - 28px); overflow:auto;
+    background:rgba(21,24,33,.95); border:1px solid var(--line); border-radius:12px; padding:16px;
+    backdrop-filter:blur(6px); z-index:10; display:none; }
+  #details h2 { font-size:15px; margin:0 6px 4px 0; line-height:1.35; }
+  #details .meta { color:var(--muted); font-size:12px; margin-bottom:12px; }
+  #details .sec { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted);
+    margin:14px 0 6px; border-top:1px solid var(--line); padding-top:10px; }
+  #details .chips { display:flex; flex-wrap:wrap; gap:5px; }
+  #details .chip { background:#0e1118; border:1px solid var(--line); border-radius:20px; padding:3px 9px; font-size:12px; }
+  #details .item { padding:5px 0; font-size:12.5px; cursor:pointer; border-bottom:1px solid rgba(38,43,56,.5); }
+  #details .item:hover { color:var(--accent); }
+  #details .item .y { color:var(--muted); font-variant-numeric:tabular-nums; }
+  #details .close { position:absolute; top:12px; right:14px; cursor:pointer; color:var(--muted); font-size:18px; line-height:1; }
+  #details .close:hover { color:var(--ink); }
   .dims { font-size:11px; color:var(--muted); border-top:1px solid var(--line); margin-top:12px; padding-top:10px; }
   .dims code { color:var(--accent); }
   button.clear { width:100%; margin-top:6px; padding:6px; background:#0e1118; border:1px solid var(--line);
@@ -39,6 +53,7 @@
 <body>
 <div id="graph"></div>
 <div id="tip"></div>
+<div id="details"></div>
 <div id="panel">
   <h1>nDB Language Graph</h1>
   <div class="sub">A GraphRAG citation graph in nDB — every dimension is an nDB query.</div>
@@ -128,6 +143,10 @@ const $ = id => document.getElementById(id);
 let DATA = { nodes: [], links: [] };
 let nodeById = new Map();      // id → node (links carry ids until 3d-force-graph resolves them)
 let citeAdj = new Map();       // citing id → [cited ids], for recursion
+let citedByAdj = new Map();    // cited id → [citing ids]
+let paperAuthors = new Map();  // paper id → [author ids]
+let authorPapers = new Map();  // author id → [paper ids]
+const push = (m, k, v) => { (m.get(k) || m.set(k, []).get(k)).push(v); };
 let highlight = new Set();     // ids to emphasise (search / recursion); empty = all
 let curYear = 9999;
 let mode = "cite";
@@ -183,20 +202,71 @@ function refreshVisibility() {
 }
 
 // ── interactions ────────────────────────────────────────────────────────
-function onNodeClick(node) {
-  // Recursive citation ancestry: BFS over CITES (depth 3) from the paper.
+function onNodeClick(node) { focusNode(node); }
+function focusNodeById(id) { const n = nodeById.get(id); if (n) focusNode(n); }
+
+function focusNode(node) {
+  // Highlight: paper → recursive citation ancestry (relation+, depth 3);
+  // author → their papers + co-authors.
   highlight = new Set([node.id]);
-  let frontier = [node.id];
-  for (let depth = 0; depth < 3; depth++) {
-    const next = [];
-    for (const id of frontier) for (const c of (citeAdj.get(id) || []))
-      if (!highlight.has(c)) { highlight.add(c); next.push(c); }
-    frontier = next;
+  if (node.kind === "paper") {
+    let frontier = [node.id];
+    for (let depth = 0; depth < 3; depth++) {
+      const next = [];
+      for (const id of frontier) for (const c of (citeAdj.get(id) || []))
+        if (!highlight.has(c)) { highlight.add(c); next.push(c); }
+      frontier = next;
+    }
+  } else {
+    for (const pid of (authorPapers.get(node.id) || [])) {
+      highlight.add(pid);
+      for (const a of (paperAuthors.get(pid) || [])) highlight.add(a);
+    }
   }
   repaint();
+  showDetails(node);
   const dist = node.kind === "paper" ? 220 : 160;
-  const r = 1 + Math.hypot(node.x, node.y, node.z);
+  const r = 1 + Math.hypot(node.x || 1, node.y || 1, node.z || 1);
   Graph.cameraPosition({ x: node.x * (1 + dist / r), y: node.y * (1 + dist / r), z: node.z * (1 + dist / r) }, node, 900);
+}
+
+function listHtml(ids, withYear) {
+  const seen = new Set(), rows = [];
+  for (const id of ids) {
+    if (seen.has(id)) continue; seen.add(id);
+    const n = nodeById.get(id); if (!n) continue;
+    rows.push(n);
+  }
+  rows.sort((a, b) => (b.citations || 0) - (a.citations || 0) || (b.year || 0) - (a.year || 0));
+  return rows.slice(0, 40).map(n =>
+    `<div class="item" data-id="${n.id}">${esc(n.label)}` +
+    (withYear ? ` <span class="y">${n.year || ""}</span>` : "") + `</div>`).join("")
+    || `<div class="meta">none</div>`;
+}
+
+function showDetails(node) {
+  const d = $("details");
+  let html = `<span class="close" id="detClose">×</span>`;
+  if (node.kind === "paper") {
+    const refs = citeAdj.get(node.id) || [];
+    const citedBy = citedByAdj.get(node.id) || [];
+    const authors = (paperAuthors.get(node.id) || []).map(id => nodeById.get(id)).filter(Boolean);
+    html += `<h2>${esc(node.label)}</h2>`;
+    html += `<div class="meta">${esc(node.field)} · ${node.year} · ${node.citations.toLocaleString()} citations</div>`;
+    if (authors.length) html += `<div class="sec">Authors</div><div class="chips">${
+      authors.map(a => `<span class="chip item" data-id="${a.id}">${esc(a.label)}</span>`).join("")}</div>`;
+    html += `<div class="sec">References (${refs.length}) — cites</div>${listHtml(refs, true)}`;
+    html += `<div class="sec">Cited by (${citedBy.length}) — in this slice</div>${listHtml(citedBy, true)}`;
+  } else {
+    const papers = authorPapers.get(node.id) || [];
+    html += `<h2>${esc(node.label)}</h2>`;
+    html += `<div class="meta">author · debut ${node.year || "—"} · ${papers.length} paper(s) here</div>`;
+    html += `<div class="sec">Papers</div>${listHtml(papers, true)}`;
+  }
+  d.innerHTML = html;
+  d.style.display = "block";
+  d.querySelector("#detClose").onclick = () => { d.style.display = "none"; highlight = new Set(); repaint(); };
+  d.querySelectorAll("[data-id]").forEach(el => el.addEventListener("click", () => focusNodeById(el.dataset.id)));
 }
 
 const tip = $("tip");
@@ -241,15 +311,37 @@ function setMode(m) {
   else Graph.refresh();
 }
 
+// ── subtle starfield twinkle ──────────────────────────────────────────────
+// Gentle per-node opacity oscillation. Each node's material is cloned once
+// (re-cloned automatically after a recolour repaint) so nodes flicker on
+// their own phase rather than in lockstep. Dim-aware: when a highlight is
+// active, non-highlighted nodes stay faded instead of twinkling back to
+// full brightness. "Not too much" — amplitude 0.14 around 0.9, slow.
+function hashId(s) { let h = 0; for (const c of s) h = (Math.imul(h, 31) + c.charCodeAt(0)) >>> 0; return h; }
+let twT = 0;
+function startTwinkle() {
+  (function frame() {
+    twT += 0.016;
+    for (const n of Graph.graphData().nodes) {
+      const o = n.__threeObj;
+      if (!o || !o.visible || !o.material) continue;
+      if (!o.material.__tw) { o.material = o.material.clone(); o.material.transparent = true; o.material.__tw = true; n.__ph = (hashId(n.id) % 628) / 100; }
+      const dim = highlight.size && !highlight.has(n.id);
+      o.material.opacity = dim ? 0.07 : 0.86 + 0.14 * Math.sin(twT * 1.3 + (n.__ph || 0));
+    }
+    requestAnimationFrame(frame);
+  })();
+}
+
 // ── boot ──────────────────────────────────────────────────────────────────
 fetch("./graph.json", { cache: "no-store" })
   .then(r => r.json())
   .then(data => {
     DATA = data;
     for (const n of data.nodes) nodeById.set(n.id, n);
-    for (const l of data.links) if (l.kind === "cites") {
-      if (!citeAdj.has(l.source)) citeAdj.set(l.source, []);
-      citeAdj.get(l.source).push(l.target);
+    for (const l of data.links) {
+      if (l.kind === "cites") { push(citeAdj, l.source, l.target); push(citedByAdj, l.target, l.source); }
+      else if (l.kind === "authored") { push(paperAuthors, l.source, l.target); push(authorPapers, l.target, l.source); }
     }
     const years = data.nodes.filter(n => n.year > 0).map(n => n.year);
     const minY = Math.min(...years), maxY = Math.max(...years);
@@ -261,7 +353,8 @@ fetch("./graph.json", { cache: "no-store" })
     Graph.graphData(data);
     updateCounts();
     window.Graph = Graph;                 // console / test affordance
-    window.__lg = { runSearch, get highlight() { return highlight; }, data: () => DATA };
+    window.__lg = { runSearch, focusNodeById, get highlight() { return highlight; }, data: () => DATA };
+    startTwinkle();
 
     $("search").addEventListener("input", e => runSearch(e.target.value));
     $("clear").addEventListener("click", () => { highlight = new Set(); $("search").value = ""; repaint(); });
