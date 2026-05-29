@@ -499,6 +499,7 @@ impl Engine {
 
     /// Open with both an explicit cipher hint and an [`EngineConfig`].
     /// All other `open*` entry points funnel here.
+    #[allow(clippy::too_many_lines)]
     pub fn open_with_cipher_config<P: AsRef<Path>>(
         path: P,
         hint: Option<Cipher>,

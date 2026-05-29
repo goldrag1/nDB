@@ -363,7 +363,8 @@ impl PropertyIndexFile {
         }
         let block_size = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
         let entry_count = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
-        let entries_len = u64::from_le_bytes(bytes[16..24].try_into().unwrap()) as usize;
+        let entries_len =
+            usize::try_from(u64::from_le_bytes(bytes[16..24].try_into().unwrap())).unwrap_or(usize::MAX);
         let bi_count = u32::from_le_bytes(bytes[24..28].try_into().unwrap()) as usize;
 
         let entries_off = HEADER_LEN;
@@ -475,7 +476,7 @@ impl PropertyIndexFile {
         if idx == 0 {
             0
         } else {
-            self.block_index[idx - 1].1 as usize
+            usize::try_from(self.block_index[idx - 1].1).unwrap_or(usize::MAX)
         }
     }
 
