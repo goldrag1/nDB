@@ -49,6 +49,13 @@ const PROP_OAID: u32 = 58;
 const PROP_DOI: u32 = 59;
 const EMBED_DIM: usize = 16;
 const DEFAULT_LIMIT: usize = 500;
+/// How many top-cited papers the server pre-ranks once and caches (in RAM +
+/// `<db>/top.json`). Covers the default `/view/top` tile, its `as_of`
+/// over-fetch, and the per-field `/view/cluster/*` scan from a single
+/// O(cache) filter — no live `property_top_k` (the 21.8 s sidecar walk) per
+/// request. 20k × ~80 B ≈ 1.6 MB resident / on disk: bounded regardless of
+/// graph size.
+const CACHE_TOP_N: usize = 20_000;
 const RING: f64 = 850.0;
 const SPREAD: f64 = 320.0;
 const ZSCALE: f64 = 16.0;
@@ -65,6 +72,16 @@ struct PaperView {
     doi: String,
 }
 
+/// One entry in the pre-ranked top-cited cache. `field` is already coarsened
+/// (so `/view/cluster/<field>` filters with a plain `==`); `year` lets the
+/// `as_of` time-travel filter run without a per-entity read.
+struct TopEntry {
+    eid: EntityId,
+    field: String,
+    year: i64,
+    citations: i64,
+}
+
 /// Lean app-layer index: holds ONLY the engine + a tiny cluster aggregate
 /// (≤19 fields). Every tile is served from the engine's (on-disk under
 /// `--low-memory`) indexes + per-node `snapshot_read` — NO per-paper RAM,
@@ -75,6 +92,7 @@ struct Index {
     clusters: Vec<(String, usize)>,        // (coarse field, count), ring order
     cluster_pos: HashMap<String, (f64, f64)>,
     top_fields: HashSet<String>,           // named (non-Other) fields → coarsening
+    top: Vec<TopEntry>,                    // pre-ranked top-cited cache (desc)
     max_cit: f64,
     mid_year: f64,
     total_papers: usize,
@@ -170,6 +188,70 @@ fn load_cluster_meta(engine: &Engine, db: &str) -> ClusterMeta {
     ClusterMeta { clusters: coarse.into_iter().collect(), max_cit: max_cit as f64, min_year, max_year, total }
 }
 
+/// Pre-rank the top-`CACHE_TOP_N` papers by citations ONCE and cache to
+/// `<db>/top.json`. On a compacted DB (one .pidx) this is a single-source
+/// top-k (fast); on an uncompacted one it pays the multi-sidecar walk a
+/// single time, then every `/view/top` + `/view/cluster/*` request is an
+/// O(cache) slice. `top_fields` coarsens each field to match `/view/clusters`.
+fn load_or_build_top(engine: &Engine, db: &str, top_fields: &HashSet<String>) -> Vec<TopEntry> {
+    let coarse = |f: &str| if top_fields.contains(f) { f.to_string() } else { "Other".to_string() };
+
+    // Fast path: the sidecar written by a previous run (or after --compact,
+    // which deletes a stale one). Instant restart at any graph size.
+    if let Ok(bytes) = std::fs::read(format!("{db}/top.json"))
+        && let Ok(j) = serde_json::from_slice::<serde_json::Value>(&bytes)
+        && let Some(arr) = j["top"].as_array()
+    {
+        let top: Vec<TopEntry> = arr.iter().filter_map(|e| {
+            let eid = EntityId::from_uuid(e["u"].as_str()?.parse::<uuid::Uuid>().ok()?);
+            Some(TopEntry {
+                eid,
+                field: e["f"].as_str().unwrap_or("Other").to_string(),
+                year: e["y"].as_i64().unwrap_or(0),
+                citations: e["c"].as_i64().unwrap_or(0),
+            })
+        }).collect();
+        if !top.is_empty() {
+            eprintln!("top cache: loaded {} pre-ranked papers from top.json", top.len());
+            return top;
+        }
+    }
+
+    // Build: one citation top-k, then read field/year per hit (bounded —
+    // CACHE_TOP_N snapshot reads, regardless of total graph size).
+    eprintln!("top.json missing — pre-ranking top {CACHE_TOP_N} cited (one-time; run --compact first to make this fast)…");
+    let t = std::time::Instant::now();
+    let hits = engine.property_top_k(TypeId::new(TYPE_PAPER), PropertyId::new(PROP_CITATIONS), CACHE_TOP_N);
+    let mut top = Vec::with_capacity(hits.len());
+    for eid in hits {
+        if let Ok(ndb_engine::Resolved::Live(Record::Entity(en))) =
+            engine.snapshot_read(&eid.into_uuid(), TxId::ACTIVE)
+        {
+            top.push(TopEntry {
+                eid,
+                field: coarse(&str_prop(&en.properties, PROP_FIELD)),
+                year: i64_prop(&en.properties, PROP_YEAR),
+                citations: i64_prop(&en.properties, PROP_CITATIONS),
+            });
+        }
+    }
+
+    // Persist atomically (temp + rename) so a kill mid-write never leaves a
+    // half-file that load reads as authoritative.
+    let arr: Vec<serde_json::Value> = top.iter().map(|t| serde_json::json!({
+        "u": t.eid.into_uuid().to_string(), "f": t.field, "y": t.year, "c": t.citations
+    })).collect();
+    let payload = serde_json::json!({"version": 1, "n": top.len(), "top": arr});
+    let tmp = format!("{db}/top.json.tmp");
+    if std::fs::write(&tmp, serde_json::to_vec(&payload).unwrap_or_default())
+        .and_then(|()| std::fs::rename(&tmp, format!("{db}/top.json"))).is_err()
+    {
+        eprintln!("top cache: warning — could not persist top.json (serving from RAM this run)");
+    }
+    eprintln!("top cache: pre-ranked {} papers in {:.1}s → top.json", top.len(), t.elapsed().as_secs_f64());
+    top
+}
+
 impl Index {
     fn build(engine: Engine, db: &str, knn_pref: &str, cache_bytes: usize) -> Self {
         let m = load_cluster_meta(&engine, db);
@@ -183,6 +265,11 @@ impl Index {
             m.clusters.iter().map(|(f, _)| f.clone()).filter(|f| f != "Other").collect();
         let mid_year = (m.min_year + m.max_year) as f64 / 2.0;
         eprintln!("served lean: {} papers, {} clusters (no per-paper RAM)", m.total, m.clusters.len());
+
+        // Pre-ranked top-cited cache: makes /view/top (the default first
+        // tile) and /view/cluster/* O(cache) slices instead of a live
+        // multi-sidecar property_top_k walk per request.
+        let top = load_or_build_top(&engine, db, &top_fields);
 
         // Resolve the kNN backend. Approx (HNSW) loads every embedding into
         // RAM — fast + tunable recall, but NOT bounded — so `auto` only
@@ -220,6 +307,7 @@ impl Index {
             clusters: m.clusters,
             cluster_pos,
             top_fields,
+            top,
             max_cit: m.max_cit.max(1.0),
             mid_year,
             total_papers: m.total,
@@ -328,34 +416,34 @@ impl Index {
     }
 
     fn top_view(&self, limit: usize, as_of: Option<i64>) -> serde_json::Value {
-        // Ordered top-K straight from the engine's citation index — no
-        // in-RAM sorted list. Over-fetch to absorb the as_of year filter.
-        let fetch = if as_of.is_some() { limit * 3 } else { limit };
-        let hits = self.engine.property_top_k(TypeId::new(TYPE_PAPER), PropertyId::new(PROP_CITATIONS), fetch);
-        let eids: Vec<EntityId> = hits.iter().copied()
-            .filter(|&e| as_of.is_none_or(|y| self.view(e).is_some_and(|v| v.year <= y)))
-            .take(limit).collect();
+        // O(cache) slice of the pre-ranked top-cited list (already desc) — no
+        // live property_top_k. `as_of` filters on the cached year in place.
+        let eids: Vec<EntityId> = self.top.iter()
+            .filter(|t| as_of.is_none_or(|y| t.year <= y))
+            .take(limit)
+            .map(|t| t.eid)
+            .collect();
         let mut v = self.tile(&eids);
-        v["meta"] = serde_json::json!({"total_papers": self.total_papers, "returned": eids.len()});
+        v["meta"] = serde_json::json!({
+            "total_papers": self.total_papers, "returned": eids.len(),
+            "source": "top-cache", "cache_n": self.top.len()
+        });
         v
     }
 
     fn cluster_papers_view(&self, field: &str, limit: usize, as_of: Option<i64>) -> serde_json::Value {
-        // No (field, citations) compound index — walk the global citation
-        // top-K and keep those in this field, capped so it stays bounded.
-        let cap = (limit * 40).max(4000);
-        let hits = self.engine.property_top_k(TypeId::new(TYPE_PAPER), PropertyId::new(PROP_CITATIONS), cap);
-        let mut eids = Vec::new();
-        for e in hits {
-            if let Some(v) = self.view(e) {
-                if v.field == field && as_of.is_none_or(|y| v.year <= y) {
-                    eids.push(e);
-                    if eids.len() >= limit { break; }
-                }
-            }
-        }
+        // Filter the pre-ranked cache by (already-coarsened) field — O(cache),
+        // no live property_top_k. A field's depth is bounded by how many of
+        // its papers fall in the global top-CACHE_TOP_N.
+        let eids: Vec<EntityId> = self.top.iter()
+            .filter(|t| t.field == field && as_of.is_none_or(|y| t.year <= y))
+            .take(limit)
+            .map(|t| t.eid)
+            .collect();
         let mut v = self.tile(&eids);
-        v["meta"] = serde_json::json!({"field": field, "returned": eids.len(), "scanned_cap": cap});
+        v["meta"] = serde_json::json!({
+            "field": field, "returned": eids.len(), "source": "top-cache", "cache_n": self.top.len()
+        });
         v
     }
 
