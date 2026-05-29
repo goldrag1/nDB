@@ -26,8 +26,8 @@
 
   <h1>langgraph_ndb</h1>
   <p class="lede">
-    A GraphRAG-style knowledge graph, browsed in 3D. 1,000 machine-learning
-    papers and several thousand authors from <a href="https://openalex.org" target="_blank" rel="noreferrer">OpenAlex</a>
+    A GraphRAG-style knowledge graph, browsed in 3D. 2,500 machine-learning
+    papers and 10,466 authors from <a href="https://openalex.org" target="_blank" rel="noreferrer">OpenAlex</a>
     (public-domain, CC0 metadata) ingested Rust-native straight into nDB —
     no Python scraper, no intermediate file. Where the other demos show how
     nDB <em>stores</em> awkward facts, this one shows how it <em>answers</em>:
@@ -109,16 +109,47 @@
   <h2>The five dimensions</h2>
   <ul>
     <li><strong>x / y / z</strong> — a 3D force layout over the CITES topology.</li>
-    <li><strong>time</strong> — the "as of year" slider. Each paper was ingested in its publication-year transaction, so the slider is a real MVCC snapshot: a handful of papers in 2012, all 1,000 by 2026.</li>
+    <li><strong>time</strong> — the "as of year" slider. Each paper was ingested in its publication-year transaction, so the slider is a real MVCC snapshot: a handful of papers in 2012, all 2,500 by 2026.</li>
     <li><strong>semantic</strong> — the <em>Semantic</em> layout toggle pins every node to a projection of its embedding, so position itself encodes meaning; clusters of related work pull together.</li>
     <li><strong>colour</strong> — research field. <strong>size</strong> — citation count.</li>
   </ul>
+
+  <h2>Zoom: detail on demand</h2>
+  <p>
+    The view uses <strong>semantic zoom</strong> — what you see depends on
+    how close you are, the way a map shows countries when you're far out and
+    streets when you're close. Each node carries an importance score (papers
+    by citation count, authors by how many papers they bridge), and the
+    camera distance sets a visibility threshold:
+  </p>
+  <ul>
+    <li><strong>Zoomed all the way out</strong> — only the ~19 <em>field
+      "galaxies"</em> (cluster super-nodes) and the handful of all-time
+      mega-hub papers. The whole field at a glance, a few dozen nodes.</li>
+    <li><strong>Zooming in</strong> — the galaxies dissolve and papers fade
+      in in importance order: the most-cited first, then the mid-tier, then
+      the long tail. Citation arrows and titles switch on as the field
+      around you thins out.</li>
+    <li><strong>Closest</strong> — every paper near you plus its co-authors,
+      with directional citation edges and labels.</li>
+    <li><strong>Click a galaxy</strong> to dive straight into a field;
+      zoom back out and it collapses to a single node again.</li>
+  </ul>
+  <p>
+    The point isn't cosmetic: because the threshold rises as you pull back,
+    the <em>number of things actually drawn stays roughly constant at every
+    zoom level</em> — a few hundred to a couple thousand — no matter how
+    large the underlying graph is. That's what keeps the 3D view fluid while
+    letting nDB hold far more than the screen could ever show: zoom is the
+    query, and nDB answers with just the slice you need.
+  </p>
 
   <h2>The 30-second tour</h2>
   <ol>
     <li><strong>Start typing in the search box.</strong> A type-ahead dropdown blends literal title/author matches (prefix-ranked) with semantic neighbours — your text is embedded with the <em>same</em> function nDB used to index every paper (byte-for-byte) and ranked by cosine. Arrow-key through them, <strong>Tab</strong> to accept the suggestion, or <strong>Enter</strong> to search your typed text; the graph lights up the nearest matches as you go.</li>
     <li><strong>Click a paper.</strong> A details panel opens — field, year, citations, the author chips, the references it cites and the papers that cite it, all clickable to hop onward. The graph highlights its citation ancestry to depth 3; everything else fades to a dim twinkle.</li>
     <li><strong>Drag the year slider</strong> back to 2015 and forward. Nodes and edges appear exactly as the field accreted — time-travel, not a filter on a static dump.</li>
+    <li><strong>Scroll to zoom out.</strong> The 2,500 papers collapse into ~19 field galaxies; scroll back in and they bloom into papers, then authors. The on-screen count stays bounded the whole way, so it never stutters.</li>
     <li><strong>Flip the layout to Semantic.</strong> The citation tangle reorganises into meaning-space; papers that share vocabulary and field migrate together.</li>
   </ol>
 
@@ -138,13 +169,16 @@
     build step.
   </p>
   <p>
-    <strong>Why 1,000 and not a million?</strong> The 3D view is the only
-    limit, not the database. nDB ingests every paper and all ~4,600
-    authors; the explorer renders the 1,000 papers plus the co-authors that
-    link two or more of them — the connective structure — and keeps the
-    rest in the store so a browser WebGL scene stays fluid. The engine
-    itself runs comfortably at <a href="/bench.html">49k+ entities and
-    millions of ops/sec</a>; the demo is sized for your GPU, not for nDB.
+    <strong>Why 2,500 and not a million?</strong> The 3D view is the only
+    limit, not the database. nDB ingests every paper and all 10,466 authors;
+    the explorer renders the 2,500 papers plus the 1,490 co-authors that
+    link two or more of them — the connective structure — and semantic zoom
+    keeps only a bounded slice on screen at any moment. The engine itself
+    runs comfortably at <a href="/bench.html">49k+ entities and millions of
+    ops/sec</a>; the demo is sized for your GPU, not for nDB. Push the
+    zoom-driven, bounded-view idea to its limit — fetch each slice live as
+    you pan, like map tiles — and the same explorer rides on top of an
+    arbitrarily large nDB.
   </p>
 
   <h2>Data &amp; thanks</h2>
