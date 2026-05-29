@@ -3470,6 +3470,100 @@ mod tests {
     }
 
     #[test]
+    fn vector_snapshot_matches_exact_and_persists() {
+        let dir = temp_dir("vec_snapshot");
+        let prop = PropertyId::new(3);
+        let mut ids = Vec::new();
+        {
+            let mut e =
+                Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
+            e.register_vector_property(prop);
+            for i in 0..8u32 {
+                let id = EntityId::now_v7();
+                ids.push(id);
+                put_vec(&mut e, id, prop, vec![f64::from(i) as f32, 0.0, 1.0]);
+                e.flush().unwrap(); // 8 SSTables → 8 .vidx sidecars (fan-out scenario)
+            }
+            e.close().unwrap();
+        }
+        let q = [3.2f32, 0.0, 1.0];
+        let mut e = reopen_vec(&dir, prop, EngineConfig::low_memory(64 * 1024 * 1024));
+        // Multi-sidecar exact path (the baseline the snapshot must reproduce).
+        let exact: Vec<EntityId> = e
+            .vector_search(prop, &q, 3, Distance::L2Squared)
+            .into_iter()
+            .map(|(x, _)| x)
+            .collect();
+        // Build the global snapshot, search it — same nearest, in order.
+        assert_eq!(e.build_vector_snapshot(prop).unwrap(), 8);
+        assert!(e.has_vector_snapshot(prop));
+        let snap: Vec<EntityId> = e
+            .vector_search_snapshot(prop, &q, 3, Distance::L2Squared)
+            .expect("snapshot present")
+            .into_iter()
+            .map(|(x, _)| x)
+            .collect();
+        assert_eq!(snap, exact, "snapshot kNN must match exact multi-sidecar kNN");
+        assert_eq!(snap[0], ids[3]); // 3.0 closest to 3.2
+        e.close().unwrap();
+        // Persists: a fresh open does NOT auto-load, but load_vector_snapshot
+        // re-mmaps the on-disk .vsnap and search works without a rebuild.
+        let mut e2 = reopen_vec(&dir, prop, EngineConfig::low_memory(64 * 1024 * 1024));
+        assert!(!e2.has_vector_snapshot(prop));
+        assert!(e2.load_vector_snapshot(prop).unwrap());
+        let snap2: Vec<EntityId> = e2
+            .vector_search_snapshot(prop, &q, 3, Distance::L2Squared)
+            .unwrap()
+            .into_iter()
+            .map(|(x, _)| x)
+            .collect();
+        assert_eq!(snap2, exact);
+        e2.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn vector_snapshot_reflects_current_after_update_and_tombstone() {
+        // The snapshot streams CURRENT vectors, so it needs no per-candidate
+        // MVCC verify: a moved entity ranks by its new value, a deleted one
+        // is absent — proven by building the snapshot AFTER both mutations.
+        let dir = temp_dir("vec_snapshot_mvcc");
+        let prop = PropertyId::new(3);
+        let moved = EntityId::now_v7();
+        let deleted = EntityId::now_v7();
+        let stable = EntityId::now_v7();
+        {
+            let mut e =
+                Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
+            e.register_vector_property(prop);
+            put_vec(&mut e, moved, prop, vec![9.0, 9.0]); // initially far
+            put_vec(&mut e, deleted, prop, vec![0.0, 0.0]); // initially nearest
+            put_vec(&mut e, stable, prop, vec![1.0, 1.0]);
+            e.flush().unwrap();
+            put_vec(&mut e, moved, prop, vec![0.05, 0.0]); // now nearest
+            let mut txn = e.begin_write();
+            txn.delete(deleted.into_uuid());
+            txn.commit().unwrap();
+            e.flush().unwrap();
+            e.close().unwrap();
+        }
+        let mut e = reopen_vec(&dir, prop, EngineConfig::low_memory(64 * 1024 * 1024));
+        assert_eq!(e.build_vector_snapshot(prop).unwrap(), 2); // moved + stable, NOT deleted
+        let q = [0.0f32, 0.0];
+        let hits: Vec<EntityId> = e
+            .vector_search_snapshot(prop, &q, 3, Distance::L2Squared)
+            .unwrap()
+            .into_iter()
+            .map(|(x, _)| x)
+            .collect();
+        assert_eq!(hits.len(), 2, "deleted entity must be absent");
+        assert_eq!(hits[0], moved, "moved entity ranks by its CURRENT (near) vector");
+        assert!(!hits.contains(&deleted));
+        e.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn low_memory_vector_mvcc_update_and_tombstone() {
         let dir = temp_dir("lm_vec_mvcc");
         let prop = PropertyId::new(3);
