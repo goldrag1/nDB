@@ -50,6 +50,7 @@ pub mod property_btree;
 pub mod property_index_file;
 pub mod type_cluster;
 pub mod vector;
+pub mod vector_index_file;
 
 /// What an index does when a record is committed. Implementors mutate
 /// their internal state to reflect the new record (or the deletion, for

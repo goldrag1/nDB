@@ -245,7 +245,9 @@ impl Index for VectorIndex {
     }
 }
 
-fn distance(a: &[f32], b: &[f32], metric: Distance) -> f32 {
+/// Distance between two equal-length vectors under `metric`. Shared by the
+/// in-RAM index and the on-disk `.vidx` reader so both rank identically.
+pub(crate) fn distance(a: &[f32], b: &[f32], metric: Distance) -> f32 {
     debug_assert_eq!(a.len(), b.len(), "dimension check happens upstream");
     match metric {
         Distance::L2Squared => a
