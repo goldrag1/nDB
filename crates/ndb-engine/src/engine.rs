@@ -42,6 +42,10 @@ use crate::encryption::{
 };
 use crate::error::EncodeError;
 use crate::id::{EntityId, HyperedgeId, PropertyId, TX_ACTIVE, TxId, TypeId};
+use crate::index::property_btree::value_to_index_bytes;
+use crate::index::property_index_file::{
+    PropertyIndexBuilder, sidecar_path_for as pidx_sidecar_path_for,
+};
 use crate::index::{
     AdjacencyIndex, Distance, EntityTypeIndex, HyperEdgeTypeIndex, Index, LookupKeyIndex,
     PropertyBTreeIndex, VectorIndex,
@@ -901,6 +905,41 @@ impl Engine {
         }
     }
 
+    /// Build + write the `<seq>.pidx` property-index sidecar for a
+    /// just-published SSTable, covering the registered `(type, prop)`
+    /// pairs. No-op when nothing is registered or no indexed values are
+    /// present. Indexes every Entity version in the SSTable; read-time
+    /// MVCC verification (Phase 1c) drops stale/superseded candidates, so
+    /// over-inclusion is safe. Best-effort: a sidecar write failure is
+    /// surfaced (callers treat it as an engine error), but a *missing*
+    /// sidecar at read time simply falls back to a RAM rebuild.
+    fn write_property_sidecar(&self, reader: &SSTableReader) -> Result<(), EngineError> {
+        if !self.property_btree.has_registrations() {
+            return Ok(());
+        }
+        let mut builder = PropertyIndexBuilder::new();
+        for item in reader.iter() {
+            let (rec, _) = item?;
+            if let Record::Entity(e) = &rec {
+                for (prop, val) in &e.properties {
+                    if self.property_btree.is_registered(e.type_id, *prop)
+                        && let Some(bytes) = value_to_index_bytes(val)
+                    {
+                        builder.observe(e.type_id, *prop, &bytes, e.entity_id);
+                    }
+                }
+            }
+        }
+        if builder.is_empty() {
+            return Ok(());
+        }
+        let path = pidx_sidecar_path_for(reader.path());
+        builder
+            .finish(&path)
+            .map_err(|e| std::io::Error::other(format!("property index sidecar: {e}")))?;
+        Ok(())
+    }
+
     /// Start a write transaction. The returned [`WriteTxn`] holds an
     /// exclusive `&mut Engine` borrow — no other writes can happen until
     /// the transaction is committed or dropped.
@@ -1193,6 +1232,10 @@ impl Engine {
 
         // Step 5: open the new SSTable reader and prepend it.
         let reader = SSTableReader::open_with_cipher(&sst_path, self.cipher.clone())?;
+        // Property-index sidecar (low-RAM core): built from the freshly
+        // written SSTable's contents. Read path uses it only under
+        // `config.mmap_indexes`; default mode ignores it.
+        self.write_property_sidecar(&reader)?;
         self.sstables.insert(0, reader);
 
         // Replace WAL.
@@ -1381,15 +1424,19 @@ impl Engine {
 
         // Step 6: re-open SSTable readers from the (now single) new entry.
         let reader = SSTableReader::open_with_cipher(&new_path, self.cipher.clone())?;
+        // Property-index sidecar for the compacted SSTable (low-RAM core).
+        self.write_property_sidecar(&reader)?;
         self.sstables.clear();
         self.sstables.push(reader);
 
         // Step 7: remove old files (best-effort). Also remove the
-        // companion `<seq>.idx` block-index sidecar if it exists.
+        // companion `<seq>.idx` block-index and `<seq>.pidx` property-index
+        // sidecars if they exist.
         for old_seq in old_sstable_seqs {
             let p = sstable_path(self.db.path(), old_seq);
             let _ = std::fs::remove_file(&p);
             let _ = std::fs::remove_file(crate::block_index::sidecar_path_for(&p));
+            let _ = std::fs::remove_file(pidx_sidecar_path_for(&p));
         }
 
         // Rebuild indexes since we dropped tombstoned records.
@@ -2257,6 +2304,59 @@ mod tests {
         assert!(stats.property_btree > 0);
         assert!(stats.index_total() > empty.index_total());
         assert!(stats.total() >= stats.index_total());
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn flush_writes_property_index_sidecar() {
+        use crate::index::property_index_file::{PropertyIndexFile, sidecar_path_for};
+        let dir = temp_dir("pidx_flush");
+        let cust = TypeId::new(1);
+        let age = PropertyId::new(1);
+        let a = EntityId::now_v7();
+        let b = EntityId::now_v7();
+        let mut engine = Engine::create(&dir).unwrap();
+        engine.register_property_btree(cust, age);
+        for (eid, v) in [(a, 30i64), (b, 40)] {
+            let mut txn = engine.begin_write();
+            txn.put_entity(EntityRecord {
+                entity_id: eid,
+                type_id: cust,
+                tx_id_assert: TxId::new(0),
+                tx_id_supersede: TxId::ACTIVE,
+                properties: vec![(age, Value::I64(v))],
+            });
+            txn.commit().unwrap();
+        }
+        engine.flush().unwrap();
+        // Exactly one SSTable → one .pidx sidecar.
+        let sst_seq = engine.manifest().sstables[0].file_seq;
+        let sst_path = super::sstable_path(engine.path(), sst_seq);
+        let pidx = sidecar_path_for(&sst_path);
+        assert!(pidx.exists(), "expected .pidx sidecar at {pidx:?}");
+        // It reflects the indexed values.
+        let f = PropertyIndexFile::open(&pidx).unwrap().unwrap();
+        let bytes30 = super::value_to_index_bytes(&Value::I64(30)).unwrap();
+        assert_eq!(f.find(cust, age, &bytes30), vec![a]);
+        let top = f.top_k(cust, age, 1);
+        assert_eq!(top[0].1, b); // 40 is highest
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn no_sidecar_when_no_registration() {
+        use crate::index::property_index_file::sidecar_path_for;
+        let dir = temp_dir("pidx_none");
+        let mut engine = Engine::create(&dir).unwrap();
+        let mut txn = engine.begin_write();
+        txn.put_entity(make_entity(EntityId::now_v7(), "x"));
+        txn.commit().unwrap();
+        engine.flush().unwrap();
+        let sst_seq = engine.manifest().sstables[0].file_seq;
+        let pidx = sidecar_path_for(&super::sstable_path(engine.path(), sst_seq));
+        assert!(!pidx.exists(), "no registration → no sidecar");
         engine.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }

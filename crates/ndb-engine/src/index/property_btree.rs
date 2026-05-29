@@ -70,6 +70,14 @@ impl PropertyBTreeIndex {
         self.registered.contains(&(type_id, property_id))
     }
 
+    /// True iff any `(type, prop)` pair is registered for B-tree indexing.
+    /// Lets the flush/compaction path skip building a `.pidx` sidecar when
+    /// nothing is indexed.
+    #[must_use]
+    pub fn has_registrations(&self) -> bool {
+        !self.registered.is_empty()
+    }
+
     /// Number of distinct `(type, prop, value)` keys currently indexed.
     #[must_use]
     pub fn key_count(&self) -> usize {
@@ -268,7 +276,7 @@ impl Index for PropertyBTreeIndex {
 /// index. Big-endian numeric types so byte-compare matches numeric
 /// compare. Vectors / Extension / Null aren't indexable.
 #[allow(clippy::match_same_arms)] // Per-variant arms kept for diff stability.
-fn value_to_index_bytes(v: &Value) -> Option<Vec<u8>> {
+pub(crate) fn value_to_index_bytes(v: &Value) -> Option<Vec<u8>> {
     Some(match v {
         Value::Null => return None,
         Value::Bool(b) => vec![u8::from(*b)],
