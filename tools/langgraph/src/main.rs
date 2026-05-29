@@ -119,18 +119,37 @@ fn short_id(openalex_url: &str) -> String {
 /// Pull the top-cited connected slice of a topic into `Vec<Paper>`. Keeps
 /// only CITES edges whose target is also in the slice, so the result is an
 /// internally-connected citation subgraph.
-fn fetch_openalex(query: &str, per_page: usize) -> Result<Vec<Paper>, Box<dyn std::error::Error>> {
-    let url = format!(
-        "https://api.openalex.org/works?filter=default.search:{q},from_publication_date:2012-01-01&sort=cited_by_count:desc&per-page={n}&select=id,doi,display_name,publication_year,cited_by_count,referenced_works,concepts,authorships",
-        q = query.replace(' ', "%20"),
-        n = per_page.min(200),
-    );
-    let resp: serde_json::Value = ureq::get(&url)
-        .set("User-Agent", "langgraph-demo (mailto:demo@nDB.example)")
-        .call()?
-        .into_json()?;
+fn fetch_openalex(query: &str, target: usize) -> Result<Vec<Paper>, Box<dyn std::error::Error>> {
+    let ua = "langgraph-demo (mailto:demo@nDB.example)";
+    let filter = format!("default.search:{query},from_publication_date:2012-01-01");
+    let select = "id,doi,display_name,publication_year,cited_by_count,referenced_works,concepts,authorships";
 
-    let results = resp["results"].as_array().cloned().unwrap_or_default();
+    // OpenAlex caps a page at 200; cursor-paginate to reach `target`. (The
+    // 200-per-page cap is the only reason the first cut of this demo had
+    // exactly 200 papers — nДB itself has no such limit.)
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    let mut cursor = "*".to_string();
+    while results.len() < target {
+        let resp: serde_json::Value = ureq::get("https://api.openalex.org/works")
+            .query("filter", &filter)
+            .query("sort", "cited_by_count:desc")
+            .query("per-page", "200")
+            .query("cursor", &cursor)
+            .query("select", select)
+            .set("User-Agent", ua)
+            .call()?
+            .into_json()?;
+        let page = resp["results"].as_array().cloned().unwrap_or_default();
+        if page.is_empty() {
+            break;
+        }
+        results.extend(page);
+        match resp["meta"]["next_cursor"].as_str() {
+            Some(c) if !c.is_empty() => cursor = c.to_string(),
+            _ => break,
+        }
+    }
+    results.truncate(target);
     // First pass: collect the id set so we can intersect references.
     let id_set: std::collections::HashSet<String> = results
         .iter()
@@ -382,15 +401,56 @@ fn export_graph(engine: &Engine, path: &str) -> Result<(usize, usize), Box<dyn s
         }).unwrap_or_default()
     };
 
+    // author id → display name; paper id → year.
+    let author_name: HashMap<String, String> = records.iter().filter_map(|r| match r {
+        Record::Entity(e) if e.type_id == TypeId::new(TYPE_AUTHOR) =>
+            Some((uuid(e.entity_id), str_prop(&e.properties, PROP_NAME).unwrap_or_default())),
+        _ => None,
+    }).collect();
+    let paper_year: HashMap<String, i64> = records.iter().filter_map(|r| match r {
+        Record::Entity(e) if e.type_id == TypeId::new(TYPE_PAPER) =>
+            Some((uuid(e.entity_id), i64_prop(&e.properties, PROP_YEAR))),
+        _ => None,
+    }).collect();
+
+    // Walk AUTHORED once: per-paper author ids, per-author paper count,
+    // per-author debut year. nDB stores every author; the VIZ renders only
+    // "bridge" authors (≥2 papers in the set) — the co-authorship structure
+    // that actually connects the graph — while a paper's details panel
+    // still lists all of its authors by name. Without this, ~4.5k
+    // single-paper leaf authors swamp the force layout.
+    let mut paper_authors: HashMap<String, Vec<String>> = HashMap::new(); // paper → author ids
+    let mut author_count: HashMap<String, usize> = HashMap::new();
+    let mut author_year: HashMap<String, i64> = HashMap::new();
+    for r in &records {
+        if let Record::HyperEdge(h) = r {
+            if h.type_id != TypeId::new(TYPE_AUTHORED) { continue; }
+            let paper = h.roles.iter().find(|(r, _)| r.get() == ROLE_PAPER).map(|(_, e)| uuid(*e));
+            let Some(paper) = paper else { continue };
+            let py = paper_year.get(&paper).copied().unwrap_or(0);
+            for (rid, aid) in &h.roles {
+                if rid.get() != ROLE_AUTHOR { continue; }
+                let a = uuid(*aid);
+                paper_authors.entry(paper.clone()).or_default().push(a.clone());
+                *author_count.entry(a.clone()).or_default() += 1;
+                let y = author_year.entry(a).or_insert(i64::MAX);
+                if py > 0 { *y = (*y).min(py); }
+            }
+        }
+    }
+    let is_bridge = |aid: &str| author_count.get(aid).copied().unwrap_or(0) >= 2;
+
     let mut nodes = Vec::new();
     let mut links = Vec::new();
-    let mut author_year: HashMap<String, i64> = HashMap::new();
 
-    // Pass 1: entities → nodes.
+    // Nodes: every paper (carrying the full author-name list for its
+    // details panel) + only bridge-author entities.
     for r in &records {
         if let Record::Entity(e) = r {
             let id = uuid(e.entity_id);
             if e.type_id == TypeId::new(TYPE_PAPER) {
+                let authors: Vec<String> = paper_authors.get(&id).map(|ids|
+                    ids.iter().filter_map(|a| author_name.get(a).cloned()).collect()).unwrap_or_default();
                 nodes.push(json!({
                     "id": id,
                     "label": str_prop(&e.properties, PROP_NAME).unwrap_or_default(),
@@ -400,14 +460,16 @@ fn export_graph(engine: &Engine, path: &str) -> Result<(usize, usize), Box<dyn s
                     "citations": i64_prop(&e.properties, PROP_CITATIONS),
                     "oaid": str_prop(&e.properties, PROP_OAID).unwrap_or_default(),
                     "doi": str_prop(&e.properties, PROP_DOI).unwrap_or_default(),
+                    "authors": authors,
                     "embedding": vec_prop(&e.properties, PROP_EMBED),
                 }));
-            } else if e.type_id == TypeId::new(TYPE_AUTHOR) {
+            } else if e.type_id == TypeId::new(TYPE_AUTHOR) && is_bridge(&id) {
+                let y = author_year.get(&id).copied().unwrap_or(0);
                 nodes.push(json!({
                     "id": id,
                     "label": str_prop(&e.properties, PROP_NAME).unwrap_or_default(),
                     "kind": "author",
-                    "year": 0, // filled in pass 2 from authorship
+                    "year": if y == i64::MAX { 0 } else { y },
                     "field": "Author",
                     "citations": 0,
                     "embedding": vec_prop(&e.properties, PROP_EMBED),
@@ -415,14 +477,9 @@ fn export_graph(engine: &Engine, path: &str) -> Result<(usize, usize), Box<dyn s
             }
         }
     }
-    // paper id → year, for author-debut inheritance.
-    let paper_year: HashMap<String, i64> = records.iter().filter_map(|r| match r {
-        Record::Entity(e) if e.type_id == TypeId::new(TYPE_PAPER) =>
-            Some((uuid(e.entity_id), i64_prop(&e.properties, PROP_YEAR))),
-        _ => None,
-    }).collect();
 
-    // Pass 2: hyperedges → links.
+    // Links: all CITES; AUTHORED only to bridge authors (the only ones
+    // with a node).
     for r in &records {
         if let Record::HyperEdge(h) = r {
             let role = |rid: u32| h.roles.iter().find(|(r, _)| r.get() == rid).map(|(_, e)| uuid(*e));
@@ -432,13 +489,12 @@ fn export_graph(engine: &Engine, path: &str) -> Result<(usize, usize), Box<dyn s
                 }
             } else if h.type_id == TypeId::new(TYPE_AUTHORED) {
                 if let Some(paper) = role(ROLE_PAPER) {
-                    let py = paper_year.get(&paper).copied().unwrap_or(0);
                     for (rid, aid) in &h.roles {
                         if rid.get() == ROLE_AUTHOR {
                             let a = uuid(*aid);
-                            links.push(json!({"source": paper.clone(), "target": a.clone(), "kind": "authored"}));
-                            let e = author_year.entry(a).or_insert(i64::MAX);
-                            if py > 0 { *e = (*e).min(py); }
+                            if is_bridge(&a) {
+                                links.push(json!({"source": paper.clone(), "target": a, "kind": "authored"}));
+                            }
                         }
                     }
                 }
@@ -446,16 +502,15 @@ fn export_graph(engine: &Engine, path: &str) -> Result<(usize, usize), Box<dyn s
         }
     }
 
-    // Backfill author debut years.
-    for n in &mut nodes {
-        if n["kind"] == "author" {
-            if let Some(y) = author_year.get(n["id"].as_str().unwrap_or("")) {
-                n["year"] = json!(if *y == i64::MAX { 0 } else { *y });
-            }
-        }
-    }
-
-    let doc = json!({ "nodes": nodes, "links": links });
+    let papers_n = nodes.iter().filter(|n| n["kind"] == "paper").count();
+    let authors_shown = nodes.iter().filter(|n| n["kind"] == "author").count();
+    let doc = json!({
+        "nodes": nodes,
+        "links": links,
+        // The viz renders a sample; nDB holds the full set. Surfaced so the
+        // UI can say "514 of 4,583 authors" honestly.
+        "meta": { "papers": papers_n, "authors_total": author_name.len(), "authors_shown": authors_shown },
+    });
     if let Some(parent) = std::path::Path::new(path).parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -538,7 +593,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     if args.first().map(String::as_str) == Some("--fetch") {
-        let papers = fetch_openalex("deep learning neural network transformer", 200)?;
+        let target = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1000);
+        let papers = fetch_openalex("deep learning neural network transformer", target)?;
         let connected = papers.iter().filter(|p| !p.cites.is_empty()).count();
         std::fs::create_dir_all("tools/langgraph/data")?;
         std::fs::write(CACHE_PATH, serde_json::to_vec_pretty(&papers)?)?;

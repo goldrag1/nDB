@@ -47,15 +47,16 @@
     <div class="card">
       <a href="/demos-langgraph_ndb.html" class="card-title">langgraph_ndb — GraphRAG knowledge graph (the query-side demo)</a>
       <p>
-        A CC0 OpenAlex citation graph — 200 ML/transformer papers + 972
-        authors, ingested Rust-native straight into nDB. Where the other
+        A CC0 OpenAlex citation graph — 1,000 ML/transformer papers (and
+        the thousands of authors behind them), ingested Rust-native straight
+        into nDB. Where the other
         demos showcase how nDB <em>stores</em> N-ary facts, this one
         showcases how nDB <em>answers</em>: <strong>recursive</strong>
         CITES ancestry (the <code>relation+</code> traversal that beats
         <code>WITH RECURSIVE</code>), <strong>vector kNN</strong> semantic
         search over abstract embeddings, and <strong>MVCC time-travel</strong>
-        — scrub the year slider and watch the field grow 6 papers (2015)
-        → 200 (2026). Plus N-ary <code>AUTHORED</code> hyperedges. An
+        — scrub the year slider and watch the field grow from a handful in
+        2012 to 1,000 by 2026. Plus N-ary <code>AUTHORED</code> hyperedges. An
         interactive 3D graph with a semantic-layout toggle (position =
         meaning).
       </p>

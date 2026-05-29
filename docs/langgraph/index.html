@@ -108,6 +108,7 @@
     <div class="stat"><span>edges visible</span><b id="nLinks">0</b></div>
   </div>
   <button class="clear" id="clear">Clear highlight</button>
+  <div class="hint" id="scalenote" style="margin-top:8px;"></div>
 
   <div class="dims">
     5 dimensions ·
@@ -172,6 +173,7 @@ let citeAdj = new Map();       // citing id → [cited ids], for recursion
 let citedByAdj = new Map();    // cited id → [citing ids]
 let paperAuthors = new Map();  // paper id → [author ids]
 let authorPapers = new Map();  // author id → [paper ids]
+let authorIdByName = new Map();// author display name → node id (bridge authors only)
 const push = (m, k, v) => { (m.get(k) || m.set(k, []).get(k)).push(v); };
 let highlight = new Set();     // ids to emphasise (search / recursion); empty = all
 let curYear = 9999;
@@ -283,7 +285,7 @@ function showDetails(node) {
   if (node.kind === "paper") {
     const refs = citeAdj.get(node.id) || [];
     const citedBy = citedByAdj.get(node.id) || [];
-    const authors = (paperAuthors.get(node.id) || []).map(id => nodeById.get(id)).filter(Boolean);
+    const authors = node.authors || [];   // all author names; bridge authors are clickable
     html += `<h2>${esc(node.label)}</h2>`;
     html += `<div class="meta">${esc(node.field)} · ${node.year} · ${node.citations.toLocaleString()} citations</div>`;
     // "See more" — go to the actual paper. DOI is the canonical link;
@@ -294,8 +296,10 @@ function showDetails(node) {
     if (node.oaid) ext.push(`<a class="ext" href="https://openalex.org/${esc(node.oaid)}" target="_blank" rel="noreferrer">OpenAlex ↗</a>`);
     ext.push(`<a class="ext alt" href="https://scholar.google.com/scholar?q=${encodeURIComponent(node.label)}" target="_blank" rel="noreferrer">Scholar ↗</a>`);
     html += `<div class="ext-row">${ext.join("")}</div>`;
-    if (authors.length) html += `<div class="sec">Authors</div><div class="chips">${
-      authors.map(a => `<span class="chip item" data-id="${a.id}">${esc(a.label)}</span>`).join("")}</div>`;
+    if (authors.length) html += `<div class="sec">Authors (${authors.length})</div><div class="chips">${
+      authors.map(name => { const aid = authorIdByName.get(name);
+        return aid ? `<span class="chip item" data-id="${aid}">${esc(name)}</span>` : `<span class="chip">${esc(name)}</span>`;
+      }).join("")}</div>`;
     html += `<div class="sec">References (${refs.length}) — cites</div>${listHtml(refs, true)}`;
     html += `<div class="sec">Cited by (${citedBy.length}) — in this slice</div>${listHtml(citedBy, true)}`;
   } else {
@@ -433,7 +437,7 @@ fetch("./graph.json", { cache: "no-store" })
   .then(r => r.json())
   .then(data => {
     DATA = data;
-    for (const n of data.nodes) nodeById.set(n.id, n);
+    for (const n of data.nodes) { nodeById.set(n.id, n); if (n.kind === "author") authorIdByName.set(n.label, n.id); }
     for (const l of data.links) {
       if (l.kind === "cites") { push(citeAdj, l.source, l.target); push(citedByAdj, l.target, l.source); }
       else if (l.kind === "authored") { push(paperAuthors, l.source, l.target); push(authorPapers, l.target, l.source); }
@@ -447,6 +451,12 @@ fetch("./graph.json", { cache: "no-store" })
 
     Graph.graphData(data);
     updateCounts();
+    if (data.meta) {
+      $("scalenote").innerHTML =
+        `Sample: <b>${data.meta.papers.toLocaleString()}</b> papers + the <b>${data.meta.authors_shown.toLocaleString()}</b> ` +
+        `co-authors linking ≥2 of them. nDB holds all <b>${data.meta.authors_total.toLocaleString()}</b> authors here — ` +
+        `and scales to millions; the in-browser 3D view is the only limit. See the <a href="/bench.html" style="color:var(--accent)">bench</a>.`;
+    }
     window.Graph = Graph;                 // console / test affordance
     window.__lg = { runSearch, focusNodeById, get highlight() { return highlight; }, data: () => DATA };
     startTwinkle();

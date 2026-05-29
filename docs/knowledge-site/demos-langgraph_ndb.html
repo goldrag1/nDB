@@ -26,8 +26,8 @@
 
   <h1>langgraph_ndb</h1>
   <p class="lede">
-    A GraphRAG-style knowledge graph, browsed in 3D. 200 machine-learning
-    papers and 972 authors from <a href="https://openalex.org" target="_blank" rel="noreferrer">OpenAlex</a>
+    A GraphRAG-style knowledge graph, browsed in 3D. 1,000 machine-learning
+    papers and several thousand authors from <a href="https://openalex.org" target="_blank" rel="noreferrer">OpenAlex</a>
     (public-domain, CC0 metadata) ingested Rust-native straight into nDB —
     no Python scraper, no intermediate file. Where the other demos show how
     nDB <em>stores</em> awkward facts, this one shows how it <em>answers</em>:
@@ -109,7 +109,7 @@
   <h2>The five dimensions</h2>
   <ul>
     <li><strong>x / y / z</strong> — a 3D force layout over the CITES topology.</li>
-    <li><strong>time</strong> — the "as of year" slider. Each paper was ingested in its publication-year transaction, so the slider is a real MVCC snapshot: 6 papers as of 2015, 200 as of 2026.</li>
+    <li><strong>time</strong> — the "as of year" slider. Each paper was ingested in its publication-year transaction, so the slider is a real MVCC snapshot: a handful of papers in 2012, all 1,000 by 2026.</li>
     <li><strong>semantic</strong> — the <em>Semantic</em> layout toggle pins every node to a projection of its embedding, so position itself encodes meaning; clusters of related work pull together.</li>
     <li><strong>colour</strong> — research field. <strong>size</strong> — citation count.</li>
   </ul>
@@ -136,6 +136,15 @@
     Rust-native database, built in Rust. The explorer itself is one
     self-contained HTML file (<code>3d-force-graph</code> over WebGL), no
     build step.
+  </p>
+  <p>
+    <strong>Why 1,000 and not a million?</strong> The 3D view is the only
+    limit, not the database. nDB ingests every paper and all ~4,600
+    authors; the explorer renders the 1,000 papers plus the co-authors that
+    link two or more of them — the connective structure — and keeps the
+    rest in the store so a browser WebGL scene stays fluid. The engine
+    itself runs comfortably at <a href="/bench.html">49k+ entities and
+    millions of ops/sec</a>; the demo is sized for your GPU, not for nDB.
   </p>
 
   <h2>Data &amp; thanks</h2>
