@@ -32,6 +32,8 @@
          clippy::cast_sign_loss, clippy::too_many_lines)]
 
 use std::collections::{BTreeMap, HashMap};
+use std::io::Write as _;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -203,6 +205,288 @@ fn fetch_openalex(query: &str, target: usize) -> Result<Vec<Paper>, Box<dyn std:
 fn load_cache() -> Option<Vec<Paper>> {
     let bytes = std::fs::read(CACHE_PATH).ok()?;
     serde_json::from_slice(&bytes).ok()
+}
+
+// ─── Resumable spool fetch (the real ~10GB acquisition) ─────────────────
+// The full OpenAlex works snapshot is 492M works / 639GB compressed — and
+// S3 has no server-side filter, so building a coherent slice from it means
+// downloading all 639GB (~60-110h on this link). The API filters
+// server-side, so we download ONLY the slice we keep (e.g.
+// `cited_by_count:>50` → ~12.3M works, the citation backbone of science),
+// projected to the fields the schema needs, gzip-compressed on the wire.
+// That's ~12.6GB transferred, not 639GB.
+//
+// Records are spooled as gzipped JSONL parts (~1KB/record gzip vs ~7KB
+// plain → fits the disk budget). The cursor is checkpointed to state.json
+// only at part boundaries, so a kill/restart re-fetches at most one
+// in-flight batch — no gaps, no dups, no corrupt gz members.
+const OA_SELECT: &str =
+    "id,doi,display_name,publication_year,cited_by_count,referenced_works,concepts,authorships";
+const OA_MAIL: &str = "nguyenhoanglong1@gmail.com";
+const SPOOL_BATCH_WORKS: u64 = 50_000; // ~250 pages per part file
+
+#[derive(Serialize, Deserialize)]
+struct SpoolState {
+    cursor: String,
+    pages: u64,
+    works: u64,
+    part: u32,
+    done: bool,
+}
+impl Default for SpoolState {
+    fn default() -> Self {
+        Self { cursor: "*".into(), pages: 0, works: 0, part: 0, done: false }
+    }
+}
+
+fn load_spool_state(dir: &str) -> SpoolState {
+    std::fs::read(format!("{dir}/state.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+fn save_spool_state(dir: &str, st: &SpoolState) -> std::io::Result<()> {
+    let tmp = format!("{dir}/state.json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec(st)?)?;
+    std::fs::rename(tmp, format!("{dir}/state.json")) // atomic checkpoint
+}
+
+/// gzip a JSONL buffer to `part_NNNNN.jsonl.gz` atomically (temp + rename),
+/// so a half-written file can never be mistaken for a complete part.
+fn write_gz_part(dir: &str, part: u32, data: &str) -> std::io::Result<()> {
+    let tmp = format!("{dir}/part_{part:05}.jsonl.gz.tmp");
+    let fin = format!("{dir}/part_{part:05}.jsonl.gz");
+    let f = std::fs::File::create(&tmp)?;
+    let mut enc = flate2::write::GzEncoder::new(std::io::BufWriter::new(f), flate2::Compression::default());
+    enc.write_all(data.as_bytes())?;
+    enc.finish()?; // flush deflate + write gzip trailer
+    std::fs::rename(tmp, fin)
+}
+
+/// Resolver that returns ONLY IPv4 addresses. The native IPv6 path to
+/// Cloudflare (which fronts OpenAlex) on this link stalls long-lived
+/// connections mid-read; IPv4 is reliably ~1.2-1.7s/request. ureq otherwise
+/// happy-eyeballs onto the flaky v6 address and wedges.
+struct V4Only;
+impl ureq::Resolver for V4Only {
+    fn resolve(&self, netloc: &str) -> std::io::Result<Vec<std::net::SocketAddr>> {
+        use std::net::ToSocketAddrs;
+        Ok(netloc.to_socket_addrs()?.filter(std::net::SocketAddr::is_ipv4).collect())
+    }
+}
+
+fn build_agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(15))
+        .timeout_read(Duration::from_secs(45)) // a stalled read now errors → retry, never wedges
+        .timeout_write(Duration::from_secs(30))
+        .resolver(V4Only)
+        .build()
+}
+
+/// One cursor page, with retry/backoff for transient drops on a slow link.
+/// Reuses one `Agent` (connection pool + keep-alive) across the whole walk.
+fn fetch_oa_page(
+    agent: &ureq::Agent,
+    filter: &str,
+    cursor: &str,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let ua = format!("langgraph-demo (mailto:{OA_MAIL})");
+    let mut delay = 1u64;
+    for attempt in 0..6 {
+        let r = agent
+            .get("https://api.openalex.org/works")
+            .query("filter", filter)
+            .query("select", OA_SELECT)
+            .query("per-page", "200")
+            .query("cursor", cursor)
+            .query("mailto", OA_MAIL)
+            .set("User-Agent", &ua)
+            .call();
+        match r {
+            Ok(resp) => return Ok(resp.into_json()?),
+            Err(e) => {
+                eprintln!("  request error ({e}); retry {}/6 in {delay}s", attempt + 1);
+                std::thread::sleep(Duration::from_secs(delay));
+                delay = (delay * 2).min(30);
+            }
+        }
+    }
+    Err("exhausted retries on a page".into())
+}
+
+fn spool_fetch(dir: &str, filter: &str, cap: Option<u64>) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(dir)?;
+    let mut st = load_spool_state(dir);
+    if st.done {
+        println!("spool already complete: {} works in {} parts → {dir}", st.works, st.part);
+        return Ok(());
+    }
+    if st.cursor.is_empty() {
+        st.cursor = "*".into();
+    }
+    eprintln!(
+        "spool: filter={filter:?}  resume={}  works so far={}",
+        if st.cursor == "*" { "<start>".into() } else { format!("{}…", &st.cursor[..st.cursor.len().min(16)]) },
+        st.works
+    );
+
+    let agent = build_agent();
+    let mut cursor = st.cursor.clone(); // working cursor (advances every page)
+    let mut buf = String::new();
+    let mut batch_works = 0u64;
+    let t0 = Instant::now();
+
+    loop {
+        let data = fetch_oa_page(&agent, filter, &cursor)?;
+        let results = data["results"].as_array().cloned().unwrap_or_default();
+        if results.is_empty() {
+            st.done = true;
+        } else {
+            for w in &results {
+                buf.push_str(&serde_json::to_string(w)?);
+                buf.push('\n');
+            }
+            let n = results.len() as u64;
+            st.works += n;
+            st.pages += 1;
+            batch_works += n;
+        }
+        let nxt = data["meta"]["next_cursor"].as_str().map(str::to_string);
+        cursor = nxt.clone().unwrap_or_default();
+        let no_more = nxt.as_deref().map_or(true, str::is_empty);
+        let hit_cap = cap.is_some_and(|c| st.works >= c);
+
+        if batch_works >= SPOOL_BATCH_WORKS || no_more || hit_cap {
+            if !buf.is_empty() {
+                write_gz_part(dir, st.part, &buf)?;
+                st.part += 1;
+                buf.clear();
+                batch_works = 0;
+            }
+            st.cursor = cursor.clone(); // checkpoint resume point = next batch start
+            if no_more {
+                st.done = true;
+            }
+            save_spool_state(dir, &st)?;
+        }
+        if st.done || hit_cap {
+            break;
+        }
+        if st.pages % 50 == 0 {
+            let rate = st.works as f64 / t0.elapsed().as_secs_f64().max(1e-6);
+            eprintln!("  {} works ({} pages, {rate:.0}/s this run, part {})", st.works, st.pages, st.part);
+        }
+        std::thread::sleep(Duration::from_millis(120)); // ~8 req/s, under 10/s polite cap
+    }
+    println!("spool DONE: {} works across {} parts → {dir}", st.works, st.part);
+    Ok(())
+}
+
+/// One `group_by=publication_year` call → per-year counts (sorted), used to
+/// split the slice into balanced year ranges.
+fn fetch_year_histogram(
+    agent: &ureq::Agent,
+    base_filter: &str,
+) -> Result<Vec<(i32, u64)>, Box<dyn std::error::Error>> {
+    let v: serde_json::Value = agent
+        .get("https://api.openalex.org/works")
+        .query("filter", base_filter)
+        .query("group_by", "publication_year")
+        .query("mailto", OA_MAIL)
+        .set("User-Agent", &format!("langgraph-demo (mailto:{OA_MAIL})"))
+        .call()?
+        .into_json()?;
+    let mut hist: Vec<(i32, u64)> = v["group_by"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|g| {
+            let y = g["key"].as_str()?.parse::<i32>().ok()?;
+            Some((y, g["count"].as_u64().unwrap_or(0)))
+        })
+        .collect();
+    hist.sort_unstable();
+    Ok(hist)
+}
+
+/// Partition the year histogram into `n` contiguous ranges of ~equal work
+/// count (cumulative greedy). Balanced shards → the slowest shard (= total
+/// wall time, since they run in parallel) is minimised.
+fn partition_year_shards(hist: &[(i32, u64)], n: usize) -> Vec<(i32, i32)> {
+    if hist.is_empty() {
+        return vec![(0, 9999)];
+    }
+    let total: u64 = hist.iter().map(|(_, c)| c).sum();
+    let target = (total / n as u64).max(1);
+    let mut buckets = Vec::new();
+    let mut lo = hist[0].0;
+    let mut acc = 0u64;
+    for (y, c) in hist {
+        acc += c;
+        if acc >= target && buckets.len() < n - 1 {
+            buckets.push((lo, *y));
+            lo = *y + 1;
+            acc = 0;
+        }
+    }
+    buckets.push((lo, hist.last().unwrap().0));
+    buckets
+}
+
+/// Sharded bulk fetch: split the slice by publication year into `n_shards`
+/// balanced ranges and walk them on parallel threads (each an independent,
+/// resumable `spool_fetch` into its own subdir). Cursor paging is sequential
+/// PER filter, so parallel year-ranges are the only way to beat the
+/// single-stream RTT wall (~53h → ~5-7h). Combined request rate (~n×0.3/s)
+/// stays well under OpenAlex's 10/s polite cap. Year-bucketed spools also
+/// give the ingest its oldest-first ordering for free.
+fn spool_sharded(
+    dir: &str,
+    base_filter: &str,
+    n_shards: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(dir)?;
+    let agent = build_agent();
+    let hist = fetch_year_histogram(&agent, base_filter)?;
+    let shards = partition_year_shards(&hist, n_shards);
+    let total: u64 = hist.iter().map(|(_, c)| c).sum();
+    eprintln!("sharded spool: {} works over {} year-shards", total, shards.len());
+    for (lo, hi) in &shards {
+        eprintln!("  shard {lo}-{hi}");
+    }
+
+    let mut handles = Vec::new();
+    for (lo, hi) in shards.clone() {
+        let dir = dir.to_string();
+        let bf = base_filter.to_string();
+        handles.push(std::thread::spawn(move || {
+            let shard_dir = format!("{dir}/shard_{lo:04}_{hi:04}");
+            let filter = format!("{bf},publication_year:{lo}-{hi}");
+            if let Err(e) = spool_fetch(&shard_dir, &filter, None) {
+                eprintln!("shard {lo}-{hi} error: {e}");
+            }
+        }));
+    }
+    for h in handles {
+        let _ = h.join();
+    }
+
+    let (mut done, mut works) = (0usize, 0u64);
+    for (lo, hi) in &shards {
+        let st = load_spool_state(&format!("{dir}/shard_{lo:04}_{hi:04}"));
+        if st.done {
+            done += 1;
+        }
+        works += st.works;
+    }
+    println!("sharded spool: {done}/{} shards done, {works} works total → {dir}", shards.len());
+    if done < shards.len() {
+        return Err("some shards incomplete — rerun to resume".into());
+    }
+    Ok(())
 }
 
 // ─── Schema registration + ingest ──────────────────────────────────────
@@ -766,6 +1050,44 @@ fn demo_reads(engine: &Engine, ing: &Ingested) {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // --spool <dir> [--filter <openalex-filter>] [--max N]: resumable bulk
+    // fetch of a server-side-filtered OpenAlex slice into a gzipped JSONL
+    // spool. The long-running acquisition step (hours on a slow link);
+    // `--from-spool` later ingests it into nDB at bounded RAM.
+    if args.first().map(String::as_str) == Some("--spool") {
+        let flag_val = |name: &str| {
+            args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
+        };
+        let dir = args
+            .iter()
+            .skip(1)
+            .find(|a| !a.starts_with("--"))
+            .cloned()
+            .unwrap_or_else(|| ".demo-data/oa-spool".to_string());
+        let filter = flag_val("--filter").unwrap_or_else(|| "cited_by_count:>50".to_string());
+        let cap = flag_val("--max").and_then(|s| s.parse::<u64>().ok());
+        spool_fetch(&dir, &filter, cap)?;
+        return Ok(());
+    }
+
+    // --spool-sharded <dir> [--filter F] [--shards N]: parallel year-range
+    // cursor walks (the fast path — beats the single-stream RTT wall).
+    if args.first().map(String::as_str) == Some("--spool-sharded") {
+        let flag_val = |name: &str| {
+            args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
+        };
+        let dir = args
+            .iter()
+            .skip(1)
+            .find(|a| !a.starts_with("--"))
+            .cloned()
+            .unwrap_or_else(|| ".demo-data/oa-spool".to_string());
+        let filter = flag_val("--filter").unwrap_or_else(|| "cited_by_count:>50".to_string());
+        let shards = flag_val("--shards").and_then(|s| s.parse::<usize>().ok()).unwrap_or(10);
+        spool_sharded(&dir, &filter, shards)?;
+        return Ok(());
+    }
 
     if args.first().map(String::as_str) == Some("--fetch") {
         let target = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1000);

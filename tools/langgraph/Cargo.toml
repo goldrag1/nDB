@@ -26,10 +26,15 @@ ndb-index-vector-hnsw = { path = "../../crates/ndb-index-vector-hnsw" }
 serde      = { workspace = true }
 serde_json = { workspace = true }
 uuid       = { workspace = true }
-# Outbound HTTPS to the LLM extraction / embedding endpoint. ureq (blocking,
-# no async runtime) is right-sized for a build-time tool; isolated to this
-# crate so it never touches the engine's dependency tree.
-ureq = { version = "2", features = ["json"] }
+# Outbound HTTPS to the OpenAlex API. ureq (blocking, no async runtime) is
+# right-sized for a build-time tool; isolated to this crate so it never
+# touches the engine's dependency tree. `gzip` makes the API serve gzipped
+# pages (~7.3× smaller on the wire) — the difference between a feasible and
+# an infeasible bulk fetch on this link.
+ureq = { version = "2", features = ["json", "gzip"] }
+# Gzip the on-disk spool so the projected slice fits the disk budget
+# (~1KB/record gzip vs ~7KB plain → ~12.6GB not ~90GB for 12.3M works).
+flate2 = "1"
 
 [lints]
 workspace = true
