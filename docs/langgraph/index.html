@@ -189,7 +189,12 @@ const fetchedTiles = new Set();   // endpoint keys already fetched (cache)
 const linkSeen = new Set();       // dedupe merged links
 const LN_MAX = Math.log1p(300000);// fixed citation ceiling for live importance
 let tileTimer = 0, fetchOrder = 0;
-const RENDER_CAP = 3000;          // max nodes kept on screen (LRU-dropped beyond)
+let RENDER_CAP = 3000;            // max nodes kept on screen (LRU-dropped; lowered on weak devices)
+let inflight = 0;                 // in-flight tile requests (capped)
+const MAX_INFLIGHT = 4;
+const tileCooldown = new Map();   // key → earliest retry time (backoff after failure)
+const TILE_TIMEOUT_MS = 8000;
+let twinkleSkip = 1;              // twinkle every Nth frame (raised on weak devices)
 let highlight = new Set();     // ids to emphasise (search / recursion); empty = all
 let curYear = 9999;
 let mode = "cite";
@@ -488,16 +493,21 @@ function setMode(m) {
 // active, non-highlighted nodes stay faded instead of twinkling back to
 // full brightness. "Not too much" — amplitude 0.14 around 0.9, slow.
 function hashId(s) { let h = 0; for (const c of s) h = (Math.imul(h, 31) + c.charCodeAt(0)) >>> 0; return h; }
-let twT = 0;
+let twT = 0, twFrame = 0;
 function startTwinkle() {
   (function frame() {
-    twT += 0.016;
-    for (const n of Graph.graphData().nodes) {
-      const o = n.__threeObj;
-      if (!o || !o.visible || !o.material) continue;
-      if (!o.material.__tw) { o.material = o.material.clone(); o.material.transparent = true; o.material.__tw = true; n.__ph = (hashId(n.id) % 628) / 100; }
-      const dim = highlight.size && !highlight.has(n.id);
-      o.material.opacity = dim ? 0.07 : 0.86 + 0.14 * Math.sin(twT * 1.3 + (n.__ph || 0));
+    twFrame++;
+    // Throttle the per-node work on weak devices (twinkleSkip raised by the
+    // adaptive-quality probe); advance phase by the skip so speed is steady.
+    if (twFrame % twinkleSkip === 0) {
+      twT += 0.016 * twinkleSkip;
+      for (const n of Graph.graphData().nodes) {
+        const o = n.__threeObj;
+        if (!o || !o.visible || !o.material) continue;
+        if (!o.material.__tw) { o.material = o.material.clone(); o.material.transparent = true; o.material.__tw = true; n.__ph = (hashId(n.id) % 628) / 100; }
+        const dim = highlight.size && !highlight.has(n.id);
+        o.material.opacity = dim ? 0.07 : 0.86 + 0.14 * Math.sin(twT * 1.3 + (n.__ph || 0));
+      }
     }
     requestAnimationFrame(frame);
   })();
@@ -561,9 +571,18 @@ function mergeTile(tile) {
   updateLiveCounts();
 }
 function fetchTile(ep, key) {
-  if (fetchedTiles.has(key)) return; fetchedTiles.add(key);
+  if (fetchedTiles.has(key)) return;            // already loaded
+  if (inflight >= MAX_INFLIGHT) return;         // in-flight cap — don't pile up on a slow server
+  const cd = tileCooldown.get(key);
+  if (cd && performance.now() < cd) return;     // backoff after a recent failure
+  fetchedTiles.add(key); inflight++;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TILE_TIMEOUT_MS);   // abort a stalled tile
   const t0 = performance.now();
-  fetch("api/" + ep, { cache: "no-store" }).then(r => r.json()).then(d => { logQuery(ep, performance.now() - t0, (d.nodes || []).length); mergeTile(d); }).catch(() => fetchedTiles.delete(key));
+  fetch("api/" + ep, { cache: "no-store", signal: ctrl.signal })
+    .then(r => { if (!r.ok) throw new Error("http " + r.status); return r.json(); })
+    .then(d => { clearTimeout(timer); inflight--; logQuery(ep, performance.now() - t0, (d.nodes || []).length); mergeTile(d); })
+    .catch(() => { clearTimeout(timer); inflight--; fetchedTiles.delete(key); tileCooldown.set(key, performance.now() + 2500); });
 }
 function centeredCluster() {
   const cam = Graph.cameraPosition(); let best = null, bd = Infinity;
@@ -632,6 +651,19 @@ function setup(data, isLive) {
       ctrls.addEventListener("change", () => { clearTimeout(lodTimer); lodTimer = setTimeout(updateLOD, 90); });
     }
     setTimeout(updateLOD, 1300);
+
+    // Adaptive quality: sample FPS once after load and dial the render budget
+    // + twinkle rate to the device, so a weak GPU degrades instead of stalling.
+    setTimeout(() => {
+      let frames = 0; const t0 = performance.now();
+      (function sample() {
+        frames++;
+        if (performance.now() - t0 < 1000) { requestAnimationFrame(sample); return; }
+        if (frames < 18) { RENDER_CAP = 800; twinkleSkip = 4; }
+        else if (frames < 30) { RENDER_CAP = 1500; twinkleSkip = 2; }
+        if (LIVE) { dropFar(); Graph.graphData(Graph.graphData()); refreshVisibility(); }
+      })();
+    }, 2600);
 
     const sIn = $("search");
     let sugTimer;
