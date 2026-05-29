@@ -160,6 +160,13 @@ const Graph = ForceGraph3D()($("graph"))
   .linkColor(linkColor)
   .linkWidth(l => l.kind === "cites" ? 1.2 : 0.4)
   .linkOpacity(0.32)
+  // CITES is directional (citing → cited): a static arrowhead near the
+  // cited end shows which way influence flows. AUTHORED is undirected
+  // membership → no arrow. Static arrows, not animated particles, so the
+  // scene still reads "at rest".
+  .linkDirectionalArrowLength(l => l.kind === "cites" ? 3.6 : 0)
+  .linkDirectionalArrowRelPos(0.9)
+  .linkDirectionalArrowColor(() => "rgba(93,176,255,0.8)")
   .linkDirectionalParticles(0)                          // baseline 0 — no idle "fireworks"
   .nodeVisibility(n => n.year > 0 && n.year <= curYear)
   .linkVisibility(l => endYear(l.source) <= curYear && endYear(l.target) <= curYear
