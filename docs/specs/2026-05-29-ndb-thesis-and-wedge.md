@@ -195,11 +195,33 @@ real-OpenAlex demo is unaffected (small, fast).
 is fetching the citation-backbone slice (`cited_by_count:>50`, ~12.3M works) via the API with
 server-side filter + select-projection + on-wire gzip + 10 parallel year-shards. NOTE: switched from
 the S3 full-snapshot plan to the filtered API — S3 has no server-side filter, so a coherent slice from
-the 639 GB snapshot means downloading all 639 GB; the API downloads only the ~12.6 GB kept. `--from-spool`
-ingest (spool → nDB at bounded RAM) is the next unbuilt piece.
-Build a real (not synthetic) ~10GB OpenAlex langgraph nDB via the S3 snapshot (free, CC0, not the
-rate-limited API). See [next-real-openalex memory]. Then the explorer over real data, served by the
-M1 engine, is the first credible public artifact of the thesis.
+the 639 GB snapshot means downloading all 639 GB; the API downloads only the ~12.6 GB kept.
+
+#### 2 GB RAM cap — architecture made to fit (commit 1050459)
+The app has a hard ~2 GB RAM cap. Three paths were over it; two fixed, one constrained:
+- **Spool downloader** (was 4.3 GB): 10 shard threads each retained a 50k-work `String` buffer
+  (~250 MB, `clear()` kept capacity). Fix: `SPOOL_BATCH_WORKS` 50k→10k + `buf = String::new()` after
+  flush + stop cloning each page. Now **0.5 GB** steady (verified 0.04→0.54 GB). Restart resumes from
+  per-shard checkpoints.
+- **`--from-spool` ingest** (was 4.7 GB, unbounded): the `author_ids` map grew without bound. Fix:
+  ingest the **citation backbone only** (papers + CITES, no authors — the explorer renders
+  papers/clusters/cites, not authors), and store NO id→EntityId map — derive each EntityId
+  deterministically from the work number (`eid_for` = `Uuid::from_u128`), keeping only a
+  `HashSet<u64>` membership set (~16 B/entry → ~200 MB at 12.3M). Engine cache capped 512 MB. Verified
+  on real OpenAlex (353k papers, 2.3M cites): ingest peak ~0.6 GB, full pipeline
+  from-spool→compact(8→1)→serve returns real top-cited (Livak qPCR, Random Forests, GLOBOCAN, graphene)
+  + working semantic kNN; server 0.31 GB.
+- **Compaction at 10 GB — still over cap (constraint, not yet fixed):** `compact_with_floor` builds the
+  whole record set in RAM → needs ~DB-size RAM. Fine for the 0.52 GB test DB; **cannot run on a 10 GB DB
+  under 2 GB.** Mitigation: the M1 **top cache makes compaction unnecessary on the hot path** (default
+  tile is O(cache), built once over however-many sidecars + persisted). So the 2 GB-capped 10 GB serving
+  pipeline is **`--from-spool` → `langgraph-server` (skip `--compact` at scale)**; the one-time top-cache
+  build over many sidecars is slower but bounded. `--compact` is only for DBs that fit RAM. True
+  bounded compaction = external-merge (streaming k-way) — future engine work. kNN at 10 GB stays
+  slow-but-bounded until on-disk HNSW (M1 b) lands.
+
+Then the explorer over real data, served by the M1 engine within 2 GB, is the first credible public
+artifact of the thesis. (Original plan referenced the S3 snapshot; superseded by the filtered API above.)
 
 ### Milestone 3+ — Discover applications
 n-D store is general. OpenAlex viz is application #1. Others to discover (NOT committed): any domain
