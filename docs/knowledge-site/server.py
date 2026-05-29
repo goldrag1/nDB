@@ -356,6 +356,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self._proxy_bench(upstream, pre, method, path)
                 return
 
+        # ── langgraph_ndb: static-file demo (client-side 3D explorer +
+        #    committed CC0 graph.json — no upstream nDB server to proxy) ──
+        if bare == "/langgraph_ndb":
+            self.send_response(301)
+            self.send_header("Location", "/langgraph_ndb/")
+            self.end_headers()
+            return
+        if bare.startswith("/langgraph_ndb/") and method == "GET":
+            self._serve_langgraph(bare[len("/langgraph_ndb/"):])
+            return
+
         # ── demo proxy (match the longest demo prefix) ──
         for demo in DEMOS:
             pre = demo["prefix"]
@@ -680,6 +691,27 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    # ── langgraph_ndb static files (docs/langgraph, sibling of SITE_ROOT) ──
+    def _serve_langgraph(self, rel: str):
+        import mimetypes
+        root = (SITE_ROOT.parent / "langgraph").resolve()
+        rel = rel or "index.html"
+        if rel.endswith("/"):
+            rel += "index.html"
+        target = (root / rel).resolve()
+        if not str(target).startswith(str(root) + os.sep) and target != root:
+            self.send_response(403); self.end_headers(); return
+        if not target.is_file():
+            self.send_response(404); self.end_headers(); return
+        data = target.read_bytes()
+        ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
 
     # ── static + widget injection ───────────────────────────────────
     def _serve_static_with_widget(self):

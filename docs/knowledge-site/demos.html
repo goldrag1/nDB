@@ -32,6 +32,7 @@
   </p>
 
   <div class="figure-row">
+    <figure><a href="/langgraph_ndb/"><img src="/static/images/heroes/hero-langgraph.png" alt="langgraph_ndb screenshot"></a><figcaption>langgraph_ndb · GraphRAG citation graph (3D · time-travel · kNN)</figcaption></figure>
     <figure><a href="/alphafold_ndb/"><img src="/static/images/heroes/hero-alphafold-graph.png" alt="alphafold_ndb screenshot"></a><figcaption>alphafold_ndb · protein structure + hypergraph</figcaption></figure>
     <figure><a href="/exoplanet_ndb/"><img src="/static/images/heroes/hero-exoplanet-trappist.png" alt="exoplanet_ndb screenshot"></a><figcaption>exoplanet_ndb · TRAPPIST-1 system view</figcaption></figure>
     <figure><a href="/seismic_ndb/"><img src="/static/images/heroes/hero-seismic-maule.png" alt="seismic_ndb screenshot"></a><figcaption>seismic_ndb · Maule 2010 aftershock window</figcaption></figure>
@@ -42,6 +43,28 @@
   <h2>Available now</h2>
 
   <div class="card-grid">
+
+    <div class="card">
+      <a href="/demos-langgraph_ndb.html" class="card-title">langgraph_ndb — GraphRAG knowledge graph (the query-side demo)</a>
+      <p>
+        A CC0 OpenAlex citation graph — 200 ML/transformer papers + 972
+        authors, ingested Rust-native straight into nDB. Where the other
+        demos showcase how nDB <em>stores</em> N-ary facts, this one
+        showcases how nDB <em>answers</em>: <strong>recursive</strong>
+        CITES ancestry (the <code>relation+</code> traversal that beats
+        <code>WITH RECURSIVE</code>), <strong>vector kNN</strong> semantic
+        search over abstract embeddings, and <strong>MVCC time-travel</strong>
+        — scrub the year slider and watch the field grow 6 papers (2015)
+        → 200 (2026). Plus N-ary <code>AUTHORED</code> hyperedges. An
+        interactive 3D graph with a semantic-layout toggle (position =
+        meaning).
+      </p>
+      <p style="margin-top: 10px;">
+        <a href="/demos-langgraph_ndb.html" class="btn secondary">Read about it</a>
+        &nbsp;
+        <a href="/langgraph_ndb/" class="btn">Launch live</a>
+      </p>
+    </div>
 
     <div class="card">
       <a href="/demos-alphafold_ndb.html" class="card-title">alphafold_ndb — structural biology browser</a>

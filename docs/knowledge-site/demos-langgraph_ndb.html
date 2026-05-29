@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>langgraph_ndb · Demo · nDB</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">nDB <span class="sub">N-dimensional database</span></div>
+  <nav>
+    <a href="/">Home</a>
+    <a href="/whitepaper.html">Whitepaper</a>
+    <a href="/discussion.html">Discussion</a>
+    <a href="/demos.html" class="active">Demos</a>
+    <a href="/query-language.html">Query</a>
+    <a href="/bench.html">Bench</a>
+    <a href="/repo.html">Repo</a>
+  </nav>
+  <div class="right">v2.3.0 · 488 tests</div>
+</header>
+
+<main class="page">
+
+  <h1>langgraph_ndb</h1>
+  <p class="lede">
+    A GraphRAG-style knowledge graph, browsed in 3D. 200 machine-learning
+    papers and 972 authors from <a href="https://openalex.org" target="_blank" rel="noreferrer">OpenAlex</a>
+    (public-domain, CC0 metadata) ingested Rust-native straight into nDB —
+    no Python scraper, no intermediate file. Where the other demos show how
+    nDB <em>stores</em> awkward facts, this one shows how it <em>answers</em>:
+    recursive citation traversal, semantic vector search, and time-travel,
+    all from one engine, all wired to an interactive 3D graph.
+  </p>
+
+  <h2>The query-side demo</h2>
+  <p>
+    The structural-biology, exoplanet, seismic and ecology demos make one
+    point: a single N-ary hyperedge models facts that relational tables
+    have to shred. That's the <em>storage</em> story. This demo is the
+    <em>query</em> story — the three capabilities a graph + vector + temporal
+    workload needs at once, which normally means three systems:
+  </p>
+
+  <table>
+    <thead><tr><th>You do this…</th><th>…which is this nDB feature</th><th>…that a relational stack handles badly</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Click a paper → trace its citation ancestry</td>
+        <td><strong>Recursive traversal</strong> (<code>relation+</code>, depth-bounded) over an in-RAM adjacency index</td>
+        <td><code>WITH RECURSIVE</code> re-joins the edge table at every hop — the workload nDB beats ~4× on the <a href="/bench.html">bench</a></td>
+      </tr>
+      <tr>
+        <td>Type a phrase → jump to the nearest papers</td>
+        <td><strong>Vector kNN</strong> (<code>vector_search</code>) over abstract embeddings, indexed natively</td>
+        <td>Needs a separate vector DB; keeping it in sync with the graph is its own project</td>
+      </tr>
+      <tr>
+        <td>Drag the year slider → watch the field grow</td>
+        <td><strong>MVCC time-travel</strong> (<code>as&nbsp;of</code> a snapshot) — append-only history is the storage model, not a bolt-on</td>
+        <td>Temporal tables / SCD-2 bookkeeping, or a full audit-log rebuild</td>
+      </tr>
+      <tr>
+        <td>See a paper's authors as one fact</td>
+        <td><strong>N-ary hyperedge</strong> — <code>AUTHORED</code> is one record: <code>[paper, author₁ … authorₙ]</code></td>
+        <td>A junction table; "the authorship" isn't a row you can point at</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    Every dimension you can move on screen is one of those — there's no
+    separate analytics layer. The graph, the embeddings, the citation
+    chains and the per-year history all live in the same nDB instance.
+  </p>
+
+  <img class="screenshot" src="/static/images/heroes/hero-langgraph.png" alt="langgraph_ndb — 3D citation graph with directional CITES arrows over a twinkling field">
+  <p class="caption">Papers coloured by field, sized by citation count; directional arrows run citing → cited. Authors are the small grey nodes binding co-authored papers together.</p>
+
+  <h2>The five dimensions</h2>
+  <ul>
+    <li><strong>x / y / z</strong> — a 3D force layout over the CITES topology.</li>
+    <li><strong>time</strong> — the "as of year" slider. Each paper was ingested in its publication-year transaction, so the slider is a real MVCC snapshot: 6 papers as of 2015, 200 as of 2026.</li>
+    <li><strong>semantic</strong> — the <em>Semantic</em> layout toggle pins every node to a projection of its embedding, so position itself encodes meaning; clusters of related work pull together.</li>
+    <li><strong>colour</strong> — research field. <strong>size</strong> — citation count.</li>
+  </ul>
+
+  <h2>The 30-second tour</h2>
+  <ol>
+    <li><strong>Search</strong> "transformer attention language model" — the box embeds your text with the <em>same</em> function nDB used to index every paper (byte-for-byte), ranks by cosine, and lights up the nearest six. The camera flies to the top hit.</li>
+    <li><strong>Click a paper.</strong> A details panel opens — field, year, citations, the author chips, the references it cites and the papers that cite it, all clickable to hop onward. The graph highlights its citation ancestry to depth 3; everything else fades to a dim twinkle.</li>
+    <li><strong>Drag the year slider</strong> back to 2015 and forward. Nodes and edges appear exactly as the field accreted — time-travel, not a filter on a static dump.</li>
+    <li><strong>Flip the layout to Semantic.</strong> The citation tangle reorganises into meaning-space; papers that share vocabulary and field migrate together.</li>
+  </ol>
+
+  <h2>How it's built</h2>
+  <p>
+    A single Rust binary (<code>tools/langgraph</code>) fetches a connected,
+    top-cited slice of the ML / deep-learning / transformer literature from
+    OpenAlex over HTTP, keeps only the citations internal to the slice, and
+    caches it as CC0 JSON committed to the repo. The default run ingests
+    that cache <em>directly through the embedded engine</em>
+    (<code>begin_write</code> / <code>put_entity</code> /
+    <code>put_hyperedge</code>) — one transaction per publication year, so
+    the time-travel timeline is honest — then exports the viz feed the 3D
+    page reads. No Python, no <code>seed.json</code> round-trip: a demo of a
+    Rust-native database, built in Rust. The explorer itself is one
+    self-contained HTML file (<code>3d-force-graph</code> over WebGL), no
+    build step.
+  </p>
+
+  <div class="cta-row" style="margin-top: 22px;">
+    <a href="/langgraph_ndb/" class="btn">Launch live demo →</a>
+    <a href="/demos.html" class="btn secondary">Other demos</a>
+  </div>
+
+</main>
+
+<footer class="site-foot">
+  <p>nDB is open-source under MIT. <a href="https://github.com/goldrag1/nDB" target="_blank" rel="noreferrer">github.com/goldrag1/nDB</a></p>
+</footer>
+
+</body>
+</html>
