@@ -1372,6 +1372,59 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    // --bench-knn <db>: engine-level A/B of kNN at scale — exact (multi-sidecar
+    // fan-out + MVCC verify) vs the global current-vector snapshot (one mmap'd
+    // file, no fan-out/verify). No top-cache, no HTTP — isolates the kNN paths.
+    // Reports latency (cold+warm), snapshot build time, COMMITTED RAM (RssAnon,
+    // not VmRSS which counts reclaimable mmap), and result-set equality.
+    if args.first().map(String::as_str) == Some("--bench-knn") {
+        let db = args.iter().skip(1).find(|a| !a.starts_with("--")).cloned()
+            .unwrap_or_else(|| ".demo-data/langgraph-ndb".to_string());
+        let rss_anon_mb = || -> u64 {
+            std::fs::read_to_string("/proc/self/status").ok()
+                .and_then(|s| s.lines().find(|l| l.starts_with("RssAnon:"))
+                    .and_then(|l| l.split_whitespace().nth(1)).and_then(|kb| kb.parse::<u64>().ok()))
+                .map_or(0, |kb| kb / 1024)
+        };
+        eprintln!("opening {db} (low-memory)…");
+        let mut engine = Engine::open_with_config(&db, EngineConfig::low_memory(768 * 1024 * 1024))?;
+        register_index_props(&mut engine);
+        engine.rebuild_indexes()?;
+        let pid = PropertyId::new(PROP_EMBED);
+        let q = embed("deep learning neural network");
+        println!("RssAnon after open: {} MB", rss_anon_mb());
+
+        let t = Instant::now();
+        let ex = engine.vector_search(pid, &q, 20, Distance::Cosine);
+        let ex_cold = t.elapsed().as_secs_f64();
+        let t = Instant::now();
+        let _ = engine.vector_search(pid, &q, 20, Distance::Cosine);
+        let ex_warm = t.elapsed().as_secs_f64();
+        println!("EXACT (multi-sidecar+verify): {} hits, cold {ex_cold:.3}s, warm {ex_warm:.3}s, RssAnon {} MB",
+            ex.len(), rss_anon_mb());
+
+        let t = Instant::now();
+        let n = engine.build_vector_snapshot(pid)?;
+        println!("SNAPSHOT build: {n} vectors in {:.1}s, RssAnon {} MB (peak during build)",
+            t.elapsed().as_secs_f64(), rss_anon_mb());
+        let t = Instant::now();
+        let sn = engine.vector_search_snapshot(pid, &q, 20, Distance::Cosine).unwrap_or_default();
+        let sn_cold = t.elapsed().as_secs_f64();
+        let t = Instant::now();
+        let _ = engine.vector_search_snapshot(pid, &q, 20, Distance::Cosine);
+        let sn_warm = t.elapsed().as_secs_f64();
+        println!("SNAPSHOT (.vsnap, no fan-out): {} hits, cold {sn_cold:.3}s, warm {sn_warm:.3}s, RssAnon {} MB",
+            sn.len(), rss_anon_mb());
+
+        let exs: HashSet<_> = ex.iter().map(|(e, _)| *e).collect();
+        let sns: HashSet<_> = sn.iter().map(|(e, _)| *e).collect();
+        println!("RESULT same_set={} overlap={}/{}  |  speedup cold {:.1}x warm {:.1}x",
+            exs == sns, exs.intersection(&sns).count(), exs.union(&sns).count(),
+            if sn_cold > 0.0 { ex_cold / sn_cold } else { 0.0 },
+            if sn_warm > 0.0 { ex_warm / sn_warm } else { 0.0 });
+        return Ok(());
+    }
+
     // --low-memory creates the nDB with on-disk index sidecars so a
     // (possibly large) graph can later be SERVED with bounded RAM
     // (`langgraph-server --low-memory`). The db dir is the first non-flag arg.
