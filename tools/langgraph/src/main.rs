@@ -31,8 +31,9 @@
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation,
          clippy::cast_sign_loss, clippy::too_many_lines)]
 
-use std::collections::{BTreeMap, HashMap};
-use std::io::Write as _;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io::{BufRead as _, Write as _};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -160,46 +161,56 @@ fn fetch_openalex(query: &str, target: usize) -> Result<Vec<Paper>, Box<dyn std:
 
     let mut papers = Vec::new();
     for w in &results {
-        let Some(id) = w["id"].as_str().map(short_id) else { continue };
-        let title = w["display_name"].as_str().unwrap_or("(untitled)").to_string();
-        let year = w["publication_year"].as_i64().unwrap_or(0);
-        let citations = w["cited_by_count"].as_i64().unwrap_or(0);
-        // First concept whose level >= 1 reads as a usable field label.
-        let field = w["concepts"]
-            .as_array()
-            .and_then(|cs| {
-                cs.iter()
-                    .find(|c| c["level"].as_i64().unwrap_or(0) >= 1)
-                    .or_else(|| cs.first())
-            })
-            .and_then(|c| c["display_name"].as_str())
-            .unwrap_or("Unknown")
-            .to_string();
-        let authors: Vec<String> = w["authorships"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|x| x["author"]["display_name"].as_str().map(str::to_string))
-                    .take(MAX_AUTHORS)
-                    .collect()
-            })
-            .unwrap_or_default();
-        let cites: Vec<String> = w["referenced_works"]
-            .as_array()
-            .map(|r| {
-                r.iter()
-                    .filter_map(|x| x.as_str().map(short_id))
-                    .filter(|rid| id_set.contains(rid) && rid != &id)
-                    .collect()
-            })
-            .unwrap_or_default();
-        if year == 0 {
-            continue;
-        }
-        let doi = w["doi"].as_str().unwrap_or("").to_string();
+        let Some((id, title, year, citations, field, doi, authors, cites_all)) = work_fields(w)
+        else { continue };
+        // Keep only references whose target is also in this set (internally-
+        // connected subgraph) and never a self-loop.
+        let cites = cites_all.into_iter().filter(|rid| id_set.contains(rid) && rid != &id).collect();
         papers.push(Paper { id, title, year, citations, field, doi, authors, cites });
     }
     Ok(papers)
+}
+
+/// Decode one OpenAlex `works` JSON object into the graph's fields. The
+/// returned `cites_all` is EVERY referenced short-id (not yet intersected
+/// with any kept set — the caller decides which targets exist). `None` for a
+/// work with no publication year (incomplete record). Shared by the API
+/// fetch path and the `--from-spool` ingest so both parse identically.
+#[allow(clippy::type_complexity)]
+fn work_fields(
+    w: &serde_json::Value,
+) -> Option<(String, String, i64, i64, String, String, Vec<String>, Vec<String>)> {
+    let id = w["id"].as_str().map(short_id)?;
+    let year = w["publication_year"].as_i64().unwrap_or(0);
+    if year == 0 {
+        return None;
+    }
+    let title = w["display_name"].as_str().unwrap_or("(untitled)").to_string();
+    let citations = w["cited_by_count"].as_i64().unwrap_or(0);
+    // First concept whose level >= 1 reads as a usable field label.
+    let field = w["concepts"]
+        .as_array()
+        .and_then(|cs| {
+            cs.iter().find(|c| c["level"].as_i64().unwrap_or(0) >= 1).or_else(|| cs.first())
+        })
+        .and_then(|c| c["display_name"].as_str())
+        .unwrap_or("Unknown")
+        .to_string();
+    let authors: Vec<String> = w["authorships"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x["author"]["display_name"].as_str().map(str::to_string))
+                .take(MAX_AUTHORS)
+                .collect()
+        })
+        .unwrap_or_default();
+    let cites_all: Vec<String> = w["referenced_works"]
+        .as_array()
+        .map(|r| r.iter().filter_map(|x| x.as_str().map(short_id)).collect())
+        .unwrap_or_default();
+    let doi = w["doi"].as_str().unwrap_or("").to_string();
+    Some((id, title, year, citations, field, doi, authors, cites_all))
 }
 
 fn load_cache() -> Option<Vec<Paper>> {
@@ -223,7 +234,12 @@ fn load_cache() -> Option<Vec<Paper>> {
 const OA_SELECT: &str =
     "id,doi,display_name,publication_year,cited_by_count,referenced_works,concepts,authorships";
 const OA_MAIL: &str = "nguyenhoanglong1@gmail.com";
-const SPOOL_BATCH_WORKS: u64 = 50_000; // ~250 pages per part file
+// Works buffered per shard before a part is flushed. Kept small so the 10
+// parallel shard threads stay well under the app's ~2 GB RAM cap: each shard's
+// in-flight buffer is ≤ this × ~5 KB/work (10k → ~50 MB/shard → ~500 MB across
+// 10 shards). Smaller parts also mean more frequent cursor checkpoints (less
+// re-fetch on kill). RAM is bounded by THIS, not by the slice size.
+const SPOOL_BATCH_WORKS: u64 = 10_000;
 
 #[derive(Serialize, Deserialize)]
 struct SpoolState {
@@ -340,11 +356,11 @@ fn spool_fetch(dir: &str, filter: &str, cap: Option<u64>) -> Result<(), Box<dyn 
 
     loop {
         let data = fetch_oa_page(&agent, filter, &cursor)?;
-        let results = data["results"].as_array().cloned().unwrap_or_default();
+        let results = data["results"].as_array().map(Vec::as_slice).unwrap_or(&[]);
         if results.is_empty() {
             st.done = true;
         } else {
-            for w in &results {
+            for w in results {
                 buf.push_str(&serde_json::to_string(w)?);
                 buf.push('\n');
             }
@@ -362,7 +378,7 @@ fn spool_fetch(dir: &str, filter: &str, cap: Option<u64>) -> Result<(), Box<dyn 
             if !buf.is_empty() {
                 write_gz_part(dir, st.part, &buf)?;
                 st.part += 1;
-                buf.clear();
+                buf = String::new(); // drop capacity, not just len → frees the ~50 MB
                 batch_works = 0;
             }
             st.cursor = cursor.clone(); // checkpoint resume point = next batch start
@@ -677,6 +693,185 @@ fn ingest_papers(engine: &mut Engine, papers: &[Paper]) -> Ingested {
         timeline,
         paper_ids,
     }
+}
+
+/// Sorted list of `part_*.jsonl.gz` files under `dir` (recurses into the
+/// per-shard subdirs a `--spool-sharded` run creates). Sorted so a
+/// year-bucketed sharded spool is visited oldest-range-first.
+fn spool_parts(dir: &str) -> std::io::Result<Vec<PathBuf>> {
+    fn collect(d: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+        for e in std::fs::read_dir(d)? {
+            let p = e?.path();
+            if p.is_dir() {
+                collect(&p, out)?;
+            } else if p.extension().is_some_and(|x| x == "gz")
+                && p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("part_"))
+            {
+                out.push(p);
+            }
+        }
+        Ok(())
+    }
+    let mut parts = Vec::new();
+    collect(Path::new(dir), &mut parts)?;
+    parts.sort();
+    Ok(parts)
+}
+
+/// Stream the decoded works of one gzipped JSONL part, calling `f` per work.
+/// `MultiGzDecoder` handles a part written as several concatenated gz members
+/// (the spool flushes one member per part, but this is robust either way).
+fn for_each_work_in_part(
+    path: &Path,
+    mut f: impl FnMut(serde_json::Value),
+) -> std::io::Result<()> {
+    let file = std::fs::File::open(path)?;
+    let dec = flate2::read::MultiGzDecoder::new(std::io::BufReader::new(file));
+    for line in std::io::BufReader::new(dec).lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
+            f(v);
+        }
+    }
+    Ok(())
+}
+
+/// Numeric part of an OpenAlex short id ("W2029397690" → 2029397690). The
+/// numeric id is stable + unique, so we DON'T store an id→EntityId map: the
+/// EntityId is DERIVED from it (`eid_for`). `None` if not a `W<digits>` id.
+fn work_num(short_id: &str) -> Option<u64> {
+    short_id.strip_prefix('W').and_then(|d| d.parse::<u64>().ok())
+}
+
+/// Deterministic EntityId for a work number — collision-free across works
+/// (distinct numbers → distinct u128 → distinct uuid). Lets `--from-spool`
+/// recompute any paper's EntityId on the fly instead of holding a 12.3M-entry
+/// id→EntityId map: the only retained set is a `HashSet<u64>` membership
+/// (~200 MB at full scale) — the difference between fitting the 2 GB cap and not.
+fn eid_for(num: u64) -> EntityId {
+    EntityId::from_uuid(uuid::Uuid::from_u128(u128::from(num)))
+}
+
+/// Two-pass streaming ingest of a `--spool` directory into nDB under the app's
+/// ~2 GB RAM cap. Pass 1 builds a `HashSet<u64>` of kept (year != 0) work
+/// numbers — membership only, ~16 B/entry. Pass 2 streams works, deriving every
+/// EntityId via `eid_for` (no stored map) and wiring EVERY in-slice citation,
+/// flushing the memtable every ~50k records. **Citation backbone only — papers
+/// + CITES, no authors** (the explorer renders papers/clusters/cites, not
+/// authors; the author map was the unbounded RAM term). Run `--compact` after.
+fn ingest_from_spool(
+    engine: &mut Engine,
+    dir: &str,
+) -> Result<Ingested, Box<dyn std::error::Error>> {
+    let parts = spool_parts(dir)?;
+    if parts.is_empty() {
+        return Err(format!("no part_*.jsonl.gz under {dir}").into());
+    }
+    eprintln!("from-spool: {} parts under {dir}", parts.len());
+
+    // Pass 1 — membership set of kept work numbers (bounded ~16 B/entry).
+    let t0 = Instant::now();
+    let mut kept: HashSet<u64> = HashSet::new();
+    let mut scanned = 0u64;
+    for path in &parts {
+        for_each_work_in_part(path, |w| {
+            scanned += 1;
+            if w["publication_year"].as_i64().unwrap_or(0) == 0 {
+                return;
+            }
+            if let Some(n) = w["id"].as_str().and_then(|s| work_num(&short_id(s))) {
+                kept.insert(n);
+            }
+        })?;
+    }
+    eprintln!(
+        "  pass 1/2: {scanned} works scanned, {} kept papers ({:.0}s)",
+        kept.len(), t0.elapsed().as_secs_f64()
+    );
+
+    // Pass 2 — stream entities + CITES, flushing every ~50k records.
+    let (mut n_cites, mut n_papers) = (0usize, 0usize);
+    let mut since_flush = 0usize;
+    let mut last_tx = TxId::new(0);
+    let mut tx = engine.begin_write();
+    let mut commit_and_flush = false;
+    for path in &parts {
+        for_each_work_in_part(path, |w| {
+            let Some((id, title, year, citations, field, doi, _authors, cites_all)) = work_fields(&w)
+            else { return };
+            let Some(num) = work_num(&id) else { return };
+            let pid = eid_for(num);
+            tx.put_entity(EntityRecord {
+                entity_id: pid,
+                type_id: TypeId::new(TYPE_PAPER),
+                tx_id_assert: TxId::new(0),
+                tx_id_supersede: TxId::ACTIVE,
+                properties: vec![
+                    (PropertyId::new(PROP_NAME), Value::String(title.clone())),
+                    (PropertyId::new(PROP_KIND), Value::String("paper".into())),
+                    (PropertyId::new(PROP_YEAR), Value::I64(year)),
+                    (PropertyId::new(PROP_CITATIONS), Value::I64(citations)),
+                    (PropertyId::new(PROP_FIELD), Value::String(field.clone())),
+                    (PropertyId::new(PROP_OAID), Value::String(id.clone())),
+                    (PropertyId::new(PROP_DOI), Value::String(doi.clone())),
+                    (PropertyId::new(PROP_EMBED), Value::Vector(embed(&format!("{title} {field}")))),
+                ],
+            });
+            n_papers += 1;
+            since_flush += 1;
+            // Every EntityId is derivable → wire every in-slice citation.
+            for cited in &cites_all {
+                if let Some(cnum) = work_num(cited)
+                    && cnum != num
+                    && kept.contains(&cnum)
+                {
+                    tx.put_hyperedge(HyperEdgeRecord {
+                        hyperedge_id: HyperedgeId::now_v7(),
+                        type_id: TypeId::new(TYPE_CITES),
+                        tx_id_assert: TxId::new(0),
+                        tx_id_supersede: TxId::ACTIVE,
+                        roles: vec![
+                            (RoleId::new(ROLE_CITING), pid),
+                            (RoleId::new(ROLE_CITED), eid_for(cnum)),
+                        ],
+                        hyperedge_roles: Vec::new(),
+                        properties: vec![],
+                    });
+                    n_cites += 1;
+                    since_flush += 1;
+                }
+            }
+            commit_and_flush = since_flush >= 50_000;
+        })?;
+        // Commit + flush at part boundaries once the window is full (keeps the
+        // memtable bounded; tx can't be committed inside the borrow closure).
+        if commit_and_flush {
+            last_tx = tx.commit()?;
+            engine.flush()?;
+            tx = engine.begin_write();
+            since_flush = 0;
+            commit_and_flush = false;
+            eprintln!("  pass 2/2: {n_papers} papers, {n_cites} cites…");
+        }
+    }
+    last_tx = tx.commit().unwrap_or(last_tx);
+    engine.flush()?;
+    eprintln!(
+        "  pass 2/2: done — {n_papers} papers, {n_cites} cites ({:.0}s total)",
+        t0.elapsed().as_secs_f64()
+    );
+
+    Ok(Ingested {
+        papers: n_papers,
+        authors: 0,
+        cites: n_cites,
+        authored: 0,
+        timeline: vec![(0, last_tx)],
+        paper_ids: HashMap::new(),
+    })
 }
 
 /// Export the whole graph to a viz-ready JSON the static 3D explorer
@@ -1141,6 +1336,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "compacted {db_dir}: {before} → {} SSTable(s) ({} → {} records) in {:.0}s",
             engine.sstable_count(), stats.records_in, stats.records_out, t.elapsed().as_secs_f64()
+        );
+        return Ok(());
+    }
+
+    // --from-spool <spool-dir> [db-dir]: build a low-memory nDB from a
+    // (possibly partial) --spool/--spool-sharded directory. Two-pass
+    // streaming ingest at bounded memtable RAM. The OUTPUT db dir is wiped +
+    // recreated; the SPOOL dir is only read. Run `--compact` after, then
+    // serve with `langgraph-server --low-memory`.
+    if args.first().map(String::as_str) == Some("--from-spool") {
+        let positional: Vec<&String> = args.iter().skip(1).filter(|a| !a.starts_with("--")).collect();
+        let spool_dir = positional.first().map(|s| s.as_str()).unwrap_or(".demo-data/oa-spool");
+        let db_dir = positional.get(1).map(|s| s.as_str()).unwrap_or(".demo-data/langgraph-oa-ndb");
+        if !Path::new(spool_dir).exists() {
+            return Err(format!("spool dir not found: {spool_dir}").into());
+        }
+        eprintln!("from-spool: {spool_dir} → {db_dir} (low-memory)");
+        let _ = std::fs::remove_dir_all(db_dir); // OUTPUT only — never the spool
+        std::fs::create_dir_all(db_dir)?;
+        // 512 MB cache leaves headroom under the ~2 GB app cap for the pass-1
+        // membership set (~200 MB at 12.3M) + the per-flush memtable window.
+        let mut engine =
+            Engine::create_with_config(db_dir, EngineConfig::low_memory(512 * 1024 * 1024))?;
+        register_schema(&mut engine);
+        let ing = ingest_from_spool(&mut engine, spool_dir)?;
+        write_clusters_meta(&engine, db_dir)?;
+        let sz: u64 = std::fs::read_dir(db_dir).map(|rd| rd.flatten()
+            .filter_map(|e| e.metadata().ok().map(|m| m.len())).sum()).unwrap_or(0);
+        println!(
+            "from-spool DONE: {} papers, {} authors, {} cites, {} authored — {:.2} GB → {db_dir}\n\
+             next: langgraph-ingest --compact {db_dir}  then  langgraph-server --low-memory --db {db_dir}",
+            ing.papers, ing.authors, ing.cites, ing.authored, sz as f64 / 1.073_741_824e9
         );
         return Ok(());
     }
