@@ -108,6 +108,13 @@ impl VectorIndex {
         self.registered.contains(&property_id)
     }
 
+    /// True iff any vector property is registered. Lets flush/compaction
+    /// skip building a `.vidx` sidecar when nothing is indexed.
+    #[must_use]
+    pub fn has_registrations(&self) -> bool {
+        !self.registered.is_empty()
+    }
+
     /// Dimension locked into `property_id` (from the first insert), if any.
     #[must_use]
     pub fn dimension(&self, property_id: PropertyId) -> Option<usize> {

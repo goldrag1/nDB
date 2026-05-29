@@ -43,8 +43,12 @@ use crate::encryption::{
 use crate::error::EncodeError;
 use crate::id::{EntityId, HyperedgeId, PropertyId, TX_ACTIVE, TxId, TypeId};
 use crate::index::property_btree::value_to_index_bytes;
+use crate::index::vector::distance as vector_distance;
 use crate::index::property_index_file::{
     PropertyIndexBuilder, PropertyIndexFile, sidecar_path_for as pidx_sidecar_path_for,
+};
+use crate::index::vector_index_file::{
+    VectorIndexBuilder, VectorIndexFile, sidecar_path_for as vidx_sidecar_path_for,
 };
 use crate::index::{
     AdjacencyIndex, Distance, EntityTypeIndex, HyperEdgeTypeIndex, Index, LookupKeyIndex,
@@ -399,6 +403,10 @@ pub struct Engine {
     /// in-RAM `property_btree` mirror, which under mmap mode holds only the
     /// memtable + sidecar-less data.
     property_index_files: HashMap<PathBuf, PropertyIndexFile>,
+    /// mmap'd on-disk vector index sidecars, keyed by SSTable path. Same
+    /// lifecycle + fallback as `property_index_files`. Embeddings are the
+    /// dominant resident-RAM term, so this is the main low-RAM win.
+    vector_index_files: HashMap<PathBuf, VectorIndexFile>,
 }
 
 impl Engine {
@@ -449,6 +457,7 @@ impl Engine {
             retention: HashMap::new(),
             config: EngineConfig::default(),
             property_index_files: HashMap::new(),
+            vector_index_files: HashMap::new(),
         })
     }
 
@@ -586,11 +595,13 @@ impl Engine {
             retention: HashMap::new(),
             config,
             property_index_files: HashMap::new(),
+            vector_index_files: HashMap::new(),
         };
-        // Low-RAM core: open the on-disk property-index sidecars (under
+        // Low-RAM core: open the on-disk index sidecars (under
         // `mmap_indexes`) BEFORE rebuilding RAM indexes, so the rebuild can
-        // skip the property data already served from disk.
+        // skip the data already served from disk.
         engine.load_property_index_sidecars();
+        engine.load_vector_index_sidecars();
         // Indexes are in-memory in v1 — rebuild them from the primary
         // store (SSTables in newest-first order) and the memtable
         // (already populated from WAL replay).
@@ -643,10 +654,12 @@ impl Engine {
         self.retention.clear();
         // SSTables (sstables[0] is newest layer; iterate in declared order).
         for sst in &mut self.sstables {
-            // Under mmap mode, SSTables with a sidecar serve their property
-            // data from disk — don't duplicate it into the RAM B-tree.
+            // Under mmap mode, SSTables with a sidecar serve that index from
+            // disk — don't duplicate it into the RAM mirror.
             let property_on_disk =
                 self.config.mmap_indexes && self.property_index_files.contains_key(sst.path());
+            let vector_on_disk =
+                self.config.mmap_indexes && self.vector_index_files.contains_key(sst.path());
             for item in sst.iter() {
                 let (rec, _) = item?;
                 let tx = match &rec {
@@ -671,7 +684,9 @@ impl Engine {
                 self.adjacency.apply(&rec, tx);
                 self.type_cluster.apply(&rec, tx);
                 self.entity_type_cluster.apply(&rec, tx);
-                self.vector.apply(&rec, tx);
+                if !vector_on_disk {
+                    self.vector.apply(&rec, tx);
+                }
                 if !property_on_disk {
                     self.property_btree.apply(&rec, tx);
                 }
@@ -945,7 +960,39 @@ impl Engine {
         k: usize,
         metric: Distance,
     ) -> Vec<(EntityId, f32)> {
-        self.vector.search(property_id, query, k, metric)
+        if k == 0 {
+            return Vec::new();
+        }
+        if !self.vector_served_from_disk() {
+            return self.vector.search(property_id, query, k, metric);
+        }
+        // Gather top-k candidates from each sidecar + the RAM mirror. A
+        // globally top-k entity (by current embedding) is within top-k of
+        // the sidecar holding its current embedding (subset argument), so
+        // k-per-source is enough.
+        let mut cand: HashSet<EntityId> = HashSet::new();
+        for f in self.vector_index_files.values() {
+            cand.extend(f.search(property_id, query, k, metric).into_iter().map(|(e, _)| e));
+        }
+        cand.extend(
+            self.vector
+                .search(property_id, query, k, metric)
+                .into_iter()
+                .map(|(e, _)| e),
+        );
+        // Verify + re-score with the CURRENT embedding (drops tombstoned /
+        // superseded / missing), then rank.
+        let mut scored: Vec<(f32, EntityId)> = cand
+            .into_iter()
+            .filter_map(|e| {
+                self.current_vector(e, property_id)
+                    .filter(|v| v.len() == query.len())
+                    .map(|v| (vector_distance(query, &v, metric), e))
+            })
+            .collect();
+        scored.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        scored.truncate(k);
+        scored.into_iter().map(|(d, e)| (e, d)).collect()
     }
 
     /// Database directory path.
@@ -996,30 +1043,42 @@ impl Engine {
     /// over-inclusion is safe. Best-effort: a sidecar write failure is
     /// surfaced (callers treat it as an engine error), but a *missing*
     /// sidecar at read time simply falls back to a RAM rebuild.
-    fn write_property_sidecar(&self, reader: &SSTableReader) -> Result<(), EngineError> {
-        if !self.property_btree.has_registrations() {
+    fn write_index_sidecars(&self, reader: &SSTableReader) -> Result<(), EngineError> {
+        let want_property = self.property_btree.has_registrations();
+        let want_vector = self.vector.has_registrations();
+        if !want_property && !want_vector {
             return Ok(());
         }
-        let mut builder = PropertyIndexBuilder::new();
+        let mut pbuilder = PropertyIndexBuilder::new();
+        let mut vbuilder = VectorIndexBuilder::new();
         for item in reader.iter() {
             let (rec, _) = item?;
-            if let Record::Entity(e) = &rec {
-                for (prop, val) in &e.properties {
-                    if self.property_btree.is_registered(e.type_id, *prop)
-                        && let Some(bytes) = value_to_index_bytes(val)
-                    {
-                        builder.observe(e.type_id, *prop, &bytes, e.entity_id);
-                    }
+            let Record::Entity(e) = &rec else { continue };
+            for (prop, val) in &e.properties {
+                if want_property
+                    && self.property_btree.is_registered(e.type_id, *prop)
+                    && let Some(bytes) = value_to_index_bytes(val)
+                {
+                    pbuilder.observe(e.type_id, *prop, &bytes, e.entity_id);
+                }
+                if want_vector
+                    && self.vector.is_registered(*prop)
+                    && let Value::Vector(v) = val
+                {
+                    vbuilder.observe(*prop, e.entity_id, v);
                 }
             }
         }
-        if builder.is_empty() {
-            return Ok(());
+        if want_property && !pbuilder.is_empty() {
+            pbuilder
+                .finish(&pidx_sidecar_path_for(reader.path()))
+                .map_err(|e| std::io::Error::other(format!("property index sidecar: {e}")))?;
         }
-        let path = pidx_sidecar_path_for(reader.path());
-        builder
-            .finish(&path)
-            .map_err(|e| std::io::Error::other(format!("property index sidecar: {e}")))?;
+        if want_vector && !vbuilder.is_empty() {
+            vbuilder
+                .finish(&vidx_sidecar_path_for(reader.path()))
+                .map_err(|e| std::io::Error::other(format!("vector index sidecar: {e}")))?;
+        }
         Ok(())
     }
 
@@ -1054,6 +1113,78 @@ impl Engine {
     /// rather than purely from the in-RAM property B-tree.
     fn property_served_from_disk(&self) -> bool {
         self.config.mmap_indexes && !self.property_index_files.is_empty()
+    }
+
+    /// Open each SSTable's `.vidx` sidecar into `vector_index_files`. Only
+    /// under `config.mmap_indexes`; missing/corrupt → RAM-mirror fallback.
+    fn load_vector_index_sidecars(&mut self) {
+        self.vector_index_files.clear();
+        if !self.config.mmap_indexes {
+            return;
+        }
+        for sst in &self.sstables {
+            let vidx = vidx_sidecar_path_for(sst.path());
+            match VectorIndexFile::open(&vidx) {
+                Ok(Some(f)) => {
+                    self.vector_index_files.insert(sst.path().to_path_buf(), f);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!(
+                        "ndb-engine: vector-index sidecar {} unreadable ({e}); \
+                         falling back to RAM mirror",
+                        vidx.display()
+                    );
+                }
+            }
+        }
+    }
+
+    /// Whether vector search should gather from on-disk sidecars +
+    /// verification rather than purely from the in-RAM vector index.
+    fn vector_served_from_disk(&self) -> bool {
+        self.config.mmap_indexes && !self.vector_index_files.is_empty()
+    }
+
+    /// Resolve an entity's *current* embedding for `property_id` at the
+    /// latest snapshot, or `None` if deleted / lacking the property. The
+    /// MVCC verification step behind on-disk vector search.
+    fn current_vector(&self, entity: EntityId, property_id: PropertyId) -> Option<Vec<f32>> {
+        let snap = TxId::new(self.db.manifest().last_tx_id);
+        match self.snapshot_read(&entity.into_uuid(), snap) {
+            Ok(Resolved::Live(Record::Entity(e))) => {
+                e.properties.iter().find(|(p, _)| *p == property_id).and_then(
+                    |(_, v)| {
+                        if let Value::Vector(vec) = v {
+                            Some(vec.clone())
+                        } else {
+                            None
+                        }
+                    },
+                )
+            }
+            _ => None,
+        }
+    }
+
+    /// Rebuild the in-RAM vector index to mirror only data WITHOUT a `.vidx`
+    /// sidecar (sidecar-less SSTables + the memtable). Called after a flush
+    /// under `mmap_indexes` so just-flushed embeddings leave RAM.
+    fn refresh_vector_ram_mirror(&mut self) -> Result<(), EngineError> {
+        self.vector.clear();
+        for sst in &mut self.sstables {
+            if self.vector_index_files.contains_key(sst.path()) {
+                continue;
+            }
+            for item in sst.iter() {
+                let (rec, _) = item?;
+                self.vector.apply(&rec, record_index_tx(&rec));
+            }
+        }
+        for (_k, rec) in self.memtable.iter() {
+            self.vector.apply(rec, record_index_tx(rec));
+        }
+        Ok(())
     }
 
     /// Resolve an entity's *current* order-preserving value bytes for
@@ -1392,18 +1523,22 @@ impl Engine {
 
         // Step 5: open the new SSTable reader and prepend it.
         let reader = SSTableReader::open_with_cipher(&sst_path, self.cipher.clone())?;
-        // Property-index sidecar (low-RAM core): built from the freshly
-        // written SSTable's contents. Read path uses it only under
-        // `config.mmap_indexes`; default mode ignores it.
-        self.write_property_sidecar(&reader)?;
+        // Index sidecars (low-RAM core): built from the freshly written
+        // SSTable's contents. Read path uses them only under
+        // `config.mmap_indexes`; default mode ignores them.
+        self.write_index_sidecars(&reader)?;
         self.sstables.insert(0, reader);
-        // Under mmap mode: register the new sidecar and drop the just-
-        // flushed entries from the RAM property mirror (bounded footprint).
+        // Under mmap mode: register the new sidecars and drop the just-
+        // flushed entries from the RAM mirrors (bounded footprint).
         if self.config.mmap_indexes {
             if let Ok(Some(f)) = PropertyIndexFile::open(&pidx_sidecar_path_for(&sst_path)) {
                 self.property_index_files.insert(sst_path.clone(), f);
             }
+            if let Ok(Some(f)) = VectorIndexFile::open(&vidx_sidecar_path_for(&sst_path)) {
+                self.vector_index_files.insert(sst_path.clone(), f);
+            }
             self.refresh_property_ram_mirror()?;
+            self.refresh_vector_ram_mirror()?;
         }
 
         // Replace WAL.
@@ -1592,8 +1727,8 @@ impl Engine {
 
         // Step 6: re-open SSTable readers from the (now single) new entry.
         let reader = SSTableReader::open_with_cipher(&new_path, self.cipher.clone())?;
-        // Property-index sidecar for the compacted SSTable (low-RAM core).
-        self.write_property_sidecar(&reader)?;
+        // Index sidecars for the compacted SSTable (low-RAM core).
+        self.write_index_sidecars(&reader)?;
         self.sstables.clear();
         self.sstables.push(reader);
 
@@ -1605,12 +1740,14 @@ impl Engine {
             let _ = std::fs::remove_file(&p);
             let _ = std::fs::remove_file(crate::block_index::sidecar_path_for(&p));
             let _ = std::fs::remove_file(pidx_sidecar_path_for(&p));
+            let _ = std::fs::remove_file(vidx_sidecar_path_for(&p));
         }
 
         // Reload sidecars for the (now single) compacted SSTable before the
-        // rebuild, so rebuild_indexes skips its property data (served from
-        // disk) and the RAM mirror ends up holding only the memtable.
+        // rebuild, so rebuild_indexes skips data served from disk and the
+        // RAM mirrors end up holding only the memtable.
         self.load_property_index_sidecars();
+        self.load_vector_index_sidecars();
         // Rebuild indexes since we dropped tombstoned records.
         self.rebuild_indexes()?;
 
@@ -2710,6 +2847,141 @@ mod tests {
         let lm = reopen_registered(&dir, ty, prop, EngineConfig::low_memory(64 * 1024 * 1024));
         assert_eq!(lm.property_top_k(ty, prop, 1), vec![top]);
         assert_eq!(lm.property_lookup(ty, prop, &Value::I64(5000)), vec![top]);
+        lm.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // --- Phase 2: vector index served from disk (low-RAM mode) ----------
+
+    fn put_vec(engine: &mut Engine, eid: EntityId, prop: PropertyId, v: Vec<f32>) {
+        let mut txn = engine.begin_write();
+        txn.put_entity(EntityRecord {
+            entity_id: eid,
+            type_id: TypeId::new(1),
+            tx_id_assert: TxId::new(0),
+            tx_id_supersede: TxId::ACTIVE,
+            properties: vec![(prop, Value::Vector(v))],
+        });
+        txn.commit().unwrap();
+    }
+
+    fn reopen_vec(dir: &PathBuf, prop: PropertyId, cfg: EngineConfig) -> Engine {
+        let mut e = Engine::open_with_config(dir, cfg).unwrap();
+        e.register_vector_property(prop);
+        e.rebuild_indexes().unwrap();
+        e
+    }
+
+    #[test]
+    fn low_memory_vector_search_matches_default() {
+        let dir = temp_dir("lm_vec_match");
+        let prop = PropertyId::new(3);
+        let mut ids = Vec::new();
+        {
+            let mut e = Engine::create(&dir).unwrap();
+            e.register_vector_property(prop);
+            for i in 0..8u32 {
+                let id = EntityId::now_v7();
+                ids.push(id);
+                put_vec(&mut e, id, prop, vec![f64::from(i) as f32, 0.0, 1.0]);
+                e.flush().unwrap(); // one SSTable + .vidx per row
+            }
+            e.close().unwrap();
+        }
+        let q = [3.2f32, 0.0, 1.0];
+        let d_ids = {
+            let e = reopen_vec(&dir, prop, EngineConfig::default());
+            let r: Vec<EntityId> = e
+                .vector_search(prop, &q, 3, Distance::L2Squared)
+                .into_iter()
+                .map(|(x, _)| x)
+                .collect();
+            e.close().unwrap();
+            r
+        };
+        let lm = reopen_vec(&dir, prop, EngineConfig::low_memory(64 * 1024 * 1024));
+        assert!(lm.config().mmap_indexes);
+        let l_ids: Vec<EntityId> = lm
+            .vector_search(prop, &q, 3, Distance::L2Squared)
+            .into_iter()
+            .map(|(x, _)| x)
+            .collect();
+        assert_eq!(d_ids, l_ids);
+        assert_eq!(l_ids[0], ids[3]); // 3.0 is closest to 3.2
+        lm.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn low_memory_vector_mvcc_update_and_tombstone() {
+        let dir = temp_dir("lm_vec_mvcc");
+        let prop = PropertyId::new(3);
+        let moved = EntityId::now_v7();
+        let deleted = EntityId::now_v7();
+        let stable = EntityId::now_v7();
+        {
+            let mut e = Engine::create(&dir).unwrap();
+            e.register_vector_property(prop);
+            put_vec(&mut e, moved, prop, vec![9.0, 9.0]); // initially far
+            put_vec(&mut e, deleted, prop, vec![0.0, 0.0]); // initially nearest
+            put_vec(&mut e, stable, prop, vec![1.0, 1.0]);
+            e.flush().unwrap();
+            // Move `moved` next to the query; tombstone `deleted`; flush.
+            put_vec(&mut e, moved, prop, vec![0.05, 0.0]);
+            let mut txn = e.begin_write();
+            txn.delete(deleted.into_uuid());
+            txn.commit().unwrap();
+            e.flush().unwrap();
+            e.close().unwrap();
+        }
+        let lm = reopen_vec(&dir, prop, EngineConfig::low_memory(64 * 1024 * 1024));
+        let q = [0.0f32, 0.0];
+        let ids: Vec<EntityId> = lm
+            .vector_search(prop, &q, 5, Distance::L2Squared)
+            .into_iter()
+            .map(|(x, _)| x)
+            .collect();
+        assert!(!ids.contains(&deleted), "tombstoned entity must be excluded");
+        assert_eq!(ids[0], moved, "updated embedding should now rank first");
+        assert!(ids.contains(&stable));
+        lm.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn low_memory_vector_ram_bounded_after_flushes() {
+        let dir = temp_dir("lm_vec_bounded");
+        let prop = PropertyId::new(3);
+        {
+            let mut e = Engine::create(&dir).unwrap();
+            e.register_vector_property(prop);
+            for i in 0..2000u32 {
+                put_vec(
+                    &mut e,
+                    EntityId::now_v7(),
+                    prop,
+                    vec![f64::from(i) as f32, f64::from(i % 13) as f32, 1.0],
+                );
+                if i % 200 == 199 {
+                    e.flush().unwrap();
+                }
+            }
+            e.flush().unwrap();
+            e.close().unwrap();
+        }
+        let dvec = {
+            let e = reopen_vec(&dir, prop, EngineConfig::default());
+            let r = e.index_memory_stats().vector;
+            e.close().unwrap();
+            r
+        };
+        let lm = reopen_vec(&dir, prop, EngineConfig::low_memory(64 * 1024 * 1024));
+        let lvec = lm.index_memory_stats().vector;
+        assert!(dvec > 50_000, "default holds all embeddings, got {dvec}");
+        assert!(
+            lvec * 4 < dvec,
+            "low-memory vector RAM should be far smaller: lm={lvec} def={dvec}"
+        );
         lm.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }

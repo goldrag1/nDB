@@ -156,9 +156,11 @@ verified end-to-end.
      of sidecar-backed property data, gather candidates from sidecars +
      the memtable mirror, MVCC-verify against the latest snapshot. The RAM
      property mirror holds only memtable + sidecar-less data.
-2. ⏳ Remaining indexes on disk, in RAM-payoff order: **vector first**
-   (embeddings dominate resident RAM — the 10 GB win hinges on this),
-   then entity_type_cluster, type_cluster, adjacency, lookup_key.
+2. **Vector index on disk** (`.vidx`) — ✅ DONE (the brute-force k-NN is
+   exact, so mmap is lossless). 2a format (11 TDD tests), 2b/2c write at
+   flush/compaction + gather-from-sidecars + MVCC re-score by current
+   embedding. Remaining ⏳: entity_type_cluster, type_cluster, adjacency,
+   lookup_key (entity/hyperedge-id-list sidecars, same shape).
 3. ⏳ Bounded block cache enforcing `max_cache_bytes` (hard cap).
 
 Then: wire `langgraph-server` to `open_with_config(low_memory(..))`, build a
@@ -177,3 +179,15 @@ mirror (≈0 in steady state) under `low_memory`, served instead from mmap'd
 `.pidx` files — while find/range/top_k return identical results to the
 default in-RAM path (verified by `low_memory_query_matches_default` +
 MVCC update/tombstone tests).
+
+### Phase 2 measured result (same example, 100k entities)
+
+```
+default   indexes 77.1 MB [lk 5.3 adj 31.3 tc 14.9 etc 14.9 vec 5.3 pbt 5.3]
+lowmemory indexes 66.4 MB [lk 5.3 adj 31.3 tc 14.9 etc 14.9 vec 0.0 pbt 0.0]
+```
+
+Both `pbt` and `vec` now served from disk. The example uses 16-d
+embeddings (so `vec` is modest here); at real embedding sizes the vector
+index dominates resident RAM, making this the decisive 10 GB lever.
+Remaining in-RAM: `adj`/`tc`/`etc`/`lk` — the next Phase 2 sidecars.

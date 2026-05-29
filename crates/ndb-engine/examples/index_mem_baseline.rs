@@ -136,6 +136,7 @@ fn build_and_measure(n: usize) {
         let mut engine =
             Engine::open_with_config(&dir, EngineConfig::low_memory(2 * 1024 * 1024 * 1024)).unwrap();
         engine.register_property_btree(TypeId::new(TYPE_PAPER), PropertyId::new(PROP_CITES));
+        engine.register_vector_property(PropertyId::new(PROP_EMBED));
         engine.rebuild_indexes().unwrap();
         let s = engine.index_memory_stats();
         println!(
