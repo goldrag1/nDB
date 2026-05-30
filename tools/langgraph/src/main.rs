@@ -524,7 +524,7 @@ fn spool_sharded(
         handles.push(std::thread::spawn(move || {
             // Stagger starts so 10 shards don't fire their first request in
             // the same instant (avoids the startup burst that trips the 429).
-            std::thread::sleep(Duration::from_millis(400 * i as u64));
+            std::thread::sleep(Duration::from_millis(3000 * i as u64));
             let shard_dir = format!("{dir}/shard_{lo:04}_{hi:04}");
             let filter = format!("{bf},publication_year:{lo}-{hi}");
             if let Err(e) = spool_fetch(&shard_dir, &filter, None) {
