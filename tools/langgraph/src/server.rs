@@ -423,7 +423,7 @@ impl Index {
     /// regardless of degree.
     fn cites_out(&self, eid: EntityId) -> Vec<EntityId> {
         let mut out = Vec::new();
-        for hid in self.engine.hyperedges_for_entity(eid).into_iter().take(MAX_INCIDENT_SCAN) {
+        for hid in self.engine.hyperedges_for_entity_capped(eid, MAX_INCIDENT_SCAN) {
             if let Ok(ndb_engine::Resolved::Live(Record::HyperEdge(h))) =
                 self.engine.snapshot_read(&hid.into_uuid(), TxId::ACTIVE)
                 && h.type_id == TypeId::new(TYPE_CITES)

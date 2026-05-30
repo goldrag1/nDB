@@ -974,6 +974,59 @@ impl Engine {
         out
     }
 
+    /// Bounded variant of [`hyperedges_for_entity`]: stop after verifying at
+    /// most `cap` live incident hyperedges. On a power-law hub (degree ~10^5)
+    /// the unbounded method does ~10^5 point reads (`current_hyperedge` per
+    /// candidate) — seconds per node. A viz tile only needs a sparse sample,
+    /// so this caps both the candidate gather AND the per-candidate verify at
+    /// `cap`, bounding disk reads regardless of degree. Order is arbitrary
+    /// (whatever the sidecars yield first); fine for sampling, not for a
+    /// complete neighbourhood.
+    #[must_use]
+    pub fn hyperedges_for_entity_capped(&self, entity: EntityId, cap: usize) -> Vec<HyperedgeId> {
+        if cap == 0 {
+            return Vec::new();
+        }
+        if !self.adjacency_served_from_disk() {
+            let mut v = self.adjacency.neighbors_vec(entity);
+            v.truncate(cap);
+            return v;
+        }
+        // Gather candidates, but stop early once we have plenty to verify
+        // down to `cap` (gather a small multiple to tolerate dead/superseded
+        // edges without re-scanning).
+        let gather_cap = cap.saturating_mul(4).max(cap);
+        let mut cand: Vec<HyperedgeId> = Vec::new();
+        'gather: for f in self.adjacency_files.values() {
+            for h in f.find(entity.as_bytes()) {
+                cand.push(HyperedgeId::from_bytes(h));
+                if cand.len() >= gather_cap {
+                    break 'gather;
+                }
+            }
+        }
+        for h in self.adjacency.neighbors_vec(entity) {
+            if cand.len() >= gather_cap {
+                break;
+            }
+            cand.push(h);
+        }
+        // Verify (live AND still references entity), stopping at `cap`.
+        let mut out: Vec<HyperedgeId> = Vec::with_capacity(cap);
+        for h in cand {
+            if self
+                .current_hyperedge(h)
+                .is_some_and(|hr| hr.roles.iter().any(|(_, e)| *e == entity))
+            {
+                out.push(h);
+                if out.len() >= cap {
+                    break;
+                }
+            }
+        }
+        out
+    }
+
     /// All hyperedges of the given type.
     #[must_use]
     pub fn hyperedges_by_type(&self, type_id: TypeId) -> Vec<HyperedgeId> {
