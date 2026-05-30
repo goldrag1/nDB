@@ -103,13 +103,35 @@
     const geom = new THREE.BufferGeometry();
     geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+
+    // Round, soft point sprite. PointsMaterial draws SQUARE points by default
+    // (that's the "rectangles" — they were the cloud, vs the force-graph's
+    // round spheres). A radial-alpha texture turns each point into a soft disc
+    // so the whole field reads as a uniform star cloud.
+    const sprite = (() => {
+      const s = 64, cv = document.createElement("canvas");
+      cv.width = cv.height = s;
+      const g = cv.getContext("2d").createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+      g.addColorStop(0, "rgba(255,255,255,1)");
+      g.addColorStop(0.4, "rgba(255,255,255,0.85)");
+      g.addColorStop(1, "rgba(255,255,255,0)");
+      const ctx = cv.getContext("2d");
+      ctx.fillStyle = g; ctx.fillRect(0, 0, s, s);
+      const tex = new THREE.CanvasTexture(cv);
+      tex.needsUpdate = true;
+      return tex;
+    })();
+
     const mat = new THREE.PointsMaterial({
-      size: 2.0,
+      size: 2.6,
       sizeAttenuation: true,
       vertexColors: true,
       transparent: true,
-      opacity: 0.5,
+      opacity: 0.55,
       depthWrite: false,
+      map: sprite,
+      alphaMap: sprite,
+      alphaTest: 0.04,
     });
     const points = new THREE.Points(geom, mat);
     points.name = "ndb-paper-cloud";
