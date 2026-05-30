@@ -196,6 +196,7 @@ const MAX_INFLIGHT = 4;
 const tileCooldown = new Map();   // key → earliest retry time (backoff after failure)
 const TILE_TIMEOUT_MS = 8000;
 let twinkleSkip = 1;              // twinkle every Nth frame (raised on weak devices)
+let firstPaperFit = false;       // LIVE: frame the camera on papers once they first arrive
 let highlight = new Set();     // ids to emphasise (search / recursion); empty = all
 let curYear = 9999;
 let mode = "cite";
@@ -561,6 +562,17 @@ function mergeTile(tile) {
     nodeById.set(n.id, n);
     if (n.kind === "author") authorIdByName.set(n.label, n.id);
     gd.nodes.push(n);
+  }
+  // First time real papers arrive in LIVE mode, the camera is still parked
+  // on the far cluster ring (LOD threshold maxed → papers hidden). Frame the
+  // papers and recalibrate LOD once, so the explorer opens in the paper tier
+  // (clusters reappear when you zoom out). One-shot.
+  if (LIVE && !firstPaperFit && tile.nodes.some(n => n.kind === "paper")) {
+    firstPaperFit = true;
+    setTimeout(() => {
+      try { Graph.zoomToFit(700, 60, n => n.kind === "paper"); } catch (e) {}
+      setTimeout(() => { lodBaseDist = 0; updateLOD(); }, 760);
+    }, 120);
   }
   for (const l of (tile.links || [])) {
     if (gd.links.length >= RENDER_LINK_CAP) break;   // hard link cap — never overfeed the renderer
