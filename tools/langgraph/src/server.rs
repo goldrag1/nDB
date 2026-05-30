@@ -222,24 +222,47 @@ fn load_or_build_top(engine: &Engine, db: &str, top_fields: &HashSet<String>) ->
         }
     }
 
-    // Build: one citation top-k, then read field/year per hit (bounded —
-    // CACHE_TOP_N snapshot reads, regardless of total graph size).
-    eprintln!("top.json missing — pre-ranking top {CACHE_TOP_N} cited (one-time; run --compact first to make this fast)…");
+    // Build via ONE streaming scan + a bounded min-heap of the top
+    // CACHE_TOP_N by citations — O(N) single pass, no per-SSTable fan-out and
+    // no per-candidate MVCC verify. property_top_k fans out over every sidecar
+    // (k candidates each, each then verified with a random read): >16 min and
+    // never finished at 204 sidecars (6.17M-paper real DB). The stream yields
+    // current entities, so the heap is authoritative without verification.
+    eprintln!("top.json missing — pre-ranking top {CACHE_TOP_N} cited via streaming scan (one-time)…");
     let t = std::time::Instant::now();
-    let hits = engine.property_top_k(TypeId::new(TYPE_PAPER), PropertyId::new(PROP_CITATIONS), CACHE_TOP_N);
-    let mut top = Vec::with_capacity(hits.len());
-    for eid in hits {
+    let paper_t = TypeId::new(TYPE_PAPER);
+    // Reverse → smallest of the current top-K sits on top, ready to evict.
+    let mut heap: std::collections::BinaryHeap<std::cmp::Reverse<(i64, uuid::Uuid)>> =
+        std::collections::BinaryHeap::with_capacity(CACHE_TOP_N + 1);
+    for item in engine.snapshot_iter_streaming(TxId::ACTIVE) {
+        let Ok(Record::Entity(en)) = item else { continue };
+        if en.type_id != paper_t {
+            continue;
+        }
+        let cit = i64_prop(&en.properties, PROP_CITATIONS);
+        if heap.len() < CACHE_TOP_N {
+            heap.push(std::cmp::Reverse((cit, en.entity_id.into_uuid())));
+        } else if heap.peek().is_some_and(|std::cmp::Reverse((m, _))| cit > *m) {
+            heap.pop();
+            heap.push(std::cmp::Reverse((cit, en.entity_id.into_uuid())));
+        }
+    }
+    // Resolve field/year for just the surviving top-K (bounded re-reads).
+    let mut top = Vec::with_capacity(heap.len());
+    for std::cmp::Reverse((cit, u)) in heap {
         if let Ok(ndb_engine::Resolved::Live(Record::Entity(en))) =
-            engine.snapshot_read(&eid.into_uuid(), TxId::ACTIVE)
+            engine.snapshot_read(&u, TxId::ACTIVE)
         {
             top.push(TopEntry {
-                eid,
+                eid: EntityId::from_uuid(u),
                 field: coarse(&str_prop(&en.properties, PROP_FIELD)),
                 year: i64_prop(&en.properties, PROP_YEAR),
-                citations: i64_prop(&en.properties, PROP_CITATIONS),
+                citations: cit,
             });
         }
     }
+    // Heap order isn't sorted — sort citations desc for the served slice.
+    top.sort_by(|a, b| b.citations.cmp(&a.citations).then(a.eid.into_uuid().cmp(&b.eid.into_uuid())));
 
     // Persist atomically (temp + rename) so a kill mid-write never leaves a
     // half-file that load reads as authoritative.
