@@ -61,11 +61,15 @@ const CACHE_TOP_N: usize = 20_000;
 /// only needs a sparse sample, and normal papers stay under this. See
 /// `cites_out`.
 const MAX_INCIDENT_SCAN: usize = 256;
-/// Max nodes per tile whose internal citation links are computed (each costs a
-/// MAX_INCIDENT_SCAN adjacency walk across all SSTables). Caps a top-cited tile
-/// — all power-law hubs — at O(const) link cost regardless of `limit`; the viz
-/// only needs a sparse internal-link sample. See `tile_cached`.
-const TILE_LINK_NODES: usize = 50;
+/// Nodes per tile whose internal citation links are precomputed. Each link
+/// needs a `cites_out` = MAX_INCIDENT_SCAN-edge adjacency walk across all 204
+/// SSTables; for TOP-CITED hub papers that's ~1s EACH (measured: limit=5 →
+/// 5.4s). Set to 0: the top/cluster tiles render nodes only (a fast, dense
+/// galaxy), and citation links are materialised on demand — clicking a paper
+/// runs `/view/neighbors` (normal-degree, cheap). Top-cited papers span
+/// different fields and rarely cite each other, so the omitted links were
+/// near-empty eye-candy anyway. See `tile_cached`.
+const TILE_LINK_NODES: usize = 0;
 const RING: f64 = 850.0;
 const SPREAD: f64 = 320.0;
 const ZSCALE: f64 = 16.0;
