@@ -890,7 +890,7 @@ fn ingest_from_spool(
                     since_flush += 1;
                 }
             }
-            commit_and_flush = since_flush >= 50_000;
+            commit_and_flush = since_flush >= 1_000_000;
         })?;
         // Commit + flush at part boundaries once the window is full (keeps the
         // memtable bounded; tx can't be committed inside the borrow closure).
