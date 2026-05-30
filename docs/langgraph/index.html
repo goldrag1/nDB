@@ -571,7 +571,20 @@ function mergeTile(tile) {
     firstPaperFit = true;
     setTimeout(() => {
       try { Graph.zoomToFit(700, 60, n => n.kind === "paper"); } catch (e) {}
-      setTimeout(() => { lodBaseDist = 0; updateLOD(); }, 760);
+      // After the fly settles, calibrate the LOD baseline so that THIS
+      // paper-fitted distance maps to threshold ≈ 0 (all papers visible) —
+      // updateLOD's formula gives 0 when dist <= 0.42*lodBaseDist, so set the
+      // baseline to dist/0.42. Zooming OUT toward the cluster ring then raises
+      // the threshold and the field galaxies take over, as designed. (The
+      // default calibration set the baseline to the far cluster-ring distance,
+      // pinning the opening threshold at ~0.45 — right where the papers' imp
+      // sits — so the paper tier never appeared on first paint.)
+      setTimeout(() => {
+        const cp = Graph.cameraPosition();
+        const dist = Math.hypot(cp.x || 0, cp.y || 0, cp.z || 0) || 1;
+        lodBaseDist = dist / 0.42;
+        updateLOD();
+      }, 760);
     }, 120);
   }
   for (const l of (tile.links || [])) {
@@ -650,6 +663,11 @@ function setup(data, isLive) {
       Graph.cooldownTicks(0);                          // positions are server-authoritative
       const lrow = $("layCite").closest(".row"); if (lrow) lrow.style.display = "none";
     }
+    // LIVE: load the first paper tile NOW (don't wait for a zoom — the initial
+    // camera sits in the far cluster tier, so liveZoomFetch would never fire it,
+    // leaving the scene as 19 lonely cluster dots). mergeTile's one-shot fit
+    // then frames the papers + recalibrates LOD into the paper tier.
+    if (isLive) setTimeout(() => fetchTile("view/top?limit=600", "top600"), 200);
     Graph.graphData(data);
     updateCounts();
     if (isLive) { updateLiveCounts(); }
