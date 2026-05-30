@@ -295,7 +295,7 @@ impl ureq::Resolver for V4Only {
 fn build_agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(15))
-        .timeout_read(Duration::from_secs(45)) // a stalled read now errors → retry, never wedges
+        .timeout_read(Duration::from_secs(120)) // congested VN→CF link: large pages need >45s to finish
         .timeout_write(Duration::from_secs(30))
         .resolver(V4Only)
         .build()
@@ -394,7 +394,12 @@ fn spool_fetch(dir: &str, filter: &str, cap: Option<u64>) -> Result<(), Box<dyn 
             let rate = st.works as f64 / t0.elapsed().as_secs_f64().max(1e-6);
             eprintln!("  {} works ({} pages, {rate:.0}/s this run, part {})", st.works, st.pages, st.part);
         }
-        std::thread::sleep(Duration::from_millis(120)); // ~8 req/s, under 10/s polite cap
+        // Per-shard inter-page delay. This is PER SHARD — with N parallel
+        // shards the aggregate is N×(this rate). At 1000ms + ~1.2s RTT each
+        // shard does ~0.45 req/s → ~4.5 req/s across 10 shards, comfortably
+        // under OpenAlex's 10/s polite cap (the old 120ms × 10 shards = ~80
+        // req/s burst is what tripped the 429 storm).
+        std::thread::sleep(Duration::from_millis(1000));
     }
     println!("spool DONE: {} works across {} parts → {dir}", st.works, st.part);
     Ok(())
