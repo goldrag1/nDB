@@ -107,6 +107,7 @@ struct Index {
     top_fields: HashSet<String>,           // named (non-Other) fields → coarsening
     top: Vec<TopEntry>,                    // pre-ranked top-cited cache (desc)
     top_links: Vec<(EntityId, EntityId)>,  // precomputed CITES among top papers
+    cloud_path: String,                    // path to cloud.bin (all-papers point cloud)
     max_cit: f64,
     mid_year: f64,
     total_papers: usize,
@@ -352,6 +353,86 @@ fn load_or_build_top_links(
     links
 }
 
+/// Build the all-papers point-cloud file `cloud.bin` (one-time, cached): a
+/// compact binary of EVERY paper's deterministic position + field + size, for
+/// the explorer's GPU `THREE.Points` backdrop (the 3d-force-graph interactive
+/// layer maxes out at a few thousand meshes; the cloud renders all ~6M points
+/// in one draw call). Layout matches `Index::pos` exactly so cloud + force
+/// nodes coincide. Streaming write — bounded RAM regardless of graph size.
+///
+/// Format (little-endian): header [magic "NDCLOUD1" (8) | u32 count | u32 0],
+/// then count × record [f32 x | f32 y | f32 z | u16 field_idx | u16 size_q],
+/// 16 bytes/record. `field_idx` indexes the clusters array (explorer maps it to
+/// the same field color); `size_q` = importance·65535.
+fn build_cloud_file(
+    engine: &Engine,
+    db: &str,
+    clusters: &[(String, usize)],
+    cluster_pos: &HashMap<String, (f64, f64)>,
+    top_fields: &HashSet<String>,
+    max_cit: f64,
+    mid_year: f64,
+) {
+    let path = format!("{db}/cloud.bin");
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 16) {
+        eprintln!("cloud: cloud.bin present ({} MB)", std::fs::metadata(&path).map(|m| m.len() >> 20).unwrap_or(0));
+        return;
+    }
+    eprintln!("cloud: building cloud.bin (all papers, one-time)…");
+    let t0 = std::time::Instant::now();
+    let field_idx: HashMap<&str, u16> = clusters.iter().enumerate()
+        .map(|(i, (f, _))| (f.as_str(), i as u16)).collect();
+    let other_idx = *field_idx.get("Other").unwrap_or(&0);
+    let ln_max = (max_cit + 1.0).ln().max(1e-9);
+    let tmp = format!("{path}.tmp");
+    let Ok(f) = std::fs::File::create(&tmp) else { eprintln!("cloud: cannot create {tmp}"); return };
+    let mut w = std::io::BufWriter::new(f);
+    let mut buf = [0u8; 16];
+    let mut count: u32 = 0;
+    // Header written first with count=0, patched after (seek) — but BufWriter
+    // can't seek mid-stream cheaply; instead reserve, write records, then
+    // rewrite header at the end via a second open. Simpler: write header now
+    // with a placeholder and fix count with a final pwrite.
+    let _ = w.write_all(b"NDCLOUD1");
+    let _ = w.write_all(&0u32.to_le_bytes());
+    let _ = w.write_all(&0u32.to_le_bytes());
+    for item in engine.snapshot_iter_streaming(TxId::ACTIVE) {
+        let Ok(Record::Entity(e)) = item else { continue };
+        if e.type_id != TypeId::new(TYPE_PAPER) { continue; }
+        let field_raw = str_prop(&e.properties, PROP_FIELD);
+        let field = if top_fields.contains(&field_raw) { field_raw.as_str() } else { "Other" };
+        let (ax, ay) = *cluster_pos.get(field).unwrap_or(&(0.0, 0.0));
+        let cit = i64_prop(&e.properties, PROP_CITATIONS);
+        let year = i64_prop(&e.properties, PROP_YEAR);
+        let imp = ((cit as f64 + 1.0).ln() / ln_max).clamp(0.0, 1.0);
+        let r = SPREAD * (1.0 - imp);
+        let uuid_str = e.entity_id.into_uuid().to_string();
+        let theta = (hash_str(&uuid_str) % 100_000) as f64 / 100_000.0 * std::f64::consts::TAU;
+        let x = (ax + r * theta.cos()) as f32;
+        let y = (ay + r * theta.sin()) as f32;
+        let z = ((year as f64 - mid_year) * ZSCALE) as f32;
+        let fi = *field_idx.get(field).unwrap_or(&other_idx);
+        let sq = (imp * 65535.0) as u16;
+        buf[0..4].copy_from_slice(&x.to_le_bytes());
+        buf[4..8].copy_from_slice(&y.to_le_bytes());
+        buf[8..12].copy_from_slice(&z.to_le_bytes());
+        buf[12..14].copy_from_slice(&fi.to_le_bytes());
+        buf[14..16].copy_from_slice(&sq.to_le_bytes());
+        if w.write_all(&buf).is_err() { eprintln!("cloud: write error"); return; }
+        count += 1;
+    }
+    let _ = w.flush();
+    drop(w);
+    // Patch the count into the header.
+    if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open(&tmp) {
+        use std::io::{Seek, SeekFrom};
+        let _ = f.seek(SeekFrom::Start(8));
+        let _ = f.write_all(&count.to_le_bytes());
+    }
+    let _ = std::fs::rename(&tmp, &path);
+    eprintln!("cloud: {} points → cloud.bin ({} MB, {:.1}s)", count, (count as u64 * 16) >> 20, t0.elapsed().as_secs_f64());
+}
+
 impl Index {
     fn build(mut engine: Engine, db: &str, knn_pref: &str, _cache_bytes: usize) -> Self {
         let m = load_cluster_meta(&engine, db);
@@ -375,6 +456,9 @@ impl Index {
         // per-node cites_out fan-out.
         let top_set: HashSet<EntityId> = top.iter().map(|t| t.eid).collect();
         let top_links = load_or_build_top_links(&engine, db, &top_set);
+        // All-papers GPU point-cloud backdrop (one-time cloud.bin).
+        build_cloud_file(&engine, db, &m.clusters, &cluster_pos, &top_fields, m.max_cit.max(1.0), mid_year);
+        let cloud_path = format!("{db}/cloud.bin");
 
         // Resolve the kNN backend. Three modes:
         //  snapshot/auto — global current-vector .vsnap: ONE mmap'd file,
@@ -440,6 +524,7 @@ impl Index {
             top_fields,
             top,
             top_links,
+            cloud_path,
             max_cit: m.max_cit.max(1.0),
             mid_year,
             total_papers: m.total,
@@ -730,6 +815,32 @@ fn handle(index: &Index, mut stream: TcpStream) -> std::io::Result<()> {
     let num = |k: &str, d: usize| qp.get(k).and_then(|v| v.parse().ok()).unwrap_or(d);
     let as_of = qp.get("as_of").and_then(|v| v.parse::<i64>().ok());
     let limit = num("limit", DEFAULT_LIMIT).min(2000);
+
+    // Binary endpoint: the all-papers point cloud. Streamed as octet-stream
+    // (it's ~16 B × N papers — too big for JSON). Served straight from the
+    // mmap-friendly file on disk; the browser parses it into typed arrays.
+    if path == "/view/cloud" {
+        match std::fs::read(&index.cloud_path) {
+            Ok(bytes) => {
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                );
+                stream.write_all(header.as_bytes())?;
+                stream.write_all(&bytes)?;
+            }
+            Err(_) => {
+                let msg = b"cloud.bin not built";
+                let header = format!(
+                    "HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    msg.len()
+                );
+                stream.write_all(header.as_bytes())?;
+                stream.write_all(msg)?;
+            }
+        }
+        return Ok(());
+    }
 
     let body: serde_json::Value = match path {
         "/health" => serde_json::json!({"status": "ok", "papers": index.total_papers}),
