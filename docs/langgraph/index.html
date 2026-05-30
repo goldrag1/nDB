@@ -109,9 +109,10 @@
   </div>
 
   <div class="row">
-    <div class="stat"><span>papers visible</span><b id="nPapers">0</b></div>
-    <div class="stat"><span>authors visible</span><b id="nAuthors">0</b></div>
-    <div class="stat"><span>edges visible</span><b id="nLinks">0</b></div>
+    <div class="stat"><span>papers in cloud</span><b id="nCloud">0</b></div>
+    <div class="stat"><span>interactive papers</span><b id="nPapers">0</b></div>
+    <div class="stat"><span>interactive edges</span><b id="nLinks">0</b></div>
+    <div class="stat"><span>authors</span><b id="nAuthors">0</b></div>
   </div>
   <button class="clear" id="clear">Clear highlight</button>
   <div class="hint" id="scalenote" style="margin-top:8px;"></div>
@@ -124,6 +125,11 @@
     color = field · size = citations.
     Click a paper → recursive citation ancestry (<code>relation+</code>).
   </div>
+  <div class="hint" style="margin-top:6px;">
+    The faint dots are <b id="nCloud2">all</b> papers (GPU cloud); the bright,
+    labelled ones are the interactive working set (zoom/click to explore).
+  </div>
+  <div id="legend" class="dims" style="border-top:none;padding-top:6px;line-height:1.9;"></div>
   <div class="dims" style="border-top:none;padding-top:6px;">
     Data: <a href="https://openalex.org" target="_blank" rel="noreferrer" style="color:var(--accent)">OpenAlex</a> (CC0) — thanks to the OpenAlex team.
   </div>
@@ -530,9 +536,22 @@ function logQuery(ep, ms, rows) {
 function updateLiveCounts() {
   const rendered = Graph.graphData().nodes.filter(n => n.kind === "paper").length;
   $("scalenote").innerHTML =
-    `<b>${rendered.toLocaleString()}</b> of <b>${TOTAL_PAPERS.toLocaleString()}</b> papers on screen — ` +
-    `every zoom is a live bounded query to nDB; the rest stay in the store. ` +
-    `Scales to millions — see the <a href="/bench.html" style="color:var(--accent)">bench</a>.`;
+    `<b>${rendered.toLocaleString()}</b> interactive of <b>${TOTAL_PAPERS.toLocaleString()}</b> total papers — ` +
+    `the interactive layer is a bounded live query to nDB (capped so it stays smooth); ` +
+    `the faint cloud is every paper. Scales to millions — see the <a href="/bench.html" style="color:var(--accent)">bench</a>.`;
+}
+
+// Colour legend: one swatch per field, using the SAME fieldColor() as the
+// nodes + the point cloud. Built from the cluster list (the named fields).
+function buildLegend(fields) {
+  const box = $("legend");
+  if (!box || !fields || !fields.length) return;
+  box.innerHTML = "<b>fields</b> (colour of each dot):<br>" + fields.map(f =>
+    `<span style="display:inline-block;margin:1px 8px 1px 0;white-space:nowrap">` +
+    `<span style="display:inline-block;width:9px;height:9px;border-radius:50%;` +
+    `background:${fieldColor(f)};vertical-align:middle;margin-right:4px"></span>` +
+    `${esc(f)}</span>`
+  ).join("");
 }
 function nodeImp(n) {
   if (n.kind === "cluster") return 1.0;
@@ -677,7 +696,18 @@ function setup(data, isLive) {
     }, 200);
     Graph.graphData(data);
     updateCounts();
-    if (isLive) { updateLiveCounts(); }
+    // Colour legend from the field set (clusters in LIVE, node fields in static).
+    buildLegend([...new Set(data.nodes.map(n => n.field).filter(f => f && f !== "Author"))].sort());
+    if (isLive) {
+      updateLiveCounts();
+      // Show the full-universe total in the cloud counters as soon as known.
+      const setCloud = () => {
+        $("nCloud").textContent = TOTAL_PAPERS ? TOTAL_PAPERS.toLocaleString() : "…";
+        $("nCloud2").textContent = TOTAL_PAPERS ? "all " + TOTAL_PAPERS.toLocaleString() : "all";
+      };
+      setCloud();
+      setTimeout(setCloud, 2500);   // TOTAL_PAPERS is set from the clusters meta
+    }
     else if (data.meta) {
       $("scalenote").innerHTML =
         `Sample: <b>${data.meta.papers.toLocaleString()}</b> papers + the <b>${data.meta.authors_shown.toLocaleString()}</b> ` +
