@@ -190,6 +190,7 @@ const linkSeen = new Set();       // dedupe merged links
 const LN_MAX = Math.log1p(300000);// fixed citation ceiling for live importance
 let tileTimer = 0, fetchOrder = 0;
 let RENDER_CAP = 3000;            // max nodes kept on screen (LRU-dropped; lowered on weak devices)
+let RENDER_LINK_CAP = 9000;       // max links kept on screen — citation data is link-dense; bounds WebGL even at RENDER_CAP nodes
 let inflight = 0;                 // in-flight tile requests (capped)
 const MAX_INFLIGHT = 4;
 const tileCooldown = new Map();   // key → earliest retry time (backoff after failure)
@@ -562,6 +563,7 @@ function mergeTile(tile) {
     gd.nodes.push(n);
   }
   for (const l of (tile.links || [])) {
+    if (gd.links.length >= RENDER_LINK_CAP) break;   // hard link cap — never overfeed the renderer
     const s = typeof l.source === "object" ? l.source.id : l.source, t = typeof l.target === "object" ? l.target.id : l.target;
     if (!nodeById.has(s) || !nodeById.has(t)) continue;
     const key = l.kind + s + ">" + t; if (linkSeen.has(key)) continue; linkSeen.add(key);
@@ -665,8 +667,8 @@ function setup(data, isLive) {
       (function sample() {
         frames++;
         if (performance.now() - t0 < 1000) { requestAnimationFrame(sample); return; }
-        if (frames < 18) { RENDER_CAP = 800; twinkleSkip = 4; }
-        else if (frames < 30) { RENDER_CAP = 1500; twinkleSkip = 2; }
+        if (frames < 18) { RENDER_CAP = 800; RENDER_LINK_CAP = 2400; twinkleSkip = 4; }
+        else if (frames < 30) { RENDER_CAP = 1500; RENDER_LINK_CAP = 4500; twinkleSkip = 2; }
         if (LIVE) { dropFar(); Graph.graphData(Graph.graphData()); refreshVisibility(); }
       })();
     }, 2600);
