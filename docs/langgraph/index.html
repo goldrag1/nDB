@@ -766,5 +766,6 @@ fetch("api/health", { cache: "no-store" })
   })
   .catch(() => fetch("./graph.json", { cache: "no-store" }).then(r => r.json()).then(d => setup(d, false)).catch(bootError));
 </script>
+<script src="cloud-layer.js"></script>
 </body>
 </html>
