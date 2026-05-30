@@ -61,7 +61,7 @@ LISTEN_HOST = "127.0.0.1"
 LISTEN_PORT = 9880
 # App-layer langgraph view server (bounded /view/* tiles). Optional — the
 # explorer falls back to the static graph.json if it's not running.
-LANGGRAPH_API = "http://127.0.0.1:8791"
+LANGGRAPH_API = os.environ.get("LANGGRAPH_API", "http://127.0.0.1:8791")
 
 SITE_ROOT = Path(__file__).resolve().parent
 
