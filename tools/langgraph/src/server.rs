@@ -56,6 +56,11 @@ const DEFAULT_LIMIT: usize = 500;
 /// request. 20k × ~80 B ≈ 1.6 MB resident / on disk: bounded regardless of
 /// graph size.
 const CACHE_TOP_N: usize = 20_000;
+/// Max incident hyperedges `cites_out` reads per node. Bounds disk reads on
+/// power-law hubs (a top-cited paper has ~10^5 incident edges); a viz tile
+/// only needs a sparse sample, and normal papers stay under this. See
+/// `cites_out`.
+const MAX_INCIDENT_SCAN: usize = 256;
 const RING: f64 = 850.0;
 const SPREAD: f64 = 320.0;
 const ZSCALE: f64 = 16.0;
@@ -384,9 +389,18 @@ impl Index {
 
     /// Entities this paper CITES (role 30 = citing == eid → role 31 = cited),
     /// via the engine's (on-disk) adjacency index + a snapshot_read per edge.
+    ///
+    /// BOUNDED: real citation data is power-law — a top-cited hub has hundreds
+    /// of thousands of INCIDENT edges (it's *cited by* that many papers, role
+    /// 31). `hyperedges_for_entity` returns all of them, and reading each to
+    /// discover the handful that are OUTGOING (role 30 == eid) is the 60 s
+    /// `/view/top` wall. Cap the scan at `MAX_INCIDENT_SCAN` edges: a viz tile
+    /// only needs a sparse sample of internal links, and normal papers
+    /// (degree < cap) are still complete. The cap bounds disk reads per node
+    /// regardless of degree.
     fn cites_out(&self, eid: EntityId) -> Vec<EntityId> {
         let mut out = Vec::new();
-        for hid in self.engine.hyperedges_for_entity(eid) {
+        for hid in self.engine.hyperedges_for_entity(eid).into_iter().take(MAX_INCIDENT_SCAN) {
             if let Ok(ndb_engine::Resolved::Live(Record::HyperEdge(h))) =
                 self.engine.snapshot_read(&hid.into_uuid(), TxId::ACTIVE)
                 && h.type_id == TypeId::new(TYPE_CITES)
