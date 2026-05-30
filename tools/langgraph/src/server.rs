@@ -61,6 +61,11 @@ const CACHE_TOP_N: usize = 20_000;
 /// only needs a sparse sample, and normal papers stay under this. See
 /// `cites_out`.
 const MAX_INCIDENT_SCAN: usize = 256;
+/// Max nodes per tile whose internal citation links are computed (each costs a
+/// MAX_INCIDENT_SCAN adjacency walk across all SSTables). Caps a top-cited tile
+/// — all power-law hubs — at O(const) link cost regardless of `limit`; the viz
+/// only needs a sparse internal-link sample. See `tile_cached`.
+const TILE_LINK_NODES: usize = 50;
 const RING: f64 = 850.0;
 const SPREAD: f64 = 320.0;
 const ZSCALE: f64 = 16.0;
@@ -82,6 +87,7 @@ struct PaperView {
 /// `as_of` time-travel filter run without a per-entity read.
 struct TopEntry {
     eid: EntityId,
+    label: String,
     field: String,
     year: i64,
     citations: i64,
@@ -211,6 +217,7 @@ fn load_or_build_top(engine: &Engine, db: &str, top_fields: &HashSet<String>) ->
             let eid = EntityId::from_uuid(e["u"].as_str()?.parse::<uuid::Uuid>().ok()?);
             Some(TopEntry {
                 eid,
+                label: e["l"].as_str().unwrap_or("").to_string(),
                 field: e["f"].as_str().unwrap_or("Other").to_string(),
                 year: e["y"].as_i64().unwrap_or(0),
                 citations: e["c"].as_i64().unwrap_or(0),
@@ -255,6 +262,7 @@ fn load_or_build_top(engine: &Engine, db: &str, top_fields: &HashSet<String>) ->
         {
             top.push(TopEntry {
                 eid: EntityId::from_uuid(u),
+                label: str_prop(&en.properties, PROP_NAME),
                 field: coarse(&str_prop(&en.properties, PROP_FIELD)),
                 year: i64_prop(&en.properties, PROP_YEAR),
                 citations: cit,
@@ -267,7 +275,7 @@ fn load_or_build_top(engine: &Engine, db: &str, top_fields: &HashSet<String>) ->
     // Persist atomically (temp + rename) so a kill mid-write never leaves a
     // half-file that load reads as authoritative.
     let arr: Vec<serde_json::Value> = top.iter().map(|t| serde_json::json!({
-        "u": t.eid.into_uuid().to_string(), "f": t.field, "y": t.year, "c": t.citations
+        "u": t.eid.into_uuid().to_string(), "l": t.label, "f": t.field, "y": t.year, "c": t.citations
     })).collect();
     let payload = serde_json::json!({"version": 1, "n": top.len(), "top": arr});
     let tmp = format!("{db}/top.json.tmp");
@@ -478,17 +486,54 @@ impl Index {
             "meta": {"total_papers": self.total_papers, "clusters": self.clusters.len()} })
     }
 
+    /// Build a tile from cached TopEntry rows with NO per-node snapshot_read
+    /// (label/field/year/citations + deterministic layout all come from the
+    /// cache; oaid/doi are lazy-loaded on click). Only the first
+    /// TILE_LINK_NODES nodes get internal links computed (each a bounded
+    /// adjacency walk), so a top-cited tile of power-law hubs is O(const) — NOT
+    /// O(limit × sidecars), which was the 14 s+ /view/top wall at 204 sidecars.
+    fn tile_cached(&self, entries: &[&TopEntry]) -> serde_json::Value {
+        let set: HashSet<EntityId> = entries.iter().map(|t| t.eid).collect();
+        let mut nodes = Vec::with_capacity(entries.len());
+        let mut by_uuid: HashMap<EntityId, String> = HashMap::new();
+        for t in entries {
+            let pv = PaperView {
+                uuid: t.eid.into_uuid().to_string(),
+                label: t.label.clone(),
+                field: t.field.clone(),
+                year: t.year,
+                citations: t.citations,
+                oaid: String::new(),
+                doi: String::new(),
+            };
+            by_uuid.insert(t.eid, pv.uuid.clone());
+            nodes.push(self.node_json(&pv));
+        }
+        let mut links = Vec::new();
+        for t in entries.iter().take(TILE_LINK_NODES) {
+            if let Some(src) = by_uuid.get(&t.eid) {
+                for cited in self.cites_out(t.eid) {
+                    if set.contains(&cited)
+                        && let Some(dst) = by_uuid.get(&cited)
+                    {
+                        links.push(serde_json::json!({"source": src, "target": dst, "kind": "cites"}));
+                    }
+                }
+            }
+        }
+        serde_json::json!({ "nodes": nodes, "links": links })
+    }
+
     fn top_view(&self, limit: usize, as_of: Option<i64>) -> serde_json::Value {
-        // O(cache) slice of the pre-ranked top-cited list (already desc) — no
-        // live property_top_k. `as_of` filters on the cached year in place.
-        let eids: Vec<EntityId> = self.top.iter()
+        // O(cache) slice of the pre-ranked top-cited list (already desc) — nodes
+        // straight from cache (no per-node reads), links bounded by tile_cached.
+        let entries: Vec<&TopEntry> = self.top.iter()
             .filter(|t| as_of.is_none_or(|y| t.year <= y))
             .take(limit)
-            .map(|t| t.eid)
             .collect();
-        let mut v = self.tile(&eids);
+        let mut v = self.tile_cached(&entries);
         v["meta"] = serde_json::json!({
-            "total_papers": self.total_papers, "returned": eids.len(),
+            "total_papers": self.total_papers, "returned": entries.len(),
             "source": "top-cache", "cache_n": self.top.len()
         });
         v
@@ -498,14 +543,13 @@ impl Index {
         // Filter the pre-ranked cache by (already-coarsened) field — O(cache),
         // no live property_top_k. A field's depth is bounded by how many of
         // its papers fall in the global top-CACHE_TOP_N.
-        let eids: Vec<EntityId> = self.top.iter()
+        let entries: Vec<&TopEntry> = self.top.iter()
             .filter(|t| t.field == field && as_of.is_none_or(|y| t.year <= y))
             .take(limit)
-            .map(|t| t.eid)
             .collect();
-        let mut v = self.tile(&eids);
+        let mut v = self.tile_cached(&entries);
         v["meta"] = serde_json::json!({
-            "field": field, "returned": eids.len(), "source": "top-cache", "cache_n": self.top.len()
+            "field": field, "returned": entries.len(), "source": "top-cache", "cache_n": self.top.len()
         });
         v
     }

@@ -667,7 +667,14 @@ function setup(data, isLive) {
     // camera sits in the far cluster tier, so liveZoomFetch would never fire it,
     // leaving the scene as 19 lonely cluster dots). mergeTile's one-shot fit
     // then frames the papers + recalibrates LOD into the paper tier.
-    if (isLive) setTimeout(() => fetchTile("view/top?limit=600", "top600"), 200);
+    if (isLive) setTimeout(() => {
+      // Direct fetch+merge, bypassing fetchTile's dedup/inflight guards (which
+      // can suppress this boot-time call). mergeTile's one-shot fit then frames
+      // the papers + recalibrates LOD into the paper tier.
+      fetchedTiles.add("top600");
+      fetch("api/view/top?limit=600", { cache: "no-store" })
+        .then(r => r.json()).then(d => mergeTile(d)).catch(() => fetchedTiles.delete("top600"));
+    }, 200);
     Graph.graphData(data);
     updateCounts();
     if (isLive) { updateLiveCounts(); }
@@ -749,6 +756,12 @@ fetch("api/health", { cache: "no-store" })
     return fetch("api/view/clusters", { cache: "no-store" }).then(r => r.json()).then(clusters => {
       if (clusters.meta && clusters.meta.total_papers) TOTAL_PAPERS = clusters.meta.total_papers;
       setup(clusters, true);
+      // Load the first PAPER tile right after setup (the initial camera sits in
+      // the far cluster tier, so liveZoomFetch never fires it — without this the
+      // scene stays 19 lonely cluster dots). mergeTile's one-shot fit then
+      // frames the papers + recalibrates LOD into the paper tier.
+      return fetch("api/view/top?limit=600", { cache: "no-store" })
+        .then(r => r.json()).then(d => mergeTile(d)).catch(() => {});
     });
   })
   .catch(() => fetch("./graph.json", { cache: "no-store" }).then(r => r.json()).then(d => setup(d, false)).catch(bootError));
