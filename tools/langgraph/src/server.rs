@@ -61,15 +61,13 @@ const CACHE_TOP_N: usize = 20_000;
 /// only needs a sparse sample, and normal papers stay under this. See
 /// `cites_out`.
 const MAX_INCIDENT_SCAN: usize = 256;
-/// Nodes per tile whose internal citation links are precomputed. Each link
-/// needs a `cites_out` = MAX_INCIDENT_SCAN-edge adjacency walk across all 204
-/// SSTables; for TOP-CITED hub papers that's ~1s EACH (measured: limit=5 →
-/// 5.4s). Set to 0: the top/cluster tiles render nodes only (a fast, dense
-/// galaxy), and citation links are materialised on demand — clicking a paper
-/// runs `/view/neighbors` (normal-degree, cheap). Top-cited papers span
-/// different fields and rarely cite each other, so the omitted links were
-/// near-empty eye-candy anyway. See `tile_cached`.
-const TILE_LINK_NODES: usize = 0;
+/// Cap on internal citation links precomputed AMONG the cached top papers
+/// (`load_or_build_top_links`). Computing links live via `cites_out` costs ~1s
+/// per top-cited hub (a MAX_INCIDENT_SCAN walk across 204 sidecars), so instead
+/// we scan the CITES hyperedges ONCE, keep those whose both endpoints are top
+/// papers, and persist them. `tile_cached` then filters this set to the tile's
+/// nodes for free — real linkages, O(1) per request.
+const MAX_TOP_LINKS: usize = 60_000;
 const RING: f64 = 850.0;
 const SPREAD: f64 = 320.0;
 const ZSCALE: f64 = 16.0;
@@ -108,6 +106,7 @@ struct Index {
     cluster_pos: HashMap<String, (f64, f64)>,
     top_fields: HashSet<String>,           // named (non-Other) fields → coarsening
     top: Vec<TopEntry>,                    // pre-ranked top-cited cache (desc)
+    top_links: Vec<(EntityId, EntityId)>,  // precomputed CITES among top papers
     max_cit: f64,
     mid_year: f64,
     total_papers: usize,
@@ -292,6 +291,67 @@ fn load_or_build_top(engine: &Engine, db: &str, top_fields: &HashSet<String>) ->
     top
 }
 
+/// Internal citation links AMONG the cached top papers — precomputed ONCE via a
+/// single streaming pass over the CITES hyperedges (NOT per-node `cites_out`,
+/// which is ~1s per power-law hub). Keeps each CITES edge whose BOTH endpoints
+/// are in `top_set` as (citing, cited). Persisted to `top-links.json` so a
+/// restart is instant; capped at `MAX_TOP_LINKS`.
+fn load_or_build_top_links(
+    engine: &Engine,
+    db: &str,
+    top_set: &HashSet<EntityId>,
+) -> Vec<(EntityId, EntityId)> {
+    let path = format!("{db}/top-links.json");
+    if let Ok(bytes) = std::fs::read(&path)
+        && let Ok(j) = serde_json::from_slice::<serde_json::Value>(&bytes)
+        && let Some(arr) = j["links"].as_array()
+    {
+        let links: Vec<(EntityId, EntityId)> = arr.iter().filter_map(|e| {
+            let s = EntityId::from_uuid(e.get(0)?.as_str()?.parse::<uuid::Uuid>().ok()?);
+            let d = EntityId::from_uuid(e.get(1)?.as_str()?.parse::<uuid::Uuid>().ok()?);
+            Some((s, d))
+        }).collect();
+        if !links.is_empty() {
+            eprintln!("top-links cache: loaded {} links from top-links.json", links.len());
+            return links;
+        }
+    }
+    eprintln!("top-links.json missing — scanning CITES edges among top papers (one-time)…");
+    let t0 = std::time::Instant::now();
+    let cites_t = TypeId::new(TYPE_CITES);
+    let mut links: Vec<(EntityId, EntityId)> = Vec::new();
+    for item in engine.snapshot_iter_streaming(TxId::ACTIVE) {
+        let Ok(Record::HyperEdge(h)) = item else { continue };
+        if h.type_id != cites_t {
+            continue;
+        }
+        let citing = h.roles.iter().find(|(r, _)| r.get() == 30).map(|(_, e)| *e);
+        let cited = h.roles.iter().find(|(r, _)| r.get() == 31).map(|(_, e)| *e);
+        if let (Some(s), Some(d)) = (citing, cited)
+            && s != d
+            && top_set.contains(&s)
+            && top_set.contains(&d)
+        {
+            links.push((s, d));
+            if links.len() >= MAX_TOP_LINKS {
+                break;
+            }
+        }
+    }
+    let arr: Vec<serde_json::Value> = links.iter().map(|(s, d)| {
+        serde_json::json!([s.into_uuid().to_string(), d.into_uuid().to_string()])
+    }).collect();
+    let payload = serde_json::json!({"version": 1, "n": links.len(), "links": arr});
+    let tmp = format!("{db}/top-links.json.tmp");
+    if std::fs::write(&tmp, serde_json::to_vec(&payload).unwrap_or_default())
+        .and_then(|()| std::fs::rename(&tmp, &path)).is_err()
+    {
+        eprintln!("top-links cache: warning — could not persist top-links.json");
+    }
+    eprintln!("top-links cache: {} links in {:.1}s → top-links.json", links.len(), t0.elapsed().as_secs_f64());
+    links
+}
+
 impl Index {
     fn build(mut engine: Engine, db: &str, knn_pref: &str, _cache_bytes: usize) -> Self {
         let m = load_cluster_meta(&engine, db);
@@ -310,6 +370,11 @@ impl Index {
         // tile) and /view/cluster/* O(cache) slices instead of a live
         // multi-sidecar property_top_k walk per request.
         let top = load_or_build_top(&engine, db, &top_fields);
+        // Precompute internal citation links among the top papers (one CITES
+        // hyperedge scan, persisted) so tiles show real linkages without a
+        // per-node cites_out fan-out.
+        let top_set: HashSet<EntityId> = top.iter().map(|t| t.eid).collect();
+        let top_links = load_or_build_top_links(&engine, db, &top_set);
 
         // Resolve the kNN backend. Three modes:
         //  snapshot/auto — global current-vector .vsnap: ONE mmap'd file,
@@ -374,6 +439,7 @@ impl Index {
             cluster_pos,
             top_fields,
             top,
+            top_links,
             max_cit: m.max_cit.max(1.0),
             mid_year,
             total_papers: m.total,
@@ -513,16 +579,15 @@ impl Index {
             by_uuid.insert(t.eid, pv.uuid.clone());
             nodes.push(self.node_json(&pv));
         }
+        // Real internal links from the precomputed top-links set, filtered to
+        // this tile's nodes — O(top_links), no per-node cites_out fan-out.
         let mut links = Vec::new();
-        for t in entries.iter().take(TILE_LINK_NODES) {
-            if let Some(src) = by_uuid.get(&t.eid) {
-                for cited in self.cites_out(t.eid) {
-                    if set.contains(&cited)
-                        && let Some(dst) = by_uuid.get(&cited)
-                    {
-                        links.push(serde_json::json!({"source": src, "target": dst, "kind": "cites"}));
-                    }
-                }
+        for (s, d) in &self.top_links {
+            if set.contains(s)
+                && set.contains(d)
+                && let (Some(src), Some(dst)) = (by_uuid.get(s), by_uuid.get(d))
+            {
+                links.push(serde_json::json!({"source": src, "target": dst, "kind": "cites"}));
             }
         }
         serde_json::json!({ "nodes": nodes, "links": links })
