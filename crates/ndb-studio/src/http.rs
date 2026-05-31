@@ -232,6 +232,12 @@ fn dispatch(
             #[allow(clippy::cast_possible_truncation)]
             Resp::ok(store.hyperedges(kind as u32, qp.u64("as_of"), limit))
         }),
+        ("GET", "/api/diff") => guard_read(session.as_ref(), || {
+            let (Some(from), Some(to)) = (qp.u64("from"), qp.u64("to")) else {
+                return Resp::fail(400, "bad_request", "missing from/to tx");
+            };
+            Resp::ok(store.diff(from, to))
+        }),
         ("POST", "/api/query") => guard_read(session.as_ref(), || run_query(store, body)),
 
         // ---- writes (editor / admin) ----

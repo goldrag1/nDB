@@ -159,6 +159,15 @@
   #recDlg .qref.erole { color: var(--ink); border: 1px solid #2c3a4a; border-radius: 5px; padding: 1px 6px; margin-right: 4px; display: inline-block; }
   #recDlg .qref.erole:hover { border-color: var(--accent); }
   #recDlg { min-width: 420px; max-width: 520px; }
+  #diffBtn { font-size: 11px; padding: 3px 8px; margin-left: 4px; }
+  .diffbar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .diffbar input { width: 90px; background: #0c1118; color: var(--ink); border: 1px solid #2c3a4a; border-radius: 6px; padding: 4px 6px; font: inherit; }
+  .diffresult { max-height: 360px; overflow: auto; min-width: 380px; }
+  .diffcounts { display: flex; gap: 14px; margin-bottom: 10px; font-size: 13px; }
+  .dadd { color: var(--accent2); } .drem { color: var(--danger); } .dchg { color: #f0c674; }
+  .diffsec { margin-bottom: 8px; }
+  .dfield { padding: 2px 8px 2px 22px; font-size: 12px; font-family: ui-monospace, monospace; }
+  .dfn { color: var(--muted); } .dold { color: var(--danger); } .dnew { color: var(--accent2); }
 </style>
 </head>
 <body>
@@ -170,6 +179,7 @@
       <span>⏱</span>
       <input type="range" id="asof" min="0" max="0" value="0" step="1" />
       <span class="asof live" id="asofLabel">now</span>
+      <button id="diffBtn" title="Diff two points in time">⇄ Diff</button>
     </div>
     <div class="userbox">
       <span class="ubadge" id="who"></span>
@@ -228,6 +238,17 @@
     <div class="nhint">This node becomes a follower: it streams the peer leader's WAL delta and applies it, preserving the leader's tx ids. Get the peer token from its <code>ndb_session</code> cookie while logged in there as admin (sessions are in-memory).</div>
     <div id="npResult" class="badge" style="margin-top:8px"></div>
     <div class="dlg-actions"><button onclick="document.getElementById('nodeDlg').close()">Close</button></div>
+  </dialog>
+
+  <dialog id="diffDlg">
+    <h3>Temporal diff</h3>
+    <div class="diffbar">
+      <label>from tx <input type="number" id="dFrom" min="0" /></label>
+      <label>to tx <input type="number" id="dTo" min="0" /></label>
+      <button class="primary" id="dRun">Diff ▸</button>
+    </div>
+    <div id="diffResult" class="diffresult"></div>
+    <div class="dlg-actions"><button onclick="document.getElementById('diffDlg').close()">Close</button></div>
   </dialog>
 
   <dialog id="edgeDlg">
@@ -336,6 +357,32 @@ async function selectKind(k) {
   TBL = newTableState();
   renderKinds();
   await renderMain();
+}
+
+// ---- Temporal diff ----
+$("diffBtn").onclick = () => {
+  $("dFrom").value = ASOF === null ? Math.max(0, HEAD - 1) : ASOF;
+  $("dTo").value = HEAD;
+  $("diffResult").innerHTML = "";
+  $("diffDlg").showModal();
+  runDiff();
+};
+$("dRun").onclick = runDiff;
+async function runDiff() {
+  const from = parseInt($("dFrom").value, 10) || 0, to = parseInt($("dTo").value, 10) || 0;
+  const d = await api.get(`/diff?from=${from}&to=${to}`);
+  const out = $("diffResult");
+  const c = d.counts || { added: 0, removed: 0, changed: 0 };
+  let h = `<div class="diffcounts"><span class="dadd">+${c.added} added</span><span class="dchg">~${c.changed} changed</span><span class="drem">−${c.removed} removed</span></div>`;
+  const idChip = (x) => `<span class="qref" data-id="${esc(x.id)}">${esc(x.label || x.id.slice(0, 8))} <span class="ekind">${esc(x.kind)}</span></span>`;
+  if (c.added) h += `<div class="diffsec"><div class="recsh">Added</div>` + d.added.map((x) => `<div class="hrow dadd">+ ${idChip(x)}</div>`).join("") + `</div>`;
+  if (c.changed) h += `<div class="diffsec"><div class="recsh">Changed</div>` + d.changed.map((x) =>
+    `<div class="hrow dchg">~ ${idChip(x)}</div>` + x.fields.map((f) => `<div class="dfield"><span class="dfn">${esc(f.name)}</span> <span class="dold">${fmt(f.old)}</span> → <span class="dnew">${fmt(f.new)}</span></div>`).join("")
+  ).join("") + `</div>`;
+  if (c.removed) h += `<div class="diffsec"><div class="recsh">Removed</div>` + d.removed.map((x) => `<div class="hrow drem">− ${idChip(x)}</div>`).join("") + `</div>`;
+  if (!c.added && !c.changed && !c.removed) h += `<div class="recempty">No differences between tx ${from} and ${to}.</div>`;
+  out.innerHTML = h;
+  out.querySelectorAll(".qref").forEach((el) => (el.onclick = () => openRecord(el.dataset.id)));
 }
 
 // ---- N-ary hyperedge workbench ----

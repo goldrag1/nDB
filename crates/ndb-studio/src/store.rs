@@ -136,6 +136,30 @@ fn entity_label(e: &EntityRecord, names: &Names) -> String {
     String::new()
 }
 
+/// Project a snapshot's entities to `id → (kind, label, name→value)`, skipping
+/// reserved kinds/props. The basis for a temporal diff between two snapshots.
+fn snapshot_entities(recs: &[Record], names: &Names) -> BTreeMap<Uuid, (String, String, BTreeMap<String, J>)> {
+    let mut m = BTreeMap::new();
+    for r in recs {
+        let Record::Entity(e) = r else { continue };
+        let kind = names.type_name.get(&e.type_id.get()).cloned()
+            .unwrap_or_else(|| format!("kind:{}", e.type_id.get()));
+        if is_reserved(&kind) {
+            continue;
+        }
+        let mut props = BTreeMap::new();
+        for (pid, v) in &e.properties {
+            let n = names.prop_name.get(&pid.get()).cloned()
+                .unwrap_or_else(|| format!("prop:{}", pid.get()));
+            if !is_reserved(&n) {
+                props.insert(n, to_json(v));
+            }
+        }
+        m.insert(e.entity_id.into_uuid(), (kind, entity_label(e, names), props));
+    }
+    m
+}
+
 /// Numeric coercion for `sum` aggregation; non-numbers contribute 0.
 fn numeric(v: &Value) -> f64 {
     match v {
@@ -815,6 +839,53 @@ impl Store {
                 json!({ "error": "query", "code": e.code(), "detail": e.to_string() })
             })),
         }
+    }
+
+    /// What changed between two snapshots: entities added, removed, and
+    /// changed (with per-property old→new). Works on any pair of tx ids
+    /// (either direction) — time-travel diffing the engine can't do as a
+    /// relational store without audit triggers.
+    #[must_use]
+    pub fn diff(&self, from: u64, to: u64) -> J {
+        let (rf, rt) = (self.records(TxId::new(from)), self.records(TxId::new(to)));
+        let mf = snapshot_entities(&rf, &Self::names(&rf));
+        let mt = snapshot_entities(&rt, &Self::names(&rt));
+
+        let mut added: Vec<J> = Vec::new();
+        let mut removed: Vec<J> = Vec::new();
+        let mut changed: Vec<J> = Vec::new();
+        for (id, (kind, label, _)) in &mt {
+            if !mf.contains_key(id) {
+                added.push(json!({ "id": id.to_string(), "kind": kind, "label": label }));
+            }
+        }
+        for (id, (kind, label, _)) in &mf {
+            if !mt.contains_key(id) {
+                removed.push(json!({ "id": id.to_string(), "kind": kind, "label": label }));
+            }
+        }
+        for (id, (kind, label, pt)) in &mt {
+            let Some((_, _, pf)) = mf.get(id) else { continue };
+            let keys: BTreeSet<&String> = pt.keys().chain(pf.keys()).collect();
+            let fields: Vec<J> = keys
+                .into_iter()
+                .filter(|k| pf.get(*k) != pt.get(*k))
+                .map(|k| json!({
+                    "name": k,
+                    "old": pf.get(k).cloned().unwrap_or(J::Null),
+                    "new": pt.get(k).cloned().unwrap_or(J::Null),
+                }))
+                .collect();
+            if !fields.is_empty() {
+                changed.push(json!({ "id": id.to_string(), "kind": kind, "label": label, "fields": fields }));
+            }
+        }
+
+        json!({
+            "from": from, "to": to,
+            "counts": { "added": added.len(), "removed": removed.len(), "changed": changed.len() },
+            "added": added, "removed": removed, "changed": changed,
+        })
     }
 
     /// Hyperedges of one kind, with each role resolved to its filler entity
@@ -1668,6 +1739,32 @@ mod tests {
         let rb = store.record(bob, None);
         assert_eq!(rb["in_refs"][0]["label"], "Alice");
         assert_eq!(rb["in_refs"][0]["property"], "friend");
+    }
+
+    /// Temporal diff: added / removed / changed (with per-field old→new).
+    #[test]
+    fn diff_between_two_snapshots() {
+        let store = fresh();
+        let t1 = store.create("Person", &[("name".into(), s("Alice")), ("age".into(), Value::I64(30))], None).expect("a");
+        let t2 = store.create("Person", &[("name".into(), s("Bob"))], None).expect("b");
+        let tid = u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
+        let alice = Uuid::parse_str(store.table(tid, &TableQuery::new(None, 5))["rows"][0]["id"].as_str().unwrap()).unwrap();
+        store.set(alice, "age", &Value::I64(31), None).expect("edit");
+
+        // From just-after-Alice (t1) to head: Bob added, Alice age changed.
+        let d = store.diff(t1, store.head());
+        assert_eq!(d["counts"]["added"], 1, "Bob added");
+        assert_eq!(d["counts"]["changed"], 1, "Alice changed");
+        assert_eq!(d["added"][0]["label"], "Bob");
+        let f = &d["changed"][0]["fields"][0];
+        assert_eq!(f["name"], "age");
+        assert_eq!(f["old"], 30);
+        assert_eq!(f["new"], 31);
+
+        // Reverse diff sees Bob as removed.
+        let dr = store.diff(store.head(), t2);
+        assert_eq!(dr["counts"]["removed"], 0); // Bob exists at t2 already
+        assert!(dr["counts"]["changed"].as_u64().unwrap() >= 1);
     }
 
     /// Editing a record that does not exist is a typed `NotFound` (HTTP 404).
