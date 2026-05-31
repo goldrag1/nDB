@@ -65,7 +65,7 @@ pub use engine::{
     BackupStats, CompactionStats, DEFAULT_MAX_CACHE_BYTES, Engine, EngineConfig, EngineError,
     IndexMemoryStats, IsolationLevel, MigrationStats, RetentionPolicy, WriteTxn,
 };
-pub use shared::SharedEngine;
+pub use shared::{CompactionPolicy, CompactorHandle, SharedEngine};
 pub use replication::{ReplicationBatch, apply_batch, read_wal_since};
 pub use error::{DecodeError, EncodeError};
 pub use id::{EntityId, HyperedgeId, PropertyId, RoleId, TX_ACTIVE, TYPE_UNTYPED, TxId, TypeId};
