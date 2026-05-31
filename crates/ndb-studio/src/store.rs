@@ -79,6 +79,34 @@ impl StoreError {
     }
 }
 
+/// The value of property `pid` on an entity, if present.
+fn prop_val(e: &EntityRecord, pid: u32) -> Option<&Value> {
+    e.properties.iter().find(|(p, _)| p.get() == pid).map(|(_, v)| v)
+}
+
+/// A display-string grouping key for a pivot axis. Missing/null share `∅`,
+/// scalars use their natural rendering, rich variants their tag.
+fn cell_key(v: Option<&Value>) -> String {
+    match v {
+        None | Some(Value::Null) => "∅".to_string(),
+        Some(Value::Bool(b)) => b.to_string(),
+        Some(Value::I64(n)) => n.to_string(),
+        Some(Value::F64(f)) => f.to_string(),
+        Some(Value::String(s)) => s.clone(),
+        Some(other) => type_hint(other).to_string(),
+    }
+}
+
+/// Numeric coercion for `sum` aggregation; non-numbers contribute 0.
+fn numeric(v: &Value) -> f64 {
+    match v {
+        #[allow(clippy::cast_precision_loss)]
+        Value::I64(n) => *n as f64,
+        Value::F64(f) => *f,
+        _ => 0.0,
+    }
+}
+
 /// Name dictionaries resolved from the current snapshot.
 struct Names {
     type_name: BTreeMap<u32, String>,
@@ -278,6 +306,152 @@ impl Store {
             }
             _ => J::Null,
         }
+    }
+
+    /// History of one record. With `property` set, returns that property's
+    /// change timeline (one entry per tx where the value actually changed,
+    /// plus a terminal `deleted` entry for a tombstone) — the per-cell popover.
+    /// With `property` `None`, returns every version's full property snapshot.
+    ///
+    /// Backed by the engine's version-chain walk, so it costs O(versions),
+    /// not O(head).
+    #[must_use]
+    pub fn history(&self, id: Uuid, property: Option<&str>) -> J {
+        let recs = self.records(self.snapshot(None));
+        let names = Self::names(&recs);
+        let versions = self.engine.versions_of(&id).unwrap_or_default();
+
+        if let Some(prop) = property {
+            let pid = names.prop_id.get(prop).copied();
+            let mut out: Vec<J> = Vec::new();
+            let mut last: Option<J> = None;
+            for (tx, rec) in &versions {
+                match rec {
+                    Record::Entity(e) => {
+                        let v = pid
+                            .and_then(|pid| {
+                                e.properties.iter().find(|(p, _)| p.get() == pid)
+                            })
+                            .map_or(J::Null, |(_, v)| to_json(v));
+                        if last.as_ref() != Some(&v) {
+                            out.push(json!({ "tx": tx.get(), "value": v }));
+                            last = Some(v);
+                        }
+                    }
+                    Record::Tombstone(_) => {
+                        out.push(json!({ "tx": tx.get(), "deleted": true }));
+                        last = None;
+                    }
+                    _ => {}
+                }
+            }
+            return json!({
+                "id": id.to_string(),
+                "property": prop,
+                "property_id": pid,
+                "versions": out,
+            });
+        }
+
+        let out: Vec<J> = versions
+            .iter()
+            .map(|(tx, rec)| match rec {
+                Record::Entity(e) => {
+                    let props: Vec<J> = e
+                        .properties
+                        .iter()
+                        .map(|(pid, v)| {
+                            json!({
+                                "name": names.prop_name.get(&pid.get()).cloned()
+                                    .unwrap_or_else(|| format!("prop:{}", pid.get())),
+                                "value": to_json(v),
+                            })
+                        })
+                        .collect();
+                    json!({ "tx": tx.get(), "properties": props })
+                }
+                Record::Tombstone(_) => json!({ "tx": tx.get(), "deleted": true }),
+                _ => json!({ "tx": tx.get() }),
+            })
+            .collect();
+        json!({ "id": id.to_string(), "versions": out })
+    }
+
+    /// A 2-D pivot of one record-kind: group entities by `row_prop` × `col_prop`
+    /// and aggregate each cell. `agg` is `"count"` (default) or `"sum"` over the
+    /// numeric `value_prop`. Returns the distinct row/col values (as display
+    /// strings), the cell matrix, and margins.
+    #[must_use]
+    pub fn pivot(
+        &self,
+        type_id: u32,
+        row_prop: &str,
+        col_prop: &str,
+        agg: &str,
+        value_prop: Option<&str>,
+        as_of: Option<u64>,
+    ) -> J {
+        let snap = self.snapshot(as_of);
+        let recs = self.records(snap);
+        let names = Self::names(&recs);
+        let tid = TypeId::new(type_id);
+        let row_pid = names.prop_id.get(row_prop).copied();
+        let col_pid = names.prop_id.get(col_prop).copied();
+        let val_pid = value_prop.and_then(|p| names.prop_id.get(p).copied());
+        let summing = agg == "sum";
+
+        // (row, col) -> aggregate; plus ordered distinct row/col values.
+        let mut rows: BTreeSet<String> = BTreeSet::new();
+        let mut cols: BTreeSet<String> = BTreeSet::new();
+        let mut cells: BTreeMap<(String, String), f64> = BTreeMap::new();
+        for r in &recs {
+            let Record::Entity(e) = r else { continue };
+            if e.type_id != tid {
+                continue;
+            }
+            let rk = cell_key(row_pid.and_then(|p| prop_val(e, p)));
+            let ck = cell_key(col_pid.and_then(|p| prop_val(e, p)));
+            let amount = if summing {
+                val_pid.and_then(|p| prop_val(e, p)).map_or(0.0, numeric)
+            } else {
+                1.0
+            };
+            rows.insert(rk.clone());
+            cols.insert(ck.clone());
+            *cells.entry((rk, ck)).or_insert(0.0) += amount;
+        }
+
+        let row_vals: Vec<String> = rows.into_iter().collect();
+        let col_vals: Vec<String> = cols.into_iter().collect();
+        let matrix: Vec<Vec<f64>> = row_vals
+            .iter()
+            .map(|rk| {
+                col_vals
+                    .iter()
+                    .map(|ck| *cells.get(&(rk.clone(), ck.clone())).unwrap_or(&0.0))
+                    .collect()
+            })
+            .collect();
+        let row_totals: Vec<f64> = matrix.iter().map(|row| row.iter().sum()).collect();
+        let col_totals: Vec<f64> = (0..col_vals.len())
+            .map(|c| matrix.iter().map(|row| row[c]).sum())
+            .collect();
+        let grand_total: f64 = row_totals.iter().sum();
+
+        json!({
+            "type_id": type_id,
+            "as_of": snap.get(),
+            "row_prop": row_prop,
+            "col_prop": col_prop,
+            "agg": if summing { "sum" } else { "count" },
+            "value_prop": value_prop,
+            "rows": row_vals,
+            "cols": col_vals,
+            "cells": matrix,
+            "row_totals": row_totals,
+            "col_totals": col_totals,
+            "grand_total": grand_total,
+        })
     }
 
     // ---- write paths ----------------------------------------------------
@@ -502,6 +676,77 @@ mod tests {
         );
         assert!(store.record(id, None).is_null(), "no live record at head");
         assert!(!store.record(id, Some(tx_create)).is_null(), "live in history");
+    }
+
+    /// The per-cell history is the property's change timeline (deduped) ending
+    /// in a `deleted` entry, and is unaffected by edits to other properties.
+    #[test]
+    fn history_is_property_change_timeline() {
+        let store = fresh();
+        store
+            .create("Person", &[("name".into(), s("Alice")), ("age".into(), Value::I64(30))])
+            .expect("create");
+        let tid = u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap())
+            .unwrap();
+        let id = Uuid::parse_str(store.table(tid, None, 10)["rows"][0]["id"].as_str().unwrap())
+            .unwrap();
+
+        store.set(id, "age", &Value::I64(31)).expect("set 31");
+        store.set(id, "name", &s("Alicia")).expect("set unrelated"); // must not appear in age history
+        store.set(id, "age", &Value::I64(32)).expect("set 32");
+        store.delete(id).expect("delete");
+
+        let h = store.history(id, Some("age"));
+        let vs = h["versions"].as_array().unwrap();
+        // 30, 31, 32, deleted — the name edit is invisible to the age timeline.
+        assert_eq!(vs.len(), 4, "three values + a delete");
+        assert_eq!(vs[0]["value"], 30);
+        assert_eq!(vs[1]["value"], 31);
+        assert_eq!(vs[2]["value"], 32);
+        assert_eq!(vs[3]["deleted"], true);
+
+        // Whole-record history (no property) yields one entry per version.
+        let whole = store.history(id, None);
+        assert_eq!(whole["versions"].as_array().unwrap().len(), 5);
+    }
+
+    /// A pivot groups by row × col and aggregates count and sum with margins.
+    #[test]
+    fn pivot_counts_and_sums_with_margins() {
+        let store = fresh();
+        for (name, city, status, age) in [
+            ("Alice", "Hanoi", "active", 30),
+            ("Bob", "Hanoi", "inactive", 40),
+            ("Cara", "HCMC", "active", 25),
+        ] {
+            store
+                .create(
+                    "Person",
+                    &[
+                        ("name".into(), s(name)),
+                        ("city".into(), s(city)),
+                        ("status".into(), s(status)),
+                        ("age".into(), Value::I64(age)),
+                    ],
+                )
+                .expect("create");
+        }
+        let tid = u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap())
+            .unwrap();
+
+        let p = store.pivot(tid, "city", "status", "count", None, None);
+        // rows sorted: HCMC, Hanoi ; cols sorted: active, inactive
+        assert_eq!(p["rows"], json!(["HCMC", "Hanoi"]));
+        assert_eq!(p["cols"], json!(["active", "inactive"]));
+        assert_eq!(p["cells"], json!([[1.0, 0.0], [1.0, 1.0]]));
+        assert_eq!(p["grand_total"], 3.0);
+        assert_eq!(p["row_totals"], json!([1.0, 2.0]));
+        assert_eq!(p["col_totals"], json!([2.0, 1.0]));
+
+        let sum = store.pivot(tid, "city", "status", "sum", Some("age"), None);
+        // Hanoi/active=30, Hanoi/inactive=40, HCMC/active=25
+        assert_eq!(sum["cells"], json!([[25.0, 0.0], [30.0, 40.0]]));
+        assert_eq!(sum["grand_total"], 95.0);
     }
 
     /// Editing a record that does not exist is a typed `NotFound` (HTTP 404).

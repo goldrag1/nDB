@@ -2376,6 +2376,56 @@ impl Engine {
         })
     }
 
+    /// Every stored version of one key, oldest first, each paired with the
+    /// transaction at which it took effect (`effective_tx`: assert tx for
+    /// entities/hyperedges, delete tx for tombstones).
+    ///
+    /// Gathers across all layers (memtable + every SSTable) exactly like
+    /// [`Self::snapshot_read`], but instead of resolving to the single visible
+    /// record it returns the full version chain — the basis for a "history of
+    /// this record" view without an O(head) snapshot walk. A key is written by
+    /// a single writer, so there is at most one version per tx; duplicates that
+    /// can appear across overlapping SSTables (pre-compaction) are deduped by
+    /// effective tx, keeping the chain one entry per tx.
+    ///
+    /// # Errors
+    /// Propagates SSTable read errors.
+    pub fn versions_of(&self, uuid: &uuid::Uuid) -> Result<Vec<(TxId, Record)>, EngineError> {
+        let mut key = SSTableKey {
+            kind: 0,
+            primary: uuid.as_bytes().to_vec(),
+        };
+        let kinds = [
+            crate::record::RecordKind::Entity,
+            crate::record::RecordKind::HyperEdge,
+            crate::record::RecordKind::Tombstone,
+        ];
+
+        // Memtable first so its (newest) copy wins any tx collision; SSTables
+        // then only fill in txs the memtable did not carry.
+        let mut by_tx: BTreeMap<u64, Record> = BTreeMap::new();
+        for kind in kinds {
+            key.kind = kind.as_byte();
+            if let Some(vs) = self.memtable.versions(&key) {
+                for r in vs {
+                    by_tx
+                        .entry(crate::mvcc::effective_tx(r).get())
+                        .or_insert_with(|| r.clone());
+                }
+            }
+        }
+        for sst in &self.sstables {
+            for kind in kinds {
+                key.kind = kind.as_byte();
+                for r in sst.find_all(&key)? {
+                    by_tx.entry(crate::mvcc::effective_tx(&r).get()).or_insert(r);
+                }
+            }
+        }
+
+        Ok(by_tx.into_iter().map(|(tx, r)| (TxId::new(tx), r)).collect())
+    }
+
     /// Number of open SSTables.
     #[must_use]
     pub fn sstable_count(&self) -> usize {
@@ -3881,6 +3931,54 @@ mod tests {
             tx_id_supersede: TxId::ACTIVE,
             properties: vec![(PropertyId::new(1), Value::String(prop.into()))],
         }
+    }
+
+    #[test]
+    fn versions_of_gathers_chain_across_memtable_and_sstable() {
+        let dir = temp_dir("versions_of");
+        let mut engine = Engine::create(&dir).unwrap();
+        let eid = EntityId::now_v7();
+        let uuid = eid.into_uuid();
+
+        // v1, v2 then flush to an SSTable; v3 + delete stay in the memtable.
+        for prop in ["a", "b"] {
+            let mut txn = engine.begin_write();
+            txn.put_entity(make_entity(eid, prop));
+            txn.commit().unwrap();
+        }
+        engine.flush().unwrap();
+        assert!(engine.sstable_count() >= 1, "flushed to sstable");
+
+        let mut txn = engine.begin_write();
+        txn.put_entity(make_entity(eid, "c"));
+        txn.commit().unwrap();
+        let mut txn = engine.begin_write();
+        txn.delete(uuid);
+        let del_tx = txn.commit().unwrap();
+
+        let versions = engine.versions_of(&uuid).unwrap();
+        // Four effective txs: three entity asserts + one tombstone, ordered.
+        assert_eq!(versions.len(), 4, "full chain across layers");
+        let txs: Vec<u64> = versions.iter().map(|(t, _)| t.get()).collect();
+        let mut sorted = txs.clone();
+        sorted.sort_unstable();
+        assert_eq!(txs, sorted, "oldest first");
+        assert!(
+            matches!(versions[0].1, Record::Entity(ref e)
+                if e.properties[0].1 == Value::String("a".into())),
+            "first version is the original value from the sstable"
+        );
+        assert!(
+            matches!(versions[3].1, Record::Tombstone(_)),
+            "last version is the delete tombstone"
+        );
+        assert_eq!(versions[3].0, del_tx, "tombstone tagged with its delete tx");
+
+        // Empty for an unknown key.
+        assert!(engine.versions_of(&EntityId::now_v7().into_uuid()).unwrap().is_empty());
+
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

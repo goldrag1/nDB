@@ -67,6 +67,30 @@
   .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
   #toast { position: fixed; bottom: 16px; right: 16px; background: #1d2733; border: 1px solid #2c3a4a; border-radius: 8px; padding: 9px 14px; opacity: 0; transition: opacity .2s; pointer-events: none; }
   #toast.show { opacity: 1; } #toast.err { border-color: var(--danger); color: #ffd0d0; }
+  .modetabs { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+  .modetabs button { border: none; border-radius: 0; background: #131922; color: var(--muted); padding: 5px 12px; }
+  .modetabs button.active { background: #1d2733; color: var(--ink); }
+  .modetabs button:hover { color: var(--ink); }
+  .cellval { position: relative; }
+  .cellval .cv { display: inline; }
+  .histbtn { background: none; border: none; padding: 0 0 0 6px; opacity: 0; cursor: pointer; font-size: 11px; line-height: 1; }
+  .cellval:hover .histbtn { opacity: .55; }
+  .histbtn:hover { opacity: 1 !important; border: none; }
+  .pivot-controls { display: flex; gap: 16px; align-items: center; margin-bottom: 12px; color: var(--muted); }
+  .pivot-controls select { background: #0c1118; color: var(--ink); border: 1px solid #2c3a4a; border-radius: 6px; padding: 4px 6px; font: inherit; }
+  .pivot-controls .hidden { display: none; }
+  table.pivot th.corner { color: var(--muted); font-weight: 600; }
+  table.pivot tbody th { background: #131922; color: var(--ink); text-align: left; position: static; }
+  table.pivot td { text-align: right; }
+  table.pivot td.total, table.pivot th.total { color: var(--accent); text-align: right; }
+  table.pivot tr.totals th, table.pivot tr.totals td { background: #131922; }
+  table.pivot .grand { color: var(--accent2); font-weight: 600; text-align: right; }
+  .histbody { max-height: 320px; overflow: auto; margin: 4px 0; }
+  .hrow { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  .hrow .htx { color: var(--muted); font-family: ui-monospace, monospace; font-size: 11px; min-width: 52px; }
+  .hrow .hval { flex: 1; }
+  .hrow.del .hval { color: var(--danger); }
+  .hjump { font-size: 11px; padding: 2px 8px; }
 </style>
 </head>
 <body>
@@ -98,11 +122,20 @@
     </div>
   </dialog>
 
+  <dialog id="histDlg">
+    <h3>History · <span id="histTitle"></span> <span class="badge" id="histId"></span></h3>
+    <div id="histBody" class="histbody"></div>
+    <div class="dlg-actions">
+      <button onclick="document.getElementById('histDlg').close()">Close</button>
+    </div>
+  </dialog>
+
   <div id="toast"></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
-let HEAD = 0, ASOF = null, SEL = null, CATALOG = [];
+let HEAD = 0, ASOF = null, SEL = null, CATALOG = [], MODE = "table";
+let PIVOT = { row: null, col: null, agg: "count", value: null };
 
 const api = {
   async get(path) { const r = await fetch("/api" + path, { cache: "no-store" }); return r.json(); },
@@ -142,7 +175,30 @@ function renderKinds() {
 }
 
 async function selectKind(k) {
-  SEL = k; renderKinds(); await loadTable();
+  SEL = k;
+  // Reset pivot axes to this kind's first two properties when switching kinds.
+  PIVOT = { row: k.properties[0]?.name || null, col: k.properties[1]?.name || k.properties[0]?.name || null, agg: "count", value: null };
+  renderKinds();
+  await renderMain();
+}
+
+// Dispatch the main pane on the current view mode.
+async function renderMain() {
+  if (!SEL) return;
+  if (MODE === "pivot") return loadPivot();
+  return loadTable();
+}
+
+function modeTabsHtml() {
+  return `<div class="modetabs">
+    <button data-mode="table" class="${MODE === "table" ? "active" : ""}">Table</button>
+    <button data-mode="pivot" class="${MODE === "pivot" ? "active" : ""}">Pivot</button>
+  </div>`;
+}
+function wireModeTabs() {
+  document.querySelectorAll(".modetabs button").forEach((b) => {
+    b.onclick = async () => { MODE = b.dataset.mode; await renderMain(); };
+  });
 }
 
 async function loadTable() {
@@ -156,12 +212,13 @@ function renderTable(t) {
   const headers = t.headers || [];
   let html = "";
   if (readOnly()) html += `<div class="banner">Viewing history as of tx ${ASOF} — read only. Slide to “now” to edit.</div>`;
-  html += `<div class="toolbar"><h2>${esc(SEL.name)}</h2><span class="badge">${t.shown} / ${t.total} records</span><div class="spacer" style="flex:1"></div>`;
+  html += `<div class="toolbar"><h2>${esc(SEL.name)}</h2>${modeTabsHtml()}<span class="badge">${t.shown} / ${t.total} records</span><div class="spacer" style="flex:1"></div>`;
   if (!readOnly()) html += `<button class="primary" id="newBtn">+ New record</button>`;
   html += `</div>`;
   if (!headers.length && !t.rows.length) {
     html += `<div class="empty">No records yet.</div>`;
     c.innerHTML = html;
+    wireModeTabs();
     if (!readOnly()) $("newBtn").onclick = openNew;
     return;
   }
@@ -172,13 +229,18 @@ function renderTable(t) {
     html += `<tr data-id="${row.id}"><td class="id" title="${row.id}">${row.id.slice(0, 8)}…</td>`;
     row.cells.forEach((cell, i) => {
       const h = headers[i];
-      html += `<td class="cellval ${editable(cell) && !readOnly() ? "editable" : ""}" data-prop="${esc(h.name)}" data-i="${i}">${fmt(cell)}</td>`;
+      const canEdit = editable(cell) && !readOnly();
+      html += `<td class="cellval ${canEdit ? "editable" : ""}" data-prop="${esc(h.name)}" data-i="${i}"><span class="cv">${fmt(cell)}</span><button class="histbtn" title="History of this value" data-prop="${esc(h.name)}">🕘</button></td>`;
     });
     html += readOnly() ? "<td></td>" : `<td><button class="rowdel" title="Delete">✕</button></td>`;
     html += "</tr>";
   }
   html += "</tbody></table>";
   c.innerHTML = html;
+  wireModeTabs();
+  c.querySelectorAll(".histbtn").forEach((b) => {
+    b.onclick = (e) => { e.stopPropagation(); openHistory(b.closest("tr").dataset.id, b.dataset.prop); };
+  });
   if (!readOnly()) {
     $("newBtn").onclick = openNew;
     c.querySelectorAll("td.editable").forEach((td) => (td.onclick = () => beginEdit(td)));
@@ -212,7 +274,9 @@ function parseScalar(text) {
 function beginEdit(td) {
   const id = td.closest("tr").dataset.id;
   const prop = td.dataset.prop;
-  const cur = td.textContent === "∅" ? "" : td.textContent;
+  const cvEl = td.querySelector(".cv");
+  const curText = cvEl ? cvEl.textContent : td.textContent;
+  const cur = curText === "∅" ? "" : curText;
   td.innerHTML = `<input value="${esc(cur)}" />`;
   const inp = td.querySelector("input");
   inp.focus(); inp.select();
@@ -261,7 +325,93 @@ $("newSave").onclick = async () => {
   else toast(r.body.error?.message || "error", true);
 };
 
-async function refreshAll() { await loadCatalog(); if (SEL) { SEL = CATALOG.find((k) => k.type_id === SEL.type_id) || SEL; } await loadTable(); }
+// ---- Pivot view ----
+function propOptions(selected) {
+  return (SEL.properties || []).map((pr) => `<option value="${esc(pr.name)}" ${pr.name === selected ? "selected" : ""}>${esc(pr.name)}</option>`).join("");
+}
+function numericPropOptions(selected) {
+  return (SEL.properties || []).filter((pr) => pr.type === "int" || pr.type === "float")
+    .map((pr) => `<option value="${esc(pr.name)}" ${pr.name === selected ? "selected" : ""}>${esc(pr.name)}</option>`).join("");
+}
+function numfmt(n) { if (n === undefined || n === null) return "0"; return Number.isInteger(n) ? String(n) : n.toFixed(2); }
+
+async function loadPivot() {
+  const params = new URLSearchParams({ kind: SEL.type_id, row: PIVOT.row || "", col: PIVOT.col || "", agg: PIVOT.agg });
+  if (PIVOT.agg === "sum" && PIVOT.value) params.set("value", PIVOT.value);
+  if (ASOF !== null) params.set("as_of", ASOF);
+  renderPivot(await api.get("/pivot?" + params.toString()));
+}
+
+function renderPivot(p) {
+  const c = $("content");
+  let html = "";
+  if (readOnly()) html += `<div class="banner">Pivot as of tx ${ASOF}.</div>`;
+  html += `<div class="toolbar"><h2>${esc(SEL.name)}</h2>${modeTabsHtml()}<div class="spacer" style="flex:1"></div></div>`;
+  html += `<div class="pivot-controls">
+    <label>Rows <select id="pvRow">${propOptions(PIVOT.row)}</select></label>
+    <label>Columns <select id="pvCol">${propOptions(PIVOT.col)}</select></label>
+    <label>Aggregate <select id="pvAgg"><option value="count" ${PIVOT.agg === "count" ? "selected" : ""}>count</option><option value="sum" ${PIVOT.agg === "sum" ? "selected" : ""}>sum</option></select></label>
+    <label id="pvValueWrap" class="${PIVOT.agg === "sum" ? "" : "hidden"}">of <select id="pvValue">${numericPropOptions(PIVOT.value)}</select></label>
+  </div>`;
+  const rows = p.rows || [], cols = p.cols || [], cells = p.cells || [];
+  if (!rows.length) {
+    html += `<div class="empty">No data — pick properties present on records of this kind.</div>`;
+  } else {
+    html += `<table class="pivot"><thead><tr><th class="corner">${esc(p.row_prop || "")} \\ ${esc(p.col_prop || "")}</th>`;
+    for (const cv of cols) html += `<th>${esc(cv)}</th>`;
+    html += `<th class="total">Σ</th></tr></thead><tbody>`;
+    rows.forEach((rv, ri) => {
+      html += `<tr><th>${esc(rv)}</th>`;
+      (cells[ri] || []).forEach((n) => (html += `<td>${numfmt(n)}</td>`));
+      html += `<td class="total">${numfmt(p.row_totals[ri])}</td></tr>`;
+    });
+    html += `<tr class="totals"><th>Σ</th>`;
+    (p.col_totals || []).forEach((n) => (html += `<td class="total">${numfmt(n)}</td>`));
+    html += `<td class="grand">${numfmt(p.grand_total)}</td></tr></tbody></table>`;
+  }
+  c.innerHTML = html;
+  wireModeTabs();
+  $("pvRow").onchange = (e) => { PIVOT.row = e.target.value; loadPivot(); };
+  $("pvCol").onchange = (e) => { PIVOT.col = e.target.value; loadPivot(); };
+  $("pvAgg").onchange = (e) => {
+    PIVOT.agg = e.target.value;
+    if (PIVOT.agg === "sum" && !PIVOT.value) {
+      const n = (SEL.properties || []).find((pr) => pr.type === "int" || pr.type === "float");
+      PIVOT.value = n ? n.name : null;
+    }
+    loadPivot();
+  };
+  const pv = $("pvValue");
+  if (pv) pv.onchange = (e) => { PIVOT.value = e.target.value; loadPivot(); };
+}
+
+// ---- Per-cell history popover ----
+async function openHistory(id, prop) {
+  const h = await api.get(`/history?id=${id}&property=${encodeURIComponent(prop)}`);
+  $("histTitle").textContent = prop;
+  $("histId").textContent = id.slice(0, 8) + "…";
+  const body = $("histBody");
+  const vs = h.versions || [];
+  if (!vs.length) {
+    body.innerHTML = `<div class="empty" style="padding:14px">No recorded history.</div>`;
+  } else {
+    body.innerHTML = vs.map((v) => v.deleted
+      ? `<div class="hrow del"><span class="htx">tx ${v.tx}</span><span class="hval">deleted</span></div>`
+      : `<div class="hrow"><span class="htx">tx ${v.tx}</span><span class="hval">${fmt(v.value)}</span><button class="hjump" data-tx="${v.tx}" title="View the database at this point">view</button></div>`
+    ).join("");
+    body.querySelectorAll(".hjump").forEach((b) => (b.onclick = () => { jumpTo(parseInt(b.dataset.tx, 10)); $("histDlg").close(); }));
+  }
+  $("histDlg").showModal();
+}
+
+function jumpTo(tx) {
+  const slider = $("asof");
+  slider.value = String(tx);
+  slider.dispatchEvent(new Event("input"));
+  loadCatalog().then(() => { if (SEL) SEL = CATALOG.find((k) => k.type_id === SEL.type_id) || SEL; renderKinds(); renderMain(); });
+}
+
+async function refreshAll() { await loadCatalog(); if (SEL) { SEL = CATALOG.find((k) => k.type_id === SEL.type_id) || SEL; } await renderMain(); }
 
 $("asof").oninput = (e) => {
   const v = parseInt(e.target.value, 10);
@@ -270,7 +420,7 @@ $("asof").oninput = (e) => {
   if (ASOF === null) { lbl.textContent = "now"; lbl.className = "asof live"; }
   else { lbl.textContent = "tx " + ASOF; lbl.className = "asof past"; }
 };
-$("asof").onchange = async () => { await loadCatalog(); if (SEL) SEL = CATALOG.find((k) => k.type_id === SEL.type_id) || CATALOG[0]; renderKinds(); await loadTable(); };
+$("asof").onchange = async () => { await loadCatalog(); if (SEL) SEL = CATALOG.find((k) => k.type_id === SEL.type_id) || CATALOG[0]; renderKinds(); await renderMain(); };
 
 loadCatalog().then(() => { if (CATALOG.length) selectKind(CATALOG[0]); });
 </script>

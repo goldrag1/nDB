@@ -170,6 +170,16 @@ impl SharedEngine {
         e.snapshot_iter(snapshot)
     }
 
+    /// `Engine::versions_of` over the shared engine: the full version chain of
+    /// one key, oldest first, each paired with its effective tx.
+    ///
+    /// # Errors
+    /// Propagates SSTable read errors.
+    pub fn versions_of(&self, uuid: &uuid::Uuid) -> Result<Vec<(TxId, Record)>, EngineError> {
+        let e = self.inner.read().expect("engine lock poisoned");
+        e.versions_of(uuid)
+    }
+
     /// Manifest snapshot (cloned out of the lock so the caller is free
     /// of the lock when it returns).
     #[must_use]

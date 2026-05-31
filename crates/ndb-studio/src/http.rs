@@ -11,6 +11,8 @@
 //! - `GET  /api/catalog`    → kinds + properties (`?as_of=`)
 //! - `GET  /api/table`      → one kind as a table (`?kind=&as_of=&limit=`)
 //! - `GET  /api/record`     → one record's full property list (`?id=&as_of=`)
+//! - `GET  /api/history`    → a record's version chain (`?id=&property=`)
+//! - `GET  /api/pivot`      → 2-D pivot (`?kind=&row=&col=&agg=&value=&as_of=`)
 //! - `POST /api/commit`     → create / set / delete (body: `{op, ...}`)
 
 use std::collections::HashMap;
@@ -89,6 +91,10 @@ fn handle(store: &Store, mut stream: TcpStream) -> std::io::Result<()> {
     if method == "GET" && path == "/" {
         return write_html(&mut stream, INDEX_HTML);
     }
+    if method == "GET" && path == "/favicon.ico" {
+        return stream
+            .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    }
 
     let (status, payload) = dispatch(store, &method, path, &qp, &body);
     write_json(&mut stream, status, &payload)
@@ -111,6 +117,26 @@ fn dispatch(store: &Store, method: &str, path: &str, qp: &Query, body: &[u8]) ->
                 return (400, err("bad_request", "missing or invalid id"));
             };
             (200, store.record(id, qp.u64("as_of")))
+        }
+        ("GET", "/api/history") => {
+            let Some(id) = qp.get("id").and_then(|s| Uuid::parse_str(s).ok()) else {
+                return (400, err("bad_request", "missing or invalid id"));
+            };
+            (200, store.history(id, qp.get("property")))
+        }
+        ("GET", "/api/pivot") => {
+            let Some(kind) = qp.u64("kind") else {
+                return (400, err("bad_request", "missing kind"));
+            };
+            let (Some(row), Some(col)) = (qp.get("row"), qp.get("col")) else {
+                return (400, err("bad_request", "missing row or col property"));
+            };
+            let agg = qp.get("agg").unwrap_or("count");
+            #[allow(clippy::cast_possible_truncation)]
+            (
+                200,
+                store.pivot(kind as u32, row, col, agg, qp.get("value"), qp.u64("as_of")),
+            )
         }
         ("POST", "/api/commit") => commit(store, body),
         _ => (404, err("not_found", "unknown endpoint")),
