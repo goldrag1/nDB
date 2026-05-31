@@ -70,12 +70,20 @@ pub struct FollowerCursor {
 pub struct StreamedBatch {
     /// The leader's current active `wal_seq`.
     pub current_wal_seq: u64,
-    /// True when the requested segment is no longer active — the follower
-    /// fell behind a flush and must re-bootstrap from a fresh base backup.
-    pub rotated: bool,
-    /// Records to ingest (decoded; may be empty when caught up).
+    /// Whether the requested segment still exists on the leader. `false`
+    /// means it was pruned past the archive window — the follower fell too
+    /// far behind and must re-bootstrap from a fresh base backup.
+    pub available: bool,
+    /// Whether the requested segment is sealed (no longer the active one).
+    /// A sealed segment, once drained, is followed by [`next_wal_seq`].
+    pub segment_sealed: bool,
+    /// The next WAL segment to advance to after draining a sealed one. WAL
+    /// seqs are non-contiguous, so the leader supplies this. `None` when the
+    /// requested segment is the newest.
+    pub next_wal_seq: Option<u64>,
+    /// Records to ingest (decoded; may be empty when caught up on a segment).
     pub records: Vec<Record>,
-    /// Offset to request from next time.
+    /// Offset to request from next time within the current segment.
     pub next_offset: u64,
 }
 
@@ -119,7 +127,7 @@ where
     F: FnOnce(&FollowerCursor) -> Result<StreamedBatch, EngineError>,
 {
     let batch = fetch(cursor)?;
-    if batch.rotated {
+    if !batch.available {
         return Ok(PollOutcome::Rotated {
             current_wal_seq: batch.current_wal_seq,
         });
@@ -127,7 +135,15 @@ where
     let n = batch.records.len();
     engine.ingest_replicated(batch.records)?;
     cursor.offset = batch.next_offset;
-    cursor.wal_seq = batch.current_wal_seq;
+    // A sealed segment, once fully drained (no new records), is followed by
+    // the next segment — advance to it so streaming continues across the
+    // leader's flush/rotation without a re-bootstrap.
+    if n == 0 && batch.segment_sealed {
+        if let Some(next) = batch.next_wal_seq {
+            cursor.wal_seq = next;
+            cursor.offset = 0;
+        }
+    }
     Ok(PollOutcome::Applied(n))
 }
 
@@ -249,7 +265,7 @@ pub fn apply_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::Engine;
+    use crate::engine::{Engine, EngineConfig};
     use crate::id::{EntityId, PropertyId, TxId, TypeId};
     use crate::mvcc::Resolved;
     use crate::record::EntityRecord;
@@ -412,6 +428,78 @@ mod tests {
     }
 
     #[test]
+    fn follower_streams_continuously_across_wal_rotations() {
+        // The cross-rotation cursor: with WAL archiving on, the leader flushes
+        // (rotating the WAL) WHILE the follower is streaming. The follower must
+        // drain the sealed segment, advance to the next one, and lose nothing —
+        // no re-bootstrap. Drives the real poll_once loop with serve_replication.
+        let leader_dir = temp_dir("xrot-leader");
+        let follower_dir = temp_dir("xrot-follower");
+        let cfg = EngineConfig {
+            wal_archive_segments: 3,
+            ..EngineConfig::default()
+        };
+        let mut leader = Engine::create_with_config(&leader_dir, cfg).unwrap();
+        let mut follower = Engine::create(&follower_dir).unwrap();
+
+        let mut cursor = FollowerCursor {
+            wal_seq: leader.active_wal_seq(),
+            offset: 0,
+        };
+        let mut ids = Vec::new();
+
+        // Interleave commits with flushes so the WAL rotates several times
+        // under the follower; the follower polls after each step.
+        for round in 0..4 {
+            for j in 0..3 {
+                let id = EntityId::now_v7();
+                put(&mut leader, id, &format!("r{round}_{j}"));
+                ids.push(id);
+            }
+            // Flush → WAL rotates; the just-streamed segment becomes archived.
+            leader.flush().unwrap();
+
+            // Drain whatever is available (loops, advancing across the rotation).
+            let mut guard = 0;
+            loop {
+                guard += 1;
+                assert!(guard < 50, "follower should converge");
+                let leader_ref = &leader;
+                let before = cursor;
+                let outcome = poll_once(&mut follower, &mut cursor, |c| {
+                    leader_ref.serve_replication(c.wal_seq, c.offset)
+                })
+                .unwrap();
+                match outcome {
+                    PollOutcome::Rotated { .. } => panic!("archive window should prevent re-bootstrap"),
+                    // Stop when a poll made no progress (no records + no segment advance).
+                    PollOutcome::Applied(0) if cursor == before => break,
+                    _ => {}
+                }
+            }
+        }
+
+        // The replica has every committed entity despite all the rotations.
+        let snap = TxId::new(leader.manifest().last_tx_id);
+        for id in &ids {
+            assert!(
+                matches!(
+                    follower.snapshot_read(&id.into_uuid(), snap).unwrap(),
+                    Resolved::Live(Record::Entity(_))
+                ),
+                "replica lost {id:?} across rotation"
+            );
+        }
+        // The leader kept multiple sealed WAL segments (archiving on).
+        assert!(leader.wal_segments().len() >= 2, "archived segments retained");
+
+        leader.close().unwrap();
+        follower.close().unwrap();
+        std::fs::remove_dir_all(&leader_dir).unwrap();
+        std::fs::remove_dir_all(&follower_dir).unwrap();
+    }
+
+    #[test]
     fn follower_daemon_loop_via_poll_once_catches_up() {
         // Drives the reusable poll_once daemon step in a loop, with the
         // transport closure streaming from an in-process leader — exactly the
@@ -438,16 +526,11 @@ mod tests {
             polls += 1;
             assert!(polls < 10, "should catch up quickly");
             let leader_ref = &leader;
-            let outcome = poll_once(&mut follower, &mut cursor, |c| {
-                let batch = leader_ref.wal_delta_since(c.offset).unwrap();
-                Ok(StreamedBatch {
-                    current_wal_seq: leader_ref.active_wal_seq(),
-                    rotated: false,
-                    records: batch.records,
-                    next_offset: batch.next_offset,
+            let outcome =
+                poll_once(&mut follower, &mut cursor, |c| {
+                    leader_ref.serve_replication(c.wal_seq, c.offset)
                 })
-            })
-            .unwrap();
+                .unwrap();
             match outcome {
                 PollOutcome::Applied(0) => break,
                 PollOutcome::Applied(_) => {}
