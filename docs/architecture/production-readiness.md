@@ -42,7 +42,7 @@ possibly-corrupt disk, so this is load-bearing.
 | **Automatic background compaction** (policy + thread) | **Landed** | `shared.rs` |
 | **Contention-free (off-lock) compaction** | **Landed** | `shared.rs`, `engine.rs` |
 | **Server `/compact` is off-lock** | **Landed** | `ndb-server` via `run_offlock_compaction` |
-| LSM write-stall / L0 backpressure | **Planned** | bounded-memtable signal; see below |
+| **LSM write-stall backpressure + memtable auto-flush** | **Landed** | `engine.rs`, `shared.rs`, `ndb-server` |
 
 The server limits land via a `ServerConfig` (builder methods; existing
 constructors unchanged) — defaults: `max_connections=256`, read/write
@@ -89,9 +89,22 @@ install swap alone keeps reads consistent. The handler documents the standing
 contract — any future read that pins an old snapshot across multiple lock
 acquisitions must enroll it in a snapshot registry first.
 
-Remaining concurrency work: a bounded-memtable **write-stall backpressure**
-signal, and (optionally) an incremental index update at install so the
-install lock-hold isn't an O(total) rebuild in default (non-mmap) mode.
+**Write-stall backpressure + memtable auto-flush** complete the concurrency
+story. Two opt-in `EngineConfig` knobs (both default `0` = disabled, so
+behaviour is unchanged): `memtable_flush_threshold_bytes` triggers
+`Engine::auto_flush_if_full` (the primary resident-write-memory bound), and
+`l0_stall_threshold` makes `Engine::check_write_admission` return
+`WriteStalled` once the live SSTable count shows flushes outpacing
+compaction. `EngineConfig::from_env` (`NDB_MEMTABLE_FLUSH_BYTES` /
+`NDB_L0_STALL`) wires them through the env-sourced server/CLI constructors,
+and the server's `/commit` maps `WriteStalled → 503` + auto-flushes after a
+commit. **Crucially the stall is a rejection, not a block**: a blocking write
+would hold the engine write lock waiting for compaction and dead-lock the
+off-lock compactor's install phase — proven safe by a multi-threaded
+writer-vs-compactor test that the stall never deadlocks.
+
+Remaining: an incremental index update at compaction install so the install
+lock-hold isn't an O(total) rebuild in default (non-mmap) mode.
 
 ## P2 — Observability & operability
 
@@ -149,7 +162,6 @@ primitives, automatic background compaction, **off-lock contention-free
 compaction** (engine) and bounded concurrency + timeouts + request limits +
 `/metrics` + `/ready` + graceful shutdown (server). Deliberately deferred —
 because a half-correct version is worse than a documented gap — block
-compression (needs a dependency + block-format work), LSM write-stall
-backpressure, the replication network daemon, and an incremental index
-update at compaction install. The deferred items are design-clear, not
-blocked.
+compression (needs a dependency + block-format work), the replication
+network daemon, and an incremental index update at compaction install. The
+deferred items are design-clear, not blocked.
