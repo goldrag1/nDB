@@ -2591,14 +2591,16 @@ impl Engine {
             }
         }
 
-        // Reload sidecars for the (now single) compacted SSTable before the
-        // rebuild, so rebuild_indexes skips data served from disk and the
-        // RAM mirrors end up holding only the memtable.
+        // Incremental index maintenance: NO full rebuild — see
+        // `install_planned_compaction` for the invariance argument. The RAM
+        // indexes are invariant under compaction (self-cleaning,
+        // `latest_tx`-guarded applies), so re-deriving them is wasted
+        // O(total) work. Only the mmap sidecar file maps need updating
+        // (gated; no-ops in default mode).
         self.load_property_index_sidecars();
         self.load_vector_index_sidecars();
         self.load_id_list_sidecars();
-        // Rebuild indexes since we dropped tombstoned records.
-        self.rebuild_indexes()?;
+        self.load_meta_sidecars();
 
         Ok(CompactionStats {
             records_in,
@@ -2723,11 +2725,30 @@ impl Engine {
             }
         }
 
-        // Same index reload + rebuild as the locking compaction.
+        // Incremental index maintenance: NO full rebuild.
+        //
+        // The in-memory indexes are INVARIANT under compaction. Every index
+        // (`property_btree`, `lookup_key`, `adjacency`, `type_cluster`,
+        // `entity_type_cluster`, `vector`) applies records via a self-cleaning,
+        // order-independent rule — it tracks `latest_tx` per key, ignores any
+        // record older than the one it already holds, and removes a key's prior
+        // entries before re-inserting. So the index state is a pure function of
+        // each key's LATEST version. Compaction only drops superseded versions
+        // and tombstoned records (whose removal the index already reflected),
+        // never the visible winner — so the RAM indexes already hold the correct
+        // post-compaction state and re-deriving them is wasted O(total) work
+        // under the install write lock (the cost off-lock compaction set out to
+        // avoid). This makes the install index cost O(1) in default mode.
+        //
+        // What DOES change is the on-disk sidecar set (mmap mode only): the new
+        // SSTable's `.pidx`/`.vidx`/`.idl`/`.meta` replace the inputs'. The
+        // gated `load_*` calls update those mmap file maps; in default mode they
+        // are no-ops. `load_meta_sidecars` (mmap-gated) refreshes the
+        // tx-timestamps + retention that the old rebuild used to reload.
         self.load_property_index_sidecars();
         self.load_vector_index_sidecars();
         self.load_id_list_sidecars();
-        self.rebuild_indexes()?;
+        self.load_meta_sidecars();
 
         Ok(Some(CompactionStats {
             records_in,
@@ -5295,6 +5316,97 @@ mod tests {
         );
         engine.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Proves the install-time index invariant directly under a given config:
+    /// after a compaction (which SKIPS the index rebuild), the entire index
+    /// query surface must be IDENTICAL to what an explicit full rebuild
+    /// produces. Exercises a superseded property value (stale-entry cleanup)
+    /// + a tombstoned entity (removal) — the two cases a rebuild used to fix.
+    fn assert_compaction_index_invariant(tag: &str, cfg: EngineConfig) {
+        let dir = temp_dir(tag);
+        let mut engine = Engine::create_with_config(&dir, cfg).unwrap();
+        let prop = PropertyId::new(1);
+        engine.register_property_btree(TypeId::new(1), prop);
+        engine.register_lookup_key(prop);
+
+        let a = EntityId::now_v7();
+        let b = EntityId::now_v7();
+        let c = EntityId::now_v7();
+
+        // SSTable 1: A="old", B="bee", C="cee".
+        {
+            let mut t = engine.begin_write();
+            t.put_entity(make_entity(a, "old"));
+            t.put_entity(make_entity(b, "bee"));
+            t.put_entity(make_entity(c, "cee"));
+            t.commit().unwrap();
+        }
+        engine.flush().unwrap();
+        // SSTable 2: A superseded to "new"; B tombstoned.
+        {
+            let mut t = engine.begin_write();
+            t.put_entity(make_entity(a, "new"));
+            t.delete(b.into_uuid());
+            t.commit().unwrap();
+        }
+        engine.flush().unwrap();
+        assert_eq!(engine.sstable_count(), 2);
+
+        // Compact — this takes the skip-rebuild install path.
+        engine.compact().unwrap();
+        assert_eq!(engine.sstable_count(), 1);
+
+        let snapshot = |e: &Engine| {
+            let mut by_type = e.entities_by_type(TypeId::new(1));
+            by_type.sort_by_key(|x| *x.as_bytes());
+            (
+                e.property_lookup(TypeId::new(1), prop, &Value::String("new".into())),
+                e.property_lookup(TypeId::new(1), prop, &Value::String("old".into())),
+                e.property_lookup(TypeId::new(1), prop, &Value::String("cee".into())),
+                e.property_lookup(TypeId::new(1), prop, &Value::String("bee".into())),
+                e.lookup_by_external_key(prop, &Value::String("new".into())),
+                e.lookup_by_external_key(prop, &Value::String("bee".into())),
+                by_type,
+            )
+        };
+        let after_skip = snapshot(&engine);
+
+        // Sanity: stale "old" gone, A under "new", tombstoned B gone, C kept.
+        assert_eq!(after_skip.0, vec![a], "A indexed under its latest value");
+        assert!(after_skip.1.is_empty(), "stale superseded value must be gone");
+        assert_eq!(after_skip.2, vec![c]);
+        assert!(after_skip.3.is_empty(), "tombstoned B must be absent from the index");
+        assert_eq!(after_skip.4, Some(a));
+        assert_eq!(after_skip.5, None);
+
+        // Decisive check: a forced full rebuild yields the SAME state, so
+        // skipping it at compaction install changed nothing.
+        engine.rebuild_indexes().unwrap();
+        assert_eq!(
+            after_skip,
+            snapshot(&engine),
+            "skip-rebuild must be identical to a full rebuild"
+        );
+
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn compaction_index_invariant_default_mode() {
+        assert_compaction_index_invariant("incr-install-default", EngineConfig::default());
+    }
+
+    #[test]
+    fn compaction_index_invariant_mmap_mode() {
+        // mmap mode takes the different path: the RAM mirror holds only the
+        // memtable and queries are served from the output's sidecar file map.
+        // The invariant must still hold (skip-rebuild == full-rebuild).
+        assert_compaction_index_invariant(
+            "incr-install-mmap",
+            EngineConfig::low_memory(DEFAULT_MAX_CACHE_BYTES),
+        );
     }
 
     #[test]

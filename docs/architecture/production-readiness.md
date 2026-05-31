@@ -43,6 +43,7 @@ possibly-corrupt disk, so this is load-bearing.
 | **Contention-free (off-lock) compaction** | **Landed** | `shared.rs`, `engine.rs` |
 | **Server `/compact` is off-lock** | **Landed** | `ndb-server` via `run_offlock_compaction` |
 | **LSM write-stall backpressure + memtable auto-flush** | **Landed** | `engine.rs`, `shared.rs`, `ndb-server` |
+| **No index rebuild at compaction install** (O(total)→O(1)) | **Landed** | `engine.rs` |
 
 The server limits land via a `ServerConfig` (builder methods; existing
 constructors unchanged) — defaults: `max_connections=256`, read/write
@@ -103,8 +104,17 @@ would hold the engine write lock waiting for compaction and dead-lock the
 off-lock compactor's install phase — proven safe by a multi-threaded
 writer-vs-compactor test that the stall never deadlocks.
 
-Remaining: an incremental index update at compaction install so the install
-lock-hold isn't an O(total) rebuild in default (non-mmap) mode.
+The last big lock-hold in compaction — the index rebuild at install — is now
+gone too. It turned out not to need an incremental-update algorithm at all:
+the in-memory indexes are **invariant under compaction**. Every index applies
+records with a self-cleaning, order-independent rule (track `latest_tx`,
+ignore older records, remove a key's prior entries before re-inserting), so
+the index state is a pure function of each key's latest version — and
+compaction only drops superseded/tombstoned records, never the visible
+winner. So the rebuild was redundant: removed, not replaced. Default-mode
+install index cost goes O(total) → O(1). A test snapshots the full query
+surface after a compaction (superseded value + tombstone), forces an explicit
+rebuild, and asserts the two are identical — in both default and mmap mode.
 
 ## P2 — Observability & operability
 
@@ -162,6 +172,5 @@ primitives, automatic background compaction, **off-lock contention-free
 compaction** (engine) and bounded concurrency + timeouts + request limits +
 `/metrics` + `/ready` + graceful shutdown (server). Deliberately deferred —
 because a half-correct version is worse than a documented gap — block
-compression (needs a dependency + block-format work), the replication
-network daemon, and an incremental index update at compaction install. The
-deferred items are design-clear, not blocked.
+compression (needs a dependency + block-format work) and the replication
+network daemon. The deferred items are design-clear, not blocked.
