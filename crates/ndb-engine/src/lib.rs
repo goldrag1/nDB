@@ -61,7 +61,7 @@ pub use db::{
     Manifest, ManifestEntry, manifest_filename, parse_manifest_filename,
 };
 pub use engine::{
-    CompactionStats, DEFAULT_MAX_CACHE_BYTES, Engine, EngineConfig, EngineError,
+    BackupStats, CompactionStats, DEFAULT_MAX_CACHE_BYTES, Engine, EngineConfig, EngineError,
     IndexMemoryStats, IsolationLevel, MigrationStats, RetentionPolicy, WriteTxn,
 };
 pub use shared::SharedEngine;
