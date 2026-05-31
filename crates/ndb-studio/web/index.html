@@ -170,6 +170,12 @@
   .dfn { color: var(--muted); } .dold { color: var(--danger); } .dnew { color: var(--accent2); }
   .simbtn { font-size: 11px; padding: 1px 7px; margin-left: 6px; }
   .simresult { margin: 4px 0 0; padding-left: 4px; border-left: 2px solid var(--accent); }
+  .qlayout { display: grid; grid-template-columns: 1fr 240px; gap: 16px; }
+  .qside { border-left: 1px solid var(--line); padding-left: 14px; }
+  .qitem { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 3px 0; }
+  .qload { color: var(--accent); cursor: pointer; font-size: 12px; font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .qload:hover { text-decoration: underline; }
+  .qdel { color: var(--danger); border: none; background: none; cursor: pointer; font-size: 11px; }
 </style>
 </head>
 <body>
@@ -777,26 +783,56 @@ function renderPivot(p) {
 // ---- Query console ----
 let QUERY_TEXT = "match Person(name: ?n) return ?n limit 50";
 
+const qStore = {
+  hist: () => { try { return JSON.parse(localStorage.getItem("ndb_qhist") || "[]"); } catch { return []; } },
+  pushHist: (q) => { let h = qStore.hist().filter((x) => x !== q); h.unshift(q); h = h.slice(0, 15); localStorage.setItem("ndb_qhist", JSON.stringify(h)); },
+  saved: () => { try { return JSON.parse(localStorage.getItem("ndb_qsaved") || "[]"); } catch { return []; } },
+  setSaved: (arr) => localStorage.setItem("ndb_qsaved", JSON.stringify(arr)),
+};
+
 function renderQuery() {
   cancelGraphAnim();
   const c = $("content");
   let html = `<div class="toolbar"><h2>Query</h2>${modeTabsHtml()}<div class="spacer" style="flex:1"></div></div>`;
-  html += `<div class="qwrap">
+  html += `<div class="qlayout"><div class="qmain">
     <textarea id="qtext" class="qeditor" spellcheck="false" placeholder="match Kind(prop: ?v) return ?v limit 50">${esc(QUERY_TEXT)}</textarea>
-    <div class="qbar"><button class="primary" id="qrun">Run ▸</button><span class="qhint">read-only · Ctrl/⌘+Enter to run · entity ids are clickable</span></div>
+    <div class="qbar"><button class="primary" id="qrun">Run ▸</button><button id="qsave">★ Save</button><span class="qhint">read-only · Ctrl/⌘+Enter to run · ids are clickable</span></div>
     <div id="qresult"></div>
-  </div>`;
+  </div><div class="qside"><div class="recsh">Saved</div><div id="qsaved"></div><div class="recsh" style="margin-top:10px">Recent</div><div id="qhist"></div></div></div>`;
   c.innerHTML = html;
   wireModeTabs();
   $("qtext").oninput = (e) => { QUERY_TEXT = e.target.value; };
   $("qtext").onkeydown = (e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); runQuery(); } };
   $("qrun").onclick = runQuery;
+  $("qsave").onclick = () => {
+    const name = prompt("Save query as:", "");
+    if (!name) return;
+    const arr = qStore.saved().filter((x) => x.name !== name);
+    arr.push({ name, q: QUERY_TEXT });
+    qStore.setSaved(arr);
+    renderQuerySide();
+    toast("query saved");
+  };
+  renderQuerySide();
+}
+
+function renderQuerySide() {
+  const sv = $("qsaved"), hi = $("qhist");
+  if (!sv || !hi) return;
+  const saved = qStore.saved();
+  sv.innerHTML = saved.length
+    ? saved.map((s, i) => `<div class="qitem"><span class="qload" data-q="${esc(s.q)}" title="${esc(s.q)}">${esc(s.name)}</span><button class="qdel" data-i="${i}" title="delete">✕</button></div>`).join("")
+    : `<div class="recempty">none</div>`;
+  hi.innerHTML = qStore.hist().map((q) => `<div class="qitem"><span class="qload" data-q="${esc(q)}" title="${esc(q)}">${esc(q.length > 38 ? q.slice(0, 38) + "…" : q)}</span></div>`).join("") || `<div class="recempty">none</div>`;
+  document.querySelectorAll(".qload").forEach((el) => (el.onclick = () => { QUERY_TEXT = el.dataset.q; $("qtext").value = QUERY_TEXT; runQuery(); }));
+  document.querySelectorAll(".qdel").forEach((el) => (el.onclick = () => { const arr = qStore.saved(); arr.splice(Number(el.dataset.i), 1); qStore.setSaved(arr); renderQuerySide(); }));
 }
 
 async function runQuery() {
   const out = $("qresult");
   out.innerHTML = `<div class="badge">running…</div>`;
   const r = await api.post("/query", { query: QUERY_TEXT });
+  if (r.status === 200) { qStore.pushHist(QUERY_TEXT); renderQuerySide(); }
   if (r.status !== 200) {
     const e = r.body || {};
     out.innerHTML = `<div class="qerr"><b>${esc(e.error || "error")}</b> · <span class="qcode">${esc(e.code || "")}</span><div class="qdetail">${esc(e.detail || "query failed")}</div></div>`;
