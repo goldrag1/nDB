@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>nDB Studio</title>
+<style>
+  :root {
+    --bg: #0f1216; --panel: #161b22; --line: #232a33; --ink: #e7ebf3;
+    --muted: #8b97a7; --accent: #5db0ff; --accent2: #58d39a; --danger: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--ink); overflow: hidden;
+    font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: grid; grid-template-rows: auto 1fr; grid-template-columns: 240px 1fr;
+    grid-template-areas: "top top" "side main";
+  }
+  header {
+    grid-area: top; display: flex; align-items: center; gap: 16px;
+    padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  header .brand { font-weight: 600; letter-spacing: .2px; }
+  header .brand b { color: var(--accent); }
+  header .spacer { flex: 1; }
+  .slider { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+  .slider input { width: 220px; }
+  .badge { font-size: 11px; color: var(--muted); }
+  .asof.live { color: var(--accent2); } .asof.past { color: #f0c674; }
+  aside {
+    grid-area: side; border-right: 1px solid var(--line); background: var(--panel);
+    overflow-y: auto; padding: 8px;
+  }
+  aside h4 { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; margin: 8px 6px; }
+  .kind {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 7px 10px; border-radius: 7px; cursor: pointer; border: 1px solid transparent;
+  }
+  .kind:hover { background: #1d242e; }
+  .kind.sel { background: #1d2733; border-color: #2c3a4a; }
+  .kind .n { color: var(--muted); font-size: 11px; }
+  main { grid-area: main; overflow: auto; padding: 14px; }
+  .toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .toolbar h2 { margin: 0; font-size: 15px; }
+  button {
+    background: #1d2733; color: var(--ink); border: 1px solid #2c3a4a; border-radius: 7px;
+    padding: 6px 11px; cursor: pointer; font: inherit;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: #143; border-color: #2c6; color: #cffbe4; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid var(--line); padding: 6px 9px; text-align: left; vertical-align: top; }
+  th { background: #131922; color: var(--muted); font-weight: 600; position: sticky; top: 0; }
+  td.id { font-family: ui-monospace, monospace; color: var(--muted); font-size: 11px; white-space: nowrap; }
+  td.editable { cursor: text; } td.editable:hover { background: #18222e; }
+  td .tag { color: var(--accent); font-size: 11px; }
+  td input { width: 100%; background: #0c1118; color: var(--ink); border: 1px solid var(--accent); border-radius: 4px; padding: 3px 5px; font: inherit; }
+  .rowdel { color: var(--danger); cursor: pointer; border: none; background: none; padding: 2px 6px; }
+  .empty { color: var(--muted); padding: 30px; text-align: center; }
+  .banner { background: #2a2410; color: #f0c674; border: 1px solid #54461a; border-radius: 7px; padding: 7px 11px; margin-bottom: 12px; }
+  dialog { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 12px; padding: 18px; min-width: 380px; }
+  dialog::backdrop { background: rgba(0,0,0,.5); }
+  dialog h3 { margin: 0 0 12px; }
+  .field { display: grid; grid-template-columns: 130px 1fr; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .field input { background: #0c1118; color: var(--ink); border: 1px solid #2c3a4a; border-radius: 6px; padding: 5px 7px; font: inherit; }
+  .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  #toast { position: fixed; bottom: 16px; right: 16px; background: #1d2733; border: 1px solid #2c3a4a; border-radius: 8px; padding: 9px 14px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  #toast.show { opacity: 1; } #toast.err { border-color: var(--danger); color: #ffd0d0; }
+</style>
+</head>
+<body>
+  <header>
+    <span class="brand">nDB <b>Studio</b></span>
+    <span class="badge" id="dbhead"></span>
+    <div class="spacer"></div>
+    <div class="slider">
+      <span>⏱</span>
+      <input type="range" id="asof" min="0" max="0" value="0" step="1" />
+      <span class="asof live" id="asofLabel">now</span>
+    </div>
+  </header>
+  <aside>
+    <h4>Kinds</h4>
+    <div id="kinds"></div>
+  </aside>
+  <main>
+    <div id="content"><div class="empty">Select a kind on the left.</div></div>
+  </main>
+
+  <dialog id="newDlg">
+    <h3>New record · <span id="newKind"></span></h3>
+    <div id="newFields"></div>
+    <button id="addField" style="margin-top:6px">+ field</button>
+    <div class="dlg-actions">
+      <button onclick="document.getElementById('newDlg').close()">Cancel</button>
+      <button class="primary" id="newSave">Create</button>
+    </div>
+  </dialog>
+
+  <div id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let HEAD = 0, ASOF = null, SEL = null, CATALOG = [];
+
+const api = {
+  async get(path) { const r = await fetch("/api" + path, { cache: "no-store" }); return r.json(); },
+  async commit(body) {
+    const r = await fetch("/api/commit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    return { status: r.status, body: await r.json() };
+  },
+};
+
+function toast(msg, isErr) {
+  const t = $("toast"); t.textContent = msg; t.className = "show" + (isErr ? " err" : "");
+  setTimeout(() => { t.className = ""; }, 2200);
+}
+const asofQuery = () => (ASOF === null ? "" : "&as_of=" + ASOF);
+const readOnly = () => ASOF !== null && ASOF < HEAD;
+
+async function loadCatalog() {
+  const c = await api.get("/catalog?" + (ASOF === null ? "" : "as_of=" + ASOF));
+  HEAD = c.head; CATALOG = c.kinds || [];
+  const slider = $("asof");
+  slider.max = String(HEAD);
+  if (ASOF === null) slider.value = String(HEAD);
+  $("dbhead").textContent = "head tx " + HEAD + " · " + CATALOG.length + " kinds";
+  renderKinds();
+}
+
+function renderKinds() {
+  const el = $("kinds"); el.innerHTML = "";
+  if (!CATALOG.length) { el.innerHTML = '<div class="empty" style="font-size:12px">empty database</div>'; }
+  for (const k of CATALOG) {
+    const d = document.createElement("div");
+    d.className = "kind" + (SEL && SEL.type_id === k.type_id ? " sel" : "");
+    d.innerHTML = `<span>${esc(k.name)}</span><span class="n">${k.count}</span>`;
+    d.onclick = () => selectKind(k);
+    el.appendChild(d);
+  }
+}
+
+async function selectKind(k) {
+  SEL = k; renderKinds(); await loadTable();
+}
+
+async function loadTable() {
+  if (!SEL) return;
+  const t = await api.get(`/table?kind=${SEL.type_id}${asofQuery()}&limit=1000`);
+  renderTable(t);
+}
+
+function renderTable(t) {
+  const c = $("content");
+  const headers = t.headers || [];
+  let html = "";
+  if (readOnly()) html += `<div class="banner">Viewing history as of tx ${ASOF} — read only. Slide to “now” to edit.</div>`;
+  html += `<div class="toolbar"><h2>${esc(SEL.name)}</h2><span class="badge">${t.shown} / ${t.total} records</span><div class="spacer" style="flex:1"></div>`;
+  if (!readOnly()) html += `<button class="primary" id="newBtn">+ New record</button>`;
+  html += `</div>`;
+  if (!headers.length && !t.rows.length) {
+    html += `<div class="empty">No records yet.</div>`;
+    c.innerHTML = html;
+    if (!readOnly()) $("newBtn").onclick = openNew;
+    return;
+  }
+  html += "<table><thead><tr><th>id</th>";
+  for (const h of headers) html += `<th>${esc(h.name)}</th>`;
+  html += `<th></th></tr></thead><tbody>`;
+  for (const row of t.rows) {
+    html += `<tr data-id="${row.id}"><td class="id" title="${row.id}">${row.id.slice(0, 8)}…</td>`;
+    row.cells.forEach((cell, i) => {
+      const h = headers[i];
+      html += `<td class="cellval ${editable(cell) && !readOnly() ? "editable" : ""}" data-prop="${esc(h.name)}" data-i="${i}">${fmt(cell)}</td>`;
+    });
+    html += readOnly() ? "<td></td>" : `<td><button class="rowdel" title="Delete">✕</button></td>`;
+    html += "</tr>";
+  }
+  html += "</tbody></table>";
+  c.innerHTML = html;
+  if (!readOnly()) {
+    $("newBtn").onclick = openNew;
+    c.querySelectorAll("td.editable").forEach((td) => (td.onclick = () => beginEdit(td)));
+    c.querySelectorAll(".rowdel").forEach((b) => (b.onclick = () => delRow(b.closest("tr").dataset.id)));
+  }
+}
+
+function editable(cell) {
+  return cell === null || ["string", "number", "boolean"].includes(typeof cell);
+}
+function fmt(cell) {
+  if (cell === null) return '<span class="tag">∅</span>';
+  if (typeof cell === "object") {
+    const k = Object.keys(cell)[0];
+    return `<span class="tag">${k}: ${esc(String(cell[k]))}</span>`;
+  }
+  return esc(String(cell));
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+function parseScalar(text) {
+  if (text === "") return null;
+  if (text === "true") return true;
+  if (text === "false") return false;
+  if (text === "null") return null;
+  if (/^-?\d+$/.test(text)) return parseInt(text, 10);
+  if (/^-?\d*\.\d+$/.test(text)) return parseFloat(text);
+  return text;
+}
+
+function beginEdit(td) {
+  const id = td.closest("tr").dataset.id;
+  const prop = td.dataset.prop;
+  const cur = td.textContent === "∅" ? "" : td.textContent;
+  td.innerHTML = `<input value="${esc(cur)}" />`;
+  const inp = td.querySelector("input");
+  inp.focus(); inp.select();
+  const done = async (commit) => {
+    inp.onblur = null;
+    if (!commit) return loadTable();
+    const value = parseScalar(inp.value);
+    const r = await api.commit({ op: "set", id, property: prop, value });
+    if (r.status === 200) { toast("saved · tx " + r.body.tx); await refreshAll(); }
+    else { toast(r.body.error?.message || "error", true); await loadTable(); }
+  };
+  inp.onkeydown = (e) => { if (e.key === "Enter") done(true); if (e.key === "Escape") done(false); };
+  inp.onblur = () => done(true);
+}
+
+async function delRow(id) {
+  const r = await api.commit({ op: "delete", id });
+  if (r.status === 200) { toast("deleted · tx " + r.body.tx); await refreshAll(); }
+  else toast(r.body.error?.message || "error", true);
+}
+
+function openNew() {
+  $("newKind").textContent = SEL.name;
+  const f = $("newFields"); f.innerHTML = "";
+  for (const p of SEL.properties) addNewField(p.name, "");
+  if (!SEL.properties.length) addNewField("", "");
+  $("newDlg").showModal();
+}
+function addNewField(name, val) {
+  const f = $("newFields");
+  const row = document.createElement("div");
+  row.className = "field";
+  row.innerHTML = `<input class="fname" placeholder="property" value="${esc(name)}" /><input class="fval" placeholder="value" value="${esc(val)}" />`;
+  f.appendChild(row);
+}
+$("addField").onclick = () => addNewField("", "");
+$("newSave").onclick = async () => {
+  const props = [];
+  $("newFields").querySelectorAll(".field").forEach((row) => {
+    const name = row.querySelector(".fname").value.trim();
+    if (!name) return;
+    props.push({ name, value: parseScalar(row.querySelector(".fval").value) });
+  });
+  const r = await api.commit({ op: "create", kind: SEL.name, properties: props });
+  if (r.status === 200) { $("newDlg").close(); toast("created · tx " + r.body.tx); await refreshAll(); }
+  else toast(r.body.error?.message || "error", true);
+};
+
+async function refreshAll() { await loadCatalog(); if (SEL) { SEL = CATALOG.find((k) => k.type_id === SEL.type_id) || SEL; } await loadTable(); }
+
+$("asof").oninput = (e) => {
+  const v = parseInt(e.target.value, 10);
+  ASOF = v >= HEAD ? null : v;
+  const lbl = $("asofLabel");
+  if (ASOF === null) { lbl.textContent = "now"; lbl.className = "asof live"; }
+  else { lbl.textContent = "tx " + ASOF; lbl.className = "asof past"; }
+};
+$("asof").onchange = async () => { await loadCatalog(); if (SEL) SEL = CATALOG.find((k) => k.type_id === SEL.type_id) || CATALOG[0]; renderKinds(); await loadTable(); };
+
+loadCatalog().then(() => { if (CATALOG.length) selectKind(CATALOG[0]); });
+</script>
+</body>
+</html>
