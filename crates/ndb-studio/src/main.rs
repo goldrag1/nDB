@@ -16,8 +16,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use ndb_engine::{Engine, EngineConfig, SharedEngine};
-use ndb_studio::http;
 use ndb_studio::store::Store;
+use ndb_studio::{http, identity};
 
 const DEFAULT_CACHE_BYTES: usize = 256 * 1024 * 1024;
 
@@ -69,7 +69,9 @@ fn main() -> ExitCode {
         }
     };
 
-    let store = Arc::new(Store::new(engine));
+    let store = Store::new(engine);
+    bootstrap_admin(&store);
+    let state = Arc::new(http::AppState::new(Arc::new(store)));
     let listener = match http::bind(&bind) {
         Ok(l) => l,
         Err(e) => {
@@ -89,11 +91,29 @@ fn main() -> ExitCode {
         open_browser(&url);
     }
 
-    if let Err(e) = http::run(&listener, &store) {
+    if let Err(e) = http::run(&listener, &state) {
         eprintln!("ndb-studio: server error: {e}");
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
+}
+
+/// On a database with no accounts yet, create an `admin` user with a random
+/// password printed once to the console, so a fresh (or pre-auth) database is
+/// immediately usable. Once any user exists this is a no-op.
+fn bootstrap_admin(store: &Store) {
+    if store.has_any_user() {
+        return;
+    }
+    let password = identity::random_password();
+    let hash = identity::hash_password(&password);
+    match store.create_user("admin", &hash, "admin") {
+        Ok(_) => {
+            println!("  bootstrap admin — username: admin  password: {password}");
+            println!("  (shown once; add your own accounts in the Users panel)");
+        }
+        Err(e) => eprintln!("  warning: could not create bootstrap admin: {}", e.message()),
+    }
 }
 
 fn open_engine(path: &str, new: bool, low_memory: bool) -> Result<SharedEngine, String> {

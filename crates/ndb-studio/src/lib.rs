@@ -9,5 +9,6 @@
 //!   module is the single frontend↔backend seam a later Tauri shell swaps.
 
 pub mod http;
+pub mod identity;
 pub mod jsonval;
 pub mod store;

@@ -79,9 +79,26 @@ impl StoreError {
     }
 }
 
+/// Reserved kind for user accounts (hidden from data views).
+const USER_KIND: &str = "$User";
+/// Reserved property recording who wrote each version.
+const AUTHOR_PROP: &str = "$author";
+
+/// Reserved names (kinds and properties) begin with `$` and are filtered out
+/// of every data-facing view — they hold the app's own metadata (users,
+/// author attribution), not user data.
+fn is_reserved(name: &str) -> bool {
+    name.starts_with('$')
+}
+
 /// The value of property `pid` on an entity, if present.
 fn prop_val(e: &EntityRecord, pid: u32) -> Option<&Value> {
     e.properties.iter().find(|(p, _)| p.get() == pid).map(|(_, v)| v)
+}
+
+/// The owned string of a `Value::String`, else `None`.
+fn str_of(v: &Value) -> Option<String> {
+    if let Value::String(s) = v { Some(s.clone()) } else { None }
 }
 
 /// A display-string grouping key for a pivot axis. Missing/null share `∅`,
@@ -211,25 +228,29 @@ impl Store {
 
         let kinds_json: Vec<J> = kinds
             .iter()
-            .map(|(tid, (count, props))| {
+            .filter_map(|(tid, (count, props))| {
+                let name = names.type_name.get(tid).cloned()
+                    .unwrap_or_else(|| format!("kind:{tid}"));
+                if is_reserved(&name) {
+                    return None; // hide $User and friends
+                }
                 let props_json: Vec<J> = props
                     .iter()
-                    .map(|(pid, hint)| {
-                        json!({
-                            "property_id": pid,
-                            "name": names.prop_name.get(pid).cloned()
-                                .unwrap_or_else(|| format!("prop:{pid}")),
-                            "type": hint,
-                        })
+                    .filter_map(|(pid, hint)| {
+                        let pname = names.prop_name.get(pid).cloned()
+                            .unwrap_or_else(|| format!("prop:{pid}"));
+                        if is_reserved(&pname) {
+                            return None; // hide $author
+                        }
+                        Some(json!({ "property_id": pid, "name": pname, "type": hint }))
                     })
                     .collect();
-                json!({
+                Some(json!({
                     "type_id": tid,
-                    "name": names.type_name.get(tid).cloned()
-                        .unwrap_or_else(|| format!("kind:{tid}")),
+                    "name": name,
                     "count": count,
                     "properties": props_json,
-                })
+                }))
             })
             .collect();
 
@@ -245,6 +266,15 @@ impl Store {
         let names = Self::names(&recs);
         let tid = TypeId::new(type_id);
 
+        // Reserved kinds ($User, …) are never exposed as a table — even by a
+        // hand-crafted type_id — so account records stay hidden.
+        if names.type_name.get(&type_id).is_some_and(|n| is_reserved(n)) {
+            return json!({
+                "type_id": type_id, "as_of": snap.get(),
+                "headers": [], "rows": [], "total": 0, "shown": 0,
+            });
+        }
+
         let mut cols: BTreeSet<u32> = BTreeSet::new();
         let mut entities: Vec<&EntityRecord> = Vec::new();
         for r in &recs {
@@ -252,7 +282,10 @@ impl Store {
                 && e.type_id == tid
             {
                 for (pid, _) in &e.properties {
-                    cols.insert(pid.get());
+                    let reserved = names.prop_name.get(&pid.get()).is_some_and(|n| is_reserved(n));
+                    if !reserved {
+                        cols.insert(pid.get());
+                    }
                 }
                 entities.push(e);
             }
@@ -301,18 +334,24 @@ impl Store {
         let recs = self.records(snap);
         let names = Self::names(&recs);
         match self.engine.snapshot_read(&id, snap) {
-            Ok(Resolved::Live(Record::Entity(e))) => {
+            Ok(Resolved::Live(Record::Entity(e)))
+                if !names.type_name.get(&e.type_id.get()).is_some_and(|n| is_reserved(n)) =>
+            {
                 let props: Vec<J> = e
                     .properties
                     .iter()
-                    .map(|(pid, v)| {
-                        json!({
+                    .filter_map(|(pid, v)| {
+                        let name = names.prop_name.get(&pid.get()).cloned()
+                            .unwrap_or_else(|| format!("prop:{}", pid.get()));
+                        if is_reserved(&name) {
+                            return None;
+                        }
+                        Some(json!({
                             "property_id": pid.get(),
-                            "name": names.prop_name.get(&pid.get()).cloned()
-                                .unwrap_or_else(|| format!("prop:{}", pid.get())),
+                            "name": name,
                             "value": to_json(v),
                             "type": type_hint(v),
-                        })
+                        }))
                     })
                     .collect();
                 json!({
@@ -321,6 +360,8 @@ impl Store {
                     "kind": names.type_name.get(&e.type_id.get()).cloned()
                         .unwrap_or_else(|| format!("kind:{}", e.type_id.get())),
                     "asserted_at": e.tx_id_assert.get(),
+                    "author": prop_val(&e, names.prop_id.get(AUTHOR_PROP).copied().unwrap_or(0))
+                        .and_then(|v| if let Value::String(s) = v { Some(s.clone()) } else { None }),
                     "properties": props,
                 })
             }
@@ -340,6 +381,12 @@ impl Store {
         let recs = self.records(self.snapshot(None));
         let names = Self::names(&recs);
         let versions = self.engine.versions_of(&id).unwrap_or_default();
+        let author_pid = names.prop_id.get(AUTHOR_PROP).copied();
+        let author_of = |e: &EntityRecord| -> Option<String> {
+            author_pid
+                .and_then(|ap| prop_val(e, ap))
+                .and_then(|v| if let Value::String(s) = v { Some(s.clone()) } else { None })
+        };
 
         if let Some(prop) = property {
             let pid = names.prop_id.get(prop).copied();
@@ -354,7 +401,7 @@ impl Store {
                             })
                             .map_or(J::Null, |(_, v)| to_json(v));
                         if last.as_ref() != Some(&v) {
-                            out.push(json!({ "tx": tx.get(), "value": v }));
+                            out.push(json!({ "tx": tx.get(), "value": v, "author": author_of(e) }));
                             last = Some(v);
                         }
                     }
@@ -380,15 +427,16 @@ impl Store {
                     let props: Vec<J> = e
                         .properties
                         .iter()
-                        .map(|(pid, v)| {
-                            json!({
-                                "name": names.prop_name.get(&pid.get()).cloned()
-                                    .unwrap_or_else(|| format!("prop:{}", pid.get())),
-                                "value": to_json(v),
-                            })
+                        .filter_map(|(pid, v)| {
+                            let name = names.prop_name.get(&pid.get()).cloned()
+                                .unwrap_or_else(|| format!("prop:{}", pid.get()));
+                            if is_reserved(&name) {
+                                return None;
+                            }
+                            Some(json!({ "name": name, "value": to_json(v) }))
                         })
                         .collect();
-                    json!({ "tx": tx.get(), "properties": props })
+                    json!({ "tx": tx.get(), "author": author_of(e), "properties": props })
                 }
                 Record::Tombstone(_) => json!({ "tx": tx.get(), "deleted": true }),
                 _ => json!({ "tx": tx.get() }),
@@ -415,6 +463,7 @@ impl Store {
         let recs = self.records(snap);
         let names = Self::names(&recs);
         let tid = TypeId::new(type_id);
+        let reserved_kind = names.type_name.get(&type_id).is_some_and(|n| is_reserved(n));
         let row_pid = names.prop_id.get(row_prop).copied();
         let col_pid = names.prop_id.get(col_prop).copied();
         let val_pid = value_prop.and_then(|p| names.prop_id.get(p).copied());
@@ -426,7 +475,7 @@ impl Store {
         let mut cells: BTreeMap<(String, String), f64> = BTreeMap::new();
         for r in &recs {
             let Record::Entity(e) = r else { continue };
-            if e.type_id != tid {
+            if reserved_kind || e.type_id != tid {
                 continue;
             }
             let rk = cell_key(row_pid.and_then(|p| prop_val(e, p)));
@@ -494,6 +543,11 @@ impl Store {
         let mut total_entities = 0usize;
         for r in &recs {
             let Record::Entity(e) = r else { continue };
+            let kind = names.type_name.get(&e.type_id.get()).cloned()
+                .unwrap_or_else(|| format!("kind:{}", e.type_id.get()));
+            if is_reserved(&kind) {
+                continue; // user/account records are not graph data
+            }
             total_entities += 1;
             if included.len() >= limit {
                 continue;
@@ -503,8 +557,7 @@ impl Store {
                 nodes.push(json!({
                     "id": id.to_string(),
                     "type_id": e.type_id.get(),
-                    "kind": names.type_name.get(&e.type_id.get()).cloned()
-                        .unwrap_or_else(|| format!("kind:{}", e.type_id.get())),
+                    "kind": kind,
                     "label": entity_label(e, &names),
                 }));
             }
@@ -582,21 +635,34 @@ impl Store {
     // ---- write paths ----------------------------------------------------
 
     /// Create a new entity of `kind` with the given `(property_name, value)`
-    /// pairs. Unknown kind/property names are interned. Returns the new tx id.
+    /// pairs. Unknown kind/property names are interned. When `author` is set
+    /// (and `kind` is not reserved), a hidden `$author` property records who
+    /// wrote this version. Returns the new tx id.
     ///
     /// # Errors
     /// Propagates engine errors (including `WriteStalled` under backpressure).
-    pub fn create(&self, kind: &str, props: &[(String, Value)]) -> Result<u64, StoreError> {
+    pub fn create(
+        &self,
+        kind: &str,
+        props: &[(String, Value)],
+        author: Option<&str>,
+    ) -> Result<u64, StoreError> {
         let recs = self.records(self.snapshot(None));
         let names = Self::names(&recs);
         let mut alloc = Allocator::new(&names);
 
         let tx = self.engine.with_write_txn(|mut txn| {
             let type_id = alloc.type_id(kind, &mut txn);
-            let mut entity_props = Vec::with_capacity(props.len());
+            let mut entity_props = Vec::with_capacity(props.len() + 1);
             for (name, value) in props {
                 let pid = alloc.prop_id(name, &mut txn);
                 entity_props.push((pid, value.clone()));
+            }
+            if let Some(a) = author
+                && !is_reserved(kind)
+            {
+                let apid = alloc.prop_id(AUTHOR_PROP, &mut txn);
+                entity_props.push((apid, Value::String(a.to_string())));
             }
             txn.put_entity(EntityRecord {
                 entity_id: EntityId::now_v7(),
@@ -615,7 +681,13 @@ impl Store {
     ///
     /// # Errors
     /// Returns `Err` if the record does not exist or on an engine error.
-    pub fn set(&self, id: Uuid, property: &str, value: &Value) -> Result<u64, StoreError> {
+    pub fn set(
+        &self,
+        id: Uuid,
+        property: &str,
+        value: &Value,
+        author: Option<&str>,
+    ) -> Result<u64, StoreError> {
         let snap = self.snapshot(None);
         let recs = self.records(snap);
         let names = Self::names(&recs);
@@ -624,6 +696,8 @@ impl Store {
         let Resolved::Live(Record::Entity(current)) = self.engine.snapshot_read(&id, snap)? else {
             return Err(StoreError::NotFound);
         };
+        let kind_reserved = names.type_name.get(&current.type_id.get())
+            .is_some_and(|n| is_reserved(n));
 
         let tx = self.engine.with_write_txn(|mut txn| {
             let pid = alloc.prop_id(property, &mut txn);
@@ -631,6 +705,16 @@ impl Store {
             match props.iter_mut().find(|(p, _)| *p == pid) {
                 Some(slot) => slot.1 = value.clone(),
                 None => props.push((pid, value.clone())),
+            }
+            if let Some(a) = author
+                && !kind_reserved
+            {
+                let apid = alloc.prop_id(AUTHOR_PROP, &mut txn);
+                let av = Value::String(a.to_string());
+                match props.iter_mut().find(|(p, _)| *p == apid) {
+                    Some(slot) => slot.1 = av,
+                    None => props.push((apid, av)),
+                }
             }
             txn.put_entity(EntityRecord {
                 entity_id: current.entity_id,
@@ -654,6 +738,101 @@ impl Store {
             txn.commit()
         })?;
         Ok(tx.get())
+    }
+
+    // ---- user accounts (stored as reserved `$User` records) -------------
+
+    /// Whether any user account exists — drives one-time admin bootstrap.
+    #[must_use]
+    pub fn has_any_user(&self) -> bool {
+        let recs = self.records(self.snapshot(None));
+        let names = Self::names(&recs);
+        let Some(uid) = names.type_id.get(USER_KIND).copied() else {
+            return false;
+        };
+        recs.iter().any(|r| matches!(r, Record::Entity(e) if e.type_id.get() == uid))
+    }
+
+    /// Look up a user by name → `(entity id, password hash, role string)`.
+    #[must_use]
+    pub fn find_user(&self, username: &str) -> Option<(Uuid, String, String)> {
+        let recs = self.records(self.snapshot(None));
+        let names = Self::names(&recs);
+        let uid = names.type_id.get(USER_KIND).copied()?;
+        let un_pid = names.prop_id.get("username").copied()?;
+        let pw_pid = names.prop_id.get("pwhash").copied();
+        let role_pid = names.prop_id.get("role").copied();
+        for r in &recs {
+            let Record::Entity(e) = r else { continue };
+            if e.type_id.get() != uid {
+                continue;
+            }
+            if prop_val(e, un_pid).and_then(str_of).as_deref() == Some(username) {
+                let pw = pw_pid.and_then(|p| prop_val(e, p)).and_then(str_of).unwrap_or_default();
+                let role = role_pid.and_then(|p| prop_val(e, p)).and_then(str_of)
+                    .unwrap_or_else(|| "viewer".to_string());
+                return Some((e.entity_id.into_uuid(), pw, role));
+            }
+        }
+        None
+    }
+
+    /// All accounts as `(username, role)`, sorted by username.
+    #[must_use]
+    pub fn list_users(&self) -> Vec<(String, String)> {
+        let recs = self.records(self.snapshot(None));
+        let names = Self::names(&recs);
+        let Some(uid) = names.type_id.get(USER_KIND).copied() else {
+            return Vec::new();
+        };
+        let un_pid = names.prop_id.get("username").copied();
+        let role_pid = names.prop_id.get("role").copied();
+        let mut out: Vec<(String, String)> = recs
+            .iter()
+            .filter_map(|r| {
+                let Record::Entity(e) = r else { return None };
+                if e.type_id.get() != uid {
+                    return None;
+                }
+                let name = un_pid.and_then(|p| prop_val(e, p)).and_then(str_of)?;
+                let role = role_pid.and_then(|p| prop_val(e, p)).and_then(str_of)
+                    .unwrap_or_else(|| "viewer".to_string());
+                Some((name, role))
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Create a user account. Errors if the username already exists.
+    ///
+    /// # Errors
+    /// `BadValue` if the username is taken; engine errors otherwise.
+    pub fn create_user(&self, username: &str, pwhash: &str, role: &str) -> Result<u64, StoreError> {
+        if username.is_empty() {
+            return Err(StoreError::BadValue("username required".to_string()));
+        }
+        if self.find_user(username).is_some() {
+            return Err(StoreError::BadValue(format!("user {username} already exists")));
+        }
+        self.create(
+            USER_KIND,
+            &[
+                ("username".to_string(), Value::String(username.to_string())),
+                ("pwhash".to_string(), Value::String(pwhash.to_string())),
+                ("role".to_string(), Value::String(role.to_string())),
+            ],
+            None,
+        )
+    }
+
+    /// Delete a user account by username.
+    ///
+    /// # Errors
+    /// `NotFound` if no such user; engine errors otherwise.
+    pub fn delete_user(&self, username: &str) -> Result<u64, StoreError> {
+        let (id, _, _) = self.find_user(username).ok_or(StoreError::NotFound)?;
+        self.delete(id)
     }
 }
 
@@ -727,10 +906,10 @@ mod tests {
     fn create_then_catalog_and_table() {
         let store = fresh();
         store
-            .create("Person", &[("name".into(), s("Alice")), ("age".into(), Value::I64(30))])
+            .create("Person", &[("name".into(), s("Alice")), ("age".into(), Value::I64(30))], None)
             .expect("create alice");
         store
-            .create("Person", &[("name".into(), s("Bob")), ("age".into(), Value::I64(25))])
+            .create("Person", &[("name".into(), s("Bob")), ("age".into(), Value::I64(25))], None)
             .expect("create bob");
 
         let cat = store.catalog(None);
@@ -758,7 +937,7 @@ mod tests {
     fn edit_creates_version_and_time_travel() {
         let store = fresh();
         let tx1 = store
-            .create("Person", &[("age".into(), Value::I64(30))])
+            .create("Person", &[("age".into(), Value::I64(30))], None)
             .expect("create");
         let tid = u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
         let id_str = store.table(tid, None, 10)["rows"][0]["id"]
@@ -767,7 +946,7 @@ mod tests {
             .to_string();
         let id = Uuid::parse_str(&id_str).unwrap();
 
-        store.set(id, "age", &Value::I64(31)).expect("set");
+        store.set(id, "age", &Value::I64(31), None).expect("set");
 
         // Now: 31. As of the create tx: 30.
         let now = store.record(id, None);
@@ -785,7 +964,7 @@ mod tests {
     fn delete_tombstones_but_history_remains() {
         let store = fresh();
         let tx_create = store
-            .create("Note", &[("body".into(), s("hi"))])
+            .create("Note", &[("body".into(), s("hi"))], None)
             .expect("create");
         let tid = u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
         let id = Uuid::parse_str(store.table(tid, None, 10)["rows"][0]["id"].as_str().unwrap())
@@ -809,16 +988,16 @@ mod tests {
     fn history_is_property_change_timeline() {
         let store = fresh();
         store
-            .create("Person", &[("name".into(), s("Alice")), ("age".into(), Value::I64(30))])
+            .create("Person", &[("name".into(), s("Alice")), ("age".into(), Value::I64(30))], None)
             .expect("create");
         let tid = u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap())
             .unwrap();
         let id = Uuid::parse_str(store.table(tid, None, 10)["rows"][0]["id"].as_str().unwrap())
             .unwrap();
 
-        store.set(id, "age", &Value::I64(31)).expect("set 31");
-        store.set(id, "name", &s("Alicia")).expect("set unrelated"); // must not appear in age history
-        store.set(id, "age", &Value::I64(32)).expect("set 32");
+        store.set(id, "age", &Value::I64(31), None).expect("set 31");
+        store.set(id, "name", &s("Alicia"), None).expect("set unrelated"); // must not appear in age history
+        store.set(id, "age", &Value::I64(32), None).expect("set 32");
         store.delete(id).expect("delete");
 
         let h = store.history(id, Some("age"));
@@ -853,6 +1032,7 @@ mod tests {
                         ("status".into(), s(status)),
                         ("age".into(), Value::I64(age)),
                     ],
+                    None,
                 )
                 .expect("create");
         }
@@ -952,12 +1132,65 @@ mod tests {
         assert_eq!(capped["truncated"], true);
     }
 
+    /// User accounts live as hidden `$User` records; author attribution is a
+    /// hidden `$author` property. Neither leaks into the data-facing views, but
+    /// the author surfaces in history.
+    #[test]
+    fn users_and_author_are_hidden_from_data_views() {
+        let store = fresh();
+        assert!(!store.has_any_user());
+        store.create_user("alice", "HASH", "editor").expect("create user");
+        assert!(store.has_any_user());
+        assert!(store.create_user("alice", "X", "viewer").is_err(), "duplicate rejected");
+
+        let (_, hash, role) = store.find_user("alice").expect("found");
+        assert_eq!(hash, "HASH");
+        assert_eq!(role, "editor");
+        assert_eq!(store.list_users(), vec![("alice".to_string(), "editor".to_string())]);
+
+        // A record authored by alice.
+        store
+            .create("Person", &[("name".into(), s("Doc"))], Some("alice"))
+            .expect("create");
+
+        // Catalog shows only Person (not $User), and only the `name` property.
+        let cat = store.catalog(None);
+        let kinds = cat["kinds"].as_array().unwrap();
+        assert_eq!(kinds.len(), 1, "$User kind hidden");
+        assert_eq!(kinds[0]["name"], "Person");
+        let props: Vec<&str> = kinds[0]["properties"].as_array().unwrap()
+            .iter().map(|p| p["name"].as_str().unwrap()).collect();
+        assert_eq!(props, vec!["name"], "$author property hidden");
+
+        // Table for Person has no $author column.
+        let tid = u32::try_from(kinds[0]["type_id"].as_u64().unwrap()).unwrap();
+        let table = store.table(tid, None, 10);
+        let headers: Vec<&str> = table["headers"].as_array().unwrap()
+            .iter().map(|h| h["name"].as_str().unwrap()).collect();
+        assert_eq!(headers, vec!["name"]);
+
+        // But history attributes the version to alice.
+        let id = Uuid::parse_str(table["rows"][0]["id"].as_str().unwrap()).unwrap();
+        let h = store.history(id, Some("name"));
+        assert_eq!(h["versions"][0]["author"], "alice");
+
+        // The $User record itself is never exposed via record() or table(),
+        // even by its raw id / interned type_id (no pwhash leak).
+        let (uid, _, _) = store.find_user("alice").unwrap();
+        assert!(store.record(uid, None).is_null(), "user record hidden");
+        assert_eq!(store.table(1, None, 10)["total"], 0, "$User not tabled (type 1)");
+
+        // Deleting a user removes it.
+        store.delete_user("alice").expect("delete user");
+        assert!(store.find_user("alice").is_none());
+    }
+
     /// Editing a record that does not exist is a typed `NotFound` (HTTP 404).
     #[test]
     fn set_unknown_record_is_not_found() {
         let store = fresh();
         let err = store
-            .set(Uuid::now_v7(), "x", &Value::I64(1))
+            .set(Uuid::now_v7(), "x", &Value::I64(1), None)
             .expect_err("must fail");
         assert!(matches!(err, StoreError::NotFound));
         assert_eq!(err.status(), 404);

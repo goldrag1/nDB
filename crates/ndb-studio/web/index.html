@@ -100,6 +100,23 @@
   .gi-label { font-weight: 600; margin: 2px 0; }
   .gi-id { color: var(--muted); font-family: ui-monospace, monospace; font-size: 10px; word-break: break-all; }
   .gi-open { margin-top: 8px; font-size: 11px; }
+  .userbox { display: flex; align-items: center; gap: 8px; margin-left: 16px; }
+  .ubadge { color: var(--muted); font-size: 12px; }
+  .hidden { display: none !important; }
+  .login { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 50; }
+  .loginCard { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 26px 28px; width: 320px; display: flex; flex-direction: column; gap: 12px; }
+  .loginCard h2 { margin: 0; } .loginCard h2 b { color: var(--accent); }
+  .loginCard .lsub { margin: 0 0 6px; color: var(--muted); font-size: 12px; }
+  .loginCard label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
+  .loginCard input { background: #0c1118; color: var(--ink); border: 1px solid #2c3a4a; border-radius: 6px; padding: 7px 9px; font: inherit; }
+  .loginCard .primary { margin-top: 6px; padding: 9px; }
+  .lerr { color: var(--danger); font-size: 12px; min-height: 14px; }
+  .userslist { max-height: 260px; overflow: auto; }
+  .urow { display: flex; align-items: center; gap: 10px; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+  .urow .un { flex: 1; }
+  #usersDlg .field { grid-template-columns: 1fr 1fr; }
+  #usersDlg select { background: #0c1118; color: var(--ink); border: 1px solid #2c3a4a; border-radius: 6px; padding: 5px 7px; font: inherit; }
+  .hauthor { color: var(--accent2); font-size: 11px; }
 </style>
 </head>
 <body>
@@ -111,6 +128,11 @@
       <span>⏱</span>
       <input type="range" id="asof" min="0" max="0" value="0" step="1" />
       <span class="asof live" id="asofLabel">now</span>
+    </div>
+    <div class="userbox">
+      <span class="ubadge" id="who"></span>
+      <button id="usersBtn" class="hidden">Users</button>
+      <button id="logoutBtn">Logout</button>
     </div>
   </header>
   <aside>
@@ -139,6 +161,26 @@
     </div>
   </dialog>
 
+  <dialog id="usersDlg">
+    <h3>Users</h3>
+    <div id="usersList" class="userslist"></div>
+    <h4 style="margin:14px 0 6px;color:var(--muted)">Add user</h4>
+    <div class="field"><input id="nuUser" placeholder="username" autocomplete="off" /><input id="nuPass" type="password" placeholder="password" autocomplete="new-password" /></div>
+    <div class="field"><select id="nuRole"><option value="viewer">viewer</option><option value="editor">editor</option><option value="admin">admin</option></select><button class="primary" id="nuAdd">Add user</button></div>
+    <div class="dlg-actions"><button onclick="document.getElementById('usersDlg').close()">Close</button></div>
+  </dialog>
+
+  <div id="login" class="login hidden">
+    <form id="loginForm" class="loginCard">
+      <h2>nDB <b>Studio</b></h2>
+      <p class="lsub">Sign in to open this database.</p>
+      <label>Username<input id="luser" autocomplete="username" /></label>
+      <label>Password<input id="lpass" type="password" autocomplete="current-password" /></label>
+      <div class="lerr" id="lerr"></div>
+      <button class="primary" type="submit">Sign in</button>
+    </form>
+  </div>
+
   <div id="toast"></div>
 
 <script>
@@ -146,13 +188,22 @@ const $ = (id) => document.getElementById(id);
 let HEAD = 0, ASOF = null, SEL = null, CATALOG = [], MODE = "table";
 let PIVOT = { row: null, col: null, agg: "count", value: null };
 let GRAPH_ANIM = null;
+let ME = { authed: false, user: null, role: null };
+const canWrite = () => ME.role === "editor" || ME.role === "admin";
 
 const api = {
-  async get(path) { const r = await fetch("/api" + path, { cache: "no-store" }); return r.json(); },
-  async commit(body) {
-    const r = await fetch("/api/commit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    return { status: r.status, body: await r.json() };
+  async get(path) {
+    const r = await fetch("/api" + path, { cache: "no-store" });
+    if (r.status === 401) showLogin();
+    return r.json();
   },
+  async post(path, body) {
+    const r = await fetch("/api" + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 401 && path !== "/login") showLogin();
+    return { status: r.status, body: j };
+  },
+  commit(body) { return this.post("/commit", body); },
 };
 
 function toast(msg, isErr) {
@@ -223,16 +274,18 @@ async function loadTable() {
 function renderTable(t) {
   const c = $("content");
   const headers = t.headers || [];
+  const writable = !readOnly() && canWrite();
   let html = "";
   if (readOnly()) html += `<div class="banner">Viewing history as of tx ${ASOF} — read only. Slide to “now” to edit.</div>`;
+  else if (!canWrite()) html += `<div class="banner">Read-only — your role is <b>${esc(ME.role || "viewer")}</b>.</div>`;
   html += `<div class="toolbar"><h2>${esc(SEL.name)}</h2>${modeTabsHtml()}<span class="badge">${t.shown} / ${t.total} records</span><div class="spacer" style="flex:1"></div>`;
-  if (!readOnly()) html += `<button class="primary" id="newBtn">+ New record</button>`;
+  if (writable) html += `<button class="primary" id="newBtn">+ New record</button>`;
   html += `</div>`;
   if (!headers.length && !t.rows.length) {
     html += `<div class="empty">No records yet.</div>`;
     c.innerHTML = html;
     wireModeTabs();
-    if (!readOnly()) $("newBtn").onclick = openNew;
+    if (writable) $("newBtn").onclick = openNew;
     return;
   }
   html += "<table><thead><tr><th>id</th>";
@@ -242,10 +295,10 @@ function renderTable(t) {
     html += `<tr data-id="${row.id}"><td class="id" title="${row.id}">${row.id.slice(0, 8)}…</td>`;
     row.cells.forEach((cell, i) => {
       const h = headers[i];
-      const canEdit = editable(cell) && !readOnly();
+      const canEdit = editable(cell) && writable;
       html += `<td class="cellval ${canEdit ? "editable" : ""}" data-prop="${esc(h.name)}" data-i="${i}"><span class="cv">${fmt(cell)}</span><button class="histbtn" title="History of this value" data-prop="${esc(h.name)}">🕘</button></td>`;
     });
-    html += readOnly() ? "<td></td>" : `<td><button class="rowdel" title="Delete">✕</button></td>`;
+    html += writable ? `<td><button class="rowdel" title="Delete">✕</button></td>` : "<td></td>";
     html += "</tr>";
   }
   html += "</tbody></table>";
@@ -254,7 +307,7 @@ function renderTable(t) {
   c.querySelectorAll(".histbtn").forEach((b) => {
     b.onclick = (e) => { e.stopPropagation(); openHistory(b.closest("tr").dataset.id, b.dataset.prop); };
   });
-  if (!readOnly()) {
+  if (writable) {
     $("newBtn").onclick = openNew;
     c.querySelectorAll("td.editable").forEach((td) => (td.onclick = () => beginEdit(td)));
     c.querySelectorAll(".rowdel").forEach((b) => (b.onclick = () => delRow(b.closest("tr").dataset.id)));
@@ -528,7 +581,7 @@ async function openHistory(id, prop) {
   } else {
     body.innerHTML = vs.map((v) => v.deleted
       ? `<div class="hrow del"><span class="htx">tx ${v.tx}</span><span class="hval">deleted</span></div>`
-      : `<div class="hrow"><span class="htx">tx ${v.tx}</span><span class="hval">${fmt(v.value)}</span><button class="hjump" data-tx="${v.tx}" title="View the database at this point">view</button></div>`
+      : `<div class="hrow"><span class="htx">tx ${v.tx}</span><span class="hval">${fmt(v.value)}</span>${v.author ? `<span class="hauthor">${esc(v.author)}</span>` : ""}<button class="hjump" data-tx="${v.tx}" title="View the database at this point">view</button></div>`
     ).join("");
     body.querySelectorAll(".hjump").forEach((b) => (b.onclick = () => { jumpTo(parseInt(b.dataset.tx, 10)); $("histDlg").close(); }));
   }
@@ -553,7 +606,53 @@ $("asof").oninput = (e) => {
 };
 $("asof").onchange = async () => { await loadCatalog(); if (SEL) SEL = CATALOG.find((k) => k.type_id === SEL.type_id) || CATALOG[0]; renderKinds(); await renderMain(); };
 
-loadCatalog().then(() => { if (CATALOG.length) selectKind(CATALOG[0]); });
+// ---- auth / session ----
+function showLogin() { $("login").classList.remove("hidden"); setTimeout(() => $("luser").focus(), 0); }
+function hideLogin() { $("login").classList.add("hidden"); }
+function renderUser() {
+  $("who").textContent = ME.user ? `${ME.user} · ${ME.role}` : "";
+  $("usersBtn").classList.toggle("hidden", ME.role !== "admin");
+}
+
+async function init() {
+  ME = await api.get("/me");
+  if (!ME.authed) { renderUser(); showLogin(); return; }
+  hideLogin();
+  renderUser();
+  await loadCatalog();
+  if (CATALOG.length) selectKind(CATALOG[0]);
+}
+
+$("loginForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const r = await api.post("/login", { username: $("luser").value, password: $("lpass").value });
+  if (r.status === 200) { $("lerr").textContent = ""; $("lpass").value = ""; await init(); }
+  else { $("lerr").textContent = r.body.error?.message || "login failed"; }
+};
+$("logoutBtn").onclick = async () => { await api.post("/logout", {}); location.reload(); };
+
+// ---- users panel (admin) ----
+async function openUsers() {
+  const r = await api.get("/users");
+  const list = $("usersList");
+  list.innerHTML = (r.users || []).map((u) =>
+    `<div class="urow"><span class="un">${esc(u.username)}</span><span class="ubadge">${esc(u.role)}</span>` +
+    (u.username === ME.user ? `<span class="badge">you</span>` : `<button class="rowdel" data-u="${esc(u.username)}" title="Delete">✕</button>`) +
+    `</div>`).join("");
+  list.querySelectorAll(".rowdel").forEach((b) => (b.onclick = async () => {
+    const rr = await api.post("/users/delete", { username: b.dataset.u });
+    if (rr.status === 200) openUsers(); else toast(rr.body.error?.message || "error", true);
+  }));
+  $("usersDlg").showModal();
+}
+$("usersBtn").onclick = openUsers;
+$("nuAdd").onclick = async () => {
+  const rr = await api.post("/users", { username: $("nuUser").value.trim(), password: $("nuPass").value, role: $("nuRole").value });
+  if (rr.status === 200) { $("nuUser").value = ""; $("nuPass").value = ""; toast("user added"); openUsers(); }
+  else toast(rr.body.error?.message || "error", true);
+};
+
+init();
 </script>
 </body>
 </html>
