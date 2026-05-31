@@ -155,6 +155,86 @@ fn commit_then_read_round_trip() {
 }
 
 #[test]
+fn replicate_route_streams_wal_delta_into_a_follower() {
+    // End-to-end replication over HTTP: a leader server serves /replicate; a
+    // fresh follower engine streams the WAL delta and ingests it, ending up
+    // with the leader's entities (tx ids preserved). No flush happens, so the
+    // follower can stream the full history from offset 0 without a base backup.
+    let leader_dir = temp_dir("repl_leader");
+    let server = Arc::new(Server::open(&leader_dir).unwrap());
+    let addr = spawn_server(Arc::clone(&server), 8);
+
+    let mk = |eid: EntityId| {
+        serde_json::json!({
+            "records": [{
+                "kind": "entity",
+                "entity_id": eid.into_uuid().to_string(),
+                "type_id": 1,
+                "tx_id_assert": 0,
+                "tx_id_supersede": "active",
+                "properties": [{"prop_id": 1, "value": {"tag": "string", "value": "x"}}]
+            }]
+        })
+        .to_string()
+    };
+
+    let a = EntityId::now_v7();
+    assert_eq!(post(addr, "/commit", &mk(a)).status, 200);
+
+    // A base-backup bootstrap would tell the follower the active wal_seq; here
+    // we read it directly from the in-process engine.
+    let wal_seq = {
+        let e = server.engine();
+        let g = e.read().unwrap();
+        g.active_wal_seq()
+    };
+
+    // Pull from offset 0 → all committed records so far.
+    let resp = post(
+        addr,
+        "/replicate",
+        &serde_json::json!({"wal_seq": wal_seq, "after": 0}).to_string(),
+    );
+    assert_eq!(resp.status, 200);
+    let body: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    assert_eq!(body["rotated"], false);
+    let recs1 = ndb_engine::decode_records_b64(body["records"].as_str().unwrap()).unwrap();
+    let next = body["next_offset"].as_u64().unwrap();
+
+    let follower_dir = temp_dir("repl_follower");
+    let mut follower = ndb_engine::Engine::create(&follower_dir).unwrap();
+    follower.ingest_replicated(recs1).unwrap();
+
+    // Leader commits B; follower streams the delta from its watermark.
+    let b = EntityId::now_v7();
+    assert_eq!(post(addr, "/commit", &mk(b)).status, 200);
+    let resp = post(
+        addr,
+        "/replicate",
+        &serde_json::json!({"wal_seq": wal_seq, "after": next}).to_string(),
+    );
+    let body: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    let recs2 = ndb_engine::decode_records_b64(body["records"].as_str().unwrap()).unwrap();
+    assert!(!recs2.is_empty(), "entity B should stream in the delta");
+    follower.ingest_replicated(recs2).unwrap();
+
+    // The replica has both entities.
+    let snap = ndb_engine::TxId::new(follower.manifest().last_tx_id);
+    for id in [a, b] {
+        match follower.snapshot_read(&id.into_uuid(), snap).unwrap() {
+            ndb_engine::Resolved::Live(ndb_engine::Record::Entity(e)) => {
+                assert_eq!(e.entity_id, id);
+            }
+            other => panic!("follower missing {}: {other:?}", id.into_uuid()),
+        }
+    }
+    follower.close().unwrap();
+
+    std::fs::remove_dir_all(&leader_dir).unwrap();
+    std::fs::remove_dir_all(&follower_dir).unwrap();
+}
+
+#[test]
 fn compact_route_merges_sstables_offlock_and_data_survives() {
     // End-to-end exercise of the off-lock /compact path: commit two entities
     // with a flush between (→ two SSTables), compact over HTTP, and confirm

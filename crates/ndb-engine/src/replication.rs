@@ -42,9 +42,144 @@
 
 use std::path::Path;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use thiserror::Error;
+
 use crate::encryption::Cipher;
+use crate::engine::{Engine, EngineError};
+use crate::error::DecodeError;
 use crate::record::Record;
 use crate::wal::{WalReadError, WalReader, WriteAheadLog};
+
+/// A follower's stream position: which WAL segment + byte offset to request
+/// next from the leader. Initialised from a base backup (the leader's active
+/// `wal_seq`, offset = the backed-up WAL length), then advanced by
+/// [`poll_once`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FollowerCursor {
+    /// Leader WAL segment being streamed.
+    pub wal_seq: u64,
+    /// Byte offset within that segment already consumed.
+    pub offset: u64,
+}
+
+/// One batch as a follower receives it, after the transport (e.g. HTTP
+/// `/replicate`) has been decoded.
+#[derive(Debug)]
+pub struct StreamedBatch {
+    /// The leader's current active `wal_seq`.
+    pub current_wal_seq: u64,
+    /// True when the requested segment is no longer active — the follower
+    /// fell behind a flush and must re-bootstrap from a fresh base backup.
+    pub rotated: bool,
+    /// Records to ingest (decoded; may be empty when caught up).
+    pub records: Vec<Record>,
+    /// Offset to request from next time.
+    pub next_offset: u64,
+}
+
+/// Result of a single [`poll_once`] step.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PollOutcome {
+    /// Ingested this many records; the cursor advanced. `0` means caught up
+    /// (the loop should sleep before polling again).
+    Applied(usize),
+    /// The leader rotated past the follower's segment; re-bootstrap from a
+    /// base backup, then resume with a fresh cursor at the new `wal_seq`.
+    Rotated {
+        /// The leader's current active `wal_seq`.
+        current_wal_seq: u64,
+    },
+}
+
+/// **Follower daemon step.** Fetch one batch via `fetch` (the caller's
+/// transport — HTTP `POST /replicate`, in-process, or a test closure),
+/// ingest it into `engine` preserving the leader's tx ids, and advance
+/// `cursor`. The operator's daemon loop is just:
+///
+/// ```ignore
+/// loop {
+///     match poll_once(&mut engine, &mut cursor, fetch)? {
+///         PollOutcome::Rotated { .. } => { /* re-bootstrap from base backup */ }
+///         PollOutcome::Applied(0)     => std::thread::sleep(poll_interval),
+///         PollOutcome::Applied(_)     => {} // more may be waiting — poll again
+///     }
+/// }
+/// ```
+///
+/// Keeping the transport in a closure means the engine takes no network
+/// dependency and the loop is deterministically testable in-process.
+pub fn poll_once<F>(
+    engine: &mut Engine,
+    cursor: &mut FollowerCursor,
+    fetch: F,
+) -> Result<PollOutcome, EngineError>
+where
+    F: FnOnce(&FollowerCursor) -> Result<StreamedBatch, EngineError>,
+{
+    let batch = fetch(cursor)?;
+    if batch.rotated {
+        return Ok(PollOutcome::Rotated {
+            current_wal_seq: batch.current_wal_seq,
+        });
+    }
+    let n = batch.records.len();
+    engine.ingest_replicated(batch.records)?;
+    cursor.offset = batch.next_offset;
+    cursor.wal_seq = batch.current_wal_seq;
+    Ok(PollOutcome::Applied(n))
+}
+
+/// Error decoding a replicated record batch off the wire.
+#[derive(Debug, Error)]
+pub enum BatchDecodeError {
+    /// The transport string wasn't valid base64.
+    #[error(transparent)]
+    Base64(#[from] base64::DecodeError),
+    /// The decoded bytes didn't form valid records.
+    #[error(transparent)]
+    Record(#[from] DecodeError),
+}
+
+/// Encode a batch of records to a self-delimiting byte blob (concatenated
+/// `Record::encode` outputs — each record is length-described by its own
+/// envelope, so the blob is walkable with repeated `Record::decode`).
+#[must_use]
+pub fn encode_records(records: &[Record]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for r in records {
+        r.encode(&mut out).expect("record encode is infallible for valid records");
+    }
+    out
+}
+
+/// Decode a record blob produced by [`encode_records`].
+pub fn decode_records(bytes: &[u8]) -> Result<Vec<Record>, DecodeError> {
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    while pos < bytes.len() {
+        let (r, consumed) = Record::decode(&bytes[pos..])?;
+        out.push(r);
+        pos += consumed;
+    }
+    Ok(out)
+}
+
+/// Base64-encode a record batch for a JSON transport (the `/replicate`
+/// response body). Carries every record kind verbatim — including the
+/// `TxTimestamp`/`RetentionPolicy` metadata replication needs — unlike the
+/// user-facing change-feed wire.
+#[must_use]
+pub fn encode_records_b64(records: &[Record]) -> String {
+    BASE64.encode(encode_records(records))
+}
+
+/// Decode a base64 record batch produced by [`encode_records_b64`].
+pub fn decode_records_b64(s: &str) -> Result<Vec<Record>, BatchDecodeError> {
+    let bytes = BASE64.decode(s)?;
+    Ok(decode_records(&bytes)?)
+}
 
 /// A batch of committed records read from a leader WAL, plus the byte
 /// offset a follower should request from next time (its new watermark).
@@ -197,6 +332,141 @@ mod tests {
         }
         follower.close().unwrap();
 
+        std::fs::remove_dir_all(&leader_dir).unwrap();
+        std::fs::remove_dir_all(&follower_dir).unwrap();
+    }
+
+    #[test]
+    fn continuous_streaming_follower_mirrors_the_leader() {
+        // The daemon's core loop, library-level: bootstrap a follower from a
+        // base backup, then repeatedly stream the leader's WAL delta and
+        // ingest it into the live follower engine. The replica must mirror the
+        // leader — same entities, leader tx ids preserved — and survive a
+        // reopen (its own WAL is valid + replayable).
+        let leader_dir = temp_dir("stream-leader");
+        let follower_dir = temp_dir("stream-follower");
+        let mut leader = Engine::create(&leader_dir).unwrap();
+
+        // Bootstrap: one commit, base-backup → follower.
+        let id0 = EntityId::now_v7();
+        put(&mut leader, id0, "init");
+        leader.backup_to(&follower_dir).unwrap();
+        let mut follower = Engine::open(&follower_dir).unwrap();
+
+        // Streaming starts at the leader WAL length captured at backup time
+        // (the follower already has everything before it, via the copied WAL).
+        let seq = leader.active_wal_seq();
+        let mut watermark = std::fs::metadata(wal_path(&leader_dir, seq)).unwrap().len();
+
+        let mut ids = vec![id0];
+        for round in 0..6 {
+            let id = EntityId::now_v7();
+            put(&mut leader, id, &format!("r{round}"));
+            ids.push(id);
+
+            // Follower pulls the delta and ingests it into the live engine.
+            let batch = leader.wal_delta_since(watermark).unwrap();
+            assert!(!batch.is_empty(), "round {round} should stream new records");
+            follower.ingest_replicated(batch.records).unwrap();
+            watermark = batch.next_offset;
+        }
+
+        // Replica state matches the leader at the latest tx, tx ids preserved.
+        let leader_tx = leader.manifest().last_tx_id;
+        assert_eq!(
+            follower.manifest().last_tx_id,
+            leader_tx,
+            "follower tx watermark must track the leader"
+        );
+        let snap = TxId::new(leader_tx);
+        for id in &ids {
+            match follower.snapshot_read(&id.into_uuid(), snap).unwrap() {
+                Resolved::Live(Record::Entity(_)) => {}
+                other => panic!("replica missing {id:?}: {other:?}"),
+            }
+        }
+        // First entity on the replica still carries the leader's tx id.
+        let leader_a = match leader.snapshot_read(&id0.into_uuid(), snap).unwrap() {
+            Resolved::Live(Record::Entity(e)) => e.tx_id_assert,
+            o => panic!("leader read: {o:?}"),
+        };
+        match follower.snapshot_read(&id0.into_uuid(), snap).unwrap() {
+            Resolved::Live(Record::Entity(e)) => assert_eq!(e.tx_id_assert, leader_a),
+            o => panic!("replica read: {o:?}"),
+        }
+        follower.close().unwrap();
+
+        // The replica's own WAL is valid: reopen replays it cleanly.
+        let reopened = Engine::open(&follower_dir).unwrap();
+        for id in &ids {
+            assert!(matches!(
+                reopened.snapshot_read(&id.into_uuid(), snap).unwrap(),
+                Resolved::Live(Record::Entity(_))
+            ));
+        }
+        reopened.close().unwrap();
+        leader.close().unwrap();
+
+        std::fs::remove_dir_all(&leader_dir).unwrap();
+        std::fs::remove_dir_all(&follower_dir).unwrap();
+    }
+
+    #[test]
+    fn follower_daemon_loop_via_poll_once_catches_up() {
+        // Drives the reusable poll_once daemon step in a loop, with the
+        // transport closure streaming from an in-process leader — exactly the
+        // operator's loop shape, deterministically tested.
+        let leader_dir = temp_dir("daemon-leader");
+        let follower_dir = temp_dir("daemon-follower");
+        let mut leader = Engine::create(&leader_dir).unwrap();
+        let mut follower = Engine::create(&follower_dir).unwrap();
+
+        let mut cursor = FollowerCursor {
+            wal_seq: leader.active_wal_seq(),
+            offset: 0,
+        };
+        let mut ids = Vec::new();
+        for i in 0..5 {
+            let id = EntityId::now_v7();
+            put(&mut leader, id, &format!("e{i}"));
+            ids.push(id);
+        }
+
+        // Loop poll_once until caught up.
+        let mut polls = 0;
+        loop {
+            polls += 1;
+            assert!(polls < 10, "should catch up quickly");
+            let leader_ref = &leader;
+            let outcome = poll_once(&mut follower, &mut cursor, |c| {
+                let batch = leader_ref.wal_delta_since(c.offset).unwrap();
+                Ok(StreamedBatch {
+                    current_wal_seq: leader_ref.active_wal_seq(),
+                    rotated: false,
+                    records: batch.records,
+                    next_offset: batch.next_offset,
+                })
+            })
+            .unwrap();
+            match outcome {
+                PollOutcome::Applied(0) => break,
+                PollOutcome::Applied(_) => {}
+                PollOutcome::Rotated { .. } => panic!("no rotation expected"),
+            }
+        }
+
+        let snap = TxId::new(leader.manifest().last_tx_id);
+        for id in &ids {
+            assert!(
+                matches!(
+                    follower.snapshot_read(&id.into_uuid(), snap).unwrap(),
+                    Resolved::Live(Record::Entity(_))
+                ),
+                "replica missing {id:?}"
+            );
+        }
+        leader.close().unwrap();
+        follower.close().unwrap();
         std::fs::remove_dir_all(&leader_dir).unwrap();
         std::fs::remove_dir_all(&follower_dir).unwrap();
     }

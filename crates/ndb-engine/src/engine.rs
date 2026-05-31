@@ -1595,6 +1595,92 @@ impl Engine {
         Ok(false)
     }
 
+    // ---------------------------------------------------------------------
+    // Replication (P3): leader read + follower apply. The leader streams its
+    // committed WAL records by byte offset; a follower ingests them verbatim,
+    // preserving the leader's tx ids, so the replica's MVCC view is identical.
+    // ---------------------------------------------------------------------
+
+    /// `file_seq` of the engine's active WAL segment — the segment a
+    /// replication follower is currently streaming from.
+    #[must_use]
+    pub fn active_wal_seq(&self) -> u64 {
+        self.db.manifest().active_wal_seq
+    }
+
+    /// **Leader side.** Read this engine's own active WAL from byte offset
+    /// `after`, returning the committed records past it plus the new
+    /// watermark. Reading the live WAL is safe — commits `fsync` before
+    /// returning, so a torn trailing record is simply excluded until durable.
+    pub fn wal_delta_since(
+        &self,
+        after: u64,
+    ) -> Result<crate::replication::ReplicationBatch, EngineError> {
+        let seq = self.db.manifest().active_wal_seq;
+        let path = wal_path(self.db.path(), seq);
+        Ok(crate::replication::read_wal_since(
+            &path,
+            self.cipher.clone(),
+            after,
+        )?)
+    }
+
+    /// **Follower side.** Ingest a batch of records streamed from a leader,
+    /// applying them VERBATIM — the records keep the leader's
+    /// `tx_id_assert`/`tx_id_supersede` and carry the leader's `TxTimestamp`,
+    /// so the replica's MVCC + as-of-timestamp views match the leader's. The
+    /// records are appended to the follower's WAL (durable), applied to its
+    /// indexes + memtable, and the tx watermark is advanced; the memtable
+    /// auto-flushes when full, so a follower bounds its own write memory and
+    /// builds SSTables exactly as the leader does.
+    ///
+    /// This is the apply path for a live, continuously-replicating follower —
+    /// distinct from [`crate::replication::apply_batch`] (which only appends
+    /// to a WAL file for a follower materialised later by reopen).
+    pub fn ingest_replicated(&mut self, records: Vec<Record>) -> Result<(), EngineError> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        let wal = self
+            .wal
+            .as_mut()
+            .expect("WAL active during ingest (engine open invariant)");
+        wal.append_batch(&records)?;
+        wal.sync()?;
+
+        let mut max_tx = 0u64;
+        for r in records {
+            let tx = record_index_tx(&r);
+            max_tx = max_tx.max(tx.get());
+            match &r {
+                Record::TxTimestamp(t) => {
+                    self.commit_timestamps.insert(t.tx_id, t.timestamp_us);
+                }
+                Record::RetentionPolicy(rp) => {
+                    if let Some(p) = decode_retention_policy(rp.policy_kind, rp.keep_last_n) {
+                        self.retention.insert(rp.type_id, p);
+                    }
+                }
+                _ => {}
+            }
+            self.lookup_key.apply(&r, tx);
+            self.adjacency.apply(&r, tx);
+            self.type_cluster.apply(&r, tx);
+            self.entity_type_cluster.apply(&r, tx);
+            self.vector.apply(&r, tx);
+            self.property_btree.apply(&r, tx);
+            self.memtable.insert(r)?;
+        }
+        // Advance the local tx watermark to the leader's, so a later as-of
+        // query / any local allocation doesn't reuse an ingested tx id.
+        let cur = self.db.manifest().last_tx_id;
+        for _ in cur..max_tx {
+            self.db.allocate_tx_id();
+        }
+        self.auto_flush_if_full()?;
+        Ok(())
+    }
+
     /// Take a consistent **hot backup** of the database into `dest` while
     /// the engine stays open and serving.
     ///
