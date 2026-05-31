@@ -40,11 +40,13 @@ flowchart TB
     subgraph DISK["3 · On-disk immutable · sstable.rs"]
         direction TB
         SW["SSTableWriter<br/>sorted blocks + SSTableFooter"]
-        BIX["block_index.rs<br/>block offsets"]
+        BIX["block_index.rs<br/>.idx — block offsets"]
+        BLM["bloom.rs<br/>.bloom — membership filter"]
         ENC["encryption.rs<br/>optional AES-256-GCM at rest"]
-        SST[("SSTable files")]
-        SR["SSTableReader<br/>mmap via memmap2<br/>CRC32 header/index only — lazy pages"]
+        SST[("SSTable files<br/>+ .idx / .bloom sidecars")]
+        SR["SSTableReader<br/>mmap via memmap2<br/>CRC32 header/index only — lazy pages<br/>bloom rejects absent keys before scan"]
         SW --> BIX --> SST
+        SW --> BLM --> SST
         SW --> ENC --> SST
         SST --> SR
     end
@@ -86,7 +88,7 @@ flowchart TB
     classDef store fill:#e8f0fe,stroke:#3367d6,color:#0b2a6b;
     classDef file fill:#fff3e0,stroke:#e8870c,color:#5a3000;
     classDef xcut fill:#f3e8fd,stroke:#7b1fa2,color:#3a0a55;
-    class BW,CM,WAL,REC,MT,SW,BIX,ENC,SR,MAN,RD,MV,OUT store;
+    class BW,CM,WAL,REC,MT,SW,BIX,BLM,ENC,SR,MAN,RD,MV,OUT store;
     class WALF,SST,MANF file;
     class CODEC,ENC xcut;
 ```
@@ -102,6 +104,12 @@ flowchart TB
   the footer/block index, leaving entry pages to lazy fault-in
   (`memmap2`) — this is what keeps RSS bounded on 10 GB+ datasets.
   Encryption at rest (`AES-256-GCM`) is an optional layer on the same file.
+- **Two read-path sidecars, both best-effort.** Each SSTable carries a
+  `.bloom` membership filter and a `.idx` block index. A point read checks
+  the bloom first and returns immediately when the key is provably absent
+  (the LSM read-amplification fix); on a maybe-hit it binary-searches the
+  `.idx` to bound the in-block scan. A missing or corrupt sidecar never
+  affects correctness — the reader just scans.
 - **Compaction is size-tiered** and re-enters the same `SSTableWriter`;
   the `Manifest` catalogues the live set and is swapped atomically.
 - **Reads are lock-free snapshots.** `mvcc::resolve()` merges the memtable
