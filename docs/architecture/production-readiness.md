@@ -41,8 +41,8 @@ possibly-corrupt disk, so this is load-bearing.
 | Request line/header/body size limits (413/431) | Landed | `ndb-server` |
 | **Automatic background compaction** (policy + thread) | **Landed** | `shared.rs` |
 | **Contention-free (off-lock) compaction** | **Landed** | `shared.rs`, `engine.rs` |
+| **Server `/compact` is off-lock** | **Landed** | `ndb-server` via `run_offlock_compaction` |
 | LSM write-stall / L0 backpressure | **Planned** | bounded-memtable signal; see below |
-| Server uses `SharedEngine` (to inherit off-lock compaction) | **Planned** | server holds `Arc<RwLock<Engine>>` today |
 
 The server limits land via a `ServerConfig` (builder methods; existing
 constructors unchanged) — defaults: `max_connections=256`, read/write
@@ -76,9 +76,22 @@ install. Proven by a deterministic set-swap test + a multi-threaded
 writer-vs-compactor no-data-loss test, on top of every existing compaction
 test now exercising the off-lock path.
 
+The HTTP server's `/compact` is now off-lock too — but via the cleaner route
+rather than a full `SharedEngine` swap. Swapping the server's
+`Arc<RwLock<Engine>>` for `Arc<SharedEngine>` would have changed the
+`engine()` accessor's return type and cascaded into `ndb-mcp-server`, so
+instead the orchestration was extracted into a reusable
+`run_offlock_compaction(&RwLock<Engine>, &Mutex<()>, floor, current_floor)`
+free function that both `SharedEngine::compact_offlock` and the server call.
+The server passes `TxId::ACTIVE` for the floor: it registers no read
+snapshots and every read handler is a single lock acquisition, so the atomic
+install swap alone keeps reads consistent. The handler documents the standing
+contract — any future read that pins an old snapshot across multiple lock
+acquisitions must enroll it in a snapshot registry first.
+
 Remaining concurrency work: a bounded-memtable **write-stall backpressure**
-signal, and migrating `ndb-server` (which holds `Arc<RwLock<Engine>>`
-directly) onto `SharedEngine` so the server inherits off-lock compaction.
+signal, and (optionally) an incremental index update at install so the
+install lock-hold isn't an O(total) rebuild in default (non-mmap) mode.
 
 ## P2 — Observability & operability
 
@@ -137,5 +150,6 @@ compaction** (engine) and bounded concurrency + timeouts + request limits +
 `/metrics` + `/ready` + graceful shutdown (server). Deliberately deferred —
 because a half-correct version is worse than a documented gap — block
 compression (needs a dependency + block-format work), LSM write-stall
-backpressure, the replication network daemon, and migrating the server onto
-`SharedEngine`. The deferred items are design-clear, not blocked.
+backpressure, the replication network daemon, and an incremental index
+update at compaction install. The deferred items are design-clear, not
+blocked.
