@@ -855,6 +855,50 @@ impl Store {
         let (id, _, _) = self.find_user(username).ok_or(StoreError::NotFound)?;
         self.delete(id)
     }
+
+    // ---- replication (leader / follower over the engine's WAL stream) ---
+
+    /// This node's replication status: head tx, `SSTable` count, active WAL seq.
+    #[must_use]
+    pub fn replication_status(&self) -> J {
+        let wal_seq = self.engine.raw_lock().read().expect("engine lock poisoned").active_wal_seq();
+        json!({ "head": self.head(), "sstables": self.engine.sstable_count(), "wal_seq": wal_seq })
+    }
+
+    /// **Leader side.** Stream the WAL delta for `(seq, after)` as a base64
+    /// record batch plus the cursor a follower advances with. Mirrors
+    /// `Engine::serve_replication`.
+    #[must_use]
+    pub fn serve_replication(&self, seq: u64, after: u64) -> J {
+        let guard = self.engine.raw_lock().read().expect("engine lock poisoned");
+        match guard.serve_replication(seq, after) {
+            Ok(b) => json!({
+                "current_wal_seq": b.current_wal_seq,
+                "available": b.available,
+                "segment_sealed": b.segment_sealed,
+                "next_wal_seq": b.next_wal_seq,
+                "next_offset": b.next_offset,
+                "count": b.records.len(),
+                "records_b64": ndb_engine::replication::encode_records_b64(&b.records),
+            }),
+            Err(e) => json!({ "error": { "code": "engine_error", "message": format!("{e}") } }),
+        }
+    }
+
+    /// **Follower side.** Decode a base64 record batch and ingest it verbatim
+    /// (leader tx ids preserved). Returns the new head tx.
+    ///
+    /// # Errors
+    /// `BadValue` on a malformed batch; engine errors on apply.
+    pub fn ingest_replicated_b64(&self, records_b64: &str) -> Result<u64, StoreError> {
+        let records = ndb_engine::replication::decode_records_b64(records_b64)
+            .map_err(|e| StoreError::BadValue(format!("decode batch: {e}")))?;
+        {
+            let mut guard = self.engine.raw_lock().write().expect("engine lock poisoned");
+            guard.ingest_replicated(records)?;
+        }
+        Ok(self.head())
+    }
 }
 
 /// Resolves names to ids within a write transaction, allocating + writing a
@@ -1221,6 +1265,45 @@ mod tests {
         let err = store.query("match Person(name: ?n return ?n").expect_err("parse error");
         assert_eq!(err["error"], "parse");
         assert!(err["span"].is_object(), "parse error carries a span");
+    }
+
+    /// A follower with an empty database replicates a leader's commits to
+    /// byte-identical state by streaming the leader's WAL delta.
+    #[test]
+    fn replication_leader_to_follower_round_trip() {
+        let leader = fresh();
+        let follower = fresh();
+        leader.create("Person", &[("name".into(), s("Alice"))], None).expect("a");
+        leader.create("Person", &[("name".into(), s("Bob"))], None).expect("b");
+
+        // Follower streams from the leader's active WAL segment, offset 0.
+        let mut seq = leader.replication_status()["wal_seq"].as_u64().unwrap();
+        let mut off = 0u64;
+        for _ in 0..100 {
+            let b = leader.serve_replication(seq, off);
+            assert!(b["available"].as_bool().unwrap_or(false), "segment available");
+            let n = b["count"].as_u64().unwrap();
+            if n > 0 {
+                follower.ingest_replicated_b64(b["records_b64"].as_str().unwrap()).expect("ingest");
+            }
+            off = b["next_offset"].as_u64().unwrap();
+            if n == 0 {
+                if b["segment_sealed"].as_bool() == Some(true)
+                    && let Some(next) = b["next_wal_seq"].as_u64()
+                {
+                    seq = next;
+                    off = 0;
+                    continue;
+                }
+                break;
+            }
+        }
+
+        // The follower now mirrors the leader.
+        assert_eq!(follower.head(), leader.head(), "watermarks match");
+        let cat = follower.catalog(None);
+        assert_eq!(cat["kinds"][0]["name"], "Person");
+        assert_eq!(cat["kinds"][0]["count"], 2);
     }
 
     /// Editing a record that does not exist is a typed `NotFound` (HTTP 404).

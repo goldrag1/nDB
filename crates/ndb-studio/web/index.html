@@ -129,6 +129,8 @@
   .qerr { background: #2a1416; border: 1px solid #54262a; border-radius: 8px; padding: 10px 12px; color: #ffd0d0; }
   .qerr .qcode { color: var(--muted); }
   .qerr .qdetail { margin-top: 6px; font-family: ui-monospace, monospace; font-size: 12px; }
+  .nhint { color: var(--muted); font-size: 12px; margin: 10px 0; line-height: 1.5; }
+  .nhint code { background: #0c1118; padding: 1px 5px; border-radius: 4px; }
 </style>
 </head>
 <body>
@@ -143,6 +145,7 @@
     </div>
     <div class="userbox">
       <span class="ubadge" id="who"></span>
+      <button id="nodeBtn" class="hidden">Node</button>
       <button id="usersBtn" class="hidden">Users</button>
       <button id="logoutBtn">Logout</button>
     </div>
@@ -186,6 +189,17 @@
     <h3>Record · <span id="recTitle"></span> <span class="badge" id="recId"></span></h3>
     <div id="recBody" class="histbody"></div>
     <div class="dlg-actions"><button onclick="document.getElementById('recDlg').close()">Close</button></div>
+  </dialog>
+
+  <dialog id="nodeDlg">
+    <h3>Node · replication</h3>
+    <div id="nodeStatus" class="histbody"></div>
+    <h4 style="margin:14px 0 6px;color:var(--muted)">Pull from a peer (leader)</h4>
+    <div class="field" style="grid-template-columns:1fr"><input id="npPeer" placeholder="http://host:port" autocomplete="off" /></div>
+    <div class="field" style="grid-template-columns:1fr auto"><input id="npToken" placeholder="peer admin session token" autocomplete="off" /><button class="primary" id="npPull">Pull now</button></div>
+    <div class="nhint">This node becomes a follower: it streams the peer leader's WAL delta and applies it, preserving the leader's tx ids. Get the peer token from its <code>ndb_session</code> cookie while logged in there as admin (sessions are in-memory).</div>
+    <div id="npResult" class="badge" style="margin-top:8px"></div>
+    <div class="dlg-actions"><button onclick="document.getElementById('nodeDlg').close()">Close</button></div>
   </dialog>
 
   <div id="login" class="login hidden">
@@ -702,6 +716,7 @@ function hideLogin() { $("login").classList.add("hidden"); }
 function renderUser() {
   $("who").textContent = ME.user ? `${ME.user} · ${ME.role}` : "";
   $("usersBtn").classList.toggle("hidden", ME.role !== "admin");
+  $("nodeBtn").classList.toggle("hidden", ME.role !== "admin");
 }
 
 async function init() {
@@ -736,6 +751,30 @@ async function openUsers() {
   $("usersDlg").showModal();
 }
 $("usersBtn").onclick = openUsers;
+
+// ---- node / replication panel (admin) ----
+async function refreshNodeStatus() {
+  const s = await api.get("/replication/status");
+  $("nodeStatus").innerHTML =
+    `<div class="hrow"><span class="htx">head tx</span><span class="hval">${s.head ?? "?"}</span></div>` +
+    `<div class="hrow"><span class="htx">sstables</span><span class="hval">${s.sstables ?? "?"}</span></div>` +
+    `<div class="hrow"><span class="htx">wal seq</span><span class="hval">${s.wal_seq ?? "?"}</span></div>`;
+}
+async function openNode() { await refreshNodeStatus(); $("npResult").textContent = ""; $("nodeDlg").showModal(); }
+$("nodeBtn").onclick = openNode;
+$("npPull").onclick = async () => {
+  $("npResult").textContent = "pulling…";
+  const r = await api.post("/replication/pull", { peer: $("npPeer").value.trim(), token: $("npToken").value.trim() });
+  if (r.status === 200) {
+    $("npResult").textContent = `applied ${r.body.applied} record(s) · head now ${r.body.head}`;
+    await refreshNodeStatus();
+    toast(`replicated ${r.body.applied} records`);
+    await refreshAll();
+  } else {
+    $("npResult").textContent = "";
+    toast(r.body.error?.message || "pull failed", true);
+  }
+};
 $("nuAdd").onclick = async () => {
   const rr = await api.post("/users", { username: $("nuUser").value.trim(), password: $("nuPass").value, role: $("nuRole").value });
   if (rr.status === 200) { $("nuUser").value = ""; $("nuPass").value = ""; toast("user added"); openUsers(); }

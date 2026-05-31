@@ -19,6 +19,8 @@
 //! - `GET  /api/catalog|table|record|history|pivot|graph` → reads (any role)
 //! - `POST /api/query`      → run a read-only query (any role)
 //! - `POST /api/commit`     → create / set / delete (editor/admin)
+//! - `GET  /api/replication/status|since` → leader stream (admin)
+//! - `POST /api/replication/apply|pull`   → follower ingest / pull (admin)
 //! - `GET  /api/users`      → list accounts (admin)
 //! - `POST /api/users`      → `{username,password,role}` create (admin)
 //! - `POST /api/users/delete` → `{username}` (admin)
@@ -239,6 +241,28 @@ fn dispatch(
             Err(r) => r,
         },
 
+        // ---- replication / node admin (admin) ----
+        ("GET", "/api/replication/status") => match admin(session.as_ref()) {
+            Ok(()) => Resp::ok(store.replication_status()),
+            Err(r) => r,
+        },
+        ("GET", "/api/replication/since") => match admin(session.as_ref()) {
+            Ok(()) => {
+                let seq = qp.u64("seq").unwrap_or(0);
+                let after = qp.u64("after").unwrap_or(0);
+                Resp::ok(store.serve_replication(seq, after))
+            }
+            Err(r) => r,
+        },
+        ("POST", "/api/replication/apply") => match admin(session.as_ref()) {
+            Ok(()) => apply_batch(store, body),
+            Err(r) => r,
+        },
+        ("POST", "/api/replication/pull") => match admin(session.as_ref()) {
+            Ok(()) => replication_pull(store, body),
+            Err(r) => r,
+        },
+
         _ => Resp::fail(404, "not_found", "unknown endpoint"),
     }
 }
@@ -268,6 +292,105 @@ fn admin(session: Option<&Session>) -> Result<(), Resp> {
         Some(s) if s.role.is_admin() => Ok(()),
         Some(_) => Err(Resp::fail(403, "forbidden", "admin role required")),
     }
+}
+
+fn apply_batch(store: &Store, body: &[u8]) -> Resp {
+    let Ok(req) = serde_json::from_slice::<J>(body) else {
+        return Resp::fail(400, "bad_request", "invalid JSON body");
+    };
+    let b64 = req.get("records_b64").and_then(J::as_str).unwrap_or("");
+    match store.ingest_replicated_b64(b64) {
+        Ok(head) => Resp::ok(json!({ "ok": true, "head": head })),
+        Err(e) => Resp::code(e.status(), json!({ "error": { "code": e.code(), "message": e.message() } })),
+    }
+}
+
+/// Follower pull: stream the peer leader's WAL delta and ingest it, advancing
+/// the cursor (a faithful reimplementation of `replication::poll_once` over the
+/// HTTP transport, so network I/O happens outside the engine lock).
+fn replication_pull(store: &Store, body: &[u8]) -> Resp {
+    let Ok(req) = serde_json::from_slice::<J>(body) else {
+        return Resp::fail(400, "bad_request", "invalid JSON body");
+    };
+    let peer = req.get("peer").and_then(J::as_str).unwrap_or("").trim_end_matches('/');
+    let token = req.get("token").and_then(J::as_str).unwrap_or("");
+    if peer.is_empty() || token.is_empty() {
+        return Resp::fail(400, "bad_request", "peer URL and peer session token required");
+    }
+
+    // Start from the leader's active WAL segment, offset 0.
+    let status = match http_get_json(peer, "/api/replication/status", token) {
+        Ok(j) => j,
+        Err(e) => return Resp::fail(502, "peer_unreachable", &e),
+    };
+    let mut seq = status["wal_seq"].as_u64().unwrap_or(0);
+    let mut off = 0u64;
+    let mut applied = 0u64;
+
+    for _ in 0..100_000 {
+        let path = format!("/api/replication/since?seq={seq}&after={off}");
+        let b = match http_get_json(peer, &path, token) {
+            Ok(j) => j,
+            Err(e) => return Resp::fail(502, "peer_unreachable", &e),
+        };
+        if b.get("error").is_some() {
+            return Resp::code(502, json!({ "error": { "code": "peer_error", "message": b["error"].clone() } }));
+        }
+        if !b["available"].as_bool().unwrap_or(false) {
+            return Resp::fail(409, "rotated", "leader rotated past our position — re-bootstrap from a base backup");
+        }
+        let n = b["count"].as_u64().unwrap_or(0);
+        if n > 0 {
+            if let Err(e) = store.ingest_replicated_b64(b["records_b64"].as_str().unwrap_or("")) {
+                return Resp::code(e.status(), json!({ "error": { "code": e.code(), "message": e.message() } }));
+            }
+            applied += n;
+        }
+        off = b["next_offset"].as_u64().unwrap_or(off);
+        if n == 0 {
+            if b["segment_sealed"].as_bool() == Some(true)
+                && let Some(next) = b["next_wal_seq"].as_u64()
+            {
+                seq = next;
+                off = 0;
+                continue;
+            }
+            break; // caught up
+        }
+    }
+    Resp::ok(json!({ "ok": true, "applied": applied, "head": store.head() }))
+}
+
+/// A minimal HTTP/1.1 GET that sends the session cookie and parses a JSON body.
+/// Loopback / LAN, plaintext, `Connection: close` (no TLS, no chunked) — the
+/// shape our own server speaks. Used only for follower→leader pulls.
+fn http_get_json(peer: &str, path_and_query: &str, token: &str) -> Result<J, String> {
+    let hostport = peer
+        .trim_start_matches("http://")
+        .trim_start_matches("https://")
+        .trim_end_matches('/');
+    let mut stream = TcpStream::connect(hostport).map_err(|e| format!("connect {hostport}: {e}"))?;
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(15)));
+    let req = format!(
+        "GET {path_and_query} HTTP/1.1\r\nHost: {hostport}\r\nCookie: {COOKIE}={token}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+
+    let sep = buf.windows(4).position(|w| w == b"\r\n\r\n")
+        .ok_or_else(|| "malformed peer response (no header terminator)".to_string())?;
+    let head = &buf[..sep];
+    let bodytext = &buf[sep + 4..];
+    let status_line = head.split(|&b| b == b'\n').next().unwrap_or(b"");
+    let status: u16 = std::str::from_utf8(status_line).ok()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(0);
+    if status != 200 {
+        return Err(format!("peer returned HTTP {status}"));
+    }
+    serde_json::from_slice(bodytext).map_err(|e| format!("peer JSON: {e}"))
 }
 
 fn run_query(store: &Store, body: &[u8]) -> Resp {
