@@ -56,14 +56,18 @@ fn usage() {
          Rust-vs-Python benchmark dashboard. Does not change any other behaviour.\n\
          \n\
          Environment:\n\
-           NDB_TOKEN=<token>   Require Authorization: Bearer <token> on every route except /health.\n\
-           NDB_AUDIT=1         Equivalent to --audit (append <db>/.audit.jsonl per request).\n\
+           NDB_TOKEN=<token>         Require Authorization: Bearer <token> on every route except /health, /ready, /metrics.\n\
+           NDB_AUDIT=1               Equivalent to --audit (append <db>/.audit.jsonl per request).\n\
+           NDB_MAX_CONNECTIONS=<n>   Cap simultaneously-handled connections (default 256). Excess gets 503.\n\
          \n\
          When both --tls-cert and --tls-key are supplied, the server binds TLS on --bind.\n\
          When only one is supplied or neither, the server binds plain HTTP on --bind.\n\
          \n\
          Routes:\n\
-           GET  /health\n\
+           GET  /health           — liveness; always 200\n\
+           GET  /ready            — readiness; 200 when engine usable, 503 while draining\n\
+           GET  /metrics          — Prometheus text exposition\n\
+           POST /admin/shutdown   — request graceful shutdown (Admin capability)\n\
            POST /commit\n\
            GET  /read/:uuid\n\
            GET  /iter\n\
@@ -120,6 +124,20 @@ fn parse_args() -> Option<Args> {
         tls_cert,
         tls_key,
     })
+}
+
+/// Apply optional resource-limit overrides sourced from the environment.
+/// Currently `NDB_MAX_CONNECTIONS`; other knobs keep their library defaults
+/// and are tuned in code via the `Server::with_*` builders.
+fn apply_env_resource_limits(mut server: Server) -> Server {
+    if let Ok(v) = std::env::var("NDB_MAX_CONNECTIONS")
+        && let Ok(n) = v.parse::<usize>()
+        && n > 0
+    {
+        eprintln!("ndb-server: max_connections = {n}");
+        server = server.with_max_connections(n);
+    }
+    server
 }
 
 fn main() -> ExitCode {
@@ -181,6 +199,7 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     }
+    server = apply_env_resource_limits(server);
     let audit_on =
         args.audit || std::env::var("NDB_AUDIT").is_ok_and(|v| v == "1");
     if audit_on {
