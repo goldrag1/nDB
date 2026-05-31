@@ -31,6 +31,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ndb_engine::index::Index as IndexTrait; // .apply() to populate the HNSW
@@ -789,9 +790,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = TcpListener::bind(&bind)?;
     eprintln!("langgraph-server on http://{bind}");
+    // Bounded concurrency: cap worker threads so a burst of clients can't
+    // spawn an unbounded number of threads (the engine is bounded; bound the
+    // serving layer to match). Over-cap connections are closed immediately.
+    let inflight = Arc::new(AtomicUsize::new(0));
+    let max_conn = 512usize;
     for stream in listener.incoming() {
         match stream {
-            Ok(s) => { let idx = Arc::clone(&index); std::thread::spawn(move || { let _ = handle(&idx, s); }); }
+            Ok(s) => {
+                if inflight.load(Ordering::Relaxed) >= max_conn {
+                    drop(s);
+                    continue;
+                }
+                inflight.fetch_add(1, Ordering::Relaxed);
+                let idx = Arc::clone(&index);
+                let cnt = Arc::clone(&inflight);
+                std::thread::spawn(move || {
+                    let _ = handle(&idx, s);
+                    cnt.fetch_sub(1, Ordering::Relaxed);
+                });
+            }
             Err(e) => eprintln!("accept error: {e}"),
         }
     }
@@ -799,6 +817,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn handle(index: &Index, mut stream: TcpStream) -> std::io::Result<()> {
+    // Production touch: bound how long a slow/stuck client can hold this
+    // worker thread (the engine itself is already bounded; this bounds the
+    // serving layer).
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(30)));
+    let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(60)));
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut line = String::new();
     reader.read_line(&mut line)?;
@@ -844,6 +867,37 @@ fn handle(index: &Index, mut stream: TcpStream) -> std::io::Result<()> {
 
     let body: serde_json::Value = match path {
         "/health" => serde_json::json!({"status": "ok", "papers": index.total_papers}),
+        // Production-engine observability: the resident-RAM footprint of each
+        // in-memory index + the on-disk SSTable count, served live while the
+        // explorer runs. This is the payoff of low-memory mode made visible —
+        // confirm the engine stays bounded as the dataset scales.
+        "/metrics" => {
+            let mem = index.engine.index_memory_stats();
+            let (mt_records, mt_bytes) = index.engine.memtable_stats();
+            let total = mem.lookup_key
+                + mem.adjacency
+                + mem.type_cluster
+                + mem.entity_type_cluster
+                + mem.vector
+                + mem.property_btree
+                + mem.memtable;
+            serde_json::json!({
+                "papers": index.total_papers,
+                "sstables": index.engine.sstable_count(),
+                "memtable_records": mt_records,
+                "memtable_bytes": mt_bytes,
+                "index_resident_bytes": {
+                    "lookup_key": mem.lookup_key,
+                    "adjacency": mem.adjacency,
+                    "type_cluster": mem.type_cluster,
+                    "entity_type_cluster": mem.entity_type_cluster,
+                    "vector": mem.vector,
+                    "property_btree": mem.property_btree,
+                    "memtable": mem.memtable,
+                    "total": total,
+                },
+            })
+        }
         "/view/clusters" => index.clusters_view(),
         "/view/top" => index.top_view(limit, as_of),
         "/view/knn" => index.knn_view(qp.get("q").map_or("", String::as_str), num("k", 8)),
