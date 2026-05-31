@@ -249,6 +249,14 @@
     <div class="dlg-actions"><button onclick="document.getElementById('nodeDlg').close()">Close</button></div>
   </dialog>
 
+  <dialog id="importDlg">
+    <h3>Import records</h3>
+    <div class="field" style="grid-template-columns:110px 1fr"><label>Into kind</label><input id="impKind" placeholder="Person" autocomplete="off" /></div>
+    <p class="nhint">Paste a JSON array of objects, or CSV with a header row. An <code>id</code> column is ignored (new records get fresh ids). Values like <code>ref:&lt;uuid&gt;</code> become links.</p>
+    <textarea id="impText" class="qeditor" style="min-height:140px" placeholder='[{"name":"Zoe","city":"Hue"}]  — or —  name,city&#10;Zoe,Hue'></textarea>
+    <div class="dlg-actions"><span id="impStatus" class="badge"></span><div class="spacer" style="flex:1"></div><button onclick="document.getElementById('importDlg').close()">Close</button><button class="primary" id="impRun">Import</button></div>
+  </dialog>
+
   <dialog id="schemaDlg">
     <h3>Schema overview</h3>
     <div id="schemaBody" class="histbody"></div>
@@ -546,7 +554,8 @@ function renderTable(t) {
   html += `<input id="tblq" class="tblsearch" placeholder="search all columns…" value="${esc(TBL.q)}" />`;
   html += `<span class="badge">${from}–${to} of ${t.total}</span><div class="spacer" style="flex:1"></div>`;
   if (writable && TBL.sel.size) html += `<button class="danger-btn" id="bulkDel">Delete ${TBL.sel.size}</button>`;
-  if (writable) html += `<button class="primary" id="newBtn">+ New record</button>`;
+  html += `<button id="expCsv">Export CSV</button><button id="expJson">JSON</button>`;
+  if (writable) html += `<button id="impBtn">Import</button><button class="primary" id="newBtn">+ New record</button>`;
   html += `</div>`;
 
   if (!headers.length && !t.rows.length && !TBL.q && !Object.values(TBL.filters).some(Boolean)) {
@@ -600,7 +609,10 @@ function renderTable(t) {
   const prev = $("pgPrev"), next = $("pgNext");
   if (prev) prev.onclick = () => { TBL.offset = Math.max(0, TBL.offset - TBL.limit); loadTable(); };
   if (next) next.onclick = () => { TBL.offset += TBL.limit; loadTable(); };
+  $("expCsv").onclick = () => exportTable("csv");
+  $("expJson").onclick = () => exportTable("json");
   if (writable) {
+    const ib = $("impBtn"); if (ib) ib.onclick = openImport;
     $("newBtn").onclick = openNew;
     const bd = $("bulkDel"); if (bd) bd.onclick = bulkDelete;
     const sa = $("selAll");
@@ -630,6 +642,75 @@ function restoreFocus() {
   if (el) { el.focus(); const n = el.value.length; el.setSelectionRange(n, n); }
   TBL.focus = null;
 }
+
+// ---- export / import ----
+function cellPlain(cell) {
+  if (cell === null || cell === undefined) return "";
+  if (typeof cell === "object") { const k = Object.keys(cell)[0]; return `${k}:${cell[k]}`; }
+  return cell;
+}
+function downloadBlob(blob, name) {
+  const u = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = u; a.download = name; a.click();
+  URL.revokeObjectURL(u);
+}
+async function exportTable(fmt) {
+  if (!SEL) return;
+  const p = new URLSearchParams({ kind: SEL.type_id, limit: 100000, offset: 0 });
+  if (ASOF !== null) p.set("as_of", ASOF);
+  if (TBL.sort) { p.set("sort", TBL.sort); p.set("dir", TBL.desc ? "desc" : "asc"); }
+  if (TBL.q) p.set("q", TBL.q);
+  for (const [k, v] of Object.entries(TBL.filters)) if (v) p.set("f_" + k, v);
+  const t = await api.get("/table?" + p.toString());
+  const headers = (t.headers || []).map((h) => h.name), rows = t.rows || [];
+  if (fmt === "json") {
+    const objs = rows.map((r) => { const o = { id: r.id }; headers.forEach((h, i) => (o[h] = cellPlain(r.cells[i]))); return o; });
+    downloadBlob(new Blob([JSON.stringify(objs, null, 2)], { type: "application/json" }), `${SEL.name}.json`);
+  } else {
+    const q = (s) => { s = String(s ?? ""); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const lines = [["id", ...headers].map(q).join(",")];
+    for (const r of rows) lines.push([r.id, ...headers.map((h, i) => cellPlain(r.cells[i]))].map(q).join(","));
+    downloadBlob(new Blob([lines.join("\n")], { type: "text/csv" }), `${SEL.name}.csv`);
+  }
+  toast(`exported ${rows.length} rows`);
+}
+
+function openImport() {
+  $("impKind").value = SEL ? SEL.name : "";
+  $("impText").value = "";
+  $("impStatus").textContent = "";
+  $("importDlg").showModal();
+}
+// Parse pasted CSV (header row) or JSON array into [{name,value}] property lists.
+function parseImport(text) {
+  text = text.trim();
+  if (text.startsWith("[")) {
+    return JSON.parse(text).map((o) => Object.entries(o).filter(([k]) => k !== "id").map(([k, v]) => ({ name: k, value: v })));
+  }
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  if (lines.length < 2) return [];
+  const splitCsv = (line) => { const out = []; let cur = "", inq = false; for (let i = 0; i < line.length; i++) { const c = line[i]; if (inq) { if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; } else if (c === '"') inq = false; else cur += c; } else if (c === '"') inq = true; else if (c === ",") { out.push(cur); cur = ""; } else cur += c; } out.push(cur); return out; };
+  const headers = splitCsv(lines[0]);
+  return lines.slice(1).map((l) => { const cells = splitCsv(l); return headers.map((h, i) => ({ name: h, value: cells[i] })).filter((p) => p.name !== "id" && p.value !== undefined && p.value !== ""); });
+}
+$("impRun").onclick = async () => {
+  const kind = $("impKind").value.trim();
+  if (!kind) { toast("target kind required", true); return; }
+  let recs;
+  try { recs = parseImport($("impText").value); } catch (e) { $("impStatus").textContent = "parse error: " + e.message; return; }
+  if (!recs.length) { $("impStatus").textContent = "nothing to import"; return; }
+  let ok = 0;
+  for (const props of recs) {
+    // CSV values are strings → parseScalar; JSON values pass through.
+    const properties = props.map((p) => ({ name: p.name, value: typeof p.value === "string" ? parseScalar(p.value) : p.value }));
+    const r = await api.commit({ op: "create", kind, properties });
+    if (r.status === 200) ok++;
+  }
+  $("impStatus").textContent = `imported ${ok}/${recs.length}`;
+  toast(`imported ${ok} records`);
+  await refreshAll();
+};
 
 async function bulkDelete() {
   const ids = [...TBL.sel];
