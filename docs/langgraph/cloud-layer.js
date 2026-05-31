@@ -67,6 +67,48 @@
     } catch (e) { return []; }
   }
 
+  // Parse the interleaved 16-B records into flat position/color arrays and
+  // importance-sort them (prefix [0..N) = top-N most-cited). The loop + the
+  // 6.17M-element Int32 sort take ~2 s — must NOT run on the main thread.
+  // Self-contained (no DOM/THREE) so it doubles as the Web Worker body.
+  function parseSortCore(buf, lut, other) {
+    var dv = new DataView(buf);
+    var count = dv.getUint32(8, true), REC = 16;
+    var px = new Float32Array(count * 3), pc = new Float32Array(count * 3), imp = new Float32Array(count);
+    var off = 16;
+    for (var i = 0; i < count; i++, off += REC) {
+      px[i * 3] = dv.getFloat32(off, true); px[i * 3 + 1] = dv.getFloat32(off + 4, true); px[i * 3 + 2] = dv.getFloat32(off + 8, true);
+      var fi = dv.getUint16(off + 12, true), rgb = lut[fi] || other;
+      pc[i * 3] = rgb[0]; pc[i * 3 + 1] = rgb[1]; pc[i * 3 + 2] = rgb[2];
+      imp[i] = dv.getUint16(off + 14, true) / 65535;
+    }
+    var order = new Int32Array(count);
+    for (var j = 0; j < count; j++) order[j] = j;
+    order.sort(function (a, b) { return imp[b] - imp[a]; });
+    var positions = new Float32Array(count * 3), colors = new Float32Array(count * 3);
+    for (var k = 0; k < count; k++) {
+      var s = order[k];
+      positions[k * 3] = px[s * 3]; positions[k * 3 + 1] = px[s * 3 + 1]; positions[k * 3 + 2] = px[s * 3 + 2];
+      colors[k * 3] = pc[s * 3]; colors[k * 3 + 1] = pc[s * 3 + 1]; colors[k * 3 + 2] = pc[s * 3 + 2];
+    }
+    return { positions: positions, colors: colors, count: count };
+  }
+
+  // Run parseSortCore in a worker, transferring the 95 MB buffer IN (zero copy)
+  // and the sorted position/color buffers OUT. Main thread never blocks.
+  function parseSortInWorker(buf, lut, other) {
+    return new Promise(function (resolve, reject) {
+      var src = "var parseSortCore=" + parseSortCore.toString() + ";\n" +
+        "self.onmessage=function(e){var d=e.data,r=parseSortCore(d.buf,d.lut,d.other);" +
+        "self.postMessage({positions:r.positions,colors:r.colors,count:r.count},[r.positions.buffer,r.colors.buffer]);};";
+      var url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+      var w = new Worker(url);
+      w.onmessage = function (e) { resolve(e.data); w.terminate(); URL.revokeObjectURL(url); };
+      w.onerror = function (e) { reject(new Error((e && e.message) || "worker error")); w.terminate(); URL.revokeObjectURL(url); };
+      w.postMessage({ buf: buf, lut: lut, other: other }, [buf]);
+    });
+  }
+
   async function buildCloud() {
     const Graph = await waitForGraph();
     let probe;
@@ -81,46 +123,18 @@
     const resp = await fetch("api/view/cloud", { cache: "no-store" });
     if (!resp.ok) { console.warn("cloud-layer: /view/cloud", resp.status); return; }
     const buf = await resp.arrayBuffer();
-    const dv = new DataView(buf);
-
     const magic = String.fromCharCode.apply(null, new Uint8Array(buf, 0, 8));
     if (magic !== "NDCLOUD1") { console.warn("cloud-layer: bad magic", magic); return; }
-    const count = dv.getUint32(8, true);
-    const REC = 16;
 
-    // Parse interleaved records into flat arrays + per-point importance. The
-    // size_q field (byte 14) is ln(cit+1)/ln(max) ∈ [0,1] — the server already
-    // wrote each paper's LOD key; we just have to use it.
-    const px = new Float32Array(count * 3);
-    const pc = new Float32Array(count * 3);
-    const imp = new Float32Array(count);
-    let off = 16;
-    for (let i = 0; i < count; i++, off += REC) {
-      px[i * 3]     = dv.getFloat32(off, true);
-      px[i * 3 + 1] = dv.getFloat32(off + 4, true);
-      px[i * 3 + 2] = dv.getFloat32(off + 8, true);
-      const fi = dv.getUint16(off + 12, true);
-      const rgb = colorLut[fi] || OTHER_RGB;
-      pc[i * 3] = rgb[0]; pc[i * 3 + 1] = rgb[1]; pc[i * 3 + 2] = rgb[2];
-      imp[i] = dv.getUint16(off + 14, true) / 65535;
-    }
-
-    // Importance-sort so the buffer prefix [0..N) is ALWAYS the N most-cited
-    // papers. LOD then collapses to one number: geom.setDrawRange(0, budget).
-    // Drawing a prefix needs no GPU re-upload and zero per-frame CPU.
-    const order = new Int32Array(count);
-    for (let i = 0; i < count; i++) order[i] = i;
-    order.sort((a, b) => imp[b] - imp[a]);
-    const positions = new Float32Array(count * 3);
-    const colors = new Float32Array(count * 3);
-    for (let i = 0; i < count; i++) {
-      const s = order[i];
-      positions[i * 3]     = px[s * 3];
-      positions[i * 3 + 1] = px[s * 3 + 1];
-      positions[i * 3 + 2] = px[s * 3 + 2];
-      colors[i * 3]     = pc[s * 3];
-      colors[i * 3 + 1] = pc[s * 3 + 1];
-      colors[i * 3 + 2] = pc[s * 3 + 2];
+    // Parse + importance-sort 6.17M records OFF the main thread (worker), so the
+    // ~2 s of work never freezes the UI on load. Falls back to inline parsing if
+    // Workers/Blob URLs are unavailable. size_q (byte 14) is the LOD key.
+    let positions, colors, count;
+    try {
+      ({ positions, colors, count } = await parseSortInWorker(buf, colorLut, OTHER_RGB));
+    } catch (e) {
+      console.warn("cloud-layer: worker parse failed, falling back inline", e);
+      ({ positions, colors, count } = parseSortCore(buf, colorLut, OTHER_RGB));
     }
 
     const geom = new THREE.BufferGeometry();
