@@ -192,6 +192,7 @@ pub struct CompactionPlan {
     cipher: Option<Cipher>,
     floor: TxId,
     retention: HashMap<TypeId, RetentionPolicy>,
+    codec: crate::compression::Codec,
 }
 
 impl CompactionPlan {
@@ -429,6 +430,13 @@ pub struct EngineConfig {
     /// blocking write would dead-lock the off-lock compactor's install phase
     /// on the engine write lock.
     pub l0_stall_threshold: usize,
+    /// Block compression codec for SSTables written by this engine (flush +
+    /// compaction). [`Codec::Stored`](crate::compression::Codec) (default)
+    /// writes the uncompressed v1 format — unchanged behaviour. Any other
+    /// codec writes the smaller v2 block-compressed format; readers handle
+    /// both, so the setting can change between runs and existing files keep
+    /// working.
+    pub compression: crate::compression::Codec,
 }
 
 impl Default for EngineConfig {
@@ -439,6 +447,7 @@ impl Default for EngineConfig {
             low_memory: false,
             memtable_flush_threshold_bytes: 0,
             l0_stall_threshold: 0,
+            compression: crate::compression::Codec::Stored,
         }
     }
 }
@@ -471,9 +480,16 @@ impl EngineConfig {
                 .ok()
                 .and_then(|v| v.trim().parse::<usize>().ok())
         };
+        // NDB_COMPRESS=lz4 enables block compression; anything else (or unset)
+        // leaves it off.
+        let compression = match std::env::var("NDB_COMPRESS").as_deref().map(str::trim) {
+            Ok("lz4" | "LZ4") => crate::compression::Codec::Lz4,
+            _ => crate::compression::Codec::Stored,
+        };
         Self {
             memtable_flush_threshold_bytes: parse("NDB_MEMTABLE_FLUSH_BYTES").unwrap_or(0),
             l0_stall_threshold: parse("NDB_L0_STALL").unwrap_or(0),
+            compression,
             ..Self::default()
         }
     }
@@ -2344,7 +2360,7 @@ impl Engine {
         // Step 1 + 2: write memtable to new SSTable.
         let sst_seq = self.db.allocate_file_seq();
         let sst_path = sstable_path(self.db.path(), sst_seq);
-        let mut writer = SSTableWriter::create_with_cipher(&sst_path, self.cipher.clone())?;
+        let mut writer = SSTableWriter::create_with_cipher_codec(&sst_path, self.cipher.clone(), self.config.compression)?;
         self.memtable.flush_into(&mut writer)?;
         writer.finish()?;
 
@@ -2505,7 +2521,7 @@ impl Engine {
         // survivors.
         let new_seq = self.db.allocate_file_seq();
         let new_path = sstable_path(self.db.path(), new_seq);
-        let mut writer = SSTableWriter::create_with_cipher(&new_path, self.cipher.clone())?;
+        let mut writer = SSTableWriter::create_with_cipher_codec(&new_path, self.cipher.clone(), self.config.compression)?;
         let mut records_out: u64 = 0;
         for (_k, versions) in by_key {
             // Per-type retention policy decides how many versions to
@@ -2659,6 +2675,7 @@ impl Engine {
             cipher: self.cipher.clone(),
             floor: oldest_active_snapshot,
             retention: self.retention.clone(),
+            codec: self.config.compression,
         })
     }
 
@@ -2844,7 +2861,7 @@ impl Engine {
             // Write under the NEW cipher. SSTableWriter's
             // write-temp-then-rename handles the atomic replace.
             let mut writer =
-                SSTableWriter::create_with_cipher(&path, new_cipher_owned.clone())?;
+                SSTableWriter::create_with_cipher_codec(&path, new_cipher_owned.clone(), self.config.compression)?;
             for r in &records {
                 writer.append(r)?;
             }
@@ -3140,7 +3157,8 @@ pub fn merge_planned(plan: &CompactionPlan) -> Result<(u64, u64), EngineError> {
         }
     }
 
-    let mut writer = SSTableWriter::create_with_cipher(&plan.output_path, plan.cipher.clone())?;
+    let mut writer =
+        SSTableWriter::create_with_cipher_codec(&plan.output_path, plan.cipher.clone(), plan.codec)?;
     let mut records_out: u64 = 0;
     for (_k, versions) in by_key {
         let type_id = versions.iter().find_map(|r| match r {
@@ -5407,6 +5425,57 @@ mod tests {
             "incr-install-mmap",
             EngineConfig::low_memory(DEFAULT_MAX_CACHE_BYTES),
         );
+    }
+
+    #[test]
+    fn engine_compression_round_trips_through_flush_compact_restart() {
+        let dir = temp_dir("engine-compress");
+        let cfg = EngineConfig {
+            compression: crate::compression::Codec::Lz4,
+            ..EngineConfig::default()
+        };
+        let ids: Vec<EntityId> = (0..50).map(|_| EntityId::now_v7()).collect();
+        {
+            let mut engine = Engine::create_with_config(&dir, cfg).unwrap();
+            for chunk in ids.chunks(25) {
+                let mut t = engine.begin_write();
+                for id in chunk {
+                    t.put_entity(make_entity(*id, "a compressible repeated value here"));
+                }
+                t.commit().unwrap();
+                engine.flush().unwrap();
+            }
+            assert_eq!(engine.sstable_count(), 2);
+
+            // Every on-disk SSTable is the v2 (compressed) format.
+            let mut saw_compressed = false;
+            for e in std::fs::read_dir(&dir).unwrap() {
+                let p = e.unwrap().path();
+                if p.extension().and_then(|x| x.to_str()) == Some("ndb") {
+                    let f = crate::sstable::read_footer(&p).unwrap();
+                    assert_eq!(f.format_version, 2, "{p:?} should be compressed v2");
+                    saw_compressed = true;
+                }
+            }
+            assert!(saw_compressed, "expected compressed SSTables on disk");
+
+            engine.compact().unwrap();
+            assert_eq!(engine.sstable_count(), 1);
+            engine.close().unwrap();
+        }
+
+        // Reopen with DEFAULT config (compression OFF) — the v2 format is
+        // self-describing, so the reader handles it regardless of config.
+        let engine = Engine::open(&dir).unwrap();
+        let snap = TxId::new(engine.manifest().last_tx_id);
+        for id in &ids {
+            match engine.snapshot_read(&id.into_uuid(), snap).unwrap() {
+                Resolved::Live(Record::Entity(e)) => assert_eq!(&e.entity_id, id),
+                other => panic!("entity {id:?} lost after compressed round-trip: {other:?}"),
+            }
+        }
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -72,8 +72,13 @@ pub const SSTABLE_MAGIC: &[u8; 8] = b"NDBSST01";
 /// Current SSTable on-disk format version this build emits.
 pub const SSTABLE_FORMAT_VERSION: u8 = 1;
 
-/// Highest SSTable `format_version` this build can read.
-pub const SSTABLE_FORMAT_VERSION_MAX_SUPPORTED: u8 = 1;
+/// Highest SSTable `format_version` this build can read. v1 = uncompressed
+/// record stream; v2 = block-compressed (see [`crate::compression`]). A v2
+/// writer is opt-in; v2 readers read both, older readers reject v2.
+pub const SSTABLE_FORMAT_VERSION_MAX_SUPPORTED: u8 = 2;
+
+/// `format_version` written for block-compressed SSTables.
+pub const SSTABLE_FORMAT_VERSION_COMPRESSED: u8 = 2;
 
 /// Size of the fixed footer in bytes.
 pub const SSTABLE_FOOTER_SIZE: usize = 32;
@@ -184,6 +189,10 @@ pub enum SSTableError {
     #[error(transparent)]
     Io(#[from] io::Error),
 
+    /// A compressed (v2) data block failed to decode (codec/CRC/length).
+    #[error("SSTable block decode failed: {0}")]
+    Compression(#[from] crate::compression::CompressionError),
+
     /// A record in the data section failed to decode (envelope, CRC,
     /// sentinel).
     #[error("SSTable record at offset {offset} failed to decode: {source}")]
@@ -289,6 +298,17 @@ pub struct SSTableWriter {
     /// Builds the `<seq>.bloom` sidecar (v1.3+). Records every appended
     /// key so a reader can prove a key absent and skip the table entirely.
     bloom: crate::bloom::BloomWriter,
+    /// Block compression codec. [`Codec::Stored`](crate::compression::Codec)
+    /// = uncompressed v1 format (records written straight to the sink). Any
+    /// other codec = v2: records are buffered into `block_buf`, compressed per
+    /// block, and the footer records `format_version = 2`.
+    codec: crate::compression::Codec,
+    /// v2 only: records accumulate here until a block is sealed + compressed.
+    block_buf: Vec<u8>,
+    /// v2 only: cumulative UNCOMPRESSED byte position — the offset space the
+    /// block index + the reader's reconstructed stream use (so block-index
+    /// offsets are codec-independent).
+    uncompressed_pos: u64,
 }
 
 /// Either a plaintext `BufWriter<File>` or a chunked-AEAD `EncryptedFile<File>`.
@@ -355,6 +375,20 @@ impl SSTableWriter {
         final_path: P,
         cipher: Option<Cipher>,
     ) -> Result<Self, SSTableError> {
+        Self::create_with_cipher_codec(final_path, cipher, crate::compression::Codec::Stored)
+    }
+
+    /// Like [`SSTableWriter::create_with_cipher`] but with an explicit block
+    /// compression [`Codec`](crate::compression::Codec). `Codec::Stored`
+    /// writes the v1 uncompressed format (byte-for-byte the historical
+    /// output); any other codec writes the v2 block-compressed format. Block
+    /// index offsets + the bloom are codec-independent (they use uncompressed
+    /// positions / keys), so the sidecars are identical either way.
+    pub fn create_with_cipher_codec<P: AsRef<Path>>(
+        final_path: P,
+        cipher: Option<Cipher>,
+        codec: crate::compression::Codec,
+    ) -> Result<Self, SSTableError> {
         let final_path = final_path.as_ref().to_path_buf();
         let tmp_path = tmp_sibling(&final_path);
         // O_TRUNC to clean up a crashed prior write attempt.
@@ -379,6 +413,9 @@ impl SSTableWriter {
             last_key: None,
             block_index: crate::block_index::BlockIndexWriter::new(),
             bloom: crate::bloom::BloomWriter::new(),
+            codec,
+            block_buf: Vec::new(),
+            uncompressed_pos: 0,
         })
     }
 
@@ -393,18 +430,31 @@ impl SSTableWriter {
                 index: self.record_count,
             });
         }
-        // Observe BEFORE writing so the entry's offset is the start of
-        // this record. The very first record always becomes the first
-        // index entry (offset 0); subsequent records become entries
-        // only when crossing a block boundary.
-        self.block_index.observe_record(&key, self.bytes_written);
+        // Observe BEFORE writing, against the UNCOMPRESSED position — the
+        // offset space the reader reconstructs and the block index seeks in.
+        // The very first record is always indexed (offset 0); subsequent
+        // records become entries only at block-size boundaries.
+        self.block_index.observe_record(&key, self.uncompressed_pos);
         self.bloom.observe_key(&key);
         let mut buf = Vec::with_capacity(128);
         record
             .encode(&mut buf)
             .map_err(|e| io::Error::new(ErrorKind::InvalidData, format!("encode failed: {e}")))?;
-        self.sink.write_all(&buf)?;
-        self.bytes_written += buf.len() as u64;
+        match self.codec {
+            crate::compression::Codec::Stored => {
+                // v1: stream the record straight to the sink.
+                self.sink.write_all(&buf)?;
+                self.bytes_written += buf.len() as u64;
+            }
+            _ => {
+                // v2: accumulate, sealing a compressed block at the threshold.
+                self.block_buf.extend_from_slice(&buf);
+                if self.block_buf.len() >= crate::compression::DEFAULT_BLOCK_BYTES {
+                    self.seal_block()?;
+                }
+            }
+        }
+        self.uncompressed_pos += buf.len() as u64;
         self.record_count += 1;
         self.last_key = Some(key);
         Ok(())
@@ -412,10 +462,32 @@ impl SSTableWriter {
 
     /// Append already-encoded record bytes. Skips the sort-order check
     /// (caller already encoded the record, so they own the contract).
+    ///
+    /// v1 (`Codec::Stored`) only — this raw escape hatch bypasses block
+    /// buffering. Unused by the engine.
     pub fn append_raw(&mut self, bytes: &[u8]) -> Result<(), SSTableError> {
+        debug_assert!(
+            matches!(self.codec, crate::compression::Codec::Stored),
+            "append_raw is not supported for compressed SSTables"
+        );
         self.sink.write_all(bytes)?;
         self.bytes_written += bytes.len() as u64;
+        self.uncompressed_pos += bytes.len() as u64;
         self.record_count += 1;
+        Ok(())
+    }
+
+    /// v2: compress the accumulated `block_buf` into one block, write it to
+    /// the sink, and advance the COMPRESSED byte counter. No-op on an empty
+    /// buffer.
+    fn seal_block(&mut self) -> Result<(), SSTableError> {
+        if self.block_buf.is_empty() {
+            return Ok(());
+        }
+        let block = crate::compression::encode_block(&self.block_buf, self.codec);
+        self.sink.write_all(&block)?;
+        self.bytes_written += block.len() as u64;
+        self.block_buf.clear();
         Ok(())
     }
 
@@ -428,10 +500,19 @@ impl SSTableWriter {
     /// find a valid SSTable with no sidecar and gracefully fall back to
     /// linear scan.
     pub fn finish(mut self) -> Result<SSTableFooter, SSTableError> {
+        // v2: flush the final partial block before the footer.
+        if !matches!(self.codec, crate::compression::Codec::Stored) {
+            self.seal_block()?;
+        }
+        let format_version = if matches!(self.codec, crate::compression::Codec::Stored) {
+            SSTABLE_FORMAT_VERSION
+        } else {
+            SSTABLE_FORMAT_VERSION_COMPRESSED
+        };
         let footer = SSTableFooter {
             record_count: self.record_count,
             data_size: self.bytes_written,
-            format_version: SSTABLE_FORMAT_VERSION,
+            format_version,
             flags: 0,
         };
         let footer_bytes = encode_footer(&footer);
@@ -583,6 +664,13 @@ pub struct SSTableReader {
     /// nonce + tag overhead).
     file_len: u64,
     footer: SSTableFooter,
+    /// Length of the iterable (uncompressed) record stream in
+    /// `backing.as_bytes()`. For v1 SSTables this equals `footer.data_size`.
+    /// For v2 (block-compressed) SSTables the backing holds the RECONSTRUCTED
+    /// uncompressed stream (decompressed at open), so this is its decompressed
+    /// length — and every downstream path (block index offsets, iter, find)
+    /// operates on uncompressed positions exactly as for v1.
+    data_len: u64,
     /// Optional block-index sidecar. Present for SSTables written by
     /// v2.0+ writers; absent for v1.3-era SSTables. When present,
     /// `find()` binary-searches it to bound the linear-scan range.
@@ -602,6 +690,10 @@ enum SSTableBacking {
         _file: File,
     },
     Decrypted(Box<[u8]>),
+    /// Reconstructed uncompressed record stream for a v2 (block-compressed)
+    /// SSTable, decompressed once at open. Like `Decrypted` it is owned heap
+    /// bytes; the downstream record layout is identical to a plain SSTable.
+    Decompressed(Box<[u8]>),
 }
 
 impl std::fmt::Debug for SSTableBacking {
@@ -609,6 +701,7 @@ impl std::fmt::Debug for SSTableBacking {
         match self {
             Self::Mmap { .. } => f.write_str("SSTableBacking::Mmap"),
             Self::Decrypted(_) => f.write_str("SSTableBacking::Decrypted"),
+            Self::Decompressed(_) => f.write_str("SSTableBacking::Decompressed"),
         }
     }
 }
@@ -617,7 +710,7 @@ impl SSTableBacking {
     fn as_bytes(&self) -> &[u8] {
         match self {
             Self::Mmap { mmap, .. } => mmap,
-            Self::Decrypted(b) => b,
+            Self::Decrypted(b) | Self::Decompressed(b) => b,
         }
     }
 }
@@ -640,7 +733,7 @@ impl SSTableReader {
     ) -> Result<Self, SSTableError> {
         let path = path.as_ref().to_path_buf();
         let needed = SSTABLE_FOOTER_SIZE as u64;
-        let (backing, file_len) = match cipher {
+        let (mut backing, file_len) = match cipher {
             None => {
                 let file = File::open(&path)?;
                 let file_len = file.metadata()?.len();
@@ -699,6 +792,32 @@ impl SSTableReader {
                 needed: footer.data_size + needed,
             });
         }
+
+        // v2 (block-compressed): reconstruct the uncompressed record stream
+        // once, here, so the entire downstream pipeline (block index, bloom,
+        // iter, find) sees a plain record stream identical to v1. `data_len`
+        // becomes the decompressed length. Composes with encryption: by this
+        // point `backing` already holds decrypted bytes.
+        let data_len = if footer.format_version >= SSTABLE_FORMAT_VERSION_COMPRESSED {
+            let records = {
+                let bytes = backing.as_bytes();
+                let compressed_end = usize::try_from(footer.data_size).unwrap_or(usize::MAX);
+                let compressed = &bytes[..compressed_end];
+                let mut out = Vec::with_capacity(compressed.len() * 2);
+                let mut p = 0usize;
+                while p < compressed.len() {
+                    let (block, consumed) = crate::compression::decode_block(&compressed[p..])?;
+                    out.extend_from_slice(&block);
+                    p += consumed;
+                }
+                out
+            };
+            let len = records.len() as u64;
+            backing = SSTableBacking::Decompressed(records.into_boxed_slice());
+            len
+        } else {
+            footer.data_size
+        };
         // Sidecar load is best-effort: missing → v1.3 SSTable, fall back
         // to linear scan. Corrupt → log + fall back (we can't bring down
         // the engine because of a bad index).
@@ -736,6 +855,7 @@ impl SSTableReader {
             path,
             backing,
             file_len,
+            data_len,
             footer,
             block_index,
             bloom,
@@ -788,7 +908,7 @@ impl SSTableReader {
     pub fn iter(&self) -> SSTableIter<'_> {
         let bytes = self.backing.as_bytes();
         SSTableIter {
-            data: &bytes[..usize::try_from(self.footer.data_size).unwrap_or(usize::MAX)],
+            data: &bytes[..usize::try_from(self.data_len).unwrap_or(usize::MAX)],
             pos: 0,
             done: false,
         }
@@ -861,7 +981,7 @@ impl SSTableReader {
     /// resolves the seek point.
     fn iter_from(&self, start_offset: usize) -> SSTableIter<'_> {
         let data_end =
-            usize::try_from(self.footer.data_size).unwrap_or(usize::MAX);
+            usize::try_from(self.data_len).unwrap_or(usize::MAX);
         let bytes = self.backing.as_bytes();
         SSTableIter {
             data: &bytes[..data_end],
@@ -1459,6 +1579,120 @@ mod tests {
         let dict_key = SSTableKey::for_record(&dict(1, ""));
         let tomb_key = SSTableKey::for_record(&tombstone(uuid::Uuid::nil(), 1));
         assert!(tomb_key < dict_key);
+    }
+
+    // ---------------------------------------------------------------------
+    // Block compression (v2 format).
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn compressed_sstable_round_trips_and_finds() {
+        let dir = temp_dir("compress_rt");
+        let path = dir.join("000001.ndb");
+        let records = sorted_corpus();
+        let mut w =
+            SSTableWriter::create_with_cipher_codec(&path, None, crate::compression::Codec::Lz4)
+                .unwrap();
+        for r in &records {
+            w.append(r).unwrap();
+        }
+        let footer = w.finish().unwrap();
+        assert_eq!(footer.format_version, SSTABLE_FORMAT_VERSION_COMPRESSED);
+        assert_eq!(footer.record_count, records.len() as u64);
+
+        let r = SSTableReader::open(&path).unwrap();
+        assert_eq!(r.footer().format_version, 2);
+        // Full iter round-trip.
+        let back: Result<Vec<_>, _> = r.iter().map(|res| res.map(|(rec, _)| rec)).collect();
+        assert_eq!(back.unwrap(), records);
+        // find() locates every key (block index offsets are uncompressed, so
+        // they resolve against the reconstructed stream).
+        for rec in &records {
+            let k = SSTableKey::for_record(rec);
+            assert!(r.find(&k).unwrap().is_some(), "key {k:?} must be found");
+        }
+        // Absent key misses cleanly.
+        assert!(
+            r.find(&SSTableKey {
+                kind: RecordKind::PropertyKey.as_byte(),
+                primary: 999u32.to_be_bytes().to_vec(),
+            })
+            .unwrap()
+            .is_none()
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn compression_shrinks_a_repetitive_sstable_and_reads_back() {
+        let dir = temp_dir("compress_size");
+        let mut ents: Vec<EntityId> = (0..400).map(|_| EntityId::now_v7()).collect();
+        ents.sort_by_key(|e| *e.as_bytes());
+        let records: Vec<Record> = ents
+            .iter()
+            .map(|e| {
+                Record::Entity(EntityRecord {
+                    entity_id: *e,
+                    type_id: TypeId::new(1),
+                    tx_id_assert: TxId::new(1),
+                    tx_id_supersede: TxId::ACTIVE,
+                    properties: vec![(
+                        PropertyId::new(1),
+                        Value::String("the same long repetitive value repeated".into()),
+                    )],
+                })
+            })
+            .collect();
+
+        let p1 = dir.join("000001.ndb");
+        let mut w = SSTableWriter::create(&p1).unwrap();
+        for r in &records {
+            w.append(r).unwrap();
+        }
+        w.finish().unwrap();
+        let v1_size = std::fs::metadata(&p1).unwrap().len();
+
+        let p2 = dir.join("000002.ndb");
+        let mut w =
+            SSTableWriter::create_with_cipher_codec(&p2, None, crate::compression::Codec::Lz4)
+                .unwrap();
+        for r in &records {
+            w.append(r).unwrap();
+        }
+        w.finish().unwrap();
+        let v2_size = std::fs::metadata(&p2).unwrap().len();
+
+        assert!(v2_size < v1_size, "compressed {v2_size} should be < plain {v1_size}");
+        let rd = SSTableReader::open(&p2).unwrap();
+        let back: Vec<_> = rd.iter().map(|r| r.unwrap().0).collect();
+        assert_eq!(back, records);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_and_compressed_compose() {
+        let dir = temp_dir("enc_compress");
+        let path = dir.join("000001.ndb");
+        let mut records = enc_records();
+        records.sort_by(|a, b| SSTableKey::for_record(a).cmp(&SSTableKey::for_record(b)));
+        let mut w = SSTableWriter::create_with_cipher_codec(
+            &path,
+            Some(test_cipher()),
+            crate::compression::Codec::Lz4,
+        )
+        .unwrap();
+        for r in &records {
+            w.append(r).unwrap();
+        }
+        let footer = w.finish().unwrap();
+        assert_eq!(footer.format_version, 2);
+
+        let rd = SSTableReader::open_with_cipher(&path, Some(test_cipher())).unwrap();
+        let back: Vec<_> = rd.iter().map(|r| r.unwrap().0).collect();
+        assert_eq!(back, records);
+        let mid = SSTableKey::for_record(&records[records.len() / 2]);
+        assert!(rd.find(&mid).unwrap().is_some(), "find through enc+compress");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     // ---------------------------------------------------------------------

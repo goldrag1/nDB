@@ -22,6 +22,10 @@ uuid       = { workspace = true }
 aes-gcm    = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
 rand_core  = { version = "0.6", features = ["getrandom"] }
 memmap2    = "0.9"
+# Block compression codec. Pure-Rust, safe-only mode (no C toolchain, no
+# unsafe) — opt-in at runtime via EngineConfig. The block header is codec-
+# tagged so other codecs (e.g. zstd) can be added without a format break.
+lz4_flex   = { version = "0.11", default-features = false, features = ["safe-encode", "safe-decode"] }
 
 [lints]
 # Mmap requires unsafe by API contract (the OS can't enforce that the
