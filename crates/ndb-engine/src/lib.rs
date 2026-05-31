@@ -30,6 +30,7 @@
 pub mod block_index;
 pub mod bloom;
 pub mod capability;
+pub mod compression;
 pub mod codec;
 pub mod db;
 pub mod encryption;
@@ -90,6 +91,7 @@ pub use record::{
     PropertyKeyRecord, Record, RecordKind, RoleNameRecord, TombstoneRecord, TypeNameRecord,
     peek_record_kind, peek_record_size,
 };
+pub use compression::{Codec, CompressionError};
 pub use bloom::{
     BLOOM_EXTENSION, BLOOM_FORMAT_VERSION, BLOOM_FORMAT_VERSION_MAX_SUPPORTED,
     BloomError, BloomFilter, BloomWriter, DEFAULT_FALSE_POSITIVE_RATE,

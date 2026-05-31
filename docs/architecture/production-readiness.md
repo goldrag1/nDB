@@ -14,7 +14,7 @@ toward "operable production database". Tiers are P0 (correctness/durability)
 | AES-256-GCM at rest | Landed (pre-existing) | `encryption.rs` |
 | **Bloom filter sidecar** (cut read amplification) | **Landed** | `bloom.rs` |
 | **Decoder fuzz/robustness suite** (no panic on hostile bytes) | **Landed** | `tests/robustness.rs` |
-| Block compression (zstd/lz4) | **Planned** | needs a dep + block-format change; see below |
+| **Block compression** (opt-in LZ4, SSTable v2) | **Landed** | `compression.rs`, `sstable.rs` |
 
 **Bloom filters.** Every SSTable now carries a `.bloom` membership summary.
 A point read consults it first and returns immediately when the key is
@@ -30,6 +30,22 @@ biggest lever on the "10 GB explorer feels slow" problem.
 trailing-garbage input. The contract: malformed bytes always surface as a
 clean `Err`, never a panic/hang/OOB. These parsers face the network and
 possibly-corrupt disk, so this is load-bearing.
+
+**Block compression.** Opt-in LZ4 (`EngineConfig.compression`, default off →
+unchanged v1 format; `NDB_COMPRESS=lz4` for the server). SSTable format v2:
+records are grouped into ~32 KiB blocks, each LZ4-compressed behind a
+codec-tagged, CRC32'd header (no inflation — a block that wouldn't shrink is
+stored raw); the footer's version gate makes v2 readers read both v1 and v2
+while older readers reject v2. Minimal blast radius for an on-disk format
+change: the reader reconstructs the uncompressed stream once at open (the
+"decrypt-to-heap" pattern encrypted SSTables already use), so block-index,
+bloom, iter, and find run unchanged on a plain stream, and compression
+composes with encryption for free. Codec-tagged header so zstd can be added
+without a format break. Pure-Rust dep (`lz4_flex`, safe mode — no C, no
+unsafe). Scope: decompresses a file's stream to heap at open (disk +
+page-cache savings; full decompression in RAM while open) — bounded-RAM
+on-demand per-block decompression is the documented follow-on, so keep
+compression off in low-RAM/mmap mode until then.
 
 ## P1 — Concurrency & resource limits (server)
 
@@ -168,9 +184,14 @@ without a base-backup re-sync.
 ## Honest summary
 
 Landed this pass: bloom filters, decoder fuzzing, hot backup, replication
-primitives, automatic background compaction, **off-lock contention-free
-compaction** (engine) and bounded concurrency + timeouts + request limits +
-`/metrics` + `/ready` + graceful shutdown (server). Deliberately deferred —
-because a half-correct version is worse than a documented gap — block
-compression (needs a dependency + block-format work) and the replication
-network daemon. The deferred items are design-clear, not blocked.
+primitives, automatic background compaction, off-lock contention-free
+compaction, write-stall backpressure, no-rebuild compaction install, and
+**opt-in block compression** (engine) plus bounded concurrency + timeouts +
+request limits + `/metrics` + `/ready` + graceful shutdown + off-lock
+`/compact` + `WriteStalled → 503` (server). The one remaining deferred item —
+because a half-correct version is worse than a documented gap — is the
+**replication network daemon** (the primitives are tested; this is the
+leader endpoint + follower poll loop). Plus two follow-on optimisations
+noted inline: bounded-RAM on-demand block decompression, and an incremental
+index update at compaction install in default mode. Design-clear, not
+blocked.
