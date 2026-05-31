@@ -152,6 +152,13 @@
   .erm { color: var(--danger); border: none; background: none; cursor: pointer; }
   .edgehdr { display: flex; align-items: center; justify-content: space-between; }
   .edgeadd { font-size: 11px; padding: 1px 7px; }
+  .recsec { margin-bottom: 10px; }
+  .recsh { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .07em; margin: 8px 0 4px; }
+  .recempty { color: var(--muted); font-size: 12px; padding: 4px 8px; }
+  #recDlg .qref { color: var(--accent); cursor: pointer; }
+  #recDlg .qref.erole { color: var(--ink); border: 1px solid #2c3a4a; border-radius: 5px; padding: 1px 6px; margin-right: 4px; display: inline-block; }
+  #recDlg .qref.erole:hover { border-color: var(--accent); }
+  #recDlg { min-width: 420px; max-width: 520px; }
 </style>
 </head>
 <body>
@@ -760,10 +767,42 @@ async function openRecord(id) {
   if (!rec || !rec.id) { toast("record not found", true); return; }
   $("recTitle").textContent = rec.kind;
   $("recId").textContent = id.slice(0, 8) + "…";
-  $("recBody").innerHTML = (rec.properties || []).map((p) =>
-    `<div class="hrow"><span class="htx">${esc(p.name)}</span><span class="hval">${fmt(p.value)}</span></div>`).join("")
-    + (rec.author ? `<div class="hrow"><span class="htx">author</span><span class="hauthor">${esc(rec.author)}</span></div>` : "");
-  $("recDlg").showModal();
+  let h = "";
+
+  // Properties
+  h += `<div class="recsec"><div class="recsh">Properties</div>`;
+  h += (rec.properties || []).map((p) => `<div class="hrow"><span class="htx">${esc(p.name)}</span><span class="hval">${fmt(p.value)}</span></div>`).join("") || `<div class="recempty">none</div>`;
+  if (rec.author) h += `<div class="hrow"><span class="htx">author</span><span class="hauthor">${esc(rec.author)}</span></div>`;
+  h += `</div>`;
+
+  // Relationships (entity refs, both directions)
+  const relRow = (r, dir) => `<div class="hrow"><span class="htx">${dir === "out" ? "→" : "←"} ${esc(r.property)}</span><span class="hval qref" data-id="${esc(r.id)}">${esc(r.label || r.id.slice(0, 8))} <span class="ekind">${esc(r.kind)}</span></span></div>`;
+  if ((rec.out_refs || []).length || (rec.in_refs || []).length) {
+    h += `<div class="recsec"><div class="recsh">Relationships</div>`;
+    h += (rec.out_refs || []).map((r) => relRow(r, "out")).join("");
+    h += (rec.in_refs || []).map((r) => relRow(r, "in")).join("");
+    h += `</div>`;
+  }
+
+  // N-ary edge memberships
+  if ((rec.roles || []).length) {
+    h += `<div class="recsec"><div class="recsh">N-ary edges</div>`;
+    h += rec.roles.map((rr) => {
+      const co = rr.members.map((m) => `<span class="qref erole" data-id="${esc(m.id)}">${esc(m.role)}: ${esc(m.label || m.id.slice(0, 8))}</span>`).join(" ");
+      return `<div class="hrow"><span class="htx">⬡ ${esc(rr.edge_kind)} <span class="ekind">as ${esc(rr.role)}</span></span><span class="hval">${co || "—"}</span></div>`;
+    }).join("");
+    h += `</div>`;
+  }
+
+  // Meta: history depth + vector
+  h += `<div class="recsec"><div class="recsh">Meta</div>`;
+  h += `<div class="hrow"><span class="htx">versions</span><span class="hval">${rec.versions ?? "?"}</span></div>`;
+  if (rec.vector) h += `<div class="hrow"><span class="htx">vector</span><span class="hval">${esc(rec.vector.property)} · dim ${rec.vector.dim}</span></div>`;
+  h += `</div>`;
+
+  $("recBody").innerHTML = h;
+  $("recBody").querySelectorAll(".qref").forEach((el) => (el.onclick = () => openRecord(el.dataset.id)));
+  if (!$("recDlg").open) $("recDlg").showModal();
 }
 
 // ---- Graph view (self-contained 2-D force layout on canvas) ----

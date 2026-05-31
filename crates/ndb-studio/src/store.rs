@@ -418,46 +418,119 @@ impl Store {
         })
     }
 
-    /// A single record with its full property list (names + values), or `null`.
+    /// A 360° view of one entity: its properties, plus everything the engine
+    /// knows that relates to it — outgoing/incoming entity references,
+    /// hyperedge role memberships, its version count, and any vector property —
+    /// the multi-model picture no single relational table holds. `null` if the
+    /// record is missing or a reserved kind.
     #[must_use]
     pub fn record(&self, id: Uuid, as_of: Option<u64>) -> J {
         let snap = self.snapshot(as_of);
         let recs = self.records(snap);
         let names = Self::names(&recs);
-        match self.engine.snapshot_read(&id, snap) {
-            Ok(Resolved::Live(Record::Entity(e)))
-                if !names.type_name.get(&e.type_id.get()).is_some_and(|n| is_reserved(n)) =>
-            {
-                let props: Vec<J> = e
-                    .properties
-                    .iter()
-                    .filter_map(|(pid, v)| {
-                        let name = names.prop_name.get(&pid.get()).cloned()
-                            .unwrap_or_else(|| format!("prop:{}", pid.get()));
-                        if is_reserved(&name) {
-                            return None;
-                        }
-                        Some(json!({
-                            "property_id": pid.get(),
-                            "name": name,
-                            "value": to_json(v),
-                            "type": type_hint(v),
-                        }))
-                    })
-                    .collect();
-                json!({
-                    "id": id.to_string(),
-                    "type_id": e.type_id.get(),
-                    "kind": names.type_name.get(&e.type_id.get()).cloned()
-                        .unwrap_or_else(|| format!("kind:{}", e.type_id.get())),
-                    "asserted_at": e.tx_id_assert.get(),
-                    "author": prop_val(&e, names.prop_id.get(AUTHOR_PROP).copied().unwrap_or(0))
-                        .and_then(|v| if let Value::String(s) = v { Some(s.clone()) } else { None }),
-                    "properties": props,
-                })
-            }
-            _ => J::Null,
+        let Ok(Resolved::Live(Record::Entity(e))) = self.engine.snapshot_read(&id, snap) else {
+            return J::Null;
+        };
+        if names.type_name.get(&e.type_id.get()).is_some_and(|n| is_reserved(n)) {
+            return J::Null;
         }
+        let kind_of = |tid: u32| names.type_name.get(&tid).cloned().unwrap_or_else(|| format!("kind:{tid}"));
+        let label_map = |er: &EntityRecord| (entity_label(er, &names), kind_of(er.type_id.get()));
+
+        // Properties (non-reserved) + vector dims if present.
+        let mut vector: Option<J> = None;
+        let props: Vec<J> = e
+            .properties
+            .iter()
+            .filter_map(|(pid, v)| {
+                let name = names.prop_name.get(&pid.get()).cloned()
+                    .unwrap_or_else(|| format!("prop:{}", pid.get()));
+                if is_reserved(&name) {
+                    return None;
+                }
+                if let Value::Vector(xs) = v {
+                    vector = Some(json!({ "property": name, "dim": xs.len() }));
+                }
+                Some(json!({ "property_id": pid.get(), "name": name, "value": to_json(v), "type": type_hint(v) }))
+            })
+            .collect();
+
+        // Outgoing refs (this entity's EntityRef properties).
+        let mut out_refs: Vec<J> = Vec::new();
+        for (pid, v) in &e.properties {
+            if let Value::EntityRef(t) = v {
+                let tid = t.into_uuid();
+                let label_kind = recs.iter().find_map(|r| match r {
+                    Record::Entity(te) if te.entity_id.into_uuid() == tid => Some(label_map(te)),
+                    _ => None,
+                }).unwrap_or_default();
+                out_refs.push(json!({
+                    "property": names.prop_name.get(&pid.get()).cloned().unwrap_or_default(),
+                    "id": tid.to_string(), "label": label_kind.0, "kind": label_kind.1,
+                }));
+            }
+        }
+
+        // Incoming refs + hyperedge role memberships (one scan).
+        let mut in_refs: Vec<J> = Vec::new();
+        let mut roles: Vec<J> = Vec::new();
+        for r in &recs {
+            match r {
+                Record::Entity(se) if se.entity_id.into_uuid() != id => {
+                    for (pid, v) in &se.properties {
+                        if let Value::EntityRef(t) = v
+                            && t.into_uuid() == id
+                        {
+                            let (label, kind) = label_map(se);
+                            in_refs.push(json!({
+                                "property": names.prop_name.get(&pid.get()).cloned().unwrap_or_default(),
+                                "id": se.entity_id.into_uuid().to_string(), "label": label, "kind": kind,
+                            }));
+                        }
+                    }
+                }
+                Record::HyperEdge(h) => {
+                    let my_role = h.roles.iter().find(|(_, eid)| eid.into_uuid() == id);
+                    if let Some((rid, _)) = my_role {
+                        let co: Vec<J> = h.roles.iter().filter(|(_, eid)| eid.into_uuid() != id)
+                            .map(|(crid, ceid)| {
+                                let cid = ceid.into_uuid();
+                                let (label, kind) = recs.iter().find_map(|x| match x {
+                                    Record::Entity(xe) if xe.entity_id.into_uuid() == cid => Some(label_map(xe)),
+                                    _ => None,
+                                }).unwrap_or_default();
+                                json!({
+                                    "role": names.role_name.get(&crid.get()).cloned().unwrap_or_default(),
+                                    "id": cid.to_string(), "label": label, "kind": kind,
+                                })
+                            })
+                            .collect();
+                        roles.push(json!({
+                            "edge_id": h.hyperedge_id.into_uuid().to_string(),
+                            "edge_kind": kind_of(h.type_id.get()),
+                            "role": names.role_name.get(&rid.get()).cloned().unwrap_or_default(),
+                            "members": co,
+                        }));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let versions = self.engine.versions_of(&id).map_or(0, |v| v.len());
+        json!({
+            "id": id.to_string(),
+            "type_id": e.type_id.get(),
+            "kind": kind_of(e.type_id.get()),
+            "asserted_at": e.tx_id_assert.get(),
+            "author": prop_val(&e, names.prop_id.get(AUTHOR_PROP).copied().unwrap_or(0)).and_then(str_of),
+            "properties": props,
+            "out_refs": out_refs,
+            "in_refs": in_refs,
+            "roles": roles,
+            "versions": versions,
+            "vector": vector,
+        })
     }
 
     /// History of one record. With `property` set, returns that property's
@@ -1570,6 +1643,31 @@ mod tests {
 
         // An empty edge is rejected.
         assert!(store.create_hyperedge("X", &[]).is_err());
+    }
+
+    /// The 360° record view surfaces outgoing/incoming refs + hyperedge roles.
+    #[test]
+    fn record_360_relationships_and_roles() {
+        let store = fresh();
+        store.create("Person", &[("name".into(), s("Alice"))], None).expect("a");
+        store.create("Person", &[("name".into(), s("Bob"))], None).expect("b");
+        let tid = u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
+        let rows = store.table(tid, &TableQuery::new(None, 5));
+        let alice = Uuid::parse_str(rows["rows"][0]["id"].as_str().unwrap()).unwrap();
+        let bob = Uuid::parse_str(rows["rows"][1]["id"].as_str().unwrap()).unwrap();
+
+        store.set(alice, "friend", &Value::EntityRef(EntityId::from_bytes(*bob.as_bytes())), None).expect("ref");
+        store.create_hyperedge("Knows", &[("a".into(), alice), ("b".into(), bob)]).expect("edge");
+
+        let ra = store.record(alice, None);
+        assert_eq!(ra["out_refs"][0]["label"], "Bob");
+        assert_eq!(ra["roles"][0]["edge_kind"], "Knows");
+        assert_eq!(ra["roles"][0]["members"][0]["label"], "Bob");
+        assert!(ra["versions"].as_u64().unwrap() >= 1);
+
+        let rb = store.record(bob, None);
+        assert_eq!(rb["in_refs"][0]["label"], "Alice");
+        assert_eq!(rb["in_refs"][0]["property"], "friend");
     }
 
     /// Editing a record that does not exist is a typed `NotFound` (HTTP 404).
