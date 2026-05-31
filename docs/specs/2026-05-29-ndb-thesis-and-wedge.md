@@ -147,6 +147,70 @@ engine beneath. OpenAlex explorer = the *template* for "engine+hosting+app per v
   pharma or finance, NOT academia). Open science = the free attention proof. The first *paid* vertical
   is the real decision, deferred to before M2 — don't be the engine for three verticals at once.
 
+## Monetizable applications (researched 2026-05-30)
+
+THE RULE: nDB wins ONLY where the buyer needs the COMPOSITE — graph traversal + as-of-time-travel +
+vector kNN in ONE query — with budget + recurring need. Anything using ONE of the three loses to a
+specialist (pgvector/Pinecone for vector, Neo4j for graph). Don't sell "an n-dimensional database";
+sell the composite as a named capability for a named job. Same engine, three product faces.
+
+### Tier A — chase these
+1. **GraphRAG / AI-agent memory backend — biggest + best timing, BUT now a CONTESTED, venture-backed
+   category (verified 2026-05-30).** GraphRAG = vector (entry-point chunks) + graph (multi-hop context)
+   + recency (freshest facts) = nDB's composite, literally. The market has CONVERGED on this hybrid:
+   - Microsoft GraphRAG bench: **86% accuracy vs 32% vanilla vector** (54-pt gap); hybrid ~80% vs 50%.
+     Practitioners "stopped arguing vector-vs-graph" by early 2026 → hybrid is the default.
+   - Gartner: **40% of enterprise apps integrate task-specific AI agents by end-2026** (was <5% in 2025).
+     The demand wave is real and dated.
+   - **The competition is already here and funded:** **Zep** ("Temporal Knowledge Graph Architecture
+     for Agent Memory", arXiv 2501.13956; OSS **Graphiti** = 20k★; stores `valid_at`/`invalid_at` per
+     node+edge = *temporal KG = nDB's MVCC pitch, shipping*). **Letta** (ex-MemGPT, $10M seed Felicis).
+     **Mem0**. **Neo4j** (GraphRAG Manifesto + Context Provider in Microsoft Agent Framework), FalkorDB,
+     Zilliz, Couchbase, Databricks — all shipping hybrid vector+graph.
+   - **CRUCIAL — they all duct-tape it.** Zep/Graphiti runs ON Neo4j/FalkorDB; Neo4j bolts vector onto
+     a graph DB; everyone stitches graph + vector + a timestamp column across systems. **nDB IS that
+     composite natively, in one engine.** That is the ONLY wedge here.
+   - **Implication:** nDB is NOT first → do NOT build another agent-memory APP (Zep/Letta/Mem0 own that
+     layer). **Be the ENGINE underneath** — the substrate their memory layer runs on, replacing the
+     Neo4j+pgvector+timestamp stack with one native composite. **Win condition = benchmark-beat the
+     duct-tape** (latency + simplicity on the composite query). If nDB can't beat Neo4j+Pinecone
+     stitched, there is no wedge. This IS hard-rule #3, now with a deadline — the category forms THIS year.
+2. **Patent / IP intelligence — best classic-data fit, budget TODAY, demoable pre-sale.** Prior-art =
+   vector kNN over claims; landscape = citation graph; freedom-to-operate = as-of-priority-date. All
+   three in one. IP teams already pay Clarivate/PatSnap/CAS for worse siloed versions. Semi-open data
+   (USPTO/EPO/Google Patents) → demo before they pay. STRONGEST first-PAID.
+3. **Fraud / AML / temporal risk — mandatory, recurring, deepest budgets.** Ring detection = traversal;
+   "counterparty graph as of the day before the trade" = MVCC; "entities like this known-bad one" =
+   vector. Neo4j/TigerGraph here already; wedge = the time-travel+vector they bolt on awkwardly. Crypto
+   AML (Chainalysis-shape) = vivid, well-funded sub-case.
+
+### Tier B — strong but slower/narrower
+4. **Regulated provenance / lineage / audit-over-time** — data/ML-feature lineage, "what did the system
+   know on date X." MVCC native, hard to retrofit on Postgres. Compliance budget; feature-shaped market.
+5. **Drug-discovery / biomedical KG** — rich, real composite fit, slowest cycle + self-builders. Enter
+   via open bridges (Open Targets, CZI, Pistoia).
+6. **Supply-chain / dependency risk** — multi-hop + "when did exposure appear" + similar-supplier.
+   Post-COVID budget; messy data.
+
+### The honest cut (looks suitable, ISN'T)
+Pure vector search → pgvector/Pinecone commoditized it. Pure graph DB → Neo4j owns mindshare.
+Recommendation engines → big tech builds in-house. Consumer/researcher viz → the graveyard.
+All use ONE power; nDB only wins on TWO-OR-THREE-at-once.
+
+### Meta: one engine, three product faces (AI coding makes shipping all three cheap)
+"GraphRAG memory for your agents" (AI teams) · "prior-art + landscape + FTO in one" (IP teams) ·
+"temporal fraud rings" (risk teams). Biggest timing arbitrage = #1 GraphRAG, but as the ENGINE under
+the memory-app layer, not a competing app — and the window is NOW; the category is forming this year.
+
+### How GraphRAG-engine reorders the roadmap
+This does NOT change M1 (serve 10GB at <1s/tile) — a memory backend that's slow is dead too. But it
+SHARPENS what comes after M1: the slicer→Arrow + composite-query work (already hard-rule #3 / hard-rule
+#1's gap) is EXACTLY what a GraphRAG-engine pitch needs — ingest embeddings, one query that does
+vector-entry → graph-traverse → as-of-filter, results out via Arrow to the agent framework. So M1 →
+composite-query+Arrow isn't just "the engine pitch," it's "the GraphRAG-substrate pitch," aimed at a
+market that is forming right now with dated demand. The benchmark that matters becomes: nDB composite
+query vs Neo4j+pgvector+timestamp duct-tape, on a standard agent-memory bench (LongMemEval/DMR-shape).
+
 ## Who it's for (the user rejected "name one vertical" — deliberately)
 
 Everyone who looks at the world. The attention play is horizontal: researchers, R&D/CI teams,

@@ -2367,6 +2367,7 @@ impl Engine {
             let p = sstable_path(self.db.path(), old_seq);
             let _ = std::fs::remove_file(&p);
             let _ = std::fs::remove_file(crate::block_index::sidecar_path_for(&p));
+            let _ = std::fs::remove_file(crate::bloom::sidecar_path_for(&p));
             let _ = std::fs::remove_file(pidx_sidecar_path_for(&p));
             let _ = std::fs::remove_file(vidx_sidecar_path_for(&p));
             for ext in [ADJ_EXT, TYC_EXT, ETC_EXT, LKP_EXT, META_EXT] {

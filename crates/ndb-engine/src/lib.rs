@@ -28,6 +28,7 @@
 #![warn(missing_docs)]
 
 pub mod block_index;
+pub mod bloom;
 pub mod capability;
 pub mod codec;
 pub mod db;
@@ -85,6 +86,10 @@ pub use record::{
     ENVELOPE_OVERHEAD, EntityRecord, FORMAT_VERSION, FORMAT_VERSION_MAX_SUPPORTED, HyperEdgeRecord,
     PropertyKeyRecord, Record, RecordKind, RoleNameRecord, TombstoneRecord, TypeNameRecord,
     peek_record_kind, peek_record_size,
+};
+pub use bloom::{
+    BLOOM_EXTENSION, BLOOM_FORMAT_VERSION, BLOOM_FORMAT_VERSION_MAX_SUPPORTED,
+    BloomError, BloomFilter, BloomWriter, DEFAULT_FALSE_POSITIVE_RATE,
 };
 pub use block_index::{
     BLOCK_INDEX_EXTENSION, BLOCK_INDEX_FORMAT_VERSION, BLOCK_INDEX_FORMAT_VERSION_MAX_SUPPORTED,
