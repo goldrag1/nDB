@@ -117,6 +117,18 @@
   #usersDlg .field { grid-template-columns: 1fr 1fr; }
   #usersDlg select { background: #0c1118; color: var(--ink); border: 1px solid #2c3a4a; border-radius: 6px; padding: 5px 7px; font: inherit; }
   .hauthor { color: var(--accent2); font-size: 11px; }
+  .gi-actions { display: flex; gap: 6px; margin-top: 8px; }
+  .gi-actions button { font-size: 11px; }
+  .qwrap { display: flex; flex-direction: column; gap: 10px; }
+  .qeditor { width: 100%; min-height: 120px; resize: vertical; background: #0c1118; color: var(--ink); border: 1px solid #2c3a4a; border-radius: 8px; padding: 10px 12px; font: 13px/1.5 ui-monospace, monospace; }
+  .qeditor:focus { outline: none; border-color: var(--accent); }
+  .qbar { display: flex; align-items: center; gap: 12px; }
+  .qhint { color: var(--muted); font-size: 12px; }
+  .qref { color: var(--accent); cursor: pointer; font-family: ui-monospace, monospace; }
+  .qref:hover { text-decoration: underline; }
+  .qerr { background: #2a1416; border: 1px solid #54262a; border-radius: 8px; padding: 10px 12px; color: #ffd0d0; }
+  .qerr .qcode { color: var(--muted); }
+  .qerr .qdetail { margin-top: 6px; font-family: ui-monospace, monospace; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -168,6 +180,12 @@
     <div class="field"><input id="nuUser" placeholder="username" autocomplete="off" /><input id="nuPass" type="password" placeholder="password" autocomplete="new-password" /></div>
     <div class="field"><select id="nuRole"><option value="viewer">viewer</option><option value="editor">editor</option><option value="admin">admin</option></select><button class="primary" id="nuAdd">Add user</button></div>
     <div class="dlg-actions"><button onclick="document.getElementById('usersDlg').close()">Close</button></div>
+  </dialog>
+
+  <dialog id="recDlg">
+    <h3>Record · <span id="recTitle"></span> <span class="badge" id="recId"></span></h3>
+    <div id="recBody" class="histbody"></div>
+    <div class="dlg-actions"><button onclick="document.getElementById('recDlg').close()">Close</button></div>
   </dialog>
 
   <div id="login" class="login hidden">
@@ -247,6 +265,7 @@ async function selectKind(k) {
 async function renderMain() {
   cancelGraphAnim();
   if (MODE === "graph") return loadGraph();
+  if (MODE === "query") return renderQuery();
   if (!SEL) return;
   if (MODE === "pivot") return loadPivot();
   return loadTable();
@@ -257,6 +276,7 @@ function modeTabsHtml() {
     <button data-mode="table" class="${MODE === "table" ? "active" : ""}">Table</button>
     <button data-mode="pivot" class="${MODE === "pivot" ? "active" : ""}">Pivot</button>
     <button data-mode="graph" class="${MODE === "graph" ? "active" : ""}">Graph</button>
+    <button data-mode="query" class="${MODE === "query" ? "active" : ""}">Query</button>
   </div>`;
 }
 function wireModeTabs() {
@@ -452,6 +472,74 @@ function renderPivot(p) {
   if (pv) pv.onchange = (e) => { PIVOT.value = e.target.value; loadPivot(); };
 }
 
+// ---- Query console ----
+let QUERY_TEXT = "match Person(name: ?n) return ?n limit 50";
+
+function renderQuery() {
+  cancelGraphAnim();
+  const c = $("content");
+  let html = `<div class="toolbar"><h2>Query</h2>${modeTabsHtml()}<div class="spacer" style="flex:1"></div></div>`;
+  html += `<div class="qwrap">
+    <textarea id="qtext" class="qeditor" spellcheck="false" placeholder="match Kind(prop: ?v) return ?v limit 50">${esc(QUERY_TEXT)}</textarea>
+    <div class="qbar"><button class="primary" id="qrun">Run ▸</button><span class="qhint">read-only · Ctrl/⌘+Enter to run · entity ids are clickable</span></div>
+    <div id="qresult"></div>
+  </div>`;
+  c.innerHTML = html;
+  wireModeTabs();
+  $("qtext").oninput = (e) => { QUERY_TEXT = e.target.value; };
+  $("qtext").onkeydown = (e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); runQuery(); } };
+  $("qrun").onclick = runQuery;
+}
+
+async function runQuery() {
+  const out = $("qresult");
+  out.innerHTML = `<div class="badge">running…</div>`;
+  const r = await api.post("/query", { query: QUERY_TEXT });
+  if (r.status !== 200) {
+    const e = r.body || {};
+    out.innerHTML = `<div class="qerr"><b>${esc(e.error || "error")}</b> · <span class="qcode">${esc(e.code || "")}</span><div class="qdetail">${esc(e.detail || "query failed")}</div></div>`;
+    return;
+  }
+  const columns = r.body.columns || [], rows = r.body.rows || [];
+  if (!rows.length) { out.innerHTML = `<div class="empty">No results.</div>`; return; }
+  let h = `<div class="badge" style="margin:8px 0 6px">${rows.length} row${rows.length === 1 ? "" : "s"}${r.body.truncated ? " · truncated" : ""}</div><table><thead><tr>`;
+  for (const col of columns) h += `<th>${esc(col)}</th>`;
+  h += `</tr></thead><tbody>`;
+  for (const row of rows) {
+    h += "<tr>";
+    for (const cell of row) h += `<td>${qcell(cell)}</td>`;
+    h += "</tr>";
+  }
+  h += "</tbody></table>";
+  out.innerHTML = h;
+  out.querySelectorAll(".qref").forEach((el) => (el.onclick = () => openRecord(el.dataset.id)));
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// A query result cell is either a scalar or a {tag, value} typed wrapper.
+function qcell(cell) {
+  let tag = null, val = cell;
+  if (cell && typeof cell === "object" && "value" in cell) { tag = cell.tag; val = cell.value; }
+  if (val === null || val === undefined) return '<span class="tag">∅</span>';
+  const s = String(val);
+  if (tag === "entity" || tag === "ref" || UUID_RE.test(s)) {
+    return `<span class="qref" data-id="${esc(s)}" title="open record">${esc(s.slice(0, 8))}…</span>`;
+  }
+  return esc(s);
+}
+
+// Promote a query result (or graph node) to its full record.
+async function openRecord(id) {
+  const rec = await api.get(`/record?id=${id}`);
+  if (!rec || !rec.id) { toast("record not found", true); return; }
+  $("recTitle").textContent = rec.kind;
+  $("recId").textContent = id.slice(0, 8) + "…";
+  $("recBody").innerHTML = (rec.properties || []).map((p) =>
+    `<div class="hrow"><span class="htx">${esc(p.name)}</span><span class="hval">${fmt(p.value)}</span></div>`).join("")
+    + (rec.author ? `<div class="hrow"><span class="htx">author</span><span class="hauthor">${esc(rec.author)}</span></div>` : "");
+  $("recDlg").showModal();
+}
+
 // ---- Graph view (self-contained 2-D force layout on canvas) ----
 function cancelGraphAnim() { if (GRAPH_ANIM) { cancelAnimationFrame(GRAPH_ANIM); GRAPH_ANIM = null; } }
 
@@ -563,9 +651,11 @@ function startGraph(g) {
   function showInfo(n) {
     const info = $("ginfo");
     info.className = "ginfo";
-    info.innerHTML = `<div class="gi-kind">${esc(n.kind)}${n.hyper ? " · N-ary edge" : ""}</div><div class="gi-label">${esc(n.label || "(no label)")}</div><div class="gi-id">${esc(n.id)}</div>` + (n.hyper ? "" : `<button class="gi-open">open in table</button>`);
+    info.innerHTML = `<div class="gi-kind">${esc(n.kind)}${n.hyper ? " · N-ary edge" : ""}</div><div class="gi-label">${esc(n.label || "(no label)")}</div><div class="gi-id">${esc(n.id)}</div>` + (n.hyper ? "" : `<div class="gi-actions"><button class="gi-rec">open record</button><button class="gi-open">open in table</button></div>`);
     const open = info.querySelector(".gi-open");
     if (open) open.onclick = () => { const k = CATALOG.find((kk) => kk.type_id === n.type_id); if (k) { MODE = "table"; selectKind(k); } };
+    const rec = info.querySelector(".gi-rec");
+    if (rec) rec.onclick = () => openRecord(n.id);
   }
 }
 

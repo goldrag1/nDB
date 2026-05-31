@@ -17,6 +17,7 @@
 //! - `POST /api/login`      → `{username,password}` → sets the session cookie
 //! - `POST /api/logout`     → clears the session
 //! - `GET  /api/catalog|table|record|history|pivot|graph` → reads (any role)
+//! - `POST /api/query`      → run a read-only query (any role)
 //! - `POST /api/commit`     → create / set / delete (editor/admin)
 //! - `GET  /api/users`      → list accounts (admin)
 //! - `POST /api/users`      → `{username,password,role}` create (admin)
@@ -212,6 +213,7 @@ fn dispatch(
             let limit = usize::try_from(qp.u64("limit").unwrap_or(300)).unwrap_or(300);
             Resp::ok(store.graph(qp.u64("as_of"), limit))
         }),
+        ("POST", "/api/query") => guard_read(session.as_ref(), || run_query(store, body)),
 
         // ---- writes (editor / admin) ----
         ("POST", "/api/commit") => match writer(session.as_ref()) {
@@ -265,6 +267,20 @@ fn admin(session: Option<&Session>) -> Result<(), Resp> {
         None => Err(Resp::fail(401, "unauthorized", "login required")),
         Some(s) if s.role.is_admin() => Ok(()),
         Some(_) => Err(Resp::fail(403, "forbidden", "admin role required")),
+    }
+}
+
+fn run_query(store: &Store, body: &[u8]) -> Resp {
+    let Ok(req) = serde_json::from_slice::<J>(body) else {
+        return Resp::fail(400, "bad_request", "invalid JSON body");
+    };
+    let text = req.get("query").and_then(J::as_str).unwrap_or("");
+    if text.trim().is_empty() {
+        return Resp::fail(400, "bad_request", "empty query");
+    }
+    match store.query(text) {
+        Ok(result) => Resp::ok(result),
+        Err(envelope) => Resp::code(400, envelope),
     }
 }
 

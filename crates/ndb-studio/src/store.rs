@@ -632,6 +632,27 @@ impl Store {
         })
     }
 
+    /// Run a read-only nDB query (the `ndb-query` language) against the current
+    /// snapshot. Returns `Ok({columns, rows, truncated})` or `Err(envelope)`
+    /// where the envelope is a `{error, code, detail, span?}` object the caller
+    /// surfaces as a 4xx. Write clauses are rejected by the read executor.
+    ///
+    /// # Errors
+    /// Returns the query-error envelope as `Err`.
+    pub fn query(&self, text: &str) -> Result<J, J> {
+        let guard = self.engine.raw_lock().read().expect("engine lock poisoned");
+        match ndb_query::run::execute_text_read(&guard, text) {
+            Ok(resp) => Ok(json!({
+                "columns": resp.columns,
+                "rows": resp.rows,
+                "truncated": resp.truncated,
+            })),
+            Err(e) => Err(serde_json::to_value(e.envelope()).unwrap_or_else(|_| {
+                json!({ "error": "query", "code": e.code(), "detail": e.to_string() })
+            })),
+        }
+    }
+
     // ---- write paths ----------------------------------------------------
 
     /// Create a new entity of `kind` with the given `(property_name, value)`
@@ -1183,6 +1204,23 @@ mod tests {
         // Deleting a user removes it.
         store.delete_user("alice").expect("delete user");
         assert!(store.find_user("alice").is_none());
+    }
+
+    /// The query console runs read-only queries and returns a structured
+    /// error envelope (with a span) on a parse failure.
+    #[test]
+    fn query_returns_rows_and_error_envelope() {
+        let store = fresh();
+        store.create("Person", &[("name".into(), s("Alice"))], None).expect("a");
+        store.create("Person", &[("name".into(), s("Bob"))], None).expect("b");
+
+        let ok = store.query("match Person(name: ?n) return ?n").expect("query ok");
+        assert_eq!(ok["columns"], json!(["n"]));
+        assert_eq!(ok["rows"].as_array().unwrap().len(), 2);
+
+        let err = store.query("match Person(name: ?n return ?n").expect_err("parse error");
+        assert_eq!(err["error"], "parse");
+        assert!(err["span"].is_object(), "parse error carries a span");
     }
 
     /// Editing a record that does not exist is a typed `NotFound` (HTTP 404).
