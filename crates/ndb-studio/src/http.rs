@@ -232,6 +232,16 @@ fn dispatch(
             #[allow(clippy::cast_possible_truncation)]
             Resp::ok(store.hyperedges(kind as u32, qp.u64("as_of"), limit))
         }),
+        ("GET", "/api/similar") => guard_read(session.as_ref(), || {
+            let Some(id) = qp.get("id").and_then(|s| Uuid::parse_str(s).ok()) else {
+                return Resp::fail(400, "bad_request", "missing or invalid id");
+            };
+            let Some(property) = qp.get("property") else {
+                return Resp::fail(400, "bad_request", "missing property");
+            };
+            let k = usize::try_from(qp.u64("k").unwrap_or(10)).unwrap_or(10);
+            Resp::ok(store.find_similar(id, property, k))
+        }),
         ("GET", "/api/diff") => guard_read(session.as_ref(), || {
             let (Some(from), Some(to)) = (qp.u64("from"), qp.u64("to")) else {
                 return Resp::fail(400, "bad_request", "missing from/to tx");
@@ -551,6 +561,16 @@ fn commit(store: &Store, body: &[u8], author: &str) -> Resp {
                 }
             }
             finish(store.create_hyperedge(kind, &roles))
+        }
+        "register_vector" => {
+            let prop = req.get("property").and_then(J::as_str).unwrap_or("");
+            if prop.is_empty() {
+                return Resp::fail(400, "bad_request", "missing property");
+            }
+            match store.register_vector(prop) {
+                Ok(()) => Resp::ok(json!({ "ok": true })),
+                Err(e) => Resp::code(e.status(), json!({ "error": { "code": e.code(), "message": e.message() } })),
+            }
         }
         _ => Resp::fail(400, "bad_request", "unknown op"),
     }

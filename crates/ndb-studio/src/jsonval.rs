@@ -76,12 +76,22 @@ pub fn from_json(j: &J) -> Result<Value, String> {
                 let uuid = uuid::Uuid::parse_str(id)
                     .map_err(|_| format!("invalid entity ref uuid: {id}"))?;
                 Ok(Value::EntityRef(ndb_engine::id::EntityId::from_bytes(*uuid.as_bytes())))
+            } else if let Some(J::Array(arr)) = map.get("$vec") {
+                let mut v = Vec::with_capacity(arr.len());
+                for x in arr {
+                    let Some(f) = x.as_f64() else {
+                        return Err("vector elements must be numbers".to_string());
+                    };
+                    #[allow(clippy::cast_possible_truncation)]
+                    v.push(f as f32);
+                }
+                Ok(Value::Vector(v))
             } else {
-                Err("unsupported object value (only {\"$ref\": uuid} is accepted)".to_string())
+                Err("unsupported object value (only {\"$ref\":uuid} or {\"$vec\":[..]})".to_string())
             }
         }
         J::Array(_) | J::Object(_) => {
-            Err("v1 can only edit scalars or {\"$ref\": uuid} references".to_string())
+            Err("v1 edits scalars, {\"$ref\":uuid}, or {\"$vec\":[..]}".to_string())
         }
     }
 }

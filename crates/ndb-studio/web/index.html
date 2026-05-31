@@ -168,6 +168,8 @@
   .diffsec { margin-bottom: 8px; }
   .dfield { padding: 2px 8px 2px 22px; font-size: 12px; font-family: ui-monospace, monospace; }
   .dfn { color: var(--muted); } .dold { color: var(--danger); } .dnew { color: var(--accent2); }
+  .simbtn { font-size: 11px; padding: 1px 7px; margin-left: 6px; }
+  .simresult { margin: 4px 0 0; padding-left: 4px; border-left: 2px solid var(--accent); }
 </style>
 </head>
 <body>
@@ -844,11 +846,24 @@ async function openRecord(id) {
   // Meta: history depth + vector
   h += `<div class="recsec"><div class="recsh">Meta</div>`;
   h += `<div class="hrow"><span class="htx">versions</span><span class="hval">${rec.versions ?? "?"}</span></div>`;
-  if (rec.vector) h += `<div class="hrow"><span class="htx">vector</span><span class="hval">${esc(rec.vector.property)} · dim ${rec.vector.dim}</span></div>`;
+  if (rec.vector) {
+    h += `<div class="hrow"><span class="htx">vector</span><span class="hval">${esc(rec.vector.property)} · dim ${rec.vector.dim} <button class="simbtn" data-prop="${esc(rec.vector.property)}" data-id="${esc(rec.id)}">find similar ▸</button></span></div>`;
+    h += `<div id="simResult" class="simresult"></div>`;
+  }
   h += `</div>`;
 
   $("recBody").innerHTML = h;
   $("recBody").querySelectorAll(".qref").forEach((el) => (el.onclick = () => openRecord(el.dataset.id)));
+  const sb = $("recBody").querySelector(".simbtn");
+  if (sb) sb.onclick = async () => {
+    const sr = $("simResult");
+    sr.innerHTML = `<span class="badge">searching…</span>`;
+    const r = await api.get(`/similar?id=${sb.dataset.id}&property=${encodeURIComponent(sb.dataset.prop)}&k=8`);
+    if (r.error) { sr.innerHTML = `<div class="recempty">${esc(r.error.message || "error")}</div>`; return; }
+    sr.innerHTML = `<div class="recsh">Nearest (cosine)</div>` + ((r.results || []).map((x) =>
+      `<div class="hrow"><span class="hval qref" data-id="${esc(x.id)}">${esc(x.label || x.id.slice(0, 8))} <span class="ekind">${esc(x.kind)}</span></span><span class="htx">${Number(x.distance).toFixed(4)}</span></div>`).join("") || `<div class="recempty">no neighbours</div>`);
+    sr.querySelectorAll(".qref").forEach((el) => (el.onclick = () => openRecord(el.dataset.id)));
+  };
   if (!$("recDlg").open) $("recDlg").showModal();
 }
 

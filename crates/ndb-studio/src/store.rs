@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use ndb_engine::engine::EngineError;
 use ndb_engine::id::{EntityId, HyperedgeId, PropertyId, RoleId, TxId, TypeId};
+use ndb_engine::index::Distance;
 use ndb_engine::mvcc::Resolved;
 use ndb_engine::record::{
     EntityRecord, HyperEdgeRecord, PropertyKeyRecord, Record, RoleNameRecord, TypeNameRecord,
@@ -841,6 +842,48 @@ impl Store {
         }
     }
 
+    /// Nearest neighbours of one entity by a vector property (cosine), nearest
+    /// first, excluding the entity itself. Semantic search inside the database —
+    /// no separate vector store. The property must have been registered (see
+    /// [`Self::register_vector`]) before the vectors were written.
+    #[must_use]
+    pub fn find_similar(&self, id: Uuid, property: &str, k: usize) -> J {
+        let snap = self.snapshot(None);
+        let recs = self.records(snap);
+        let names = Self::names(&recs);
+        let Some(&pid) = names.prop_id.get(property) else {
+            return json!({ "error": { "code": "bad_value", "message": "unknown property" } });
+        };
+        let qvec = match self.engine.snapshot_read(&id, snap) {
+            Ok(Resolved::Live(Record::Entity(e))) => match prop_val(&e, pid) {
+                Some(Value::Vector(xs)) => xs.clone(),
+                _ => return json!({ "error": { "code": "bad_value", "message": "entity has no vector on that property" } }),
+            },
+            _ => return json!({ "error": { "code": "not_found", "message": "record not found" } }),
+        };
+
+        let mut labels: HashMap<Uuid, (String, String)> = HashMap::new();
+        for r in &recs {
+            if let Record::Entity(e) = r {
+                let kind = names.type_name.get(&e.type_id.get()).cloned()
+                    .unwrap_or_else(|| format!("kind:{}", e.type_id.get()));
+                labels.insert(e.entity_id.into_uuid(), (entity_label(e, &names), kind));
+            }
+        }
+        let hits = self.engine.vector_search(PropertyId::new(pid), &qvec, k + 1, Distance::Cosine);
+        let results: Vec<J> = hits
+            .iter()
+            .filter(|(eid, _)| eid.into_uuid() != id)
+            .take(k)
+            .map(|(eid, dist)| {
+                let u = eid.into_uuid();
+                let (label, kind) = labels.get(&u).cloned().unwrap_or_default();
+                json!({ "id": u.to_string(), "label": label, "kind": kind, "distance": dist })
+            })
+            .collect();
+        json!({ "id": id.to_string(), "property": property, "results": results })
+    }
+
     /// What changed between two snapshots: entities added, removed, and
     /// changed (with per-property old→new). Works on any pair of tx ids
     /// (either direction) — time-travel diffing the engine can't do as a
@@ -1023,6 +1066,32 @@ impl Store {
             txn.commit()
         })?;
         Ok(tx.get())
+    }
+
+    /// Declare a property as a vector so its values are indexed for similarity
+    /// search. Allocates the property name if new. Register before writing the
+    /// vectors you want searchable.
+    ///
+    /// # Errors
+    /// Propagates engine errors while allocating the property name.
+    pub fn register_vector(&self, property: &str) -> Result<(), StoreError> {
+        let recs = self.records(self.snapshot(None));
+        let names = Self::names(&recs);
+        let pid = if let Some(p) = names.prop_id.get(property) {
+            *p
+        } else {
+            let new_id = names.max_prop + 1;
+            self.engine.with_write_txn(|mut txn| {
+                txn.put_raw(Record::PropertyKey(PropertyKeyRecord {
+                    id: PropertyId::new(new_id),
+                    name: property.to_string(),
+                }));
+                txn.commit()
+            })?;
+            new_id
+        };
+        self.engine.register_vector_property(PropertyId::new(pid));
+        Ok(())
     }
 
     /// Set `property` on an existing record to `value`, committing a new
@@ -1765,6 +1834,29 @@ mod tests {
         let dr = store.diff(store.head(), t2);
         assert_eq!(dr["counts"]["removed"], 0); // Bob exists at t2 already
         assert!(dr["counts"]["changed"].as_u64().unwrap() >= 1);
+    }
+
+    /// Vector similarity: register a vector property, store embeddings, and
+    /// find the nearest neighbour (cosine), excluding self.
+    #[test]
+    fn vector_find_similar() {
+        let store = fresh();
+        store.register_vector("embedding").expect("register");
+        let mk = |name: &str, v: Vec<f32>| vec![("name".into(), s(name)), ("embedding".into(), Value::Vector(v))];
+        store.create("Person", &mk("A", vec![1.0, 0.0, 0.0]), None).expect("a");
+        store.create("Person", &mk("B", vec![0.9, 0.1, 0.0]), None).expect("b");
+        store.create("Person", &mk("C", vec![0.0, 0.0, 1.0]), None).expect("c");
+
+        let tid = u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
+        let rows = store.table(tid, &TableQuery::new(None, 10));
+        let a = Uuid::parse_str(rows["rows"][0]["id"].as_str().unwrap()).unwrap();
+
+        let res = store.find_similar(a, "embedding", 5);
+        let results = res["results"].as_array().unwrap();
+        assert!(!results.is_empty(), "neighbours found");
+        assert_eq!(results[0]["label"], "B", "B is nearest to A");
+        // 'A' itself is excluded.
+        assert!(results.iter().all(|r| r["label"] != "A"));
     }
 
     /// Editing a record that does not exist is a typed `NotFound` (HTTP 404).
