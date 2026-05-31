@@ -88,71 +88,110 @@
     const count = dv.getUint32(8, true);
     const REC = 16;
 
-    const positions = new Float32Array(count * 3);
-    const colors = new Float32Array(count * 3);
+    // Parse interleaved records into flat arrays + per-point importance. The
+    // size_q field (byte 14) is ln(cit+1)/ln(max) ∈ [0,1] — the server already
+    // wrote each paper's LOD key; we just have to use it.
+    const px = new Float32Array(count * 3);
+    const pc = new Float32Array(count * 3);
+    const imp = new Float32Array(count);
     let off = 16;
     for (let i = 0; i < count; i++, off += REC) {
-      positions[i * 3]     = dv.getFloat32(off, true);
-      positions[i * 3 + 1] = dv.getFloat32(off + 4, true);
-      positions[i * 3 + 2] = dv.getFloat32(off + 8, true);
+      px[i * 3]     = dv.getFloat32(off, true);
+      px[i * 3 + 1] = dv.getFloat32(off + 4, true);
+      px[i * 3 + 2] = dv.getFloat32(off + 8, true);
       const fi = dv.getUint16(off + 12, true);
       const rgb = colorLut[fi] || OTHER_RGB;
-      colors[i * 3] = rgb[0]; colors[i * 3 + 1] = rgb[1]; colors[i * 3 + 2] = rgb[2];
+      pc[i * 3] = rgb[0]; pc[i * 3 + 1] = rgb[1]; pc[i * 3 + 2] = rgb[2];
+      imp[i] = dv.getUint16(off + 14, true) / 65535;
+    }
+
+    // Importance-sort so the buffer prefix [0..N) is ALWAYS the N most-cited
+    // papers. LOD then collapses to one number: geom.setDrawRange(0, budget).
+    // Drawing a prefix needs no GPU re-upload and zero per-frame CPU.
+    const order = new Int32Array(count);
+    for (let i = 0; i < count; i++) order[i] = i;
+    order.sort((a, b) => imp[b] - imp[a]);
+    const positions = new Float32Array(count * 3);
+    const colors = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      const s = order[i];
+      positions[i * 3]     = px[s * 3];
+      positions[i * 3 + 1] = px[s * 3 + 1];
+      positions[i * 3 + 2] = px[s * 3 + 2];
+      colors[i * 3]     = pc[s * 3];
+      colors[i * 3 + 1] = pc[s * 3 + 1];
+      colors[i * 3 + 2] = pc[s * 3 + 2];
     }
 
     const geom = new THREE.BufferGeometry();
     geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    // On-screen point budget (the LOD). Zoom OUT = whole galaxy, worst overlap
+    // → few hubs; zoom IN → budget grows, long tail fades in. Start conservative
+    // because the boot frame can be fully zoomed out; camera 'change' refines.
+    const MIN_DRAW = 60000, MAX_DRAW = Math.min(count, 350000);
+    geom.setDrawRange(0, Math.min(count, 90000));
 
-    // Round, soft point sprite. PointsMaterial draws SQUARE points by default
-    // (that's the "rectangles" — they were the cloud, vs the force-graph's
-    // round spheres). A radial-alpha texture turns each point into a soft disc
-    // so the whole field reads as a uniform star cloud.
-    const sprite = (() => {
-      const s = 64, cv = document.createElement("canvas");
-      cv.width = cv.height = s;
-      const g = cv.getContext("2d").createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
-      g.addColorStop(0, "rgba(255,255,255,1)");
-      g.addColorStop(0.4, "rgba(255,255,255,0.85)");
-      g.addColorStop(1, "rgba(255,255,255,0)");
-      const ctx = cv.getContext("2d");
-      ctx.fillStyle = g; ctx.fillRect(0, 0, s, s);
-      const tex = new THREE.CanvasTexture(cv);
-      tex.needsUpdate = true;
-      return tex;
-    })();
-
+    // OPAQUE + depthWrite is the crash fix: 6M transparent discs with
+    // depthWrite:false force every covered pixel to blend (no early-Z) →
+    // fillrate wall → iGPU driver hang. Opaque points keep early-Z so hidden
+    // points cost nothing.
     const mat = new THREE.PointsMaterial({
-      size: 2.6,
+      size: 2.4,
       sizeAttenuation: true,
       vertexColors: true,
-      transparent: true,
-      opacity: 0.55,
-      depthWrite: false,
-      map: sprite,
-      alphaMap: sprite,
-      alphaTest: 0.04,
+      transparent: false,
+      depthWrite: true,
     });
+    // Round points WITHOUT a texture. A CanvasTexture built by this file's
+    // separate THREE instance trips 3d-force-graph's bundled THREE on the
+    // colorSpace upload path (getPrimaries crash → render loop dies). Discard
+    // fragments outside the unit disc in-shader instead: round, opaque, zero
+    // texture, no cross-instance colorSpace, and cheaper than sampling a sprite.
+    mat.onBeforeCompile = (shader) => {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <clipping_planes_fragment>",
+        "#include <clipping_planes_fragment>\n\tif (length(gl_PointCoord - vec2(0.5)) > 0.5) discard;"
+      );
+    };
     const points = new THREE.Points(geom, mat);
     points.name = "ndb-paper-cloud";
-    points.renderOrder = -1; // behind the interactive nodes
+    points.renderOrder = -1;       // behind the interactive nodes
+    points.frustumCulled = false;  // bounding sphere covers all points; drawRange picks the prefix
     Graph.scene().add(points);
 
-    window.__cloud = { points, count, setOpacity: (o) => { mat.opacity = o; }, setSize: (s) => { mat.size = s; } };
-    console.log("cloud-layer: rendered " + count.toLocaleString() + " papers as a GPU point cloud");
+    // Cap the device pixel ratio: a HiDPI panel renders up to 4× the fragments,
+    // and fragments (not vertices) are what the integrated GPU chokes on.
+    try {
+      const r = Graph.renderer && Graph.renderer();
+      if (r && r.setPixelRatio) r.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    } catch (e) {}
 
-    // Camera-distance LOD: fade the cloud in on zoom-OUT (whole universe), out
-    // on zoom-IN (interactive nodes dominate).
+    // ── Camera-distance draw budget (the LOD) ──────────────────────────────
+    // Fixed on-screen point budget, Google-Earth style. Because points are
+    // importance-sorted, setDrawRange(0,N) always draws the top-N most-cited —
+    // no re-upload, no per-frame CPU. budget grows as the camera moves IN.
+    let base = 0;
+    const applyBudget = () => {
+      const cp = Graph.cameraPosition();
+      const d = Math.hypot(cp.x || 0, cp.y || 0, cp.z || 0) || 1;
+      if (!base) base = d;
+      const budget = Math.max(MIN_DRAW, Math.min(MAX_DRAW, Math.round(MAX_DRAW * (base / d))));
+      geom.setDrawRange(0, budget);
+      if (window.__cloud) window.__cloud.drawn = budget;
+    };
+    setTimeout(applyBudget, 300);
+
+    window.__cloud = {
+      points, count, geom, mat, drawn: 0,
+      setBudget: (n) => geom.setDrawRange(0, Math.max(0, Math.min(count, n | 0))),
+      setSize: (s) => { mat.size = s; },
+    };
+    console.log("cloud-layer: " + count.toLocaleString() + " papers loaded, importance-LOD budget " + MIN_DRAW + "–" + MAX_DRAW);
+
     const controls = Graph.controls && Graph.controls();
     if (controls && controls.addEventListener) {
-      let base = 0;
-      const update = () => {
-        const cp = Graph.cameraPosition();
-        const d = Math.hypot(cp.x || 0, cp.y || 0, cp.z || 0);
-        if (!base) base = d || 1;
-        mat.opacity = Math.max(0.1, Math.min(0.55, (d / base) * 0.55));
-      };
-      controls.addEventListener("change", () => { clearTimeout(window.__cloudT); window.__cloudT = setTimeout(update, 80); });
+      controls.addEventListener("change", () => { clearTimeout(window.__cloudT); window.__cloudT = setTimeout(applyBudget, 80); });
     }
   }
 
