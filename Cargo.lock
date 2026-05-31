@@ -951,6 +951,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nstack"
+version = "1.3.0"
+dependencies = [
+ "ndb-engine",
+ "uuid",
+]
+
+[[package]]
 name = "num"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

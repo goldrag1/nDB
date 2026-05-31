@@ -178,6 +178,15 @@
   .qdel { color: var(--danger); border: none; background: none; cursor: pointer; font-size: 11px; }
   .dbchip { color: var(--accent2); font-size: 12px; font-weight: 600; }
   #dbBtn { font-size: 11px; padding: 2px 7px; }
+  #helpDlg { min-width: 520px; max-width: 640px; }
+  .helpintro { color: var(--muted); font-size: 12.5px; line-height: 1.5; margin: 0 0 10px; }
+  .helpbody { max-height: 60vh; overflow: auto; }
+  .cgroup { margin-bottom: 14px; }
+  .ccard { border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 7px; padding: 8px 11px; margin-bottom: 7px; background: #131922; }
+  .cterm { font-weight: 600; }
+  .csql { color: var(--muted); font-weight: 400; font-size: 11.5px; }
+  .cdesc { font-size: 12.5px; line-height: 1.5; margin: 3px 0; }
+  .ceg { color: var(--accent2); font-size: 12px; font-family: ui-monospace, monospace; }
 </style>
 </head>
 <body>
@@ -195,6 +204,7 @@
     </div>
     <div class="userbox">
       <span class="ubadge" id="who"></span>
+      <button id="helpBtn" title="nDB concepts &amp; how-to">? Concepts</button>
       <button id="schemaBtn">Schema</button>
       <button id="nodeBtn" class="hidden">Node</button>
       <button id="usersBtn" class="hidden">Users</button>
@@ -268,6 +278,13 @@
     <div class="field" style="grid-template-columns:1fr auto"><input id="dbNew" placeholder="name — letters, digits, - or _" autocomplete="off" /><button class="primary" id="dbCreate">Create + open</button></div>
     <div class="nhint">The launch database holds accounts; new databases are data-only and share this login.</div>
     <div class="dlg-actions"><button onclick="document.getElementById('dbDlg').close()">Close</button></div>
+  </dialog>
+
+  <dialog id="helpDlg">
+    <h3>nDB concepts <span class="badge">for people coming from SQL</span></h3>
+    <p class="helpintro">nDB stores objects n-dimensionally — entities, N-ary relationships, versions and vectors in one log — and projects them for you (tables, pivots, graph). A few terms have no relational equivalent:</p>
+    <div id="helpBody" class="helpbody"></div>
+    <div class="dlg-actions"><button onclick="document.getElementById('helpDlg').close()">Close</button></div>
   </dialog>
 
   <dialog id="schemaDlg">
@@ -393,6 +410,49 @@ async function selectKind(k) {
   TBL = newTableState();
   renderKinds();
   await renderMain();
+}
+
+// ---- Concepts / help ----
+const CONCEPTS = [
+  { group: "The data model", items: [
+    { term: "Entity", sql: "row — but schemaless", desc: "A record with its own set of properties. Two entities of the same kind need not share the same columns; there is no table definition to alter.", eg: "Add a property to one record (click a cell) without touching the others." },
+    { term: "Kind", sql: "table / type", desc: "Just a label on entities (e.g. Person). It isn't declared — kinds and their columns are derived by scanning the data (schema-on-read). New kinds appear the moment you use them.", eg: "Create a record of a brand-new kind and it shows up in the sidebar — no CREATE TABLE." },
+    { term: "Property", sql: "column — but per-entity", desc: "A name→value pair on a single entity. Types are inferred per value, not fixed per column.", eg: "One Person can have an extra `nickname` while others don't." },
+  ]},
+  { group: "Relationships", items: [
+    { term: "Entity reference", sql: "foreign key — as a value", desc: "A property whose value points at another entity: a directed edge. Shown as $ref:…", eg: "Type ref:<uuid> in a cell or New-record field to link two records (see them connect in Graph)." },
+    { term: "Hyperedge (N-ary edge)", sql: "no equivalent — junction tables", desc: "ONE edge that connects N entities at once, each filling a named role. Where SQL needs a junction table (a row per pair), nDB keeps it as a single first-class object.", eg: "Sidebar → Edges (N-ary) → + new: Authorship { author→Alice, paper→…, venue→… }. One row spans all of them." },
+    { term: "Role", sql: "the columns of the junction", desc: "The named slot an entity fills in a hyperedge (author, paper, venue…). An edge table's columns are its roles.", eg: "Open an edge kind to see one column per role." },
+  ]},
+  { group: "Time (built-in MVCC)", items: [
+    { term: "Transaction (tx)", sql: "—", desc: "Every commit gets a monotonic number; the head tx is “now”. The time-slider picks which tx you view.", eg: "Slide left to read the database as of an earlier tx." },
+    { term: "Time-travel / as-of", sql: "audit triggers / temporal tables", desc: "Read the WHOLE database as it was at any past tx — no audit tables, it's intrinsic.", eg: "Slide back: edit buttons disappear and old values appear." },
+    { term: "Version & history", sql: "—", desc: "Every edit is a new version; nothing is overwritten. Each value carries its timeline and who wrote it.", eg: "Click the 🕘 on a cell to see that value change over time, with authors, and jump to any point." },
+    { term: "Tombstone", sql: "soft-delete row", desc: "A delete marks the record deleted at a tx but keeps its history; time-travel still shows it before then.", eg: "Delete a row, then slide back — it's there again." },
+    { term: "Diff", sql: "—", desc: "Compare two tx points: what was added / changed (old→new per field) / removed.", eg: "The ⇄ Diff button by the slider." },
+  ]},
+  { group: "Vectors", items: [
+    { term: "Vector property", sql: "needs a separate vector DB", desc: "A property holding an embedding (array of floats). Register it once, then nearest-neighbour search runs inside the database.", eg: "Open a record with a vector → “find similar” (cosine kNN). Input vectors as {\"$vec\":[…]}." },
+  ]},
+  { group: "Conventions", items: [
+    { term: "$-names", sql: "system catalog", desc: "Kinds/properties starting with $ are app metadata (e.g. $User accounts, $author attribution) and are hidden from data views.", eg: "You won't see $User in the sidebar, but the author shows in a value's history." },
+    { term: "Query", sql: "SELECT", desc: "A small read-only pattern language over the current snapshot.", eg: "Query tab → match Person(name: ?n, age: ?a) return ?n, ?a limit 50" },
+    { term: "Database switch", sql: "USE database", desc: "The launch DB holds the accounts; admins can create/open/switch additional data-only databases that share this login.", eg: "The “switch ▾” control by the db chip (top-left)." },
+  ]},
+];
+
+$("helpBtn").onclick = () => {
+  if ($("helpBody").childElementCount === 0) renderHelp();
+  $("helpDlg").showModal();
+};
+function renderHelp() {
+  $("helpBody").innerHTML = CONCEPTS.map((s) =>
+    `<div class="cgroup"><div class="recsh">${esc(s.group)}</div>` +
+    s.items.map((c) =>
+      `<div class="ccard"><div class="cterm">${esc(c.term)} <span class="csql">≈ ${esc(c.sql)}</span></div>` +
+      `<div class="cdesc">${esc(c.desc)}</div><div class="ceg">▸ ${esc(c.eg)}</div></div>`
+    ).join("") + `</div>`
+  ).join("");
 }
 
 // ---- Schema overview ----
