@@ -39,8 +39,9 @@ possibly-corrupt disk, so this is load-bearing.
 | Thread-per-connection on both plain + TLS paths | Landed | `ndb-server` |
 | Per-connection read/write timeouts | Landed | `ndb-server` |
 | Request line/header/body size limits (413/431) | Landed | `ndb-server` |
+| **Automatic background compaction** (policy + thread) | **Landed** | `shared.rs` |
+| Contention-free (off-lock) compaction | **Partial** | scheduling landed; off-lock merge is the follow-on |
 | LSM write-stall / L0 backpressure | **Planned** | engine concurrency surgery; see below |
-| Background compaction thread | **Planned** | same; deferred over a half-correct version |
 
 The server limits land via a `ServerConfig` (builder methods; existing
 constructors unchanged) — defaults: `max_connections=256`, read/write
@@ -51,11 +52,17 @@ OOM). Bounded concurrency uses a CAS-acquired RAII `ConnGuard` over an
 accept paths are now both thread-per-connection and shutdown-aware. 42
 ndb-server tests pass (10 new), clippy-clean.
 
-Write-stall + background compaction are genuine
-engine-concurrency changes (the engine is single-writer under one `RwLock`):
-doing them correctly means a compaction worker that coordinates with the
-write lock and a bounded-memtable backpressure signal. Deferred deliberately
-rather than shipping a version that can dead-lock or stall under load.
+**Automatic compaction** is now landed: `CompactionPolicy { l0_trigger,
+check_interval }` + `SharedEngine::spawn_auto_compactor` run a named
+background thread that compacts when the live-SSTable count hits the
+trigger (default 4), with a stoppable `CompactorHandle`. This closes the
+"operator must call `compact()` by hand" gap. It **schedules** compaction;
+it does not yet make it contention-free — the compaction still holds the
+engine write lock for its duration. The follow-on (off-lock merge: read the
+immutable input SSTables by path, take the lock only for the manifest swap)
+plus a bounded-memtable **write-stall backpressure** signal are the
+remaining concurrency work — deferred deliberately rather than shipping a
+version that can dead-lock or corrupt under load.
 
 ## P2 — Observability & operability
 
@@ -109,10 +116,11 @@ without a base-backup re-sync.
 ## Honest summary
 
 Landed this pass: bloom filters, decoder fuzzing, hot backup, replication
-primitives (engine) and bounded concurrency + timeouts + request limits +
-`/metrics` + `/ready` + graceful shutdown (server). Deliberately deferred —
-because a half-correct version is worse than a documented gap — block
-compression (needs a dependency + block-format work), LSM write-stall
-backpressure and a background compaction thread (single-writer concurrency
-surgery), and the replication network daemon (server wiring). The deferred
-items are design-clear, not blocked.
+primitives, **automatic background compaction** (engine) and bounded
+concurrency + timeouts + request limits + `/metrics` + `/ready` + graceful
+shutdown (server). Deliberately deferred — because a half-correct version is
+worse than a documented gap — block compression (needs a dependency +
+block-format work), **off-lock contention-free compaction** + LSM
+write-stall backpressure (single-writer concurrency surgery where a bug is
+data corruption), and the replication network daemon (server wiring). The
+deferred items are design-clear, not blocked.
