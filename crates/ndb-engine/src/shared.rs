@@ -365,54 +365,10 @@ impl SharedEngine {
     /// (<2 SSTables) or when the run is safely aborted (floor regressed, or
     /// the input set changed underneath it).
     pub fn compact_offlock(&self) -> Result<CompactionStats, EngineError> {
-        // Serialise compactions — two concurrent off-lock merges could pick
-        // overlapping inputs. Does not block readers/writers.
-        let _c = self
-            .compaction_lock
-            .lock()
-            .expect("compaction lock poisoned");
-
-        // Phase 1: plan under the write lock (brief — no data I/O).
         let floor = self.oldest_active_snapshot();
-        let plan = self
-            .inner
-            .write()
-            .expect("engine lock poisoned")
-            .plan_compaction(floor);
-        let Some(plan) = plan else {
-            return Ok(CompactionStats::default());
-        };
-
-        // Phase 2: merge OFF-LOCK. Writers/flushes run concurrently.
-        let (records_in, records_out) = match merge_planned(&plan) {
-            Ok(v) => v,
-            Err(e) => {
-                discard_output(&plan);
-                return Err(e);
-            }
-        };
-
-        // Phase 3: install under the write lock, re-checking the snapshot
-        // floor in the same critical section so no reader can slip in between
-        // the check and the swap.
-        let mut engine = self.inner.write().expect("engine lock poisoned");
-        let current_floor = self.oldest_active_snapshot();
-        if current_floor < plan.floor() {
-            // A reader registered an older snapshot while we merged; the
-            // merge may have dropped versions it needs. Abort safely.
-            drop(engine);
-            discard_output(&plan);
-            return Ok(CompactionStats::default());
-        }
-        if let Some(stats) = engine.install_planned_compaction(&plan, records_in, records_out)? {
-            Ok(stats)
-        } else {
-            // Input set changed (shouldn't happen under the mutex, but be
-            // defensive). Discard the orphaned output.
-            drop(engine);
-            discard_output(&plan);
-            Ok(CompactionStats::default())
-        }
+        run_offlock_compaction(&self.inner, &self.compaction_lock, floor, || {
+            self.oldest_active_snapshot()
+        })
     }
 
     /// Run a compaction **only if** the [`CompactionPolicy`] trigger is met
@@ -578,6 +534,74 @@ impl CompactorHandle {
 impl Drop for CompactorHandle {
     fn drop(&mut self) {
         self.signal_and_join();
+    }
+}
+
+/// Run one **off-lock compaction** against `engine`, serialised by
+/// `compaction_lock`. The heavy read+merge+write phase runs without holding
+/// the engine write lock; only the brief plan + install phases take it.
+///
+/// `floor` is the snapshot floor to merge against (versions superseded before
+/// it may be dropped). `current_floor` is invoked once, under the install
+/// lock, to re-read the live floor; if it has regressed below `floor` (a
+/// reader registered an older snapshot mid-merge) the run aborts and discards
+/// its output rather than drop a version that reader needs.
+///
+/// Callers with a snapshot registry (e.g. [`SharedEngine`]) pass the oldest
+/// active snapshot for both. Callers with **no** registry — where every read
+/// is a single lock acquisition, so the atomic install swap is sufficient for
+/// consistency — pass [`TxId::ACTIVE`] for both (aggressive drop, no floor to
+/// protect). Reuse this from any `RwLock<Engine>` holder (the HTTP server)
+/// to get off-lock compaction without adopting the whole `SharedEngine`.
+pub fn run_offlock_compaction(
+    engine: &RwLock<Engine>,
+    compaction_lock: &Mutex<()>,
+    floor: TxId,
+    current_floor: impl FnOnce() -> TxId,
+) -> Result<CompactionStats, EngineError> {
+    // Serialise compactions — two concurrent merges could pick overlapping
+    // input sets. Does not block ordinary readers/writers.
+    let _c = compaction_lock.lock().expect("compaction lock poisoned");
+
+    // Phase 1: plan under the write lock (brief — no data I/O). Capture the
+    // live SSTable count in the same lock so a no-op (<2 SSTables) reports it
+    // exactly as the locking compaction did.
+    let (plan, sstable_count) = {
+        let mut e = engine.write().expect("engine lock poisoned");
+        let count = e.sstable_count();
+        (e.plan_compaction(floor), count)
+    };
+    let Some(plan) = plan else {
+        return Ok(CompactionStats {
+            sstables_in: sstable_count,
+            ..CompactionStats::default()
+        });
+    };
+
+    // Phase 2: merge OFF-LOCK. Writers/flushes run concurrently.
+    let (records_in, records_out) = match merge_planned(&plan) {
+        Ok(v) => v,
+        Err(e) => {
+            discard_output(&plan);
+            return Err(e);
+        }
+    };
+
+    // Phase 3: install under the write lock, re-checking the floor in the
+    // same critical section so no reader can slip between check and swap.
+    let mut e = engine.write().expect("engine lock poisoned");
+    if current_floor() < plan.floor() {
+        drop(e);
+        discard_output(&plan);
+        return Ok(CompactionStats::default());
+    }
+    if let Some(stats) = e.install_planned_compaction(&plan, records_in, records_out)? {
+        Ok(stats)
+    } else {
+        // Input set changed (shouldn't happen under the mutex, but be safe).
+        drop(e);
+        discard_output(&plan);
+        Ok(CompactionStats::default())
     }
 }
 

@@ -155,6 +155,66 @@ fn commit_then_read_round_trip() {
 }
 
 #[test]
+fn compact_route_merges_sstables_offlock_and_data_survives() {
+    // End-to-end exercise of the off-lock /compact path: commit two entities
+    // with a flush between (→ two SSTables), compact over HTTP, and confirm
+    // both entities still resolve Live afterwards.
+    let dir = temp_dir("compact_route");
+    let server = Arc::new(Server::open(&dir).unwrap());
+    let addr = spawn_server(Arc::clone(&server), 8);
+
+    let mk = |eid: EntityId| {
+        serde_json::json!({
+            "records": [{
+                "kind": "entity",
+                "entity_id": eid.into_uuid().to_string(),
+                "type_id": 1,
+                "tx_id_assert": 0,
+                "tx_id_supersede": "active",
+                "properties": [{"prop_id": 1, "value": {"tag": "string", "value": "x"}}]
+            }]
+        })
+        .to_string()
+    };
+
+    let a = EntityId::now_v7();
+    let b = EntityId::now_v7();
+    assert_eq!(post(addr, "/commit", &mk(a)).status, 200);
+    assert_eq!(post(addr, "/flush", "").status, 200);
+    assert_eq!(post(addr, "/commit", &mk(b)).status, 200);
+    assert_eq!(post(addr, "/flush", "").status, 200);
+
+    // Off-lock compaction over the wire.
+    let resp = post(addr, "/compact", "");
+    assert_eq!(
+        resp.status,
+        200,
+        "compact body: {}",
+        String::from_utf8_lossy(&resp.body)
+    );
+    let body: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    assert!(
+        body["sstables_in"].as_u64().unwrap() >= 2,
+        "two SSTables should have been merged: {body}"
+    );
+    assert!(body["new_sstable_seq"].as_u64().is_some());
+
+    // Both entities still readable after the off-lock compaction.
+    for eid in [a, b] {
+        let resp = get(addr, &format!("/read/{}", eid.into_uuid()));
+        assert_eq!(resp.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+        assert_eq!(
+            body["outcome"], "live",
+            "entity {} lost after compact",
+            eid.into_uuid()
+        );
+    }
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn validation_failure_returns_422() {
     let dir = temp_dir("val_422");
     let server = Arc::new(Server::open(&dir).unwrap());

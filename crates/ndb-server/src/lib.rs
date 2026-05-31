@@ -50,6 +50,7 @@ use ndb_engine::{
     PropertyRangeRequest, PropertyRangeResponse, QueryError, QueryRequest, ReadResponse, Record,
     Resolved, SubscribeRequest, TraverseRequest, TraverseResponse, TxId, VectorHit, VectorMetric,
     VectorSearchRequest, VectorSearchResponse, WireError, WriteTxn, execute_query,
+    run_offlock_compaction,
 };
 use ndb_engine::id::{EntityId, PropertyId, TypeId};
 use ndb_engine::index::Distance;
@@ -555,6 +556,13 @@ pub enum ServerError {
 /// up to the host CPU.
 pub struct Server {
     engine: Arc<RwLock<Engine>>,
+    /// Serialises `/compact` runs. Compaction now uses the engine's off-lock
+    /// path (`run_offlock_compaction`): its read+merge+write phase runs
+    /// WITHOUT the engine write lock, so a `/compact` no longer blocks
+    /// commits/reads for the whole merge — only the brief plan + install
+    /// phases take the lock. This mutex ensures at most one compaction runs
+    /// at a time. Shared across connection threads via `Arc`.
+    compaction_lock: Arc<Mutex<()>>,
     /// Optional bearer token. If `Some` AND `principals` is `None`, every
     /// request must carry `Authorization: Bearer <token>` else 401. v1
     /// keeps this single-token path for backward compatibility with the
@@ -802,6 +810,7 @@ impl Server {
         let initial_tx = engine.manifest().last_tx_id;
         Ok(Self {
             engine: Arc::new(RwLock::new(engine)),
+            compaction_lock: Arc::new(Mutex::new(())),
             auth_token: None,
             principals: None,
             audit: None,
@@ -821,6 +830,7 @@ impl Server {
         let initial_tx = engine.manifest().last_tx_id;
         Self {
             engine: Arc::new(RwLock::new(engine)),
+            compaction_lock: Arc::new(Mutex::new(())),
             auth_token: None,
             principals: None,
             audit: None,
@@ -1637,8 +1647,25 @@ impl Server {
         outcome: &mut DispatchOutcome,
     ) -> Result<(), ServerError> {
         if self.read_only { return reject_read_only(out, outcome, "/compact"); }
-        let mut engine = self.engine.write().expect("engine lock poisoned");
-        let stats = engine.compact()?;
+        // Off-lock compaction: the heavy merge runs WITHOUT the engine write
+        // lock, so this no longer blocks commits/reads for its whole duration
+        // — only the brief plan + install phases take the lock.
+        //
+        // Floor = TxId::ACTIVE (and the install-time re-check returns ACTIVE
+        // too): this server registers no read snapshots, and every read
+        // handler holds the read lock for a SINGLE acquisition, so the atomic
+        // install swap alone keeps reads consistent (the merge is invisible;
+        // the install cannot interleave a held read lock). CONTRACT: any
+        // future read handler that pins an OLD snapshot tx across MULTIPLE
+        // lock acquisitions (paginated/streamed at a fixed past tx) must
+        // enroll it in a snapshot registry, or off-lock compaction may drop a
+        // version it still needs.
+        let stats = run_offlock_compaction(
+            &self.engine,
+            &self.compaction_lock,
+            TxId::ACTIVE,
+            || TxId::ACTIVE,
+        )?;
         outcome.status = 200;
         write_json(
             out,
