@@ -242,6 +242,7 @@ fn dispatch(
             let k = usize::try_from(qp.u64("k").unwrap_or(10)).unwrap_or(10);
             Resp::ok(store.find_similar(id, property, k))
         }),
+        ("GET", "/api/schema") => guard_read(session.as_ref(), || Resp::ok(store.schema())),
         ("GET", "/api/diff") => guard_read(session.as_ref(), || {
             let (Some(from), Some(to)) = (qp.u64("from"), qp.u64("to")) else {
                 return Resp::fail(400, "bad_request", "missing from/to tx");

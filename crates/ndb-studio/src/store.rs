@@ -884,6 +884,77 @@ impl Store {
         json!({ "id": id.to_string(), "property": property, "results": results })
     }
 
+    /// A schema overview: entity kinds (count + property count), edge kinds
+    /// (count + role names), and the observed kind→kind relationship map
+    /// (`source --property--> target`, with counts) derived from `EntityRef`
+    /// values. The shape of the database at a glance.
+    #[must_use]
+    pub fn schema(&self) -> J {
+        let recs = self.records(self.snapshot(None));
+        let names = Self::names(&recs);
+        let kind_of = |tid: u32| names.type_name.get(&tid).cloned().unwrap_or_else(|| format!("kind:{tid}"));
+
+        let mut id_kind: HashMap<Uuid, String> = HashMap::new();
+        for r in &recs {
+            if let Record::Entity(e) = r {
+                id_kind.insert(e.entity_id.into_uuid(), kind_of(e.type_id.get()));
+            }
+        }
+
+        let mut kinds: BTreeMap<u32, (u64, BTreeSet<u32>)> = BTreeMap::new();
+        let mut relmap: BTreeMap<(String, String, String), u64> = BTreeMap::new();
+        let mut edges: BTreeMap<u32, (u64, BTreeSet<u32>)> = BTreeMap::new();
+        for r in &recs {
+            match r {
+                Record::Entity(e) => {
+                    let sk = kind_of(e.type_id.get());
+                    if is_reserved(&sk) {
+                        continue;
+                    }
+                    let entry = kinds.entry(e.type_id.get()).or_default();
+                    entry.0 += 1;
+                    for (pid, v) in &e.properties {
+                        let pn = names.prop_name.get(&pid.get()).cloned().unwrap_or_default();
+                        if is_reserved(&pn) {
+                            continue;
+                        }
+                        entry.1.insert(pid.get());
+                        if let Value::EntityRef(t) = v {
+                            let tk = id_kind.get(&t.into_uuid()).cloned().unwrap_or_else(|| "?".to_string());
+                            *relmap.entry((sk.clone(), pn, tk)).or_default() += 1;
+                        }
+                    }
+                }
+                Record::HyperEdge(h) => {
+                    if is_reserved(&kind_of(h.type_id.get())) {
+                        continue;
+                    }
+                    let entry = edges.entry(h.type_id.get()).or_default();
+                    entry.0 += 1;
+                    for (rid, _) in &h.roles {
+                        entry.1.insert(rid.get());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let kinds_json: Vec<J> = kinds.iter()
+            .map(|(tid, (count, props))| json!({ "name": kind_of(*tid), "count": count, "properties": props.len() }))
+            .collect();
+        let edges_json: Vec<J> = edges.iter()
+            .map(|(tid, (count, roles))| json!({
+                "name": kind_of(*tid), "count": count,
+                "roles": roles.iter().map(|r| names.role_name.get(r).cloned().unwrap_or_default()).collect::<Vec<_>>(),
+            }))
+            .collect();
+        let rels_json: Vec<J> = relmap.iter()
+            .map(|((s, p, t), c)| json!({ "source": s, "property": p, "target": t, "count": c }))
+            .collect();
+
+        json!({ "kinds": kinds_json, "edges": edges_json, "relationships": rels_json })
+    }
+
     /// What changed between two snapshots: entities added, removed, and
     /// changed (with per-property old→new). Works on any pair of tx ids
     /// (either direction) — time-travel diffing the engine can't do as a
@@ -1857,6 +1928,28 @@ mod tests {
         assert_eq!(results[0]["label"], "B", "B is nearest to A");
         // 'A' itself is excluded.
         assert!(results.iter().all(|r| r["label"] != "A"));
+    }
+
+    /// Schema overview: kinds, edge types, and the kind→kind relationship map.
+    #[test]
+    fn schema_overview() {
+        let store = fresh();
+        store.create("Person", &[("name".into(), s("Alice"))], None).expect("a");
+        store.create("Person", &[("name".into(), s("Bob"))], None).expect("b");
+        let tid = u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
+        let rows = store.table(tid, &TableQuery::new(None, 5));
+        let alice = Uuid::parse_str(rows["rows"][0]["id"].as_str().unwrap()).unwrap();
+        let bob = Uuid::parse_str(rows["rows"][1]["id"].as_str().unwrap()).unwrap();
+        store.set(alice, "friend", &Value::EntityRef(EntityId::from_bytes(*bob.as_bytes())), None).expect("ref");
+        store.create_hyperedge("Knows", &[("a".into(), alice), ("b".into(), bob)]).expect("edge");
+
+        let sc = store.schema();
+        assert_eq!(sc["kinds"][0]["name"], "Person");
+        assert_eq!(sc["kinds"][0]["count"], 2);
+        assert_eq!(sc["edges"][0]["name"], "Knows");
+        assert_eq!(sc["relationships"][0]["source"], "Person");
+        assert_eq!(sc["relationships"][0]["property"], "friend");
+        assert_eq!(sc["relationships"][0]["target"], "Person");
     }
 
     /// Editing a record that does not exist is a typed `NotFound` (HTTP 404).

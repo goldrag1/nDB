@@ -185,6 +185,7 @@
     </div>
     <div class="userbox">
       <span class="ubadge" id="who"></span>
+      <button id="schemaBtn">Schema</button>
       <button id="nodeBtn" class="hidden">Node</button>
       <button id="usersBtn" class="hidden">Users</button>
       <button id="logoutBtn">Logout</button>
@@ -240,6 +241,12 @@
     <div class="nhint">This node becomes a follower: it streams the peer leader's WAL delta and applies it, preserving the leader's tx ids. Get the peer token from its <code>ndb_session</code> cookie while logged in there as admin (sessions are in-memory).</div>
     <div id="npResult" class="badge" style="margin-top:8px"></div>
     <div class="dlg-actions"><button onclick="document.getElementById('nodeDlg').close()">Close</button></div>
+  </dialog>
+
+  <dialog id="schemaDlg">
+    <h3>Schema overview</h3>
+    <div id="schemaBody" class="histbody"></div>
+    <div class="dlg-actions"><button onclick="document.getElementById('schemaDlg').close()">Close</button></div>
   </dialog>
 
   <dialog id="diffDlg">
@@ -360,6 +367,19 @@ async function selectKind(k) {
   renderKinds();
   await renderMain();
 }
+
+// ---- Schema overview ----
+$("schemaBtn").onclick = async () => {
+  const s = await api.get("/schema");
+  let h = `<div class="recsec"><div class="recsh">Kinds</div>` +
+    ((s.kinds || []).map((k) => `<div class="hrow"><span class="hval">${esc(k.name)}</span><span class="htx">${k.count} records · ${k.properties} props</span></div>`).join("") || `<div class="recempty">none</div>`) + `</div>`;
+  if ((s.edges || []).length) h += `<div class="recsec"><div class="recsh">Edge types (N-ary)</div>` +
+    s.edges.map((e) => `<div class="hrow"><span class="hval">⬡ ${esc(e.name)}</span><span class="htx">${e.count} · roles: ${e.roles.map(esc).join(", ")}</span></div>`).join("") + `</div>`;
+  if ((s.relationships || []).length) h += `<div class="recsec"><div class="recsh">Relationships</div>` +
+    s.relationships.map((r) => `<div class="hrow"><span class="hval">${esc(r.source)} <span class="ekind">${esc(r.property)}</span> → ${esc(r.target)}</span><span class="htx">${r.count}</span></div>`).join("") + `</div>`;
+  $("schemaBody").innerHTML = h;
+  $("schemaDlg").showModal();
+};
 
 // ---- Temporal diff ----
 $("diffBtn").onclick = () => {
