@@ -62,8 +62,9 @@ pub use db::{
     Manifest, ManifestEntry, manifest_filename, parse_manifest_filename,
 };
 pub use engine::{
-    BackupStats, CompactionStats, DEFAULT_MAX_CACHE_BYTES, Engine, EngineConfig, EngineError,
-    IndexMemoryStats, IsolationLevel, MigrationStats, RetentionPolicy, WriteTxn,
+    BackupStats, CompactionPlan, CompactionStats, DEFAULT_MAX_CACHE_BYTES, Engine, EngineConfig,
+    EngineError, IndexMemoryStats, IsolationLevel, MigrationStats, RetentionPolicy, WriteTxn,
+    merge_planned,
 };
 pub use shared::{CompactionPolicy, CompactorHandle, SharedEngine};
 pub use replication::{ReplicationBatch, apply_batch, read_wal_since};

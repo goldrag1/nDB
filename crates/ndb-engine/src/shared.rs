@@ -37,7 +37,8 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crate::engine::{
-    CompactionStats, Engine, EngineError, IsolationLevel, RetentionPolicy, WriteTxn,
+    CompactionPlan, CompactionStats, Engine, EngineError, IsolationLevel, RetentionPolicy, WriteTxn,
+    merge_planned,
 };
 use crate::id::{EntityId, HyperedgeId, PropertyId, TxId, TypeId};
 use crate::index::Distance;
@@ -56,6 +57,11 @@ pub struct SharedEngine {
     /// `oldest_active_snapshot()` as a floor — versions superseded
     /// before that tx are safe to drop.
     snapshots: Mutex<BTreeMap<TxId, usize>>,
+    /// Serialises compactions. The off-lock path runs its merge without the
+    /// engine write lock, so two concurrent compactions could otherwise pick
+    /// overlapping input sets; this mutex makes at most one run at a time
+    /// without blocking ordinary readers/writers.
+    compaction_lock: Mutex<()>,
 }
 
 impl SharedEngine {
@@ -64,6 +70,7 @@ impl SharedEngine {
         Ok(Self {
             inner: RwLock::new(Engine::create(path)?),
             snapshots: Mutex::new(BTreeMap::new()),
+            compaction_lock: Mutex::new(()),
         })
     }
 
@@ -72,6 +79,7 @@ impl SharedEngine {
         Ok(Self {
             inner: RwLock::new(Engine::open(path)?),
             snapshots: Mutex::new(BTreeMap::new()),
+            compaction_lock: Mutex::new(()),
         })
     }
 
@@ -81,6 +89,7 @@ impl SharedEngine {
         Self {
             inner: RwLock::new(engine),
             snapshots: Mutex::new(BTreeMap::new()),
+            compaction_lock: Mutex::new(()),
         }
     }
 
@@ -337,11 +346,73 @@ impl SharedEngine {
     /// no registered snapshots, behaves identically to v1.3 — drops
     /// everything superseded.
     pub fn compact(&self) -> Result<CompactionStats, EngineError> {
+        self.compact_offlock()
+    }
+
+    /// Off-lock compaction: the read+merge+write phase runs **without** the
+    /// engine write lock, so writers and flushes proceed concurrently; only
+    /// the brief plan (phase 1) and install (phase 3) take the lock.
+    ///
+    /// Snapshot-aware like the locking compaction: it merges against the
+    /// oldest active snapshot floor and **re-checks it before installing**,
+    /// aborting (and discarding the output) if a reader registered an older
+    /// snapshot while the merge ran — so an off-lock compaction can never
+    /// drop a version a registered reader still needs. Serialised against
+    /// other compactions by an internal mutex; concurrent calls run one at a
+    /// time without blocking ordinary reads/writes.
+    ///
+    /// Returns no-op [`CompactionStats`] when there's nothing to compact
+    /// (<2 SSTables) or when the run is safely aborted (floor regressed, or
+    /// the input set changed underneath it).
+    pub fn compact_offlock(&self) -> Result<CompactionStats, EngineError> {
+        // Serialise compactions — two concurrent off-lock merges could pick
+        // overlapping inputs. Does not block readers/writers.
+        let _c = self
+            .compaction_lock
+            .lock()
+            .expect("compaction lock poisoned");
+
+        // Phase 1: plan under the write lock (brief — no data I/O).
         let floor = self.oldest_active_snapshot();
-        self.inner
+        let plan = self
+            .inner
             .write()
             .expect("engine lock poisoned")
-            .compact_with_floor(floor)
+            .plan_compaction(floor);
+        let Some(plan) = plan else {
+            return Ok(CompactionStats::default());
+        };
+
+        // Phase 2: merge OFF-LOCK. Writers/flushes run concurrently.
+        let (records_in, records_out) = match merge_planned(&plan) {
+            Ok(v) => v,
+            Err(e) => {
+                discard_output(&plan);
+                return Err(e);
+            }
+        };
+
+        // Phase 3: install under the write lock, re-checking the snapshot
+        // floor in the same critical section so no reader can slip in between
+        // the check and the swap.
+        let mut engine = self.inner.write().expect("engine lock poisoned");
+        let current_floor = self.oldest_active_snapshot();
+        if current_floor < plan.floor() {
+            // A reader registered an older snapshot while we merged; the
+            // merge may have dropped versions it needs. Abort safely.
+            drop(engine);
+            discard_output(&plan);
+            return Ok(CompactionStats::default());
+        }
+        if let Some(stats) = engine.install_planned_compaction(&plan, records_in, records_out)? {
+            Ok(stats)
+        } else {
+            // Input set changed (shouldn't happen under the mutex, but be
+            // defensive). Discard the orphaned output.
+            drop(engine);
+            discard_output(&plan);
+            Ok(CompactionStats::default())
+        }
     }
 
     /// Run a compaction **only if** the [`CompactionPolicy`] trigger is met
@@ -510,6 +581,16 @@ impl Drop for CompactorHandle {
     }
 }
 
+/// Remove an aborted off-lock compaction's output SSTable + the block-index
+/// and bloom sidecars its merge wrote (the pidx/vidx/idl sidecars are only
+/// written at install, so a pre-install abort never produced them).
+fn discard_output(plan: &CompactionPlan) {
+    let p = plan.output_path();
+    let _ = std::fs::remove_file(p);
+    let _ = std::fs::remove_file(crate::block_index::sidecar_path_for(p));
+    let _ = std::fs::remove_file(crate::bloom::sidecar_path_for(p));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -521,8 +602,12 @@ mod tests {
     }
 
     fn make_entity(name: &str) -> EntityRecord {
+        make_entity_with(EntityId::now_v7(), name)
+    }
+
+    fn make_entity_with(id: EntityId, name: &str) -> EntityRecord {
         EntityRecord {
-            entity_id: EntityId::now_v7(),
+            entity_id: id,
             type_id: TypeId::new(1),
             tx_id_assert: TxId::new(0),
             tx_id_supersede: TxId::ACTIVE,
@@ -566,6 +651,61 @@ mod tests {
         assert!(stats.is_some(), "trigger met → compaction must run");
         assert_eq!(eng.sstable_count(), 1);
 
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn offlock_compaction_runs_concurrently_with_writers_without_data_loss() {
+        // A writer thread commits + flushes while a compactor thread hammers
+        // the off-lock compaction. Because the merge runs without the write
+        // lock and the install swaps by SET, writers must never block-fail or
+        // lose data, and no commit may go missing.
+        let dir = temp_dir("offlock_concurrent");
+        let eng = Arc::new(SharedEngine::create(&dir).unwrap());
+        let n = 80usize;
+
+        let writer = {
+            let e = Arc::clone(&eng);
+            std::thread::spawn(move || {
+                let mut ids = Vec::with_capacity(n);
+                for i in 0..n {
+                    let id = EntityId::now_v7();
+                    e.with_write_txn(|mut t| {
+                        t.put_entity(make_entity_with(id, &format!("e{i}")));
+                        t.commit()
+                    })
+                    .unwrap();
+                    ids.push(id);
+                    if i % 5 == 4 {
+                        e.flush().unwrap();
+                    }
+                }
+                ids
+            })
+        };
+        let compactor = {
+            let e = Arc::clone(&eng);
+            std::thread::spawn(move || {
+                for _ in 0..40 {
+                    e.compact_offlock().unwrap();
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            })
+        };
+
+        let ids = writer.join().unwrap();
+        compactor.join().unwrap();
+        eng.flush().unwrap();
+        eng.compact_offlock().unwrap();
+
+        // Every committed entity must still resolve Live at the latest snapshot.
+        let snap = TxId::new(eng.manifest_snapshot().last_tx_id);
+        for id in &ids {
+            match eng.snapshot_read(&id.into_uuid(), snap).unwrap() {
+                Resolved::Live(Record::Entity(e)) => assert_eq!(&e.entity_id, id),
+                other => panic!("entity {id:?} lost after concurrent compaction: {other:?}"),
+            }
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -176,6 +176,49 @@ pub struct BackupStats {
     pub sstables: u64,
 }
 
+/// A planned off-lock compaction. Produced under the write lock by
+/// [`Engine::plan_compaction`], its heavy merge is run off-lock by
+/// [`merge_planned`], and it is committed under the write lock by
+/// [`Engine::install_planned_compaction`]. Carries everything the off-lock
+/// merge needs so it can run without touching the engine: the immutable
+/// input paths, the reserved output, the at-rest cipher, the snapshot floor,
+/// and a snapshot of the per-type retention policy.
+#[derive(Debug, Clone)]
+pub struct CompactionPlan {
+    input_seqs: Vec<u64>,
+    input_paths: Vec<PathBuf>,
+    output_seq: u64,
+    output_path: PathBuf,
+    cipher: Option<Cipher>,
+    floor: TxId,
+    retention: HashMap<TypeId, RetentionPolicy>,
+}
+
+impl CompactionPlan {
+    /// `file_seq`s this plan merges and retires.
+    #[must_use]
+    pub fn input_seqs(&self) -> &[u64] {
+        &self.input_seqs
+    }
+    /// `file_seq` of the SSTable this plan produces.
+    #[must_use]
+    pub fn output_seq(&self) -> u64 {
+        self.output_seq
+    }
+    /// Path of the output SSTable — used to discard the orphan if a planned
+    /// compaction is aborted before install.
+    #[must_use]
+    pub fn output_path(&self) -> &Path {
+        &self.output_path
+    }
+    /// Snapshot floor this plan was built against (versions superseded
+    /// before it may be dropped).
+    #[must_use]
+    pub fn floor(&self) -> TxId {
+        self.floor
+    }
+}
+
 /// Errors raised by the engine layer.
 #[derive(Debug, Error)]
 pub enum EngineError {
@@ -663,15 +706,9 @@ impl Engine {
         let cipher = resolve_cipher_against_marker(db.path(), hint)?;
 
         // Open active SSTables.
-        let mut sstables: Vec<SSTableReader> = Vec::new();
-        // Sort entries by level then file_seq descending so newest layer is
-        // first in the lookup chain.
-        let mut entries = db.manifest().sstables.clone();
-        entries.sort_by(|a, b| a.level.cmp(&b.level).then(b.file_seq.cmp(&a.file_seq)));
-        for entry in &entries {
-            let p = sstable_path(db.path(), entry.file_seq);
-            sstables.push(SSTableReader::open_with_cipher(&p, cipher.clone())?);
-        }
+        // Open every SSTable in the manifest, newest layer first (shared
+        // ordering helper — see `open_sstables_from_manifest`).
+        let sstables: Vec<SSTableReader> = open_sstables_from_manifest(&db, &cipher)?;
 
         // Replay WAL (or mint a fresh one).
         let mut memtable = Memtable::new();
@@ -2474,6 +2511,135 @@ impl Engine {
         })
     }
 
+    // ---------------------------------------------------------------------
+    // Off-lock compaction (P1): the same merge as `compact_with_floor`, but
+    // split into three phases so the expensive read+merge+write runs without
+    // holding the engine write lock. Phase 1 (`plan_compaction`) and phase 3
+    // (`install_planned_compaction`) are brief locked critical sections;
+    // phase 2 (`merge_planned`, a free fn) is the long off-lock body.
+    //
+    // Correctness vs concurrent flushes: a flush during phase 2 appends a
+    // strictly-newer SSTable (its records carry higher tx ids than anything
+    // in the merge inputs). `install_planned_compaction` swaps by SET —
+    // removing exactly the planned input seqs and adding the output — so any
+    // such concurrently-flushed table is preserved, and the read path
+    // resolves it ahead of the (older) merged output. See
+    // `docs/architecture/production-readiness.md`.
+    // ---------------------------------------------------------------------
+
+    /// **Phase 1 (locked).** Snapshot the current SSTable set as the merge
+    /// inputs and reserve an output `file_seq`, doing no data I/O. Returns
+    /// `None` when there's nothing worth compacting (<2 SSTables) — the same
+    /// threshold as [`compact_with_floor`](Self::compact_with_floor).
+    ///
+    /// Prefer [`SharedEngine::compact`](crate::SharedEngine::compact) or the
+    /// background compactor; call these phases directly only when
+    /// orchestrating compaction yourself.
+    pub fn plan_compaction(&mut self, oldest_active_snapshot: TxId) -> Option<CompactionPlan> {
+        if self.sstables.len() < 2 {
+            return None;
+        }
+        let input_seqs: Vec<u64> = self
+            .db
+            .manifest()
+            .sstables
+            .iter()
+            .map(|e| e.file_seq)
+            .collect();
+        let input_paths: Vec<PathBuf> = input_seqs
+            .iter()
+            .map(|s| sstable_path(self.db.path(), *s))
+            .collect();
+        let output_seq = self.db.allocate_file_seq();
+        let output_path = sstable_path(self.db.path(), output_seq);
+        Some(CompactionPlan {
+            input_seqs,
+            input_paths,
+            output_seq,
+            output_path,
+            cipher: self.cipher.clone(),
+            floor: oldest_active_snapshot,
+            retention: self.retention.clone(),
+        })
+    }
+
+    /// **Phase 3 (locked).** Commit a merge produced by [`merge_planned`]:
+    /// swap the planned inputs out for the output in the manifest (keeping
+    /// any SSTables flushed while the merge ran), reopen the SSTable chain,
+    /// write the output's index sidecars, rebuild indexes, and retire the old
+    /// input files.
+    ///
+    /// Returns `Ok(None)` if the input set is no longer fully present in the
+    /// manifest (a concurrent compaction changed it) — the caller should
+    /// discard the orphaned output file. Otherwise `Ok(Some(stats))`.
+    pub fn install_planned_compaction(
+        &mut self,
+        plan: &CompactionPlan,
+        records_in: u64,
+        records_out: u64,
+    ) -> Result<Option<CompactionStats>, EngineError> {
+        let input: HashSet<u64> = plan.input_seqs.iter().copied().collect();
+        let cur_seqs: HashSet<u64> = self
+            .db
+            .manifest()
+            .sstables
+            .iter()
+            .map(|e| e.file_seq)
+            .collect();
+        if !input.iter().all(|s| cur_seqs.contains(s)) {
+            // Inputs changed under us (a concurrent compaction). Abort; the
+            // caller deletes the orphaned output.
+            return Ok(None);
+        }
+        let sstables_in = plan.input_seqs.len();
+
+        // Set-based manifest swap: drop exactly the inputs, add the output at
+        // level 1, keep everything else (concurrent flushes).
+        let mut manifest = self.db.manifest().clone();
+        manifest.sstables.retain(|e| !input.contains(&e.file_seq));
+        manifest.sstables.push(ManifestEntry {
+            file_seq: plan.output_seq,
+            level: 1,
+        });
+        self.db.write_manifest(manifest)?;
+
+        // Write the output's low-RAM index sidecars (block-index + bloom were
+        // already written by the merge's SSTableWriter::finish()). Use a
+        // throwaway reader so we don't tangle with the chain borrow below.
+        let out_reader = SSTableReader::open_with_cipher(&plan.output_path, self.cipher.clone())?;
+        self.write_index_sidecars(&out_reader)?;
+        drop(out_reader);
+
+        // Reopen the full chain from the new manifest (newest layer first).
+        self.sstables = open_sstables_from_manifest(&self.db, &self.cipher)?;
+
+        // Retire ONLY the input files — never a concurrently-flushed table.
+        for old_seq in &plan.input_seqs {
+            let p = sstable_path(self.db.path(), *old_seq);
+            let _ = std::fs::remove_file(&p);
+            let _ = std::fs::remove_file(crate::block_index::sidecar_path_for(&p));
+            let _ = std::fs::remove_file(crate::bloom::sidecar_path_for(&p));
+            let _ = std::fs::remove_file(pidx_sidecar_path_for(&p));
+            let _ = std::fs::remove_file(vidx_sidecar_path_for(&p));
+            for ext in [ADJ_EXT, TYC_EXT, ETC_EXT, LKP_EXT, META_EXT] {
+                let _ = std::fs::remove_file(idl_sidecar_path_for(&p, ext));
+            }
+        }
+
+        // Same index reload + rebuild as the locking compaction.
+        self.load_property_index_sidecars();
+        self.load_vector_index_sidecars();
+        self.load_id_list_sidecars();
+        self.rebuild_indexes()?;
+
+        Ok(Some(CompactionStats {
+            records_in,
+            records_out,
+            sstables_in,
+            new_sstable_seq: Some(plan.output_seq),
+        }))
+    }
+
     /// Migrate this database between encryption states.
     ///
     /// Covers the three transitions:
@@ -2825,6 +2991,83 @@ impl WriteTxn<'_> {
 // Path helpers + recovery
 // ---------------------------------------------------------------------------
 
+/// **Phase 2 (off-lock).** Read the plan's immutable input SSTables, merge
+/// them honouring the snapshot floor + per-type retention, and write the
+/// output SSTable (block-index + bloom sidecars are written by
+/// `SSTableWriter::finish`). Touches no engine state, so writers and flushes
+/// proceed concurrently. Returns `(records_in, records_out)`.
+///
+/// The merge body mirrors [`Engine::compact_with_floor`] exactly; the only
+/// difference is that inputs are reopened by path and the retention policy is
+/// read from the plan's snapshot rather than `self`.
+pub fn merge_planned(plan: &CompactionPlan) -> Result<(u64, u64), EngineError> {
+    let mut by_key: BTreeMap<SSTableKey, Vec<Record>> = BTreeMap::new();
+    let mut killed: HashMap<uuid::Uuid, TxId> = HashMap::new();
+    let mut records_in: u64 = 0;
+    for path in &plan.input_paths {
+        let reader = SSTableReader::open_with_cipher(path, plan.cipher.clone())?;
+        for item in reader.iter() {
+            let (rec, _) = item?;
+            records_in += 1;
+            if let Record::Tombstone(t) = &rec {
+                let entry = killed.entry(t.target_id).or_insert(t.tx_id_supersede);
+                if t.tx_id_supersede > *entry {
+                    *entry = t.tx_id_supersede;
+                }
+            }
+            by_key
+                .entry(SSTableKey::for_record(&rec))
+                .or_default()
+                .push(rec);
+        }
+    }
+
+    let mut writer = SSTableWriter::create_with_cipher(&plan.output_path, plan.cipher.clone())?;
+    let mut records_out: u64 = 0;
+    for (_k, versions) in by_key {
+        let type_id = versions.iter().find_map(|r| match r {
+            Record::Entity(e) => Some(e.type_id),
+            Record::HyperEdge(h) => Some(h.type_id),
+            _ => None,
+        });
+        // Mirrors Engine::retention_policy: absent type → LatestOnly default.
+        let policy = type_id
+            .and_then(|t| plan.retention.get(&t).copied())
+            .unwrap_or_default();
+        match policy {
+            RetentionPolicy::LatestOnly => {
+                if plan.floor == TxId::ACTIVE {
+                    emit_latest_only(&mut writer, &versions, &killed, &mut records_out)?;
+                } else {
+                    emit_latest_only_with_floor(
+                        &mut writer,
+                        &versions,
+                        &killed,
+                        plan.floor,
+                        &mut records_out,
+                    )?;
+                }
+            }
+            RetentionPolicy::Audited => {
+                for r in &versions {
+                    writer.append(r)?;
+                    records_out += 1;
+                }
+            }
+            RetentionPolicy::Versioned { keep_last_n } => {
+                emit_versioned(
+                    &mut writer,
+                    versions,
+                    keep_last_n.max(1) as usize,
+                    &mut records_out,
+                )?;
+            }
+        }
+    }
+    writer.finish()?;
+    Ok((records_in, records_out))
+}
+
 /// Emit just the snapshot-visible winner (current LatestOnly behaviour).
 /// Drops the whole key if a tombstone in `killed` supersedes it.
 fn emit_latest_only(
@@ -3112,6 +3355,26 @@ fn wal_path(dir: &Path, seq: u64) -> PathBuf {
 
 fn sstable_path(dir: &Path, seq: u64) -> PathBuf {
     dir.join(format!("{seq:06}{SSTABLE_FILENAME_SUFFIX}"))
+}
+
+/// Open every SSTable in `db`'s manifest, sorted so the newest layer
+/// (lowest `level`, then highest `file_seq`) comes first — the exact order
+/// the read path walks when resolving MVCC versions. Defined once and shared
+/// by [`Engine::open`] and the off-lock compaction install so the in-memory
+/// chain ordering can never drift between the two paths (a mismatch would
+/// silently corrupt reads).
+fn open_sstables_from_manifest(
+    db: &Database,
+    cipher: &Option<Cipher>,
+) -> Result<Vec<SSTableReader>, EngineError> {
+    let mut entries = db.manifest().sstables.clone();
+    entries.sort_by(|a, b| a.level.cmp(&b.level).then(b.file_seq.cmp(&a.file_seq)));
+    let mut sstables = Vec::with_capacity(entries.len());
+    for entry in &entries {
+        let p = sstable_path(db.path(), entry.file_seq);
+        sstables.push(SSTableReader::open_with_cipher(&p, cipher.clone())?);
+    }
+    Ok(sstables)
 }
 
 /// The tx id an index uses as the out-of-order watermark for a record.
@@ -4856,6 +5119,58 @@ mod tests {
         {
             Resolved::Deleted { deleted_at } => assert_eq!(deleted_at, snap_deleted),
             other => panic!("expected Deleted, got {other:?}"),
+        }
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn offlock_compaction_preserves_a_concurrently_flushed_sstable() {
+        // The core off-lock correctness property: a flush that lands AFTER
+        // the plan (i.e. while the merge would be running) must survive the
+        // install's set-based manifest swap — never dropped.
+        let dir = temp_dir("offlock-setswap");
+        let mut engine = Engine::create(&dir).unwrap();
+        let (a, b, c) = (EntityId::now_v7(), EntityId::now_v7(), EntityId::now_v7());
+
+        let commit_flush = |engine: &mut Engine, eid: EntityId, name: &str| {
+            let mut t = engine.begin_write();
+            t.put_entity(make_entity(eid, name));
+            let tx = t.commit().unwrap();
+            engine.flush().unwrap();
+            tx
+        };
+        let ta = commit_flush(&mut engine, a, "alice");
+        let tb = commit_flush(&mut engine, b, "bob");
+        assert_eq!(engine.sstable_count(), 2);
+
+        // Phase 1: plan to compact the two current SSTables {A, B}.
+        let plan = engine.plan_compaction(TxId::ACTIVE).expect("2 SSTables → a plan");
+        assert_eq!(plan.input_seqs().len(), 2);
+
+        // Simulate a flush concurrent with the off-lock merge: C lands as a
+        // 3rd SSTable that is NOT in the plan's input set.
+        let tc = commit_flush(&mut engine, c, "carol");
+        assert_eq!(engine.sstable_count(), 3);
+
+        // Phase 2 (off-lock) + Phase 3 (install).
+        let (ri, ro) = merge_planned(&plan).unwrap();
+        assert!(ri >= 2);
+        let stats = engine
+            .install_planned_compaction(&plan, ri, ro)
+            .unwrap()
+            .expect("inputs still present → install succeeds");
+        assert_eq!(stats.new_sstable_seq, Some(plan.output_seq()));
+        // {A,B} → 1 output, plus the preserved C table = 2 SSTables.
+        assert_eq!(engine.sstable_count(), 2);
+
+        // All three entities readable — C was preserved by the set swap, and
+        // A/B survive in the merged output.
+        for (eid, tx, who) in [(a, ta, "alice"), (b, tb, "bob"), (c, tc, "carol")] {
+            match engine.snapshot_read(&eid.into_uuid(), tx).unwrap() {
+                Resolved::Live(Record::Entity(e)) => assert_eq!(e.entity_id, eid, "{who}"),
+                other => panic!("read of {who}: {other:?}"),
+            }
         }
         engine.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
