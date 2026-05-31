@@ -176,11 +176,15 @@
   .qload { color: var(--accent); cursor: pointer; font-size: 12px; font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .qload:hover { text-decoration: underline; }
   .qdel { color: var(--danger); border: none; background: none; cursor: pointer; font-size: 11px; }
+  .dbchip { color: var(--accent2); font-size: 12px; font-weight: 600; }
+  #dbBtn { font-size: 11px; padding: 2px 7px; }
 </style>
 </head>
 <body>
   <header>
     <span class="brand">nDB <b>Studio</b></span>
+    <span class="dbchip" id="dbActive"></span>
+    <button id="dbBtn" class="hidden" title="Databases">switch ▾</button>
     <span class="badge" id="dbhead"></span>
     <div class="spacer"></div>
     <div class="slider">
@@ -255,6 +259,15 @@
     <p class="nhint">Paste a JSON array of objects, or CSV with a header row. An <code>id</code> column is ignored (new records get fresh ids). Values like <code>ref:&lt;uuid&gt;</code> become links.</p>
     <textarea id="impText" class="qeditor" style="min-height:140px" placeholder='[{"name":"Zoe","city":"Hue"}]  — or —  name,city&#10;Zoe,Hue'></textarea>
     <div class="dlg-actions"><span id="impStatus" class="badge"></span><div class="spacer" style="flex:1"></div><button onclick="document.getElementById('importDlg').close()">Close</button><button class="primary" id="impRun">Import</button></div>
+  </dialog>
+
+  <dialog id="dbDlg">
+    <h3>Databases</h3>
+    <div id="dbList" class="histbody"></div>
+    <h4 style="margin:12px 0 6px;color:var(--muted)">Create new</h4>
+    <div class="field" style="grid-template-columns:1fr auto"><input id="dbNew" placeholder="name — letters, digits, - or _" autocomplete="off" /><button class="primary" id="dbCreate">Create + open</button></div>
+    <div class="nhint">The launch database holds accounts; new databases are data-only and share this login.</div>
+    <div class="dlg-actions"><button onclick="document.getElementById('dbDlg').close()">Close</button></div>
   </dialog>
 
   <dialog id="schemaDlg">
@@ -1173,6 +1186,46 @@ function renderUser() {
   $("who").textContent = ME.user ? `${ME.user} · ${ME.role}` : "";
   $("usersBtn").classList.toggle("hidden", ME.role !== "admin");
   $("nodeBtn").classList.toggle("hidden", ME.role !== "admin");
+  $("dbActive").textContent = ME.db ? "▦ " + ME.db : "";
+  $("dbBtn").classList.toggle("hidden", ME.role !== "admin");
+}
+
+// ---- databases (admin) ----
+$("dbBtn").onclick = openDbDlg;
+async function openDbDlg() {
+  const d = await api.get("/databases");
+  const list = $("dbList");
+  let h = (d.open || []).map((x) =>
+    `<div class="hrow"><span class="hval ${x.active ? "" : "qload"}" ${x.active ? "" : `data-use="${esc(x.name)}"`}>▦ ${esc(x.name)}${x.name === d.primary ? " · primary" : ""}</span><span class="htx">${x.active ? "active" : ""}</span></div>`).join("");
+  if ((d.available || []).length) {
+    h += `<div class="recsh" style="margin-top:8px">On disk (not open)</div>`;
+    h += d.available.map((n) => `<div class="hrow"><span class="hval qload" data-open="${esc(n)}">▦ ${esc(n)}</span><span class="htx">open</span></div>`).join("");
+  }
+  list.innerHTML = h;
+  list.querySelectorAll("[data-use]").forEach((el) => (el.onclick = () => switchDb("use", el.dataset.use)));
+  list.querySelectorAll("[data-open]").forEach((el) => (el.onclick = async () => { await switchDb("open", el.dataset.open); await switchDb("use", el.dataset.open); }));
+  $("dbDlg").showModal();
+}
+$("dbCreate").onclick = async () => {
+  const name = $("dbNew").value.trim();
+  if (!name) { toast("name required", true); return; }
+  const r = await api.post("/databases", { name });
+  if (r.status === 200) { $("dbNew").value = ""; await afterDbChange(name); }
+  else toast(r.body.error?.message || "create failed", true);
+};
+async function switchDb(action, name) {
+  const r = await api.post("/databases/" + (action === "use" ? "use" : "open"), { name });
+  if (r.status !== 200) { toast(r.body.error?.message || "failed", true); return; }
+  if (action === "use") await afterDbChange(name);
+  else await openDbDlg();
+}
+async function afterDbChange(name) {
+  $("dbDlg").close();
+  ME.db = name; renderUser();
+  SEL = null; SEL_EDGE = null; MODE = "table";
+  await loadCatalog();
+  if (CATALOG.length) selectKind(CATALOG[0]); else { $("content").innerHTML = `<div class="empty">Empty database — create records via the API or import.</div>`; renderKinds(); }
+  toast("switched to " + name);
 }
 
 async function init() {

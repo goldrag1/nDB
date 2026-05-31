@@ -1,0 +1,13 @@
+[package]
+name         = "nstack"
+description  = "nStack kernel — typed n-dimensional ERP framework on nDB (Phase 1 vertical slice)"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+authors      = { workspace = true }
+repository   = { workspace = true }
+license      = { workspace = true }
+
+[dependencies]
+ndb-engine = { path = "../ndb-engine" }
+uuid       = { workspace = true }

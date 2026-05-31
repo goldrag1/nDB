@@ -71,7 +71,12 @@ fn main() -> ExitCode {
 
     let store = Store::new(engine);
     bootstrap_admin(&store);
-    let state = Arc::new(http::AppState::new(Arc::new(store)));
+    let p = std::path::Path::new(&path);
+    let primary_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("primary").to_string();
+    // New databases live in a sibling "<name>-dbs" directory.
+    let root = p.parent().unwrap_or_else(|| std::path::Path::new("."))
+        .join(format!("{primary_name}-dbs"));
+    let state = Arc::new(http::AppState::new(Arc::new(store), primary_name, root));
     let listener = match http::bind(&bind) {
         Ok(l) => l,
         Err(e) => {

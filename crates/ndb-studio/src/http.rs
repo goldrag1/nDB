@@ -21,6 +21,7 @@
 //! - `POST /api/commit`     → create / set / delete (editor/admin)
 //! - `GET  /api/replication/status|since` → leader stream (admin)
 //! - `POST /api/replication/apply|pull`   → follower ingest / pull (admin)
+//! - `GET  /api/databases` · `POST /api/databases[/open|/use]` → multi-db (admin)
 //! - `GET  /api/users`      → list accounts (admin)
 //! - `POST /api/users`      → `{username,password,role}` create (admin)
 //! - `POST /api/users/delete` → `{username}` (admin)
@@ -28,8 +29,10 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 
+use ndb_engine::shared::SharedEngine;
 use serde_json::{Value as J, json};
 use uuid::Uuid;
 
@@ -40,20 +43,142 @@ use crate::store::{Store, StoreError, TableQuery};
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const COOKIE: &str = "ndb_session";
 
-/// Everything a request handler needs: the engine-backed store and the
-/// process-local session map.
+/// Everything a request handler needs. The launch database is the *primary* —
+/// it holds the accounts (auth always resolves against it). Admins can create,
+/// open, and switch additional *data* databases; the active one serves every
+/// data request. The active selection is process-global (a single-operator
+/// desktop tool).
 pub struct AppState {
-    /// The data store (the only thing that touches the engine).
-    pub store: Arc<Store>,
+    /// Auth/account database (the one passed at launch).
+    pub primary: Arc<Store>,
+    /// Display name of the primary database.
+    pub primary_name: String,
+    /// Directory under which new databases are created/opened.
+    pub root: PathBuf,
+    /// Open databases by name (includes the primary).
+    databases: RwLock<HashMap<String, Arc<Store>>>,
+    /// Name of the active data database.
+    active: RwLock<String>,
     /// In-memory token → session map.
     pub sessions: identity::Sessions,
 }
 
 impl AppState {
-    /// Build state around an opened store.
+    /// Build state around the launch (primary) database.
     #[must_use]
-    pub fn new(store: Arc<Store>) -> Self {
-        Self { store, sessions: identity::Sessions::new() }
+    pub fn new(primary: Arc<Store>, primary_name: String, root: PathBuf) -> Self {
+        let mut dbs = HashMap::new();
+        dbs.insert(primary_name.clone(), Arc::clone(&primary));
+        Self {
+            primary,
+            active: RwLock::new(primary_name.clone()),
+            primary_name,
+            root,
+            databases: RwLock::new(dbs),
+            sessions: identity::Sessions::new(),
+        }
+    }
+
+    fn lock_active(&self) -> String {
+        self.active.read().expect("active lock poisoned").clone()
+    }
+
+    /// The store serving data requests right now.
+    #[must_use]
+    pub fn active_store(&self) -> Arc<Store> {
+        let a = self.lock_active();
+        self.databases.read().expect("db lock poisoned").get(&a).cloned()
+            .unwrap_or_else(|| Arc::clone(&self.primary))
+    }
+
+    /// Open databases as `(name, is_active)`, sorted.
+    #[must_use]
+    pub fn list_databases(&self) -> Vec<(String, bool)> {
+        let active = self.lock_active();
+        let mut v: Vec<(String, bool)> = self.databases.read().expect("db lock poisoned")
+            .keys().map(|n| (n.clone(), *n == active)).collect();
+        v.sort();
+        v
+    }
+
+    /// Databases present under `root` but not yet open.
+    #[must_use]
+    pub fn discover(&self) -> Vec<String> {
+        let open = self.databases.read().expect("db lock poisoned");
+        let mut out = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(&self.root) {
+            for e in rd.flatten() {
+                if let Ok(name) = e.file_name().into_string()
+                    && e.path().join("CURRENT").exists()
+                    && !open.contains_key(&name)
+                {
+                    out.push(name);
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    fn valid_name(name: &str) -> bool {
+        !name.is_empty() && name.len() <= 64
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    }
+
+    /// Switch the active data database.
+    ///
+    /// # Errors
+    /// If no database with that name is open.
+    pub fn use_db(&self, name: &str) -> Result<(), String> {
+        if self.databases.read().expect("db lock poisoned").contains_key(name) {
+            *self.active.write().expect("active lock poisoned") = name.to_string();
+            Ok(())
+        } else {
+            Err(format!("no open database named {name}"))
+        }
+    }
+
+    /// Create a new empty database under `root` and open it.
+    ///
+    /// # Errors
+    /// On an invalid name, a name collision, or an engine/IO error.
+    pub fn create_db(&self, name: &str) -> Result<(), String> {
+        if !Self::valid_name(name) {
+            return Err("name must be ASCII letters, digits, - or _".to_string());
+        }
+        if self.databases.read().expect("db lock poisoned").contains_key(name) {
+            return Err(format!("{name} is already open"));
+        }
+        let path = self.root.join(name);
+        if path.join("CURRENT").exists() {
+            return Err(format!("a database already exists at {name}"));
+        }
+        std::fs::create_dir_all(&self.root).map_err(|e| e.to_string())?;
+        let engine = SharedEngine::create(&path).map_err(|e| format!("{e}"))?;
+        self.databases.write().expect("db lock poisoned")
+            .insert(name.to_string(), Arc::new(Store::new(engine)));
+        Ok(())
+    }
+
+    /// Open an existing database under `root` (no-op if already open).
+    ///
+    /// # Errors
+    /// On an invalid name, a missing database, or an engine error.
+    pub fn open_db(&self, name: &str) -> Result<(), String> {
+        if !Self::valid_name(name) {
+            return Err("invalid name".to_string());
+        }
+        if self.databases.read().expect("db lock poisoned").contains_key(name) {
+            return Ok(());
+        }
+        let path = self.root.join(name);
+        if !path.join("CURRENT").exists() {
+            return Err(format!("no database at {name}"));
+        }
+        let engine = SharedEngine::open(&path).map_err(|e| format!("{e}"))?;
+        self.databases.write().expect("db lock poisoned")
+            .insert(name.to_string(), Arc::new(Store::new(engine)));
+        Ok(())
     }
 }
 
@@ -160,14 +285,16 @@ fn dispatch(
     body: &[u8],
     token: Option<&str>,
 ) -> Resp {
-    let store = &state.store;
+    let active = state.active_store();
+    let store: &Store = &active; // data requests hit the active database
+    let primary: &Store = &state.primary; // auth lives on the primary
     let session = token.and_then(|t| state.sessions.lookup(t));
 
     match (method, path) {
         // ---- public ----
         ("GET", "/api/health") => Resp::ok(json!({ "status": "ok", "head": store.head() })),
         ("GET", "/api/me") => match &session {
-            Some(s) => Resp::ok(json!({ "authed": true, "user": s.username, "role": s.role.as_str() })),
+            Some(s) => Resp::ok(json!({ "authed": true, "user": s.username, "role": s.role.as_str(), "db": state.lock_active() })),
             None => Resp::ok(json!({ "authed": false })),
         },
         ("POST", "/api/login") => login(state, body),
@@ -257,21 +384,45 @@ fn dispatch(
             Err(r) => r,
         },
 
-        // ---- user administration (admin) ----
+        // ---- user administration (admin; always the primary database) ----
         ("GET", "/api/users") => match admin(session.as_ref()) {
             Ok(()) => {
-                let users: Vec<J> = store.list_users().into_iter()
+                let users: Vec<J> = primary.list_users().into_iter()
                     .map(|(u, r)| json!({ "username": u, "role": r })).collect();
                 Resp::ok(json!({ "users": users }))
             }
             Err(r) => r,
         },
         ("POST", "/api/users") => match admin(session.as_ref()) {
-            Ok(()) => create_user(store, body),
+            Ok(()) => create_user(primary, body),
             Err(r) => r,
         },
         ("POST", "/api/users/delete") => match admin(session.as_ref()) {
-            Ok(()) => delete_user(store, body, session.as_ref()),
+            Ok(()) => delete_user(primary, body, session.as_ref()),
+            Err(r) => r,
+        },
+
+        // ---- databases (admin) ----
+        ("GET", "/api/databases") => match admin(session.as_ref()) {
+            Ok(()) => Resp::ok(json!({
+                "active": state.lock_active(),
+                "primary": state.primary_name,
+                "open": state.list_databases().into_iter()
+                    .map(|(n, a)| json!({ "name": n, "active": a })).collect::<Vec<_>>(),
+                "available": state.discover(),
+            })),
+            Err(r) => r,
+        },
+        ("POST", "/api/databases") => match admin(session.as_ref()) {
+            Ok(()) => db_action(body, |name| { state.create_db(name)?; state.use_db(name) }),
+            Err(r) => r,
+        },
+        ("POST", "/api/databases/open") => match admin(session.as_ref()) {
+            Ok(()) => db_action(body, |name| state.open_db(name)),
+            Err(r) => r,
+        },
+        ("POST", "/api/databases/use") => match admin(session.as_ref()) {
+            Ok(()) => db_action(body, |name| state.use_db(name)),
             Err(r) => r,
         },
 
@@ -427,6 +578,20 @@ fn http_get_json(peer: &str, path_and_query: &str, token: &str) -> Result<J, Str
     serde_json::from_slice(bodytext).map_err(|e| format!("peer JSON: {e}"))
 }
 
+fn db_action(body: &[u8], f: impl FnOnce(&str) -> Result<(), String>) -> Resp {
+    let Ok(req) = serde_json::from_slice::<J>(body) else {
+        return Resp::fail(400, "bad_request", "invalid JSON body");
+    };
+    let name = req.get("name").and_then(J::as_str).unwrap_or("").trim();
+    if name.is_empty() {
+        return Resp::fail(400, "bad_request", "missing database name");
+    }
+    match f(name) {
+        Ok(()) => Resp::ok(json!({ "ok": true, "name": name })),
+        Err(e) => Resp::fail(400, "db_error", &e),
+    }
+}
+
 fn run_query(store: &Store, body: &[u8]) -> Resp {
     let Ok(req) = serde_json::from_slice::<J>(body) else {
         return Resp::fail(400, "bad_request", "invalid JSON body");
@@ -447,7 +612,7 @@ fn login(state: &AppState, body: &[u8]) -> Resp {
     };
     let username = req.get("username").and_then(J::as_str).unwrap_or("");
     let password = req.get("password").and_then(J::as_str).unwrap_or("");
-    if let Some((_, pwhash, role_str)) = state.store.find_user(username)
+    if let Some((_, pwhash, role_str)) = state.primary.find_user(username)
         && identity::verify_password(password, &pwhash)
     {
         let role = Role::parse(&role_str);
