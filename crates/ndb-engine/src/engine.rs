@@ -275,6 +275,20 @@ pub enum EngineError {
         modified_at: u64,
     },
 
+    /// Write rejected by backpressure: the live SSTable count has reached the
+    /// configured `l0_stall_threshold`, meaning flushes are outpacing
+    /// compaction. The caller should back off and retry — the background
+    /// compactor will reduce the count. Rejection (not blocking) is
+    /// deliberate: a blocking write would dead-lock the off-lock compactor's
+    /// install phase on the engine write lock.
+    #[error("write_stalled: {sstable_count} SSTables ≥ stall threshold {threshold}; retry after compaction")]
+    WriteStalled {
+        /// Live SSTable count at the time of rejection.
+        sstable_count: usize,
+        /// Configured stall threshold.
+        threshold: usize,
+    },
+
     /// At-rest encryption is misconfigured: the running key does not
     /// match the on-disk `.encryption` marker, or one side has a key
     /// where the other does not.
@@ -403,6 +417,18 @@ pub struct EngineConfig {
     /// Convenience preset for memory-constrained deployments. Implies
     /// `mmap_indexes` and a tighter cache budget via [`Self::resolved`].
     pub low_memory: bool,
+    /// Auto-flush the memtable to an SSTable once its estimated size reaches
+    /// this many bytes — the primary bound on resident write memory. `0`
+    /// (default) disables auto-flush (historical behaviour: the caller flushes
+    /// explicitly). Enforced by [`Engine::auto_flush_if_full`].
+    pub memtable_flush_threshold_bytes: usize,
+    /// Reject writes (with [`EngineError::WriteStalled`]) once the live
+    /// SSTable count reaches this value — the backpressure valve for when
+    /// flushes outpace compaction. `0` (default) disables stalling. Enforced
+    /// by [`Engine::check_write_admission`]. Rejection, not blocking: a
+    /// blocking write would dead-lock the off-lock compactor's install phase
+    /// on the engine write lock.
+    pub l0_stall_threshold: usize,
 }
 
 impl Default for EngineConfig {
@@ -411,6 +437,8 @@ impl Default for EngineConfig {
             max_cache_bytes: DEFAULT_MAX_CACHE_BYTES,
             mmap_indexes: false,
             low_memory: false,
+            memtable_flush_threshold_bytes: 0,
+            l0_stall_threshold: 0,
         }
     }
 }
@@ -424,6 +452,29 @@ impl EngineConfig {
             max_cache_bytes,
             mmap_indexes: true,
             low_memory: true,
+            ..Self::default()
+        }
+    }
+
+    /// Build a config from environment variables, starting from
+    /// [`Default`]. Recognised:
+    /// - `NDB_MEMTABLE_FLUSH_BYTES` → `memtable_flush_threshold_bytes`
+    /// - `NDB_L0_STALL` → `l0_stall_threshold`
+    ///
+    /// Unset or unparseable values leave the default (`0` = disabled), so the
+    /// env-sourced server constructors keep their historical behaviour unless
+    /// an operator opts in.
+    #[must_use]
+    pub fn from_env() -> Self {
+        let parse = |key: &str| {
+            std::env::var(key)
+                .ok()
+                .and_then(|v| v.trim().parse::<usize>().ok())
+        };
+        Self {
+            memtable_flush_threshold_bytes: parse("NDB_MEMTABLE_FLUSH_BYTES").unwrap_or(0),
+            l0_stall_threshold: parse("NDB_L0_STALL").unwrap_or(0),
+            ..Self::default()
         }
     }
 
@@ -652,7 +703,7 @@ impl Engine {
     /// tests don't accidentally race against the env.
     pub fn create_from_env<P: AsRef<Path>>(path: P) -> Result<Self, EngineError> {
         let cipher = Cipher::from_env()?;
-        Self::create_with_cipher(path, cipher)
+        Self::create_with_cipher_config(path, cipher, EngineConfig::from_env())
     }
 
     /// Open an existing database directory.
@@ -802,7 +853,7 @@ impl Engine {
     /// prefer `open_with_cipher` so tests don't race on the env.
     pub fn open_from_env<P: AsRef<Path>>(path: P) -> Result<Self, EngineError> {
         let cipher = Cipher::from_env()?;
-        Self::open_with_cipher(path, cipher)
+        Self::open_with_cipher_config(path, cipher, EngineConfig::from_env())
     }
 
     /// Scan the latest snapshot for metadata constraint entities and
@@ -1480,6 +1531,52 @@ impl Engine {
     #[must_use]
     pub fn config(&self) -> EngineConfig {
         self.config
+    }
+
+    /// Write-admission check (backpressure). Returns
+    /// [`EngineError::WriteStalled`] when `l0_stall_threshold` is configured
+    /// (`> 0`) and the live SSTable count has reached it — i.e. flushes are
+    /// outpacing compaction. Returns `Ok(())` otherwise (and always when the
+    /// threshold is disabled).
+    ///
+    /// This is **non-blocking by design**: callers reject/retry rather than
+    /// wait, because blocking while holding the engine write lock would
+    /// dead-lock the off-lock compactor's install phase. Call it before
+    /// `begin_write`; the background compactor reduces the count so a retry
+    /// later succeeds.
+    pub fn check_write_admission(&self) -> Result<(), EngineError> {
+        let threshold = self.config.l0_stall_threshold;
+        if threshold > 0 {
+            let n = self.sstable_count();
+            if n >= threshold {
+                return Err(EngineError::WriteStalled {
+                    sstable_count: n,
+                    threshold,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Auto-flush the memtable to an SSTable when it has grown past
+    /// `memtable_flush_threshold_bytes` — the primary bound on resident write
+    /// memory. No-op (returns `Ok(false)`) when the threshold is disabled
+    /// (`0`) or the memtable is below it / empty; flushes and returns
+    /// `Ok(true)` otherwise.
+    ///
+    /// Composes with off-lock compaction: the flush appends a strictly-newer
+    /// SSTable, which a concurrent compaction's set-based install preserves.
+    /// Call it after a commit.
+    pub fn auto_flush_if_full(&mut self) -> Result<bool, EngineError> {
+        let threshold = self.config.memtable_flush_threshold_bytes;
+        if threshold > 0
+            && !self.memtable.is_empty()
+            && self.memtable.size_bytes() as usize >= threshold
+        {
+            self.flush()?;
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     /// Take a consistent **hot backup** of the database into `dest` while
@@ -5120,6 +5217,82 @@ mod tests {
             Resolved::Deleted { deleted_at } => assert_eq!(deleted_at, snap_deleted),
             other => panic!("expected Deleted, got {other:?}"),
         }
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_stall_rejects_when_l0_reaches_threshold() {
+        let dir = temp_dir("write-stall");
+        let cfg = EngineConfig {
+            l0_stall_threshold: 2,
+            ..EngineConfig::default()
+        };
+        let mut engine = Engine::create_with_config(&dir, cfg).unwrap();
+        // No SSTables yet → admitted.
+        assert!(engine.check_write_admission().is_ok());
+        // Flush two SSTables into existence.
+        for i in 0..2 {
+            let mut t = engine.begin_write();
+            t.put_entity(make_entity(EntityId::now_v7(), &format!("e{i}")));
+            t.commit().unwrap();
+            engine.flush().unwrap();
+        }
+        assert_eq!(engine.sstable_count(), 2);
+        // At threshold → WriteStalled with the right numbers.
+        match engine.check_write_admission() {
+            Err(EngineError::WriteStalled { sstable_count, threshold }) => {
+                assert_eq!(sstable_count, 2);
+                assert_eq!(threshold, 2);
+            }
+            other => panic!("expected WriteStalled, got {other:?}"),
+        }
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn auto_flush_bounds_the_memtable() {
+        let dir = temp_dir("auto-flush");
+        // 1-byte threshold: any committed record trips it.
+        let cfg = EngineConfig {
+            memtable_flush_threshold_bytes: 1,
+            ..EngineConfig::default()
+        };
+        let mut engine = Engine::create_with_config(&dir, cfg).unwrap();
+        assert_eq!(engine.sstable_count(), 0);
+        let mut t = engine.begin_write();
+        t.put_entity(make_entity(EntityId::now_v7(), "x"));
+        t.commit().unwrap();
+        assert!(engine.memtable_stats().1 > 0, "memtable has bytes");
+        // Over threshold → flush, memtable drains.
+        assert!(engine.auto_flush_if_full().unwrap(), "should auto-flush");
+        assert_eq!(engine.sstable_count(), 1);
+        assert_eq!(engine.memtable_stats().0, 0, "memtable drained");
+        // Empty memtable → no-op.
+        assert!(!engine.auto_flush_if_full().unwrap());
+        engine.close().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_stall_and_auto_flush_disabled_by_default() {
+        let dir = temp_dir("stall-off");
+        let mut engine = Engine::create(&dir).unwrap(); // default config = both 0
+        for i in 0..5 {
+            let mut t = engine.begin_write();
+            t.put_entity(make_entity(EntityId::now_v7(), &format!("e{i}")));
+            t.commit().unwrap();
+            engine.flush().unwrap();
+        }
+        assert!(engine.check_write_admission().is_ok(), "stall off by default");
+        let mut t = engine.begin_write();
+        t.put_entity(make_entity(EntityId::now_v7(), "y"));
+        t.commit().unwrap();
+        assert!(
+            !engine.auto_flush_if_full().unwrap(),
+            "auto-flush off by default"
+        );
         engine.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }

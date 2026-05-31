@@ -125,8 +125,17 @@ impl SharedEngine {
         F: FnOnce(WriteTxn<'_>) -> Result<R, EngineError>,
     {
         let mut engine = self.inner.write().expect("engine lock poisoned");
+        // Backpressure: reject before doing any work if flushes are outpacing
+        // compaction (no-op unless `l0_stall_threshold` is configured).
+        engine.check_write_admission()?;
         let txn = engine.begin_write();
-        f(txn)
+        let result = f(txn)?;
+        // Bound resident write memory: flush the memtable if it has grown past
+        // `memtable_flush_threshold_bytes` (no-op when disabled). Composes with
+        // off-lock compaction — the flushed table is preserved by its
+        // set-based install.
+        engine.auto_flush_if_full()?;
+        Ok(result)
     }
 
     /// Like `with_write_txn` but pre-sets the isolation level on the txn.
@@ -618,6 +627,7 @@ fn discard_output(plan: &CompactionPlan) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::EngineConfig;
     use crate::record::EntityRecord;
     use std::sync::Arc;
 
@@ -728,6 +738,77 @@ mod tests {
             match eng.snapshot_read(&id.into_uuid(), snap).unwrap() {
                 Resolved::Live(Record::Entity(e)) => assert_eq!(&e.entity_id, id),
                 other => panic!("entity {id:?} lost after concurrent compaction: {other:?}"),
+            }
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_stall_plus_auto_flush_with_concurrent_compaction_never_deadlocks() {
+        // Auto-flush at 1 byte (every commit flushes → L0 grows fast) and a
+        // low stall threshold. A writer drives commits through with_write_txn
+        // while a compactor runs off-lock compaction. The whole point: writes
+        // are rejected (WriteStalled), never blocked, so there is no deadlock
+        // against the compactor's lock-taking install phase — and committed
+        // data always survives.
+        let dir = temp_dir("stall_concurrent");
+        let cfg = EngineConfig {
+            memtable_flush_threshold_bytes: 1,
+            l0_stall_threshold: 6,
+            ..EngineConfig::default()
+        };
+        let eng = Arc::new(SharedEngine::from_engine(
+            Engine::create_with_config(&dir, cfg).unwrap(),
+        ));
+
+        let writer = {
+            let e = Arc::clone(&eng);
+            std::thread::spawn(move || {
+                let mut committed = Vec::new();
+                let mut stalls = 0u32;
+                for i in 0..120 {
+                    let id = EntityId::now_v7();
+                    let r = e.with_write_txn(|mut t| {
+                        t.put_entity(make_entity_with(id, &format!("e{i}")));
+                        t.commit()
+                    });
+                    match r {
+                        Ok(_) => committed.push(id),
+                        Err(EngineError::WriteStalled { .. }) => {
+                            stalls += 1;
+                            // Back off WITHOUT holding any lock; the compactor
+                            // reduces the SSTable count so a later write lands.
+                            std::thread::sleep(Duration::from_millis(2));
+                        }
+                        Err(e) => panic!("unexpected write error: {e:?}"),
+                    }
+                }
+                (committed, stalls)
+            })
+        };
+        let compactor = {
+            let e = Arc::clone(&eng);
+            std::thread::spawn(move || {
+                for _ in 0..120 {
+                    e.compact_offlock().unwrap();
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            })
+        };
+
+        let (committed, stalls) = writer.join().unwrap();
+        compactor.join().unwrap();
+
+        // Backpressure actually engaged, and progress was still made.
+        assert!(stalls > 0, "expected some writes to be stalled by backpressure");
+        assert!(!committed.is_empty(), "writer should still make progress");
+
+        // Every committed entity survives the storm of flushes + compactions.
+        let snap = TxId::new(eng.manifest_snapshot().last_tx_id);
+        for id in &committed {
+            match eng.snapshot_read(&id.into_uuid(), snap).unwrap() {
+                Resolved::Live(Record::Entity(e)) => assert_eq!(&e.entity_id, id),
+                other => panic!("committed entity {id:?} lost: {other:?}"),
             }
         }
         std::fs::remove_dir_all(&dir).unwrap();

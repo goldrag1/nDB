@@ -215,6 +215,51 @@ fn compact_route_merges_sstables_offlock_and_data_survives() {
 }
 
 #[test]
+fn commit_returns_503_when_write_stalled() {
+    // Configure the engine to stall at 1 live SSTable, then drive the server
+    // past it: commit (0 SSTables, ok) → flush (1 SSTable == threshold) →
+    // commit (rejected with 503 write_stalled). Uses from_engine to set the
+    // threshold deterministically without racing on env vars.
+    let dir = temp_dir("write_stall_503");
+    let cfg = ndb_engine::EngineConfig {
+        l0_stall_threshold: 1,
+        ..Default::default()
+    };
+    let engine = ndb_engine::Engine::create_with_config(&dir, cfg).unwrap();
+    let server = Arc::new(Server::from_engine(engine));
+    let addr = spawn_server(Arc::clone(&server), 6);
+
+    let mk = |eid: EntityId| {
+        serde_json::json!({
+            "records": [{
+                "kind": "entity",
+                "entity_id": eid.into_uuid().to_string(),
+                "type_id": 1,
+                "tx_id_assert": 0,
+                "tx_id_supersede": "active",
+                "properties": [{"prop_id": 1, "value": {"tag": "string", "value": "x"}}]
+            }]
+        })
+        .to_string()
+    };
+
+    assert_eq!(post(addr, "/commit", &mk(EntityId::now_v7())).status, 200);
+    assert_eq!(post(addr, "/flush", "").status, 200);
+
+    let resp = post(addr, "/commit", &mk(EntityId::now_v7()));
+    assert_eq!(
+        resp.status,
+        503,
+        "expected write_stalled 503: {}",
+        String::from_utf8_lossy(&resp.body)
+    );
+    let body: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    assert_eq!(body["error"], "write_stalled");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn validation_failure_returns_422() {
     let dir = temp_dir("val_422");
     let server = Arc::new(Server::open(&dir).unwrap());

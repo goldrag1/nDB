@@ -1696,6 +1696,16 @@ impl Server {
             }
         };
         let mut engine = self.engine.write().expect("engine lock poisoned");
+        // Backpressure: reject before doing work if flushes are outpacing
+        // compaction (no-op unless NDB_L0_STALL is configured). 503 tells the
+        // client to retry once the background compactor catches up. Rejection,
+        // not blocking — a blocked write would dead-lock the off-lock compactor.
+        if let Err(e) = engine.check_write_admission() {
+            drop(engine);
+            outcome.status = 503;
+            outcome.failure = Some(e.to_string());
+            return write_error(out, 503, "write_stalled", &e.to_string());
+        }
         let mut txn: WriteTxn = engine.begin_write();
         for jr in req.records {
             let r: Record = match jr.try_into() {
@@ -1711,6 +1721,13 @@ impl Server {
         }
         match txn.commit() {
             Ok(tid) => {
+                // Bound resident write memory: flush the memtable if it has
+                // grown past NDB_MEMTABLE_FLUSH_BYTES (no-op when unset). The
+                // commit is already durable in the WAL, so a flush failure is
+                // logged but doesn't fail the response.
+                if let Err(e) = engine.auto_flush_if_full() {
+                    eprintln!("ndb-server: auto-flush after commit failed: {e}");
+                }
                 // Drop the engine lock BEFORE notifying so subscribers
                 // can grab the lock to read newly-committed records
                 // without contending with the writer's still-held mutex.
