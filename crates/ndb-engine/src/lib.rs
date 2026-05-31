@@ -28,6 +28,7 @@
 #![warn(missing_docs)]
 
 pub mod block_index;
+pub mod bloom;
 pub mod capability;
 pub mod codec;
 pub mod db;
@@ -40,6 +41,7 @@ pub mod memtable;
 pub mod mvcc;
 pub mod query;
 pub mod record;
+pub mod replication;
 pub mod shared;
 pub mod sstable;
 pub mod validation;
@@ -60,10 +62,11 @@ pub use db::{
     Manifest, ManifestEntry, manifest_filename, parse_manifest_filename,
 };
 pub use engine::{
-    CompactionStats, DEFAULT_MAX_CACHE_BYTES, Engine, EngineConfig, EngineError,
+    BackupStats, CompactionStats, DEFAULT_MAX_CACHE_BYTES, Engine, EngineConfig, EngineError,
     IndexMemoryStats, IsolationLevel, MigrationStats, RetentionPolicy, WriteTxn,
 };
-pub use shared::SharedEngine;
+pub use shared::{CompactionPolicy, CompactorHandle, SharedEngine};
+pub use replication::{ReplicationBatch, apply_batch, read_wal_since};
 pub use error::{DecodeError, EncodeError};
 pub use id::{EntityId, HyperedgeId, PropertyId, RoleId, TX_ACTIVE, TYPE_UNTYPED, TxId, TypeId};
 pub use index::{
@@ -85,6 +88,10 @@ pub use record::{
     ENVELOPE_OVERHEAD, EntityRecord, FORMAT_VERSION, FORMAT_VERSION_MAX_SUPPORTED, HyperEdgeRecord,
     PropertyKeyRecord, Record, RecordKind, RoleNameRecord, TombstoneRecord, TypeNameRecord,
     peek_record_kind, peek_record_size,
+};
+pub use bloom::{
+    BLOOM_EXTENSION, BLOOM_FORMAT_VERSION, BLOOM_FORMAT_VERSION_MAX_SUPPORTED,
+    BloomError, BloomFilter, BloomWriter, DEFAULT_FALSE_POSITIVE_RATE,
 };
 pub use block_index::{
     BLOCK_INDEX_EXTENSION, BLOCK_INDEX_FORMAT_VERSION, BLOCK_INDEX_FORMAT_VERSION_MAX_SUPPORTED,

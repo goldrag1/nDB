@@ -286,6 +286,9 @@ pub struct SSTableWriter {
     /// always indexed so seek_offset(target) before the first key
     /// returns 0.
     block_index: crate::block_index::BlockIndexWriter,
+    /// Builds the `<seq>.bloom` sidecar (v1.3+). Records every appended
+    /// key so a reader can prove a key absent and skip the table entirely.
+    bloom: crate::bloom::BloomWriter,
 }
 
 /// Either a plaintext `BufWriter<File>` or a chunked-AEAD `EncryptedFile<File>`.
@@ -375,6 +378,7 @@ impl SSTableWriter {
             bytes_written: 0,
             last_key: None,
             block_index: crate::block_index::BlockIndexWriter::new(),
+            bloom: crate::bloom::BloomWriter::new(),
         })
     }
 
@@ -394,6 +398,7 @@ impl SSTableWriter {
         // index entry (offset 0); subsequent records become entries
         // only when crossing a block boundary.
         self.block_index.observe_record(&key, self.bytes_written);
+        self.bloom.observe_key(&key);
         let mut buf = Vec::with_capacity(128);
         record
             .encode(&mut buf)
@@ -441,7 +446,18 @@ impl SSTableWriter {
         self.block_index.finish(&sidecar).map_err(|e| {
             io::Error::other(format!("block-index sidecar write failed: {e}"))
         })?;
-        // fsync the parent directory so both renames are durable.
+        // Bloom sidecar — only emit it when it provably covers EVERY record.
+        // `append` observes each key; `append_raw` (raw escape hatch) does
+        // not. Writing a partial bloom would produce false negatives, so if
+        // the observed key count ever disagrees with `record_count` we skip
+        // the sidecar entirely and the reader falls back to scanning.
+        if self.bloom.key_count() as u64 == self.record_count {
+            let bloom_path = crate::bloom::sidecar_path_for(&self.final_path);
+            self.bloom.finish(&bloom_path).map_err(|e| {
+                io::Error::other(format!("bloom sidecar write failed: {e}"))
+            })?;
+        }
+        // fsync the parent directory so the renames are durable.
         if let Some(parent) = self.final_path.parent() {
             fsync_dir(parent)?;
         }
@@ -571,6 +587,10 @@ pub struct SSTableReader {
     /// v2.0+ writers; absent for v1.3-era SSTables. When present,
     /// `find()` binary-searches it to bound the linear-scan range.
     block_index: Option<crate::block_index::BlockIndex>,
+    /// Optional bloom sidecar. Present for SSTables written by v1.3+
+    /// writers. When present and it reports a key absent, `find` /
+    /// `find_all` return immediately without touching the data section.
+    bloom: Option<crate::bloom::BloomFilter>,
 }
 
 /// Backing storage for an [`SSTableReader`]. Plain files are mmap'd
@@ -695,12 +715,30 @@ impl SSTableReader {
                 None
             }
         };
+        // Bloom sidecar load is best-effort too: missing → no skip, corrupt
+        // → log + skip. A bad bloom can never cause a wrong answer (we only
+        // ever use a `false` result to skip, and a corrupt/absent filter is
+        // simply not consulted), so falling back is always safe.
+        let bloom_path = crate::bloom::sidecar_path_for(&path);
+        let bloom = match crate::bloom::load_sidecar(&bloom_path) {
+            Ok(Some(b)) => Some(b),
+            Ok(None) => None,
+            Err(e) => {
+                eprintln!(
+                    "ndb-engine: bloom sidecar {} corrupt ({}); skipping membership filter",
+                    bloom_path.display(),
+                    e,
+                );
+                None
+            }
+        };
         Ok(Self {
             path,
             backing,
             file_len,
             footer,
             block_index,
+            bloom,
         })
     }
 
@@ -708,6 +746,21 @@ impl SSTableReader {
     #[must_use]
     pub fn has_block_index(&self) -> bool {
         self.block_index.is_some()
+    }
+
+    /// Whether this reader has a bloom sidecar loaded.
+    #[must_use]
+    pub fn has_bloom(&self) -> bool {
+        self.bloom.is_some()
+    }
+
+    /// Whether the bloom filter proves `target` is absent from this table.
+    /// `false` when no bloom is loaded (caller must scan) or the key may be
+    /// present. Never a false "absent" — a `true` here means a scan would
+    /// definitely find nothing.
+    #[must_use]
+    fn bloom_rejects(&self, target: &SSTableKey) -> bool {
+        self.bloom.as_ref().is_some_and(|b| !b.may_contain(target))
     }
 
     /// Path of the underlying file.
@@ -750,6 +803,9 @@ impl SSTableReader {
     /// Returns the first record whose [`SSTableKey`] matches `target`;
     /// returns `None` if the key isn't present.
     pub fn find(&self, target: &SSTableKey) -> Result<Option<Record>, SSTableError> {
+        if self.bloom_rejects(target) {
+            return Ok(None);
+        }
         let start_offset = self.block_index_offset(target);
         let mut iter = self.iter_from(start_offset);
         for item in &mut iter {
@@ -770,6 +826,9 @@ impl SSTableReader {
     /// matches `target` — needed by MVCC point reads, where multiple
     /// versions of the same entity may live in one SSTable.
     pub fn find_all(&self, target: &SSTableKey) -> Result<Vec<Record>, SSTableError> {
+        if self.bloom_rejects(target) {
+            return Ok(Vec::new());
+        }
         let start_offset = self.block_index_offset(target);
         let mut out = Vec::new();
         let mut iter = self.iter_from(start_offset);
@@ -1158,6 +1217,83 @@ mod tests {
         // holds since snapshot_read no longer uses it.
         let one = r.find(&key).unwrap();
         assert!(one.is_some());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn finish_writes_bloom_sidecar_and_reader_loads_it() {
+        let dir = temp_dir("bloom_sidecar");
+        let path = dir.join("000001.ndb");
+        let records = sorted_corpus();
+        let mut w = SSTableWriter::create(&path).unwrap();
+        for r in &records {
+            w.append(r).unwrap();
+        }
+        w.finish().unwrap();
+
+        let bloom_path = crate::bloom::sidecar_path_for(&path);
+        assert!(bloom_path.exists(), "bloom sidecar at {bloom_path:?} must exist");
+
+        let r = SSTableReader::open(&path).unwrap();
+        assert!(r.has_bloom(), "reader must pick up the bloom sidecar");
+        // Every real key must survive the bloom (no false negatives).
+        for rec in &records {
+            let k = SSTableKey::for_record(rec);
+            assert!(r.find(&k).unwrap().is_some(), "real key {k:?} skipped by bloom");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn bloom_short_circuits_absent_keys_and_find_still_correct() {
+        // A table of entities. Looking up an entity UUID that was never
+        // inserted should (almost always) be rejected by the bloom; either
+        // way the answer must be None.
+        let dir = temp_dir("bloom_absent");
+        let path = dir.join("000001.ndb");
+        let mut records: Vec<Record> = (0..64)
+            .map(|i| entity(EntityId::now_v7(), 100 + i, u64::from(i)))
+            .collect();
+        records.sort_by(|a, b| SSTableKey::for_record(a).cmp(&SSTableKey::for_record(b)));
+        let mut w = SSTableWriter::create(&path).unwrap();
+        for r in &records {
+            w.append(r).unwrap();
+        }
+        w.finish().unwrap();
+
+        let r = SSTableReader::open(&path).unwrap();
+        assert!(r.has_bloom());
+        // 200 random absent keys must all miss; with fpr 1% the bloom
+        // rejects ~99% before scanning, but correctness holds regardless.
+        for _ in 0..200 {
+            let absent = SSTableKey {
+                kind: RecordKind::Entity.as_byte(),
+                primary: EntityId::now_v7().as_bytes().to_vec(),
+            };
+            assert!(r.find(&absent).unwrap().is_none());
+            assert!(r.find_all(&absent).unwrap().is_empty());
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn missing_bloom_sidecar_falls_back_to_scan() {
+        let dir = temp_dir("bloom_missing");
+        let path = dir.join("000001.ndb");
+        let records = sorted_corpus();
+        let mut w = SSTableWriter::create(&path).unwrap();
+        for r in &records {
+            w.append(r).unwrap();
+        }
+        w.finish().unwrap();
+        // Delete the bloom sidecar — reader must still find every key.
+        std::fs::remove_file(crate::bloom::sidecar_path_for(&path)).unwrap();
+        let r = SSTableReader::open(&path).unwrap();
+        assert!(!r.has_bloom(), "deleted sidecar = no bloom loaded");
+        for rec in &records {
+            let k = SSTableKey::for_record(rec);
+            assert!(r.find(&k).unwrap().is_some());
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

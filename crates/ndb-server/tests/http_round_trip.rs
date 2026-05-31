@@ -1442,3 +1442,431 @@ fn cors_disabled_by_default() {
     );
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+// ===========================================================================
+// P1/P2 hardening: resource limits, observability, graceful shutdown.
+// (Added tests only — all helpers above are reused.)
+// ===========================================================================
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
+
+use ndb_server::ShutdownHandle;
+
+/// Send a raw request and read whatever response comes back, tolerating a
+/// connection reset (the capacity-rejection path closes the socket promptly,
+/// which can RST a still-writing client — the 503 bytes are usually already
+/// buffered client-side before the RST). Returns `(status, full_text)`, or
+/// `None` if nothing at all was read.
+fn raw_full_tolerant(addr: std::net::SocketAddr, req: &[u8]) -> Option<(u16, String)> {
+    let mut s = TcpStream::connect(addr).ok()?;
+    s.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    // A write failure here means the server already closed/reset — fall
+    // through to the read, which may still surface the 503 the server wrote.
+    let _ = s.write_all(req);
+    let _ = s.flush();
+    let mut buf = Vec::new();
+    // Reset mid-stream is acceptable; keep whatever bytes we got.
+    let _ = s.read_to_end(&mut buf);
+    if buf.is_empty() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    let status: u16 = text
+        .lines()
+        .next()?
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()?;
+    Some((status, text))
+}
+
+/// Spawn a server that serves until graceful shutdown (the new
+/// `serve_forever` path), returning the address + a handle to stop it.
+/// The worker thread is detached; tests that need it to finish call
+/// `request_shutdown` (or hit `/admin/shutdown`).
+fn spawn_server_forever(server: Arc<Server>) -> (std::net::SocketAddr, ShutdownHandle) {
+    let bind = server.bind("127.0.0.1:0").unwrap();
+    let addr = bind.local_addr().unwrap();
+    let handle = server.shutdown_handle();
+    drop(bind);
+    let srv = Arc::clone(&server);
+    thread::spawn(move || {
+        let bind = srv.bind(addr).unwrap();
+        let _ = bind.serve_forever();
+    });
+    thread::sleep(Duration::from_millis(50));
+    (addr, handle)
+}
+
+#[test]
+fn connection_cap_rejects_with_503_then_recovers() {
+    // max_connections=1: while one slow connection holds the only slot,
+    // a second connection must be rejected with 503.
+    let dir = temp_dir("conn_cap");
+    let server = Arc::new(
+        Server::open(&dir)
+            .unwrap()
+            .with_max_connections(1)
+            // Generous read timeout so the slow connection holds its slot
+            // for the duration of the test rather than timing out early.
+            .with_timeouts(Duration::from_secs(5), Duration::from_secs(5)),
+    );
+    let (addr, handle) = spawn_server_forever(Arc::clone(&server));
+
+    // Connection A: announce a body but never send it. The server thread
+    // blocks reading the body, holding the single slot.
+    let mut slow = TcpStream::connect(addr).unwrap();
+    slow.write_all(
+        b"POST /commit HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 64\r\nConnection: close\r\n\r\n",
+    )
+    .unwrap();
+    slow.flush().unwrap();
+
+    // Wait until the slot is actually taken (in_flight == 1).
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while server.in_flight() == 0 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(server.in_flight(), 1, "slow connection should hold the slot");
+
+    // Connection B: a full request → rejected with 503 because we're at cap.
+    // The rejection path closes the socket promptly, so tolerate a RST.
+    let (status, raw) = raw_full_tolerant(
+        addr,
+        b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+    )
+    .expect("capacity rejection should have produced a 503 response");
+    assert_eq!(status, 503, "expected capacity rejection; got:\n{raw}");
+    assert!(raw.contains("capacity"), "rejection body should mention capacity:\n{raw}");
+
+    // The rejected counter should have advanced.
+    let metrics = server.metrics();
+    assert!(
+        metrics.render().contains("ndb_connections_rejected_total 1"),
+        "rejected counter not incremented:\n{}",
+        metrics.render(),
+    );
+
+    // Release the slow connection; the slot should free up.
+    drop(slow);
+    let deadline = Instant::now() + Duration::from_secs(6);
+    while server.in_flight() > 0 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(server.in_flight(), 0, "slot should free after slow conn closes");
+
+    // And a fresh request now succeeds.
+    let resp = get(addr, "/health");
+    assert_eq!(resp.status, 200);
+
+    handle.request();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn body_size_limit_returns_413() {
+    let dir = temp_dir("body_limit");
+    let server = Arc::new(
+        Server::open(&dir)
+            .unwrap()
+            // 16-byte body cap; anything larger is refused pre-read.
+            .with_request_limits(64 * 1024, 16),
+    );
+    let addr = spawn_server(Arc::clone(&server), 1);
+
+    // Content-Length exceeds the cap → 413 without the body ever being read.
+    let body = "x".repeat(100);
+    let req = format!(
+        "POST /commit HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body,
+    );
+    let (status, raw) = raw_full(addr, req.as_bytes());
+    assert_eq!(status, 413, "expected 413 body too large; got:\n{raw}");
+    assert!(raw.contains("body_too_large"), "error code missing:\n{raw}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn header_size_limit_returns_431() {
+    let dir = temp_dir("header_limit");
+    let server = Arc::new(
+        Server::open(&dir)
+            .unwrap()
+            // Tiny header budget — a normal request line + a few headers
+            // already blows it.
+            .with_request_limits(48, 16 * 1024 * 1024),
+    );
+    let addr = spawn_server(Arc::clone(&server), 1);
+
+    let mut req = String::from("GET /health HTTP/1.1\r\nHost: x\r\n");
+    // Pad with a long header to overflow the 48-byte budget.
+    req.push_str("X-Pad: ");
+    req.push_str(&"a".repeat(200));
+    req.push_str("\r\nConnection: close\r\n\r\n");
+    let (status, raw) = raw_full(addr, req.as_bytes());
+    assert_eq!(status, 431, "expected 431 headers too large; got:\n{raw}");
+    assert!(raw.contains("headers_too_large"), "error code missing:\n{raw}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn read_timeout_releases_slot() {
+    // A client that connects, sends a partial request, then stalls must
+    // have its slot reclaimed once the read timeout elapses — the server
+    // does not pin the connection forever.
+    let dir = temp_dir("read_timeout");
+    let server = Arc::new(
+        Server::open(&dir)
+            .unwrap()
+            .with_max_connections(4)
+            .with_timeouts(Duration::from_millis(300), Duration::from_secs(5)),
+    );
+    let (addr, handle) = spawn_server_forever(Arc::clone(&server));
+
+    // Open a connection, send only the request line (no terminating blank
+    // line), then stall. The server's read_line blocks and times out.
+    let mut stalled = TcpStream::connect(addr).unwrap();
+    stalled
+        .write_all(b"GET /health HTTP/1.1\r\nHost: x\r\n")
+        .unwrap();
+    stalled.flush().unwrap();
+
+    // Slot taken.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while server.in_flight() == 0 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(server.in_flight(), 1, "stalled connection should hold a slot");
+
+    // Within ~the read timeout, the slot is reclaimed even though we never
+    // closed the socket from our side.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while server.in_flight() > 0 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        server.in_flight(),
+        0,
+        "read timeout should have released the stalled connection's slot",
+    );
+
+    drop(stalled);
+    handle.request();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn metrics_endpoint_exposes_expected_series() {
+    let dir = temp_dir("metrics");
+    let server = Arc::new(Server::open(&dir).unwrap());
+    let addr = spawn_server(Arc::clone(&server), 3);
+
+    // Drive a couple of requests so the counters are non-trivial.
+    let _ = get(addr, "/health");
+    let _ = get(addr, "/this/route/does/not/exist");
+
+    let (status, raw) = raw_full(
+        addr,
+        b"GET /metrics HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+    );
+    assert_eq!(status, 200, "got:\n{raw}");
+    // Prometheus content type.
+    assert!(
+        raw.to_lowercase().contains("content-type: text/plain"),
+        "metrics should be text/plain:\n{raw}",
+    );
+    // Body (after header block) carries the expected series.
+    let body = raw.split("\r\n\r\n").nth(1).unwrap_or("");
+    for series in [
+        "ndb_requests_total",
+        "ndb_responses_total",
+        "ndb_connections_in_flight",
+        "ndb_connections_rejected_total",
+        "ndb_request_duration_seconds_sum",
+        "ndb_request_duration_seconds_count",
+        "ndb_bytes_read_total",
+        "ndb_bytes_written_total",
+    ] {
+        assert!(body.contains(series), "missing series {series}:\n{body}");
+    }
+    // The /health request we made should appear as a labeled route series.
+    assert!(
+        body.contains("ndb_requests_total{route=\"/health\"}"),
+        "missing /health route label:\n{body}",
+    );
+    // A response-status series for 200 must be present.
+    assert!(
+        body.contains("ndb_responses_total{status=\"200\"}"),
+        "missing status=200 series:\n{body}",
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn ready_returns_200_when_engine_usable() {
+    let dir = temp_dir("ready_ok");
+    let server = Arc::new(Server::open(&dir).unwrap());
+    let addr = spawn_server(Arc::clone(&server), 1);
+    let resp = get(addr, "/ready");
+    assert_eq!(resp.status, 200);
+    let body: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    assert_eq!(body["status"], "ready");
+    assert!(body["last_tx_id"].is_number(), "ready should report last_tx_id");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn ready_returns_503_while_shutting_down() {
+    // Once shutdown is requested, /ready flips to 503 (readiness) so an
+    // orchestrator drains traffic, while /health stays 200 (liveness).
+    //
+    // The accept loop KEEPS accepting during the bounded drain window, so
+    // we can probe /ready over the wire. To keep the window open long
+    // enough (the loop returns the instant in-flight hits zero), we hold
+    // one slow connection in-flight while we probe.
+    let dir = temp_dir("ready_draining");
+    let server = Arc::new(
+        Server::open(&dir)
+            .unwrap()
+            .with_shutdown_drain_timeout(Duration::from_secs(3))
+            // Long read timeout so the held connection stays in-flight.
+            .with_timeouts(Duration::from_secs(5), Duration::from_secs(5)),
+    );
+    let (addr, handle) = spawn_server_forever(Arc::clone(&server));
+
+    // Hold one connection in-flight (announce a body, never send it).
+    let mut held = TcpStream::connect(addr).unwrap();
+    held.write_all(
+        b"POST /commit HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 64\r\nConnection: close\r\n\r\n",
+    )
+    .unwrap();
+    held.flush().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while server.in_flight() == 0 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(server.in_flight() >= 1, "held connection should be in-flight");
+
+    // /health stays 200 (liveness) even before shutdown.
+    assert_eq!(get(addr, "/health").status, 200);
+
+    // Flip the shutdown flag; the accept loop drains (still accepting) for
+    // up to 3s — long enough for the /ready probe below.
+    handle.request();
+    let resp = get(addr, "/ready");
+    assert_eq!(resp.status, 503, "ready must be 503 while shutting down");
+    let body: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    assert_eq!(body["status"], "not_ready");
+
+    // /health still 200 during drain (liveness unaffected).
+    assert_eq!(get(addr, "/health").status, 200);
+
+    drop(held);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn graceful_shutdown_drains_and_serve_returns() {
+    // Start a server on a worker thread via serve(); request shutdown and
+    // assert the serve() call returns (the worker thread joins) within the
+    // drain window, with in-flight at zero.
+    let dir = temp_dir("graceful_shutdown");
+    let server = Arc::new(
+        Server::open(&dir)
+            .unwrap()
+            .with_shutdown_drain_timeout(Duration::from_secs(2)),
+    );
+    let bind = server.bind("127.0.0.1:0").unwrap();
+    let addr = bind.local_addr().unwrap();
+    let handle = server.shutdown_handle();
+    drop(bind);
+
+    let returned = Arc::new(AtomicBool::new(false));
+    let returned_w = Arc::clone(&returned);
+    let srv = Arc::clone(&server);
+    let worker = thread::spawn(move || {
+        let bind = srv.bind(addr).unwrap();
+        let _ = bind.serve();
+        returned_w.store(true, Ordering::SeqCst);
+    });
+    thread::sleep(Duration::from_millis(50));
+
+    // Sanity: server answers before shutdown.
+    assert_eq!(get(addr, "/health").status, 200);
+
+    // Request graceful shutdown.
+    let t0 = Instant::now();
+    handle.request();
+
+    // serve() should return promptly (no in-flight to drain).
+    worker.join().expect("serve worker should join");
+    assert!(returned.load(Ordering::SeqCst), "serve() must have returned");
+    assert!(
+        t0.elapsed() < Duration::from_secs(2),
+        "shutdown should be prompt with no in-flight; took {:?}",
+        t0.elapsed(),
+    );
+    assert_eq!(server.in_flight(), 0);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn admin_shutdown_route_triggers_drain() {
+    // POST /admin/shutdown sets the flag; the serve loop then returns.
+    let dir = temp_dir("admin_shutdown");
+    let server = Arc::new(Server::open(&dir).unwrap());
+    let bind = server.bind("127.0.0.1:0").unwrap();
+    let addr = bind.local_addr().unwrap();
+    drop(bind);
+    let srv = Arc::clone(&server);
+    let worker = thread::spawn(move || {
+        let bind = srv.bind(addr).unwrap();
+        let _ = bind.serve();
+    });
+    thread::sleep(Duration::from_millis(50));
+
+    let resp = post(addr, "/admin/shutdown", "{}");
+    assert_eq!(resp.status, 202, "admin shutdown should return 202 Accepted");
+    let body: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
+    assert_eq!(body["status"], "shutting_down");
+
+    assert!(server.is_shutting_down(), "flag should be set");
+    worker.join().expect("serve should return after admin shutdown");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn admin_shutdown_requires_admin_capability() {
+    // With a principals registry installed, /admin/shutdown is gated by
+    // the Admin capability. A read-only principal gets 403; the flag stays
+    // unset.
+    let dir = temp_dir("admin_shutdown_authz");
+    let mut principals = Principals::default();
+    principals.principals.insert(
+        "reader-token".to_string(),
+        Principal {
+            name: "reader".to_string(),
+            capabilities: [Capability::Read].into_iter().collect(),
+            entity_id: None,
+        },
+    );
+    let server = Arc::new(Server::open(&dir).unwrap().with_principals(principals));
+    let addr = spawn_server(Arc::clone(&server), 2);
+
+    // Reader (no Admin) → 403.
+    let req = b"POST /admin/shutdown HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer reader-token\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+    let (status, raw) = raw_full(addr, req);
+    assert_eq!(status, 403, "reader should be forbidden; got:\n{raw}");
+    assert!(!server.is_shutting_down(), "flag must stay unset on 403");
+
+    // No token at all → 401.
+    let req2 = b"POST /admin/shutdown HTTP/1.1\r\nHost: x\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+    let (status2, _raw2) = raw_full(addr, req2);
+    assert_eq!(status2, 401, "missing token should be 401");
+    assert!(!server.is_shutting_down(), "flag must stay unset on 401");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}

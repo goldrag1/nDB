@@ -35,13 +35,14 @@
 //! cargo run -p ndb-server -- --path /tmp/mydb --bind 127.0.0.1:8742
 //! ```
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ndb_engine::{
     CommitRequest, CommitResponse, Engine, EngineError, ErrorResponse, JsonRecord, JsonValue,
@@ -67,6 +68,313 @@ pub const MAX_VECTOR_K: usize = 1000;
 
 /// Principals config filename, optionally placed under the database directory.
 pub const PRINCIPALS_FILENAME: &str = ".principals.json";
+
+/// Default cap on simultaneously-handled connections. New connections past
+/// this cap are rejected with `503` and counted in `ndb_connections_rejected_total`.
+pub const DEFAULT_MAX_CONNECTIONS: usize = 256;
+
+/// Default per-connection read timeout. A client that opens a socket but
+/// sends no (or partial) request within this window is dropped so it can't
+/// pin a connection slot indefinitely.
+pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Default per-connection write timeout. Bounds how long a stuck/slow
+/// reader can hold a slot while the server tries to flush a response.
+pub const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Default cap on the combined size of the request line + all header
+/// lines. Exceeding it yields `431 Request Header Fields Too Large`.
+pub const DEFAULT_MAX_HEADER_BYTES: usize = 64 * 1024;
+
+/// Default cap on the request body size (honors `Content-Length`).
+/// Exceeding it yields `413 Payload Too Large`; the body is never read
+/// past the cap.
+pub const DEFAULT_MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
+
+/// Default upper bound on how long [`graceful shutdown`](Server::request_shutdown)
+/// waits for in-flight connections to drain before returning anyway.
+pub const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Default poll interval for the shutdown-aware accept loop. The listener
+/// is set non-blocking and the loop sleeps this long between `accept`
+/// attempts so a shutdown request is noticed promptly without a busy spin.
+pub const DEFAULT_ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+// ---------------------------------------------------------------------------
+// Resource-limit / lifecycle configuration (P1/P2)
+// ---------------------------------------------------------------------------
+
+/// Tunable resource limits + lifecycle knobs for the server.
+///
+/// All fields have sane defaults via [`Default`]; the existing
+/// constructors (`Server::open`, `Server::from_engine`) install
+/// [`ServerConfig::default`]. Operators override individual knobs with the
+/// `Server::with_*` builder methods (e.g.
+/// [`with_max_connections`](Server::with_max_connections)) or replace the
+/// whole struct with [`with_config`](Server::with_config).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServerConfig {
+    /// Cap on simultaneously-handled connections. Connections accepted past
+    /// this cap are rejected with `503` then closed.
+    pub max_connections: usize,
+    /// Per-connection read timeout (applied via `TcpStream::set_read_timeout`).
+    pub read_timeout: Duration,
+    /// Per-connection write timeout (applied via `TcpStream::set_write_timeout`).
+    pub write_timeout: Duration,
+    /// Cap on request line + headers byte size (`431` on exceed).
+    pub max_header_bytes: usize,
+    /// Cap on request body byte size (`413` on exceed).
+    pub max_body_bytes: usize,
+    /// How long graceful shutdown waits for in-flight connections to drain.
+    pub shutdown_drain_timeout: Duration,
+    /// Poll interval for the shutdown-aware accept loop.
+    pub accept_poll_interval: Duration,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            max_connections: DEFAULT_MAX_CONNECTIONS,
+            read_timeout: DEFAULT_READ_TIMEOUT,
+            write_timeout: DEFAULT_WRITE_TIMEOUT,
+            max_header_bytes: DEFAULT_MAX_HEADER_BYTES,
+            max_body_bytes: DEFAULT_MAX_BODY_BYTES,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
+            accept_poll_interval: DEFAULT_ACCEPT_POLL_INTERVAL,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Observability counters (P2)
+// ---------------------------------------------------------------------------
+
+/// Atomic counters backing the `/metrics` endpoint. Shared (`Arc`) across
+/// every connection-handling thread; all updates are lock-free except the
+/// two labeled series (`route`, `status`) which take a short `Mutex` over a
+/// `BTreeMap`. Cheap relative to per-request engine work.
+///
+/// Exposed in Prometheus text exposition format by
+/// [`render_metrics`](ServerMetrics::render); see the `/metrics` route.
+#[derive(Debug, Default)]
+pub struct ServerMetrics {
+    /// Connections currently being handled (the in-flight gauge).
+    in_flight: AtomicUsize,
+    /// Connections rejected because the in-flight cap was reached.
+    rejected: AtomicU64,
+    /// Sum of per-request handling durations, in seconds (×1e6 fixed-point
+    /// microseconds internally to stay integer-atomic).
+    duration_us_sum: AtomicU64,
+    /// Number of requests whose duration was recorded.
+    duration_count: AtomicU64,
+    /// Total request bytes read off the wire (line + headers + body).
+    bytes_read: AtomicU64,
+    /// Total response bytes written.
+    bytes_written: AtomicU64,
+    /// `ndb_requests_total{route=...}` — keyed by normalised route label.
+    requests_by_route: Mutex<BTreeMap<&'static str, u64>>,
+    /// `ndb_responses_total{status=...}` — keyed by status code.
+    responses_by_status: Mutex<BTreeMap<u16, u64>>,
+}
+
+impl ServerMetrics {
+    /// Record the start of a request for `route`. Returns the wall-clock
+    /// instant the caller should pass back to [`observe_done`](Self::observe_done).
+    fn observe_request(&self, route: &'static str) {
+        *self
+            .requests_by_route
+            .lock()
+            .expect("metrics mutex poisoned")
+            .entry(route)
+            .or_insert(0) += 1;
+    }
+
+    /// Record the completion of a request: its final status and elapsed time.
+    fn observe_done(&self, status: u16, elapsed: Duration) {
+        *self
+            .responses_by_status
+            .lock()
+            .expect("metrics mutex poisoned")
+            .entry(status)
+            .or_insert(0) += 1;
+        let us = u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX);
+        self.duration_us_sum.fetch_add(us, Ordering::Relaxed);
+        self.duration_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Render the full metrics snapshot in Prometheus text exposition
+    /// format. Cheap — a few atomic loads plus the two labeled maps.
+    #[must_use]
+    pub fn render(&self) -> String {
+        use std::fmt::Write as _;
+        let mut s = String::with_capacity(1024);
+        // Counter: requests by route.
+        s.push_str("# HELP ndb_requests_total Total HTTP requests dispatched, by route.\n");
+        s.push_str("# TYPE ndb_requests_total counter\n");
+        {
+            let by_route = self.requests_by_route.lock().expect("metrics mutex poisoned");
+            if by_route.is_empty() {
+                s.push_str("ndb_requests_total 0\n");
+            } else {
+                for (route, n) in by_route.iter() {
+                    let r = escape_label(route);
+                    let _ = writeln!(s, "ndb_requests_total{{route=\"{r}\"}} {n}");
+                }
+            }
+        }
+        // Counter: responses by status.
+        s.push_str("# HELP ndb_responses_total Total HTTP responses, by status code.\n");
+        s.push_str("# TYPE ndb_responses_total counter\n");
+        {
+            let by_status = self.responses_by_status.lock().expect("metrics mutex poisoned");
+            if by_status.is_empty() {
+                s.push_str("ndb_responses_total 0\n");
+            } else {
+                for (status, n) in by_status.iter() {
+                    let _ = writeln!(s, "ndb_responses_total{{status=\"{status}\"}} {n}");
+                }
+            }
+        }
+        // Gauge: in-flight connections.
+        let in_flight = self.in_flight.load(Ordering::Relaxed);
+        s.push_str("# HELP ndb_connections_in_flight Connections currently being handled.\n");
+        s.push_str("# TYPE ndb_connections_in_flight gauge\n");
+        let _ = writeln!(s, "ndb_connections_in_flight {in_flight}");
+        // Counter: rejected connections.
+        let rejected = self.rejected.load(Ordering::Relaxed);
+        s.push_str(
+            "# HELP ndb_connections_rejected_total Connections rejected because the in-flight cap was reached.\n",
+        );
+        s.push_str("# TYPE ndb_connections_rejected_total counter\n");
+        let _ = writeln!(s, "ndb_connections_rejected_total {rejected}");
+        // Request duration sum + count (seconds).
+        let dur_sum_us = self.duration_us_sum.load(Ordering::Relaxed);
+        let dur_count = self.duration_count.load(Ordering::Relaxed);
+        #[allow(clippy::cast_precision_loss)]
+        let dur_sum_seconds = dur_sum_us as f64 / 1_000_000.0;
+        s.push_str("# HELP ndb_request_duration_seconds Request handling duration in seconds.\n");
+        s.push_str("# TYPE ndb_request_duration_seconds summary\n");
+        let _ = writeln!(s, "ndb_request_duration_seconds_sum {dur_sum_seconds}");
+        let _ = writeln!(s, "ndb_request_duration_seconds_count {dur_count}");
+        // Byte counters.
+        let bytes_read = self.bytes_read.load(Ordering::Relaxed);
+        let bytes_written = self.bytes_written.load(Ordering::Relaxed);
+        s.push_str("# HELP ndb_bytes_read_total Total request bytes read off the wire.\n");
+        s.push_str("# TYPE ndb_bytes_read_total counter\n");
+        let _ = writeln!(s, "ndb_bytes_read_total {bytes_read}");
+        s.push_str("# HELP ndb_bytes_written_total Total response bytes written.\n");
+        s.push_str("# TYPE ndb_bytes_written_total counter\n");
+        let _ = writeln!(s, "ndb_bytes_written_total {bytes_written}");
+        s
+    }
+}
+
+/// RAII guard for the in-flight connection gauge. Created via
+/// [`acquire`](ConnGuard::acquire) which atomically reserves a slot if one
+/// is free; dropping it (including on panic) releases the slot.
+struct ConnGuard<'m> {
+    metrics: &'m ServerMetrics,
+}
+
+impl<'m> ConnGuard<'m> {
+    /// Reserve a connection slot iff the in-flight count is below `cap`.
+    /// Returns `None` when at capacity (caller should reject the
+    /// connection). Uses a CAS loop so two acceptor threads can't both
+    /// squeeze past the cap.
+    fn acquire(metrics: &'m ServerMetrics, cap: usize) -> Option<Self> {
+        let mut cur = metrics.in_flight.load(Ordering::Acquire);
+        loop {
+            if cur >= cap {
+                return None;
+            }
+            match metrics.in_flight.compare_exchange_weak(
+                cur,
+                cur + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Some(Self { metrics }),
+                Err(observed) => cur = observed,
+            }
+        }
+    }
+}
+
+impl Drop for ConnGuard<'_> {
+    fn drop(&mut self) {
+        self.metrics.in_flight.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// `Write` wrapper that tallies every byte written into an atomic counter
+/// (`ndb_bytes_written_total`). Pass-through otherwise; keeps streaming
+/// responses streaming.
+struct CountingWriter<'a, W: Write> {
+    inner: &'a mut W,
+    counter: &'a AtomicU64,
+}
+
+impl<'a, W: Write> CountingWriter<'a, W> {
+    fn new(inner: &'a mut W, counter: &'a AtomicU64) -> Self {
+        Self { inner, counter }
+    }
+}
+
+impl<W: Write> Write for CountingWriter<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.counter.fetch_add(n as u64, Ordering::Relaxed);
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// Reject a connection at the cap with a `503`, then close gracefully.
+///
+/// Writes the response, half-closes the write side (FIN), then briefly
+/// drains the client's request bytes. Without the drain, closing while the
+/// kernel still has unread RX data triggers a TCP RST on Linux, which can
+/// truncate the response on the client before it reads the body. The drain
+/// is bounded (one buffer) and honours whatever read timeout is set on the
+/// stream, so a slow client can't pin the rejecting thread.
+fn reject_at_capacity(stream: &mut TcpStream) -> std::io::Result<()> {
+    const BODY: &str = "{\"error\":\"capacity\",\"detail\":\"max connections reached\"}";
+    write!(
+        stream,
+        "HTTP/1.1 503 Service Unavailable\r\n\
+         Content-Type: application/json; charset=utf-8\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\r\n{BODY}",
+        BODY.len(),
+    )?;
+    stream.flush()?;
+    // Half-close the write direction so the client sees a clean FIN after
+    // the body.
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    // Drain a bounded amount of the request so the final close is a clean
+    // FIN rather than a RST. Best-effort: any read error (timeout, reset)
+    // just ends the drain.
+    let mut scratch = [0u8; 2048];
+    let _ = stream.read(&mut scratch);
+    Ok(())
+}
+
+/// Escape a Prometheus label value (backslash, double-quote, newline).
+fn escape_label(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
 
 // ---------------------------------------------------------------------------
 // ReBAC capability model
@@ -283,6 +591,16 @@ pub struct Server {
     /// `/flush`, `/compact`, and any `/query[/text]` whose body has
     /// `creates` / `deletes` / `sets` / `merges`.
     read_only: bool,
+    /// Resource limits + lifecycle knobs (P1/P2). See [`ServerConfig`].
+    config: ServerConfig,
+    /// Observability counters backing `/metrics` (P2). Shared across every
+    /// connection-handling thread.
+    metrics: Arc<ServerMetrics>,
+    /// Graceful-shutdown flag (P2). Set via
+    /// [`request_shutdown`](Self::request_shutdown) (or the auth-gated
+    /// `POST /admin/shutdown` route); the shutdown-aware accept loops stop
+    /// accepting and drain in-flight connections.
+    shutting_down: Arc<AtomicBool>,
 }
 
 /// Append-only audit log. One JSON line per request. Synchronous flush
@@ -491,6 +809,9 @@ impl Server {
             commit_notify: Arc::new((Mutex::new(initial_tx), std::sync::Condvar::new())),
             cors_origin: None,
             read_only: false,
+            config: ServerConfig::default(),
+            metrics: Arc::new(ServerMetrics::default()),
+            shutting_down: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -507,6 +828,9 @@ impl Server {
             commit_notify: Arc::new((Mutex::new(initial_tx), std::sync::Condvar::new())),
             cors_origin: None,
             read_only: false,
+            config: ServerConfig::default(),
+            metrics: Arc::new(ServerMetrics::default()),
+            shutting_down: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -520,6 +844,96 @@ impl Server {
     pub fn with_read_only(mut self, read_only: bool) -> Self {
         self.read_only = read_only;
         self
+    }
+
+    /// Replace the whole [`ServerConfig`] (resource limits + lifecycle
+    /// knobs). For one-off tweaks prefer the focused `with_*` builders
+    /// below, which leave the other fields at their defaults.
+    #[must_use]
+    pub fn with_config(mut self, config: ServerConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    /// Cap the number of simultaneously-handled connections (P1). New
+    /// connections accepted past this cap get `503` then close, and bump
+    /// `ndb_connections_rejected_total`.
+    #[must_use]
+    pub fn with_max_connections(mut self, n: usize) -> Self {
+        self.config.max_connections = n;
+        self
+    }
+
+    /// Set the per-connection read + write timeouts (P1). A slow/stuck
+    /// client can no longer hold a connection slot past these.
+    #[must_use]
+    pub fn with_timeouts(mut self, read: Duration, write: Duration) -> Self {
+        self.config.read_timeout = read;
+        self.config.write_timeout = write;
+        self
+    }
+
+    /// Cap the combined request line + headers size (`431` on exceed) and
+    /// the request body size (`413` on exceed) (P1).
+    #[must_use]
+    pub fn with_request_limits(mut self, max_header_bytes: usize, max_body_bytes: usize) -> Self {
+        self.config.max_header_bytes = max_header_bytes;
+        self.config.max_body_bytes = max_body_bytes;
+        self
+    }
+
+    /// Set how long graceful shutdown waits for in-flight connections to
+    /// drain before returning anyway (P2).
+    #[must_use]
+    pub fn with_shutdown_drain_timeout(mut self, d: Duration) -> Self {
+        self.config.shutdown_drain_timeout = d;
+        self
+    }
+
+    /// Read-only view of the active resource-limit / lifecycle config.
+    #[must_use]
+    pub fn config(&self) -> ServerConfig {
+        self.config
+    }
+
+    /// Shared metrics handle backing `/metrics` (P2). Useful for tests and
+    /// for an operator that wants to scrape counters in-process.
+    #[must_use]
+    pub fn metrics(&self) -> Arc<ServerMetrics> {
+        Arc::clone(&self.metrics)
+    }
+
+    /// Number of connections currently being handled (the in-flight gauge).
+    #[must_use]
+    pub fn in_flight(&self) -> usize {
+        self.metrics.in_flight.load(Ordering::Relaxed)
+    }
+
+    /// A cloneable handle that can request graceful shutdown from another
+    /// thread (P2). Calling [`request`](ShutdownHandle::request) on it sets
+    /// the same flag the accept loops poll.
+    #[must_use]
+    pub fn shutdown_handle(&self) -> ShutdownHandle {
+        ShutdownHandle {
+            flag: Arc::clone(&self.shutting_down),
+        }
+    }
+
+    /// Request graceful shutdown (P2): the shutdown-aware accept loops
+    /// (`run`, `BoundServer::serve`/`serve_forever`,
+    /// `BoundTlsServer::serve`/`serve_forever`) stop accepting new
+    /// connections, wait up to
+    /// [`shutdown_drain_timeout`](ServerConfig::shutdown_drain_timeout) for
+    /// in-flight connections to drain, then return cleanly. Idempotent.
+    pub fn request_shutdown(&self) {
+        self.shutting_down.store(true, Ordering::SeqCst);
+    }
+
+    /// True once [`request_shutdown`](Self::request_shutdown) (or the
+    /// `POST /admin/shutdown` route) has been called.
+    #[must_use]
+    pub fn is_shutting_down(&self) -> bool {
+        self.shutting_down.load(Ordering::SeqCst)
     }
 
     /// v2.2 preview: enable `Access-Control-Allow-Origin` headers on
@@ -713,20 +1127,28 @@ impl Server {
         }
     }
 
-    /// Block forever accepting connections on `addr`.
+    /// Block accepting connections on `addr` until graceful shutdown is
+    /// requested.
+    ///
+    /// P1/P2: the listener is set non-blocking and polled on
+    /// [`accept_poll_interval`](ServerConfig::accept_poll_interval) so the
+    /// loop notices a [`request_shutdown`](Self::request_shutdown) promptly.
+    /// Each accepted connection is handed to a detached thread bounded by
+    /// [`max_connections`](ServerConfig::max_connections); connections past
+    /// the cap are rejected with `503`. On shutdown the loop stops
+    /// accepting and waits up to
+    /// [`shutdown_drain_timeout`](ServerConfig::shutdown_drain_timeout) for
+    /// in-flight connections to drain, then returns `Ok(())`.
     pub fn run<A: ToSocketAddrs>(&self, addr: A) -> Result<(), ServerError> {
         let listener = TcpListener::bind(addr)?;
         eprintln!("ndb-server listening on {}", listener.local_addr()?);
-        for stream in listener.incoming() {
-            match stream {
-                Ok(s) => {
-                    if let Err(e) = self.handle_connection(s) {
-                        eprintln!("connection error: {e}");
-                    }
+        std::thread::scope(|scope| {
+            self.accept_loop(&listener, scope, |srv, stream| {
+                if let Err(e) = srv.handle_connection(stream) {
+                    eprintln!("connection error: {e}");
                 }
-                Err(e) => eprintln!("accept error: {e}"),
-            }
-        }
+            });
+        });
         Ok(())
     }
 
@@ -740,9 +1162,95 @@ impl Server {
         })
     }
 
-    /// Handle one plain-TCP connection. Convenience wrapper for the
-    /// generic [`handle_io`](Self::handle_io).
+    /// Shutdown-aware, bounded-concurrency accept loop shared by the plain
+    /// `run` and `BoundServer::serve`/`serve_forever` paths.
+    ///
+    /// Polls a non-blocking listener; for each accepted stream, either
+    /// spawns `handle` on a scoped thread (when below the connection cap)
+    /// or rejects it with `503`.
+    ///
+    /// On shutdown the loop enters a bounded *drain* window of
+    /// [`shutdown_drain_timeout`](ServerConfig::shutdown_drain_timeout):
+    /// it KEEPS accepting (so `/ready` flips to `503` for orchestrators and
+    /// in-flight work finishes), then returns once in-flight reaches zero
+    /// or the window elapses, whichever comes first.
+    fn accept_loop<'scope, 'env, F>(
+        &'env self,
+        listener: &TcpListener,
+        scope: &'scope std::thread::Scope<'scope, 'env>,
+        handle: F,
+    ) where
+        F: Fn(&'env Self, TcpStream) + Copy + Send + 'scope,
+        'env: 'scope,
+    {
+        listener
+            .set_nonblocking(true)
+            .unwrap_or_else(|e| eprintln!("set_nonblocking failed: {e}"));
+        let mut drain_deadline: Option<Instant> = None;
+        loop {
+            // Enter the drain window the first time shutdown is observed.
+            if drain_deadline.is_none() && self.is_shutting_down() {
+                drain_deadline = Some(Instant::now() + self.config.shutdown_drain_timeout);
+            }
+            // Exit once draining has finished (no in-flight) or timed out.
+            if let Some(deadline) = drain_deadline
+                && (self.in_flight() == 0 || Instant::now() >= deadline)
+            {
+                break;
+            }
+            match listener.accept() {
+                Ok((stream, _addr)) => {
+                    self.spawn_or_reject(scope, stream, handle);
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(self.config.accept_poll_interval);
+                }
+                Err(e) => eprintln!("accept error: {e}"),
+            }
+        }
+    }
+
+    /// Either accept the connection (spawn a handler thread, incrementing
+    /// the in-flight gauge for its lifetime) or reject it with `503` when
+    /// the connection cap is reached.
+    fn spawn_or_reject<'scope, 'env, F>(
+        &'env self,
+        scope: &'scope std::thread::Scope<'scope, 'env>,
+        stream: TcpStream,
+        handle: F,
+    ) where
+        F: Fn(&'env Self, TcpStream) + Copy + Send + 'scope,
+        'env: 'scope,
+    {
+        let Some(guard) = ConnGuard::acquire(&self.metrics, self.config.max_connections) else {
+            // At capacity: reply 503, then close gracefully. Bound the
+            // rejection's drain read with the configured timeout so a slow
+            // client can't pin the acceptor.
+            self.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+            let mut s = stream;
+            let _ = s.set_read_timeout(Some(self.config.read_timeout));
+            let _ = reject_at_capacity(&mut s);
+            return;
+        };
+        scope.spawn(move || {
+            // Guard moves into the thread so the gauge decrements once the
+            // connection is fully handled (and on panic).
+            let _guard = guard;
+            handle(self, stream);
+        });
+    }
+
+    /// Handle one plain-TCP connection. Applies the configured per-connection
+    /// read/write timeouts, then dispatches via [`serve_one`](Self::serve_one).
     pub fn handle_connection(&self, stream: TcpStream) -> Result<(), ServerError> {
+        // Best-effort timeouts: a slow/stuck client can't pin the slot past
+        // these. Failure to set them is non-fatal (logged, then continue).
+        if let Err(e) = stream.set_read_timeout(Some(self.config.read_timeout)) {
+            eprintln!("set_read_timeout failed: {e}");
+        }
+        if let Err(e) = stream.set_write_timeout(Some(self.config.write_timeout)) {
+            eprintln!("set_write_timeout failed: {e}");
+        }
         // BufReader needs ownership, but we still need to write back on
         // the same socket — clone the file descriptor for reading.
         let read = stream.try_clone()?;
@@ -752,35 +1260,84 @@ impl Server {
 
     /// Handle one connection over arbitrary `Read` + `Write` halves.
     /// Used by the TLS path to wrap a `rustls::StreamOwned` and reuse the
-    /// same dispatch logic.
+    /// same dispatch logic. Convenience wrapper over [`serve_one`](Self::serve_one).
     pub fn handle_io<R: Read, W: Write>(
         &self,
         reader: R,
         writer: &mut W,
     ) -> Result<(), ServerError> {
-        let (req, body) = parse_request(reader)?;
+        self.serve_one(reader, writer)
+    }
+
+    /// Parse one request, dispatch it, record metrics + audit. Shared by
+    /// the plain (`handle_connection`) and TLS (`BoundTlsServer::handle_one`)
+    /// paths. Enforces the request-size limits during parse and writes the
+    /// matching `413`/`431`/`400` response on failure.
+    fn serve_one<R: Read, W: Write>(
+        &self,
+        reader: R,
+        writer: &mut W,
+    ) -> Result<(), ServerError> {
+        let start = Instant::now();
+        let parsed = match parse_request(
+            reader,
+            self.config.max_header_bytes,
+            self.config.max_body_bytes,
+        ) {
+            Ok(p) => p,
+            Err(fail) => return self.handle_parse_failure(writer, fail, start),
+        };
+        self.metrics
+            .bytes_read
+            .fetch_add(parsed.bytes_read as u64, Ordering::Relaxed);
+        let ParsedRequest { request: req, body, .. } = parsed;
+        self.dispatch_instrumented(&req, &body, writer, start)
+    }
+
+    /// Dispatch an already-parsed request and record metrics + audit.
+    /// Shared by the plain (`serve_one`) and TLS
+    /// (`BoundTlsServer::handle_one`) paths — both parse separately (the
+    /// TLS reader can't be split from the writer) then converge here.
+    fn dispatch_instrumented<W: Write>(
+        &self,
+        req: &Request,
+        body: &[u8],
+        writer: &mut W,
+        start: Instant,
+    ) -> Result<(), ServerError> {
+        let route = route_label(&req.method, req.path_no_query());
+        self.metrics.observe_request(route);
+
         let mut outcome = DispatchOutcome::default();
         // v2.2 CORS: wrap the writer so every response gets an
         // `Access-Control-Allow-Origin` header injected right after
         // the last response header. The injector buffers up to the
         // `\r\n\r\n` terminator, then passes everything else through —
         // streaming responses (/iter, /query_stream, /subscribe) keep
-        // their streaming behaviour.
+        // their streaming behaviour. A `CountingWriter` underneath tallies
+        // response bytes for `ndb_bytes_written_total`.
+        let mut counter = CountingWriter::new(writer, &self.metrics.bytes_written);
         let dispatch_result = if let Some(origin) = self.cors_origin.clone() {
             let mut inject = HeaderInjector::new(
-                writer,
+                &mut counter,
                 format!("Access-Control-Allow-Origin: {origin}\r\n").into_bytes(),
             );
-            let r = self.dispatch(&req, &body, &mut inject, &mut outcome);
+            let r = self.dispatch(req, body, &mut inject, &mut outcome);
             let _ = inject.flush();
             r
         } else {
-            self.dispatch(&req, &body, writer, &mut outcome)
+            self.dispatch(req, body, &mut counter, &mut outcome)
         };
-        let _ = writer.flush();
+        let _ = counter.flush();
+
+        self.metrics.observe_done(outcome.status, start.elapsed());
         // Audit AFTER response is flushed; failures here don't break the request.
         let principal = if outcome.principal.is_empty() {
-            if self.auth_token.is_none() { "anonymous" } else { "unknown" }
+            if self.auth_token.is_none() && self.principals.is_none() {
+                "anonymous"
+            } else {
+                "unknown"
+            }
         } else {
             outcome.principal.as_str()
         };
@@ -793,6 +1350,44 @@ impl Server {
             outcome.failure.as_deref(),
         );
         dispatch_result
+    }
+
+    /// Write the appropriate error response for a parse failure and record
+    /// it in the metrics. `413`/`431` for size overruns; `400` for
+    /// malformed requests; I/O failures (timeouts, resets) propagate
+    /// without a response body (the socket is likely already gone).
+    fn handle_parse_failure<W: Write>(
+        &self,
+        writer: &mut W,
+        fail: ParseFailure,
+        start: Instant,
+    ) -> Result<(), ServerError> {
+        let (status, code, detail): (u16, &str, &str) = match &fail {
+            ParseFailure::HeadersTooLarge => (
+                431,
+                "headers_too_large",
+                "request line + headers exceeded the configured limit",
+            ),
+            ParseFailure::BodyTooLarge => (
+                413,
+                "body_too_large",
+                "request body exceeded the configured limit",
+            ),
+            ParseFailure::Malformed(m) => (400, "bad_request", m),
+            ParseFailure::Io(_) => {
+                // Likely a timeout or reset mid-request — nothing useful to
+                // write back. Surface as the server error so the caller logs it.
+                if let ParseFailure::Io(e) = fail {
+                    return Err(ServerError::Io(e));
+                }
+                unreachable!()
+            }
+        };
+        let mut counter = CountingWriter::new(writer, &self.metrics.bytes_written);
+        let r = write_error(&mut counter, status, code, detail);
+        let _ = counter.flush();
+        self.metrics.observe_done(status, start.elapsed());
+        r
     }
 
     #[allow(clippy::too_many_lines)] // long match over routes is the natural shape
@@ -904,6 +1499,9 @@ impl Server {
                 outcome.status = 200;
                 write_json(out, 200, &serde_json::json!({"status": "ok"}))
             }
+            ("GET", "/ready") => self.handle_ready(out, outcome),
+            ("GET", "/metrics") => self.handle_metrics(out, outcome),
+            ("POST", "/admin/shutdown") => self.handle_admin_shutdown(out, outcome),
             ("POST", "/commit") => self.handle_commit(body, out, outcome),
             ("GET", path) if path.starts_with("/read/") => {
                 let after_prefix = &full_path["/read/".len()..];
@@ -932,6 +1530,84 @@ impl Server {
                 write_error(out, 404, "not_found", &detail)
             }
         }
+    }
+
+    /// `GET /ready` — readiness probe (P2). Performs a cheap engine read
+    /// (manifest fetch) to confirm the backing store is usable. `200` with
+    /// `{"status":"ready","last_tx_id":N}` when ok, `503` with
+    /// `{"status":"not_ready"}` when the engine lock is poisoned or the
+    /// server is draining for shutdown. Distinct from `/health`, which is
+    /// pure liveness and always `200`.
+    fn handle_ready(
+        &self,
+        out: &mut dyn Write,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
+        if self.is_shutting_down() {
+            outcome.status = 503;
+            outcome.failure = Some("shutting down".into());
+            return write_json(
+                out,
+                503,
+                &serde_json::json!({"status": "not_ready", "reason": "shutting_down"}),
+            );
+        }
+        // A poisoned engine lock means a writer panicked mid-transaction —
+        // the store is no longer trustworthy. Report not-ready rather than
+        // panicking the readiness probe itself.
+        if let Ok(engine) = self.engine.read() {
+            let last_tx = engine.manifest().last_tx_id;
+            outcome.status = 200;
+            write_json(
+                out,
+                200,
+                &serde_json::json!({"status": "ready", "last_tx_id": last_tx}),
+            )
+        } else {
+            outcome.status = 503;
+            outcome.failure = Some("engine lock poisoned".into());
+            write_json(
+                out,
+                503,
+                &serde_json::json!({"status": "not_ready", "reason": "engine_unavailable"}),
+            )
+        }
+    }
+
+    /// `GET /metrics` — Prometheus text exposition (P2). Open like
+    /// `/health` (no auth gating); the counters are non-sensitive
+    /// operational data. Content-Type follows the Prometheus convention.
+    fn handle_metrics(
+        &self,
+        out: &mut dyn Write,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
+        let body = self.metrics.render();
+        outcome.status = 200;
+        write_status_line(out, 200)?;
+        write!(
+            out,
+            "Content-Type: text/plain; version=0.0.4; charset=utf-8\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\r\n",
+            body.len(),
+        )?;
+        out.write_all(body.as_bytes())?;
+        Ok(())
+    }
+
+    /// `POST /admin/shutdown` — request graceful shutdown (P2). Sets the
+    /// shutdown flag so the accept loops stop accepting + drain in-flight
+    /// connections; this request itself returns `202 Accepted` immediately.
+    /// Auth-gated by the `Admin` capability (see `required_capability`).
+    fn handle_admin_shutdown(
+        &self,
+        out: &mut dyn Write,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
+        self.request_shutdown();
+        outcome.status = 202;
+        write_json(out, 202, &serde_json::json!({"status": "shutting_down"}))
     }
 
     fn handle_flush(
@@ -1761,6 +2437,29 @@ fn build_rustls_config(
     Ok(cfg)
 }
 
+/// Cloneable handle for requesting graceful shutdown from another thread.
+///
+/// Obtained from [`Server::shutdown_handle`]. Holding one does NOT keep the
+/// server alive — it shares only the shutdown flag.
+#[derive(Debug, Clone)]
+pub struct ShutdownHandle {
+    flag: Arc<AtomicBool>,
+}
+
+impl ShutdownHandle {
+    /// Request graceful shutdown. Equivalent to
+    /// [`Server::request_shutdown`]. Idempotent.
+    pub fn request(&self) {
+        self.flag.store(true, Ordering::SeqCst);
+    }
+
+    /// True once shutdown has been requested.
+    #[must_use]
+    pub fn is_requested(&self) -> bool {
+        self.flag.load(Ordering::SeqCst)
+    }
+}
+
 /// Server bound to an address; useful for tests that pick port 0.
 pub struct BoundServer<'a> {
     /// Reference back to the server.
@@ -1774,49 +2473,73 @@ impl BoundServer<'_> {
         self.listener.local_addr()
     }
 
-    /// Accept and serve forever. Spawns a fresh thread per connection
-    /// — multiple `/subscribe` long-polls + concurrent `/commit`s no
-    /// longer queue behind each other, unlocking the condvar-based
-    /// notify-on-commit path added in #23.
+    /// Accept and serve until graceful shutdown is requested.
     ///
-    /// Threads borrow back into this `BoundServer` via [`std::thread::scope`],
-    /// so the function never returns while connections are in flight.
-    /// In practice that's fine — `serve()` runs forever on a healthy
-    /// server.
+    /// P1/P2: bounded concurrency (per
+    /// [`max_connections`](ServerConfig::max_connections), excess rejected
+    /// with `503`) + a shutdown-aware non-blocking accept loop that drains
+    /// in-flight connections before returning. Multiple `/subscribe`
+    /// long-polls + concurrent `/commit`s still don't queue behind each
+    /// other (the condvar-based notify-on-commit path from #23). Threads
+    /// borrow back into this `BoundServer` via [`std::thread::scope`].
+    ///
+    /// Returns `Ok(())` once
+    /// [`request_shutdown`](Server::request_shutdown) (or the
+    /// `POST /admin/shutdown` route) has fired and connections have drained.
+    /// On a server that's never asked to shut down, this runs forever.
     pub fn serve(&self) -> Result<(), ServerError> {
         std::thread::scope(|scope| {
-            for stream in self.listener.incoming() {
-                match stream {
-                    Ok(s) => {
-                        let server = self.server;
-                        scope.spawn(move || {
-                            if let Err(e) = server.handle_connection(s) {
-                                eprintln!("connection error: {e}");
-                            }
-                        });
-                    }
-                    Err(e) => eprintln!("accept error: {e}"),
+            self.server.accept_loop(&self.listener, scope, |srv, stream| {
+                if let Err(e) = srv.handle_connection(stream) {
+                    eprintln!("connection error: {e}");
                 }
-            }
-            Ok(())
-        })
+            });
+        });
+        Ok(())
+    }
+
+    /// Alias for [`serve`](Self::serve) — accepts until graceful shutdown.
+    /// Provided so the intent (run forever / until shutdown) reads clearly
+    /// at call sites alongside the bounded [`serve_n`](Self::serve_n).
+    pub fn serve_forever(&self) -> Result<(), ServerError> {
+        self.serve()
     }
 
     /// Accept and serve N connections, then return. Used by tests.
     /// Spawns a thread per accepted connection and joins them all
     /// before returning so the bounded test loop still blocks until
     /// every request has been processed.
+    ///
+    /// Each connection is bounded by the same connection cap
+    /// (`handle_connection` applies the per-connection timeouts); a
+    /// connection accepted while at capacity is rejected with `503` and
+    /// still counts toward `n` (it's a completed accept). Shutdown is
+    /// honored: if the flag is set mid-loop, remaining slots are skipped.
     pub fn serve_n(&self, n: usize) -> Result<(), ServerError> {
         std::thread::scope(|scope| -> Result<(), ServerError> {
             let mut handles = Vec::with_capacity(n);
             for _ in 0..n {
+                if self.server.is_shutting_down() {
+                    break;
+                }
                 let (stream, _addr) = self.listener.accept()?;
-                let server = self.server;
-                handles.push(scope.spawn(move || {
-                    if let Err(e) = server.handle_connection(stream) {
-                        eprintln!("connection error: {e}");
-                    }
-                }));
+                if let Some(guard) = ConnGuard::acquire(
+                    &self.server.metrics,
+                    self.server.config.max_connections,
+                ) {
+                    let server = self.server;
+                    handles.push(scope.spawn(move || {
+                        let _guard = guard;
+                        if let Err(e) = server.handle_connection(stream) {
+                            eprintln!("connection error: {e}");
+                        }
+                    }));
+                } else {
+                    self.server.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+                    let mut s = stream;
+                    let _ = s.set_read_timeout(Some(self.server.config.read_timeout));
+                    let _ = reject_at_capacity(&mut s);
+                }
             }
             for h in handles {
                 // Per-connection errors are already logged; we don't
@@ -1845,6 +2568,16 @@ impl BoundTlsServer<'_> {
     }
 
     fn handle_one(&self, stream: TcpStream) -> Result<(), ServerError> {
+        let start = Instant::now();
+        // Apply per-connection timeouts on the raw TCP stream BEFORE the
+        // TLS handshake — a client that opens the socket then stalls
+        // mid-handshake can't pin the slot past the read timeout.
+        if let Err(e) = stream.set_read_timeout(Some(self.server.config.read_timeout)) {
+            eprintln!("set_read_timeout failed: {e}");
+        }
+        if let Err(e) = stream.set_write_timeout(Some(self.server.config.write_timeout)) {
+            eprintln!("set_write_timeout failed: {e}");
+        }
         let conn = rustls::ServerConnection::new(Arc::clone(&self.cfg))
             .map_err(|e| ServerError::Io(std::io::Error::other(format!("rustls: {e}"))))?;
         // StreamOwned drives the TLS handshake + record layer transparently.
@@ -1852,68 +2585,110 @@ impl BoundTlsServer<'_> {
         // Split borrow: the same stream is both reader and writer. We read
         // headers + body up-front via BufReader (owning a &mut to tls), then
         // write directly back through tls afterwards.
-        let (req, body) = {
-            let r = &mut tls;
-            parse_request(r)?
+        let parsed = match parse_request(
+            &mut tls,
+            self.server.config.max_header_bytes,
+            self.server.config.max_body_bytes,
+        ) {
+            Ok(p) => p,
+            Err(fail) => return self.server.handle_parse_failure(&mut tls, fail, start),
         };
-        let mut outcome = DispatchOutcome::default();
-        let dispatch_result = self.server.dispatch(&req, &body, &mut tls, &mut outcome);
-        let _ = tls.flush();
-        let principal = if outcome.principal.is_empty() {
-            if self.server.auth_token.is_none() && self.server.principals.is_none() {
-                "anonymous"
-            } else {
-                "unknown"
-            }
-        } else {
-            outcome.principal.as_str()
-        };
-        self.server.record_audit(
-            principal,
-            &req.method,
-            req.path_no_query(),
-            outcome.status,
-            outcome.tx_id,
-            outcome.failure.as_deref(),
-        );
-        dispatch_result
+        self.server
+            .metrics
+            .bytes_read
+            .fetch_add(parsed.bytes_read as u64, Ordering::Relaxed);
+        let ParsedRequest { request: req, body, .. } = parsed;
+        self.server.dispatch_instrumented(&req, &body, &mut tls, start)
     }
 
-    /// Accept and serve forever. Spawns a fresh thread per connection
-    /// via [`std::thread::scope`]; same shape as the plain-TCP
-    /// `BoundServer::serve` — see that for rationale.
+    /// Accept and serve until graceful shutdown is requested. Bounded
+    /// concurrency + shutdown-aware accept loop; same shape as the
+    /// plain-TCP [`BoundServer::serve`] — see that for rationale.
     pub fn serve(&self) -> Result<(), ServerError> {
         std::thread::scope(|scope| {
-            for stream in self.listener.incoming() {
-                match stream {
-                    Ok(s) => {
-                        let me = self;
-                        scope.spawn(move || {
-                            if let Err(e) = me.handle_one(s) {
-                                eprintln!("tls connection error: {e}");
-                            }
-                        });
-                    }
-                    Err(e) => eprintln!("tls accept error: {e}"),
-                }
+            self.tls_accept_loop(scope);
+        });
+        Ok(())
+    }
+
+    /// Alias for [`serve`](Self::serve).
+    pub fn serve_forever(&self) -> Result<(), ServerError> {
+        self.serve()
+    }
+
+    /// Shutdown-aware, bounded-concurrency accept loop for the TLS path.
+    /// Mirrors [`Server::accept_loop`] but spawns the TLS-wrapping
+    /// `handle_one` (which lives on `BoundTlsServer`, not `Server`).
+    fn tls_accept_loop<'scope>(&'scope self, scope: &'scope std::thread::Scope<'scope, '_>) {
+        self.listener
+            .set_nonblocking(true)
+            .unwrap_or_else(|e| eprintln!("set_nonblocking failed: {e}"));
+        let mut drain_deadline: Option<Instant> = None;
+        loop {
+            if drain_deadline.is_none() && self.server.is_shutting_down() {
+                drain_deadline =
+                    Some(Instant::now() + self.server.config.shutdown_drain_timeout);
             }
-            Ok(())
-        })
+            if let Some(deadline) = drain_deadline
+                && (self.server.in_flight() == 0 || Instant::now() >= deadline)
+            {
+                break;
+            }
+            match self.listener.accept() {
+                Ok((stream, _addr)) => {
+                    self.spawn_or_reject_tls(scope, stream);
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(self.server.config.accept_poll_interval);
+                }
+                Err(e) => eprintln!("tls accept error: {e}"),
+            }
+        }
+    }
+
+    /// Either accept (spawn the TLS-wrapping `handle_one` thread, holding a
+    /// connection-slot guard for its lifetime) or reject at the TCP layer
+    /// (drop the stream → connection reset) when the connection cap is
+    /// reached. Returns the spawned handle, if any, so `serve_n` can join it.
+    fn spawn_or_reject_tls<'scope>(
+        &'scope self,
+        scope: &'scope std::thread::Scope<'scope, '_>,
+        stream: TcpStream,
+    ) -> Option<std::thread::ScopedJoinHandle<'scope, ()>> {
+        if let Some(guard) = ConnGuard::acquire(
+            &self.server.metrics,
+            self.server.config.max_connections,
+        ) {
+            let me = self;
+            Some(scope.spawn(move || {
+                let _guard = guard;
+                if let Err(e) = me.handle_one(stream) {
+                    eprintln!("tls connection error: {e}");
+                }
+            }))
+        } else {
+            self.server.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+            // Reject at the TCP layer (pre-handshake) — the client gets a
+            // connection reset, which curl/browsers surface as retryable.
+            drop(stream);
+            None
+        }
     }
 
     /// Accept and serve N connections, then return. Spawns + joins;
-    /// see `BoundServer::serve_n`.
+    /// see `BoundServer::serve_n`. Connections accepted while at the cap
+    /// are dropped (TCP reset) and counted as rejected.
     pub fn serve_n(&self, n: usize) -> Result<(), ServerError> {
         std::thread::scope(|scope| -> Result<(), ServerError> {
             let mut handles = Vec::with_capacity(n);
             for _ in 0..n {
+                if self.server.is_shutting_down() {
+                    break;
+                }
                 let (stream, _addr) = self.listener.accept()?;
-                let me = self;
-                handles.push(scope.spawn(move || {
-                    if let Err(e) = me.handle_one(stream) {
-                        eprintln!("tls connection error: {e}");
-                    }
-                }));
+                if let Some(h) = self.spawn_or_reject_tls(scope, stream) {
+                    handles.push(h);
+                }
             }
             for h in handles {
                 let _ = h.join();
@@ -1944,20 +2719,61 @@ impl Request {
     }
 }
 
-fn parse_request<R: Read>(stream: R) -> Result<(Request, Vec<u8>), ServerError> {
+/// Reason a request could not be parsed, distinct from a generic
+/// [`ServerError::BadRequest`] so the caller can pick the right HTTP status
+/// (`413` for an oversized body, `431` for oversized headers).
+#[derive(Debug)]
+enum ParseFailure {
+    /// Underlying socket I/O error (timeout, reset, eof).
+    Io(std::io::Error),
+    /// Malformed request line / headers.
+    Malformed(&'static str),
+    /// Request line + headers exceeded `max_header_bytes` (`431`).
+    HeadersTooLarge,
+    /// `Content-Length` body exceeded `max_body_bytes` (`413`).
+    BodyTooLarge,
+}
+
+impl From<std::io::Error> for ParseFailure {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+
+/// How many bytes we read off the wire while parsing one request. Folded
+/// into the `ndb_bytes_read_total` counter.
+struct ParsedRequest {
+    request: Request,
+    body: Vec<u8>,
+    bytes_read: usize,
+}
+
+fn parse_request<R: Read>(
+    stream: R,
+    max_header_bytes: usize,
+    max_body_bytes: usize,
+) -> Result<ParsedRequest, ParseFailure> {
     let mut reader = BufReader::new(stream);
+    // Track the running header-block byte budget across the request line +
+    // every header line so a flood of tiny headers can't blow memory.
+    let mut header_bytes: usize = 0;
     let mut request_line = String::new();
-    if reader.read_line(&mut request_line)? == 0 {
-        return Err(ServerError::BadRequest("empty request"));
+    let n = reader.read_line(&mut request_line)?;
+    if n == 0 {
+        return Err(ParseFailure::Malformed("empty request"));
+    }
+    header_bytes += n;
+    if header_bytes > max_header_bytes {
+        return Err(ParseFailure::HeadersTooLarge);
     }
     let mut parts = request_line.trim_end().split(' ');
     let method = parts
         .next()
-        .ok_or(ServerError::BadRequest("no method"))?
+        .ok_or(ParseFailure::Malformed("no method"))?
         .to_owned();
     let path = parts
         .next()
-        .ok_or(ServerError::BadRequest("no path"))?
+        .ok_or(ParseFailure::Malformed("no path"))?
         .to_owned();
     // Discard HTTP version token; we don't validate it.
 
@@ -1966,8 +2782,13 @@ fn parse_request<R: Read>(stream: R) -> Result<(Request, Vec<u8>), ServerError> 
     let mut bearer = String::new();
     loop {
         let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 {
-            return Err(ServerError::BadRequest("eof in headers"));
+        let n = reader.read_line(&mut line)?;
+        if n == 0 {
+            return Err(ParseFailure::Malformed("eof in headers"));
+        }
+        header_bytes += n;
+        if header_bytes > max_header_bytes {
+            return Err(ParseFailure::HeadersTooLarge);
         }
         if line == "\r\n" || line == "\n" {
             break;
@@ -1990,18 +2811,24 @@ fn parse_request<R: Read>(stream: R) -> Result<(Request, Vec<u8>), ServerError> 
             }
         }
     }
+    // Refuse to read past the body cap. Reject BEFORE allocating /
+    // reading so a malicious `Content-Length` can't OOM the server.
+    if content_length > max_body_bytes {
+        return Err(ParseFailure::BodyTooLarge);
+    }
     let mut body = vec![0u8; content_length];
     if content_length > 0 {
         reader.read_exact(&mut body)?;
     }
-    Ok((
-        Request {
+    Ok(ParsedRequest {
+        request: Request {
             method,
             path,
             bearer,
         },
         body,
-    ))
+        bytes_read: header_bytes + content_length,
+    })
 }
 
 /// Captures per-request metadata so the audit logger can write a row
@@ -2019,12 +2846,17 @@ struct DispatchOutcome {
 /// branch which is intentionally open.
 fn required_capability(method: &str, path: &str) -> Option<Capability> {
     match (method, path) {
-        ("GET", "/health") => Some(Capability::Health),
+        // `/health`, `/ready`, `/metrics` are liveness/observability probes
+        // — treated like `/health`: routed without auth gating (the
+        // dispatch `needs_auth` check excludes `Health`).
+        ("GET", "/health" | "/ready" | "/metrics") => Some(Capability::Health),
         ("POST", "/commit") => Some(Capability::Commit),
         ("GET", p) if p.starts_with("/read/") => Some(Capability::Read),
         ("GET", "/iter") => Some(Capability::Iter),
         ("POST", "/flush") => Some(Capability::Flush),
         ("POST", "/compact") => Some(Capability::Compact),
+        // Operator-only lifecycle route: requires the Admin wildcard.
+        ("POST", "/admin/shutdown") => Some(Capability::Admin),
         // Indexed query + traversal + query-language + subscribe routes
         // — all gated by Read.
         (
@@ -2033,6 +2865,36 @@ fn required_capability(method: &str, path: &str) -> Option<Capability> {
                 | "/query" | "/query/text" | "/query_stream" | "/subscribe",
         ) => Some(Capability::Read),
         _ => None,
+    }
+}
+
+/// Map a `(method, path)` to a low-cardinality route label for the
+/// `ndb_requests_total{route=...}` metric. Path parameters (the `/read/`
+/// UUID) collapse to a placeholder so the label set stays bounded;
+/// unrecognised paths bucket into `"other"`.
+fn route_label(method: &str, path: &str) -> &'static str {
+    match (method, path) {
+        ("GET", "/health") => "/health",
+        ("GET", "/ready") => "/ready",
+        ("GET", "/metrics") => "/metrics",
+        ("POST", "/commit") => "/commit",
+        ("GET", p) if p.starts_with("/read/") => "/read/:id",
+        ("GET", "/iter") => "/iter",
+        ("POST", "/flush") => "/flush",
+        ("POST", "/compact") => "/compact",
+        ("POST", "/lookup") => "/lookup",
+        ("POST", "/vector_search") => "/vector_search",
+        ("POST", "/property_lookup") => "/property_lookup",
+        ("POST", "/property_range") => "/property_range",
+        ("POST", "/traverse") => "/traverse",
+        ("POST", "/query") => "/query",
+        ("POST", "/query/text") => "/query/text",
+        ("POST", "/query/explain") => "/query/explain",
+        ("POST", "/query_stream") => "/query_stream",
+        ("POST", "/subscribe") => "/subscribe",
+        ("POST", "/admin/shutdown") => "/admin/shutdown",
+        ("OPTIONS", _) => "OPTIONS",
+        _ => "other",
     }
 }
 
@@ -2124,10 +2986,17 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 
 fn status_text(code: u16) -> &'static str {
     match code {
+        202 => "Accepted",
         400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
         404 => "Not Found",
+        410 => "Gone",
+        413 => "Payload Too Large",
         422 => "Unprocessable Entity",
+        431 => "Request Header Fields Too Large",
         500 => "Internal Server Error",
+        503 => "Service Unavailable",
         // Default reason phrase for 200 + anything unrecognised.
         _ => "OK",
     }

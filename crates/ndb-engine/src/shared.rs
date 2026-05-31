@@ -31,7 +31,10 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::{Mutex, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 use crate::engine::{
     CompactionStats, Engine, EngineError, IsolationLevel, RetentionPolicy, WriteTxn,
@@ -341,6 +344,73 @@ impl SharedEngine {
             .compact_with_floor(floor)
     }
 
+    /// Run a compaction **only if** the [`CompactionPolicy`] trigger is met
+    /// (the live SSTable count has reached `l0_trigger`). Returns
+    /// `Ok(Some(stats))` when a compaction ran, `Ok(None)` when the trigger
+    /// wasn't met. Embedders that drive their own maintenance loop call this
+    /// directly; the batteries-included alternative is
+    /// [`spawn_auto_compactor`](Self::spawn_auto_compactor).
+    pub fn maybe_compact(
+        &self,
+        policy: &CompactionPolicy,
+    ) -> Result<Option<CompactionStats>, EngineError> {
+        if self.sstable_count() >= policy.l0_trigger {
+            self.compact().map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Spawn a background thread that automatically compacts when the
+    /// [`CompactionPolicy`] trigger fires — closing the production gap where
+    /// compaction otherwise only happens when an operator calls it by hand.
+    ///
+    /// The thread polls every `policy.check_interval` (in small sub-steps so
+    /// it stops promptly), calling [`maybe_compact`](Self::maybe_compact). A
+    /// compaction error is logged and the loop continues — a transient
+    /// failure must not silently kill the compactor. The returned
+    /// [`CompactorHandle`] stops the thread on `stop()` or on drop.
+    ///
+    /// Concurrency note: this **schedules** compaction; it does not yet make
+    /// it contention-free. The compaction still takes the engine write lock
+    /// for its duration (same as a manual `compact()`), so it serialises
+    /// with writers. Moving the merge phase off the write lock — reading the
+    /// immutable input SSTables by path and taking the lock only for the
+    /// manifest swap — is the documented follow-on (see
+    /// `docs/architecture/production-readiness.md`).
+    #[must_use]
+    pub fn spawn_auto_compactor(
+        engine: &Arc<SharedEngine>,
+        policy: CompactionPolicy,
+    ) -> CompactorHandle {
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let eng = Arc::clone(engine);
+        // Poll in <=100ms slices so stop() is responsive even with a long
+        // check_interval.
+        let slice = policy.check_interval.min(Duration::from_millis(100));
+        let join = std::thread::Builder::new()
+            .name("ndb-auto-compactor".into())
+            .spawn(move || {
+                let mut waited = Duration::ZERO;
+                while !thread_stop.load(Ordering::Relaxed) {
+                    if waited >= policy.check_interval {
+                        waited = Duration::ZERO;
+                        if let Err(e) = eng.maybe_compact(&policy) {
+                            eprintln!("ndb-engine: auto-compactor error: {e}");
+                        }
+                    }
+                    std::thread::sleep(slice);
+                    waited += slice;
+                }
+            })
+            .expect("spawn auto-compactor thread");
+        CompactorHandle {
+            stop,
+            join: Some(join),
+        }
+    }
+
     // -----------------------------------------------------------------
     // Active-snapshot registry (snapshot-aware compaction support)
     // -----------------------------------------------------------------
@@ -389,6 +459,57 @@ impl SharedEngine {
     }
 }
 
+/// Trigger policy for automatic compaction. The default — compact once the
+/// live SSTable count reaches 4, checked every 5 s — keeps a write-heavy
+/// LSM from accumulating an unbounded fan of tiny flushed tables (which
+/// would slowly inflate read amplification) without compacting so eagerly
+/// that it wastes I/O on a quiet database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompactionPolicy {
+    /// Compact when the number of live SSTables is `>=` this value.
+    pub l0_trigger: usize,
+    /// How often the background compactor evaluates the trigger.
+    pub check_interval: Duration,
+}
+
+impl Default for CompactionPolicy {
+    fn default() -> Self {
+        Self {
+            l0_trigger: 4,
+            check_interval: Duration::from_secs(5),
+        }
+    }
+}
+
+/// Handle to a running background compactor. Stops the thread on
+/// [`stop`](Self::stop) or when dropped, so the compactor never outlives
+/// the handle's owner.
+#[derive(Debug)]
+pub struct CompactorHandle {
+    stop: Arc<AtomicBool>,
+    join: Option<JoinHandle<()>>,
+}
+
+impl CompactorHandle {
+    /// Signal the background thread to stop and wait for it to finish.
+    pub fn stop(mut self) {
+        self.signal_and_join();
+    }
+
+    fn signal_and_join(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.join.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for CompactorHandle {
+    fn drop(&mut self) {
+        self.signal_and_join();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,6 +528,82 @@ mod tests {
             tx_id_supersede: TxId::ACTIVE,
             properties: vec![(PropertyId::new(1), Value::String(name.into()))],
         }
+    }
+
+    /// Write one entity and flush, producing exactly one new SSTable.
+    fn write_one_sstable(eng: &SharedEngine, name: &str) {
+        eng.with_write_txn(|mut txn| {
+            txn.put_entity(make_entity(name));
+            txn.commit()
+        })
+        .unwrap();
+        eng.flush().unwrap();
+    }
+
+    #[test]
+    fn maybe_compact_respects_the_trigger() {
+        let dir = temp_dir("maybe_compact");
+        let eng = SharedEngine::create(&dir).unwrap();
+        for i in 0..3 {
+            write_one_sstable(&eng, &format!("e{i}"));
+        }
+        assert_eq!(eng.sstable_count(), 3);
+
+        // Trigger not met → no compaction.
+        let policy_high = CompactionPolicy {
+            l0_trigger: 5,
+            check_interval: Duration::from_millis(10),
+        };
+        assert!(eng.maybe_compact(&policy_high).unwrap().is_none());
+        assert_eq!(eng.sstable_count(), 3);
+
+        // Trigger met → compaction collapses the tables to one.
+        let policy_low = CompactionPolicy {
+            l0_trigger: 2,
+            check_interval: Duration::from_millis(10),
+        };
+        let stats = eng.maybe_compact(&policy_low).unwrap();
+        assert!(stats.is_some(), "trigger met → compaction must run");
+        assert_eq!(eng.sstable_count(), 1);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn auto_compactor_compacts_in_background_then_stops() {
+        let dir = temp_dir("auto_compact");
+        let eng = Arc::new(SharedEngine::create(&dir).unwrap());
+        for i in 0..3 {
+            write_one_sstable(&eng, &format!("e{i}"));
+        }
+        assert_eq!(eng.sstable_count(), 3);
+
+        let handle = SharedEngine::spawn_auto_compactor(
+            &eng,
+            CompactionPolicy {
+                l0_trigger: 2,
+                check_interval: Duration::from_millis(20),
+            },
+        );
+
+        // Poll for the background compaction to land (bounded wait).
+        let mut compacted = false;
+        for _ in 0..200 {
+            if eng.sstable_count() <= 1 {
+                compacted = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        handle.stop();
+        assert!(compacted, "auto-compactor should have collapsed the SSTables");
+        assert_eq!(eng.sstable_count(), 1);
+
+        // Data survives the background compaction.
+        let snap = TxId::new(eng.manifest_snapshot().last_tx_id);
+        assert!(snap.get() >= 3);
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
