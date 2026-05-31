@@ -35,7 +35,7 @@ use uuid::Uuid;
 
 use crate::identity::{self, Role, Session};
 use crate::jsonval::from_json;
-use crate::store::{Store, StoreError};
+use crate::store::{Store, StoreError, TableQuery};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const COOKIE: &str = "ndb_session";
@@ -184,9 +184,18 @@ fn dispatch(
             let Some(kind) = qp.u64("kind") else {
                 return Resp::fail(400, "bad_request", "missing kind");
             };
-            let limit = usize::try_from(qp.u64("limit").unwrap_or(1000)).unwrap_or(1000);
+            let tq = TableQuery {
+                as_of: qp.u64("as_of"),
+                limit: usize::try_from(qp.u64("limit").unwrap_or(50)).unwrap_or(50),
+                offset: usize::try_from(qp.u64("offset").unwrap_or(0)).unwrap_or(0),
+                sort: qp.get("sort").filter(|s| !s.is_empty()).map(decode_uri),
+                desc: qp.get("dir") == Some("desc"),
+                q: qp.get("q").filter(|s| !s.is_empty()).map(decode_uri),
+                // per-column filters arrive as f_<prop>=<substr>
+                filters: qp.filters(),
+            };
             #[allow(clippy::cast_possible_truncation)]
-            Resp::ok(store.table(kind as u32, qp.u64("as_of"), limit))
+            Resp::ok(store.table(kind as u32, &tq))
         }),
         ("GET", "/api/record") => guard_read(session.as_ref(), || {
             let Some(id) = qp.get("id").and_then(|s| Uuid::parse_str(s).ok()) else {
@@ -549,6 +558,36 @@ impl Query {
     fn u64(&self, key: &str) -> Option<u64> {
         self.get(key).and_then(|s| s.parse().ok())
     }
+    /// Per-column table filters supplied as `f_<prop>=<substr>`.
+    fn filters(&self) -> Vec<(String, String)> {
+        self.0
+            .iter()
+            .filter_map(|(k, v)| k.strip_prefix("f_").map(|p| (decode_uri(p), decode_uri(v))))
+            .collect()
+    }
+}
+
+/// Minimal percent-decode (`%XX`) + `+`→space, for filter/search/sort values.
+fn decode_uri(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'%' if i + 2 < b.len() => {
+                if let Ok(h) = u8::from_str_radix(std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or(""), 16) {
+                    out.push(h);
+                    i += 3;
+                } else {
+                    out.push(b'%');
+                    i += 1;
+                }
+            }
+            b'+' => { out.push(b' '); i += 1; }
+            c => { out.push(c); i += 1; }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn parse_query(query: &str) -> Query {

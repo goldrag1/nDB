@@ -131,6 +131,17 @@
   .qerr .qdetail { margin-top: 6px; font-family: ui-monospace, monospace; font-size: 12px; }
   .nhint { color: var(--muted); font-size: 12px; margin: 10px 0; line-height: 1.5; }
   .nhint code { background: #0c1118; padding: 1px 5px; border-radius: 4px; }
+  .tblsearch { background: #0c1118; color: var(--ink); border: 1px solid #2c3a4a; border-radius: 6px; padding: 5px 9px; font: inherit; width: 220px; }
+  .tblsearch:focus { outline: none; border-color: var(--accent); }
+  th.sortable { cursor: pointer; user-select: none; } th.sortable:hover { color: var(--ink); }
+  th.cb, td.cb { width: 28px; text-align: center; }
+  tr.filterrow th { position: static; padding: 3px 4px; background: #0f141b; }
+  .colf { width: 100%; background: #0c1118; color: var(--ink); border: 1px solid #232a33; border-radius: 4px; padding: 2px 5px; font: 11px ui-sans-serif; }
+  .colf:focus { outline: none; border-color: var(--accent); }
+  .idlink { cursor: pointer; } .idlink:hover { color: var(--accent); }
+  .danger-btn { border-color: #54262a; color: #ffb3b3; }
+  .danger-btn:hover { border-color: var(--danger); background: #2a1416; }
+  .pager { display: flex; align-items: center; gap: 12px; justify-content: center; margin: 14px 0; }
 </style>
 </head>
 <body>
@@ -271,6 +282,7 @@ async function selectKind(k) {
   SEL = k;
   // Reset pivot axes to this kind's first two properties when switching kinds.
   PIVOT = { row: k.properties[0]?.name || null, col: k.properties[1]?.name || k.properties[0]?.name || null, agg: "count", value: null };
+  TBL = newTableState();
   renderKinds();
   await renderMain();
 }
@@ -299,34 +311,63 @@ function wireModeTabs() {
   });
 }
 
+let TBL = newTableState();
+function newTableState() { return { offset: 0, limit: 50, sort: null, desc: false, q: "", filters: {}, sel: new Set(), focus: null }; }
+let TBL_DEBOUNCE = null;
+function tblReload(resetPage) { if (resetPage) TBL.offset = 0; clearTimeout(TBL_DEBOUNCE); TBL_DEBOUNCE = setTimeout(loadTable, 280); }
+
 async function loadTable() {
   if (!SEL) return;
-  const t = await api.get(`/table?kind=${SEL.type_id}${asofQuery()}&limit=1000`);
-  renderTable(t);
+  const p = new URLSearchParams({ kind: SEL.type_id, limit: TBL.limit, offset: TBL.offset });
+  if (ASOF !== null) p.set("as_of", ASOF);
+  if (TBL.sort) { p.set("sort", TBL.sort); p.set("dir", TBL.desc ? "desc" : "asc"); }
+  if (TBL.q) p.set("q", TBL.q);
+  for (const [k, v] of Object.entries(TBL.filters)) if (v) p.set("f_" + k, v);
+  renderTable(await api.get("/table?" + p.toString()));
 }
 
 function renderTable(t) {
   const c = $("content");
   const headers = t.headers || [];
   const writable = !readOnly() && canWrite();
+  const pageIds = (t.rows || []).map((r) => r.id);
+  // drop selections no longer on this page-set is fine; keep cross-page selections
   let html = "";
   if (readOnly()) html += `<div class="banner">Viewing history as of tx ${ASOF} — read only. Slide to “now” to edit.</div>`;
   else if (!canWrite()) html += `<div class="banner">Read-only — your role is <b>${esc(ME.role || "viewer")}</b>.</div>`;
-  html += `<div class="toolbar"><h2>${esc(SEL.name)}</h2>${modeTabsHtml()}<span class="badge">${t.shown} / ${t.total} records</span><div class="spacer" style="flex:1"></div>`;
+
+  const from = t.total ? t.offset + 1 : 0, to = t.offset + t.shown;
+  html += `<div class="toolbar"><h2>${esc(SEL.name)}</h2>${modeTabsHtml()}`;
+  html += `<input id="tblq" class="tblsearch" placeholder="search all columns…" value="${esc(TBL.q)}" />`;
+  html += `<span class="badge">${from}–${to} of ${t.total}</span><div class="spacer" style="flex:1"></div>`;
+  if (writable && TBL.sel.size) html += `<button class="danger-btn" id="bulkDel">Delete ${TBL.sel.size}</button>`;
   if (writable) html += `<button class="primary" id="newBtn">+ New record</button>`;
   html += `</div>`;
-  if (!headers.length && !t.rows.length) {
+
+  if (!headers.length && !t.rows.length && !TBL.q && !Object.values(TBL.filters).some(Boolean)) {
     html += `<div class="empty">No records yet.</div>`;
     c.innerHTML = html;
     wireModeTabs();
     if (writable) $("newBtn").onclick = openNew;
+    wireSearch();
     return;
   }
-  html += "<table><thead><tr><th>id</th>";
-  for (const h of headers) html += `<th>${esc(h.name)}</th>`;
+
+  const arrow = (h) => (TBL.sort === h.name ? (TBL.desc ? " ▾" : " ▴") : "");
+  html += `<table><thead><tr>`;
+  html += writable ? `<th class="cb"><input type="checkbox" id="selAll" /></th>` : `<th class="cb"></th>`;
+  html += `<th>id</th>`;
+  for (const h of headers) html += `<th class="sortable" data-prop="${esc(h.name)}">${esc(h.name)}${arrow(h)}</th>`;
+  html += `<th></th></tr>`;
+  // filter row
+  html += `<tr class="filterrow"><th class="cb"></th><th></th>`;
+  for (const h of headers) html += `<th><input class="colf" data-prop="${esc(h.name)}" placeholder="filter" value="${esc(TBL.filters[h.name] || "")}" /></th>`;
   html += `<th></th></tr></thead><tbody>`;
   for (const row of t.rows) {
-    html += `<tr data-id="${row.id}"><td class="id" title="${row.id}">${row.id.slice(0, 8)}…</td>`;
+    const checked = TBL.sel.has(row.id) ? "checked" : "";
+    html += `<tr data-id="${row.id}">`;
+    html += writable ? `<td class="cb"><input type="checkbox" class="rowcb" ${checked} /></td>` : `<td class="cb"></td>`;
+    html += `<td class="id idlink" title="${row.id}">${row.id.slice(0, 8)}…</td>`;
     row.cells.forEach((cell, i) => {
       const h = headers[i];
       const canEdit = editable(cell) && writable;
@@ -336,16 +377,64 @@ function renderTable(t) {
     html += "</tr>";
   }
   html += "</tbody></table>";
+  // pagination
+  const pages = Math.max(1, Math.ceil(t.total / TBL.limit)), cur = Math.floor(t.offset / TBL.limit) + 1;
+  html += `<div class="pager"><button id="pgPrev" ${t.offset <= 0 ? "disabled" : ""}>‹ Prev</button><span class="badge">page ${cur} / ${pages}</span><button id="pgNext" ${to >= t.total ? "disabled" : ""}>Next ›</button></div>`;
+
   c.innerHTML = html;
   wireModeTabs();
-  c.querySelectorAll(".histbtn").forEach((b) => {
-    b.onclick = (e) => { e.stopPropagation(); openHistory(b.closest("tr").dataset.id, b.dataset.prop); };
-  });
+  wireSearch();
+  c.querySelectorAll("th.sortable").forEach((th) => (th.onclick = () => {
+    const p = th.dataset.prop;
+    if (TBL.sort === p) TBL.desc = !TBL.desc; else { TBL.sort = p; TBL.desc = false; }
+    tblReload(true);
+  }));
+  c.querySelectorAll(".colf").forEach((inp) => (inp.oninput = () => { TBL.filters[inp.dataset.prop] = inp.value; TBL.focus = "f::" + inp.dataset.prop; tblReload(true); }));
+  c.querySelectorAll(".idlink").forEach((td) => (td.onclick = () => openRecord(td.closest("tr").dataset.id)));
+  c.querySelectorAll(".histbtn").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); openHistory(b.closest("tr").dataset.id, b.dataset.prop); }));
+  const prev = $("pgPrev"), next = $("pgNext");
+  if (prev) prev.onclick = () => { TBL.offset = Math.max(0, TBL.offset - TBL.limit); loadTable(); };
+  if (next) next.onclick = () => { TBL.offset += TBL.limit; loadTable(); };
   if (writable) {
     $("newBtn").onclick = openNew;
-    c.querySelectorAll("td.editable").forEach((td) => (td.onclick = () => beginEdit(td)));
+    const bd = $("bulkDel"); if (bd) bd.onclick = bulkDelete;
+    const sa = $("selAll");
+    if (sa) {
+      sa.checked = pageIds.length > 0 && pageIds.every((id) => TBL.sel.has(id));
+      sa.onclick = () => { if (sa.checked) pageIds.forEach((id) => TBL.sel.add(id)); else pageIds.forEach((id) => TBL.sel.delete(id)); loadTable(); };
+    }
+    c.querySelectorAll(".rowcb").forEach((cb) => (cb.onclick = () => {
+      const id = cb.closest("tr").dataset.id;
+      if (cb.checked) TBL.sel.add(id); else TBL.sel.delete(id);
+      loadTable();
+    }));
+    c.querySelectorAll("td.editable").forEach((td) => (td.onclick = (e) => { if (e.target.closest(".histbtn")) return; beginEdit(td); }));
     c.querySelectorAll(".rowdel").forEach((b) => (b.onclick = () => delRow(b.closest("tr").dataset.id)));
   }
+  restoreFocus();
+}
+
+function wireSearch() {
+  const q = $("tblq");
+  if (q) q.oninput = () => { TBL.q = q.value; TBL.focus = "q::"; tblReload(true); };
+}
+function restoreFocus() {
+  if (!TBL.focus) return;
+  const [kind, name] = TBL.focus.split("::");
+  const el = kind === "q" ? $("tblq") : document.querySelector(`.colf[data-prop="${CSS.escape(name)}"]`);
+  if (el) { el.focus(); const n = el.value.length; el.setSelectionRange(n, n); }
+  TBL.focus = null;
+}
+
+async function bulkDelete() {
+  const ids = [...TBL.sel];
+  if (!ids.length) return;
+  if (!confirm(`Delete ${ids.length} record(s)? This tombstones them (history kept).`)) return;
+  let ok = 0;
+  for (const id of ids) { const r = await api.commit({ op: "delete", id }); if (r.status === 200) ok++; }
+  TBL.sel.clear();
+  toast(`deleted ${ok}/${ids.length}`);
+  await refreshAll();
 }
 
 function editable(cell) {

@@ -144,6 +144,34 @@ fn numeric(v: &Value) -> f64 {
     }
 }
 
+/// Browsing parameters for [`Store::table`]: snapshot, paging, sort, and
+/// filtering (a global substring `q` plus per-property `(name, substring)`).
+#[derive(Default)]
+pub struct TableQuery {
+    /// Snapshot tx (None = head).
+    pub as_of: Option<u64>,
+    /// Page size.
+    pub limit: usize,
+    /// Rows to skip before the page.
+    pub offset: usize,
+    /// Property name to sort by (None = snapshot/insertion order).
+    pub sort: Option<String>,
+    /// Sort descending when true.
+    pub desc: bool,
+    /// Global case-insensitive substring across all columns.
+    pub q: Option<String>,
+    /// Per-column `(property_name, substring)` filters, AND-combined.
+    pub filters: Vec<(String, String)>,
+}
+
+impl TableQuery {
+    /// A plain page request (no sort/filter).
+    #[must_use]
+    pub fn new(as_of: Option<u64>, limit: usize) -> Self {
+        Self { as_of, limit, ..Default::default() }
+    }
+}
+
 /// Name dictionaries resolved from the current snapshot.
 struct Names {
     type_name: BTreeMap<u32, String>,
@@ -257,11 +285,13 @@ impl Store {
         json!({ "head": self.head(), "as_of": snap.get(), "kinds": kinds_json })
     }
 
-    /// One record-kind projected to a table: a header row of property names and
-    /// one row per entity (each row carries its `id` for edit/select).
+    /// One record-kind projected to a table page: a header row of property
+    /// names and the requested slice of rows (each carrying its `id`), after
+    /// applying the query's filters and sort. `total` is the filtered count
+    /// (for pagination); `shown` is the page size.
     #[must_use]
-    pub fn table(&self, type_id: u32, as_of: Option<u64>, limit: usize) -> J {
-        let snap = self.snapshot(as_of);
+    pub fn table(&self, type_id: u32, q: &TableQuery) -> J {
+        let snap = self.snapshot(q.as_of);
         let recs = self.records(snap);
         let names = Self::names(&recs);
         let tid = TypeId::new(type_id);
@@ -270,8 +300,8 @@ impl Store {
         // hand-crafted type_id — so account records stay hidden.
         if names.type_name.get(&type_id).is_some_and(|n| is_reserved(n)) {
             return json!({
-                "type_id": type_id, "as_of": snap.get(),
-                "headers": [], "rows": [], "total": 0, "shown": 0,
+                "type_id": type_id, "as_of": snap.get(), "headers": [], "rows": [],
+                "total": 0, "shown": 0, "offset": 0, "limit": q.limit,
             });
         }
 
@@ -292,20 +322,46 @@ impl Store {
         }
         let cols: Vec<u32> = cols.into_iter().collect();
 
+        // Display string of one property on an entity (drives filter + sort).
+        let disp = |e: &EntityRecord, pid: u32| cell_key(prop_val(e, pid));
+
+        // Filter: global substring across columns + per-column substrings.
+        let ql = q.q.as_ref().map(|s| s.to_lowercase());
+        let col_filters: Vec<(u32, String)> = q.filters.iter()
+            .filter_map(|(name, val)| names.prop_id.get(name).map(|p| (*p, val.to_lowercase())))
+            .collect();
+        entities.retain(|e| {
+            if let Some(ql) = &ql
+                && !cols.iter().any(|&pid| disp(e, pid).to_lowercase().contains(ql))
+            {
+                return false;
+            }
+            col_filters.iter().all(|(pid, val)| disp(e, *pid).to_lowercase().contains(val))
+        });
+
+        // Sort by a property's display string (stable; case-insensitive).
+        if let Some(sp) = q.sort.as_ref()
+            && let Some(&pid) = names.prop_id.get(sp)
+        {
+            entities.sort_by_cached_key(|e| disp(e, pid).to_lowercase());
+            if q.desc {
+                entities.reverse();
+            }
+        }
+
+        let total = entities.len();
         let headers: Vec<J> = cols
             .iter()
-            .map(|pid| {
-                json!({
-                    "property_id": pid,
-                    "name": names.prop_name.get(pid).cloned()
-                        .unwrap_or_else(|| format!("prop:{pid}")),
-                })
-            })
+            .map(|pid| json!({
+                "property_id": pid,
+                "name": names.prop_name.get(pid).cloned().unwrap_or_else(|| format!("prop:{pid}")),
+            }))
             .collect();
 
         let rows: Vec<J> = entities
             .iter()
-            .take(limit)
+            .skip(q.offset)
+            .take(q.limit)
             .map(|e| {
                 let by_prop: HashMap<u32, &Value> =
                     e.properties.iter().map(|(p, v)| (p.get(), v)).collect();
@@ -322,8 +378,10 @@ impl Store {
             "as_of": snap.get(),
             "headers": headers,
             "rows": rows,
-            "total": entities.len(),
-            "shown": entities.len().min(limit),
+            "total": total,
+            "shown": rows.len(),
+            "offset": q.offset,
+            "limit": q.limit,
         })
     }
 
@@ -991,7 +1049,7 @@ mod tests {
         assert!(prop_names.contains(&"name") && prop_names.contains(&"age"));
 
         let tid = u32::try_from(kinds[0]["type_id"].as_u64().unwrap()).unwrap();
-        let table = store.table(tid, None, 1000);
+        let table = store.table(tid, &TableQuery::new(None, 1000));
         assert_eq!(table["total"], 2);
         assert_eq!(table["rows"].as_array().unwrap().len(), 2);
     }
@@ -1005,7 +1063,7 @@ mod tests {
             .create("Person", &[("age".into(), Value::I64(30))], None)
             .expect("create");
         let tid = u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
-        let id_str = store.table(tid, None, 10)["rows"][0]["id"]
+        let id_str = store.table(tid, &TableQuery::new(None, 10))["rows"][0]["id"]
             .as_str()
             .unwrap()
             .to_string();
@@ -1020,7 +1078,7 @@ mod tests {
         assert_eq!(past["properties"][0]["value"], 30);
 
         // Table path honours the same snapshot.
-        let past_table = store.table(tid, Some(tx1), 10);
+        let past_table = store.table(tid, &TableQuery::new(Some(tx1), 10));
         assert_eq!(past_table["rows"][0]["cells"][0], 30);
     }
 
@@ -1032,14 +1090,14 @@ mod tests {
             .create("Note", &[("body".into(), s("hi"))], None)
             .expect("create");
         let tid = u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
-        let id = Uuid::parse_str(store.table(tid, None, 10)["rows"][0]["id"].as_str().unwrap())
+        let id = Uuid::parse_str(store.table(tid, &TableQuery::new(None, 10))["rows"][0]["id"].as_str().unwrap())
             .unwrap();
 
         store.delete(id).expect("delete");
 
-        assert_eq!(store.table(tid, None, 10)["total"], 0, "gone at head");
+        assert_eq!(store.table(tid, &TableQuery::new(None, 10))["total"], 0, "gone at head");
         assert_eq!(
-            store.table(tid, Some(tx_create), 10)["total"],
+            store.table(tid, &TableQuery::new(Some(tx_create), 10))["total"],
             1,
             "still in history"
         );
@@ -1057,7 +1115,7 @@ mod tests {
             .expect("create");
         let tid = u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap())
             .unwrap();
-        let id = Uuid::parse_str(store.table(tid, None, 10)["rows"][0]["id"].as_str().unwrap())
+        let id = Uuid::parse_str(store.table(tid, &TableQuery::new(None, 10))["rows"][0]["id"].as_str().unwrap())
             .unwrap();
 
         store.set(id, "age", &Value::I64(31), None).expect("set 31");
@@ -1229,7 +1287,7 @@ mod tests {
 
         // Table for Person has no $author column.
         let tid = u32::try_from(kinds[0]["type_id"].as_u64().unwrap()).unwrap();
-        let table = store.table(tid, None, 10);
+        let table = store.table(tid, &TableQuery::new(None, 10));
         let headers: Vec<&str> = table["headers"].as_array().unwrap()
             .iter().map(|h| h["name"].as_str().unwrap()).collect();
         assert_eq!(headers, vec!["name"]);
@@ -1243,7 +1301,7 @@ mod tests {
         // even by its raw id / interned type_id (no pwhash leak).
         let (uid, _, _) = store.find_user("alice").unwrap();
         assert!(store.record(uid, None).is_null(), "user record hidden");
-        assert_eq!(store.table(1, None, 10)["total"], 0, "$User not tabled (type 1)");
+        assert_eq!(store.table(1, &TableQuery::new(None, 10))["total"], 0, "$User not tabled (type 1)");
 
         // Deleting a user removes it.
         store.delete_user("alice").expect("delete user");
@@ -1304,6 +1362,35 @@ mod tests {
         let cat = follower.catalog(None);
         assert_eq!(cat["kinds"][0]["name"], "Person");
         assert_eq!(cat["kinds"][0]["count"], 2);
+    }
+
+    /// Table browsing: per-column filter, global search, sort, and paging.
+    #[test]
+    fn table_filter_sort_paginate() {
+        let store = fresh();
+        for (n, c) in [("Alice", "Hanoi"), ("Bob", "Hanoi"), ("Cara", "HCMC"), ("Dan", "HCMC"), ("Eve", "Hue")] {
+            store.create("Person", &[("name".into(), s(n)), ("city".into(), s(c))], None).expect("c");
+        }
+        let tid = u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
+
+        // Per-column filter: city contains "Ha" → the two Hanoi rows.
+        let q = TableQuery { filters: vec![("city".into(), "Ha".into())], ..TableQuery::new(None, 50) };
+        assert_eq!(store.table(tid, &q)["total"], 2);
+
+        // Global search "ar" → Cara only.
+        let q = TableQuery { q: Some("ar".into()), ..TableQuery::new(None, 50) };
+        assert_eq!(store.table(tid, &q)["total"], 1);
+
+        // Sort by name desc → Eve first.
+        let q = TableQuery { sort: Some("name".into()), desc: true, ..TableQuery::new(None, 50) };
+        assert_eq!(store.table(tid, &q)["rows"][0]["cells"][0], "Eve");
+
+        // Page 2 of name-asc (limit 2, offset 2) → Cara, Dan.
+        let q = TableQuery { sort: Some("name".into()), offset: 2, ..TableQuery::new(None, 2) };
+        let p = store.table(tid, &q);
+        assert_eq!(p["total"], 5);
+        assert_eq!(p["shown"], 2);
+        assert_eq!(p["rows"][0]["cells"][0], "Cara");
     }
 
     /// Editing a record that does not exist is a typed `NotFound` (HTTP 404).
