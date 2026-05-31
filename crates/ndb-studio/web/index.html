@@ -91,6 +91,15 @@
   .hrow .hval { flex: 1; }
   .hrow.del .hval { color: var(--danger); }
   .hjump { font-size: 11px; padding: 2px 8px; }
+  .graphwrap { position: relative; width: 100%; height: calc(100vh - 132px); border: 1px solid var(--line); border-radius: 8px; background: #0b0f15; overflow: hidden; }
+  #gcanvas { display: block; }
+  .glegend { position: absolute; bottom: 10px; left: 12px; color: var(--muted); font-size: 11px; pointer-events: none; }
+  .ginfo { position: absolute; top: 12px; right: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 180px; max-width: 260px; }
+  .ginfo.hidden { display: none; }
+  .gi-kind { color: var(--accent); font-size: 11px; }
+  .gi-label { font-weight: 600; margin: 2px 0; }
+  .gi-id { color: var(--muted); font-family: ui-monospace, monospace; font-size: 10px; word-break: break-all; }
+  .gi-open { margin-top: 8px; font-size: 11px; }
 </style>
 </head>
 <body>
@@ -136,6 +145,7 @@
 const $ = (id) => document.getElementById(id);
 let HEAD = 0, ASOF = null, SEL = null, CATALOG = [], MODE = "table";
 let PIVOT = { row: null, col: null, agg: "count", value: null };
+let GRAPH_ANIM = null;
 
 const api = {
   async get(path) { const r = await fetch("/api" + path, { cache: "no-store" }); return r.json(); },
@@ -184,6 +194,8 @@ async function selectKind(k) {
 
 // Dispatch the main pane on the current view mode.
 async function renderMain() {
+  cancelGraphAnim();
+  if (MODE === "graph") return loadGraph();
   if (!SEL) return;
   if (MODE === "pivot") return loadPivot();
   return loadTable();
@@ -193,6 +205,7 @@ function modeTabsHtml() {
   return `<div class="modetabs">
     <button data-mode="table" class="${MODE === "table" ? "active" : ""}">Table</button>
     <button data-mode="pivot" class="${MODE === "pivot" ? "active" : ""}">Pivot</button>
+    <button data-mode="graph" class="${MODE === "graph" ? "active" : ""}">Graph</button>
   </div>`;
 }
 function wireModeTabs() {
@@ -266,6 +279,7 @@ function parseScalar(text) {
   if (text === "true") return true;
   if (text === "false") return false;
   if (text === "null") return null;
+  if (/^ref:[0-9a-fA-F-]{36}$/.test(text)) return { "$ref": text.slice(4) };
   if (/^-?\d+$/.test(text)) return parseInt(text, 10);
   if (/^-?\d*\.\d+$/.test(text)) return parseFloat(text);
   return text;
@@ -309,7 +323,7 @@ function addNewField(name, val) {
   const f = $("newFields");
   const row = document.createElement("div");
   row.className = "field";
-  row.innerHTML = `<input class="fname" placeholder="property" value="${esc(name)}" /><input class="fval" placeholder="value" value="${esc(val)}" />`;
+  row.innerHTML = `<input class="fname" placeholder="property" value="${esc(name)}" /><input class="fval" placeholder="value or ref:&lt;uuid&gt;" value="${esc(val)}" />`;
   f.appendChild(row);
 }
 $("addField").onclick = () => addNewField("", "");
@@ -383,6 +397,123 @@ function renderPivot(p) {
   };
   const pv = $("pvValue");
   if (pv) pv.onchange = (e) => { PIVOT.value = e.target.value; loadPivot(); };
+}
+
+// ---- Graph view (self-contained 2-D force layout on canvas) ----
+function cancelGraphAnim() { if (GRAPH_ANIM) { cancelAnimationFrame(GRAPH_ANIM); GRAPH_ANIM = null; } }
+
+async function loadGraph() {
+  const g = await api.get(`/graph?${ASOF === null ? "" : "as_of=" + ASOF + "&"}limit=300`);
+  renderGraph(g);
+}
+
+function renderGraph(g) {
+  cancelGraphAnim();
+  const c = $("content");
+  let html = "";
+  if (readOnly()) html += `<div class="banner">Graph as of tx ${ASOF}.</div>`;
+  html += `<div class="toolbar"><h2>Graph</h2>${modeTabsHtml()}<span class="badge" id="gstat"></span><div class="spacer" style="flex:1"></div></div>`;
+  if (!(g.nodes || []).length) {
+    html += `<div class="empty">No entities to graph yet.</div>`;
+    c.innerHTML = html; wireModeTabs(); return;
+  }
+  html += `<div class="graphwrap"><canvas id="gcanvas"></canvas><div id="ginfo" class="ginfo hidden"></div><div class="glegend">drag to rearrange · hover for labels · click a node</div></div>`;
+  c.innerHTML = html;
+  wireModeTabs();
+  startGraph(g);
+}
+
+function startGraph(g) {
+  const canvas = $("gcanvas"), wrap = canvas.parentElement;
+  const W = wrap.clientWidth, H = wrap.clientHeight, dpr = window.devicePixelRatio || 1;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + "px"; canvas.style.height = H + "px";
+  const ctx = canvas.getContext("2d"); ctx.scale(dpr, dpr);
+
+  const nodes = (g.nodes || []).map((n, i) => {
+    const a = (i / (g.nodes.length || 1)) * Math.PI * 2, rad = Math.min(W, H) * 0.32;
+    return { ...n, x: W / 2 + Math.cos(a) * rad * (0.5 + 0.5 * Math.random()), y: H / 2 + Math.sin(a) * rad * (0.5 + 0.5 * Math.random()), vx: 0, vy: 0 };
+  });
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const links = (g.links || []).map((l) => ({ ...l, source: byId.get(l.source), target: byId.get(l.target) })).filter((l) => l.source && l.target);
+  $("gstat").textContent = `${nodes.length} nodes · ${links.length} links${g.truncated ? " · truncated to " + g.shown : ""}`;
+
+  const palette = ["#5db0ff", "#58d39a", "#f0c674", "#ff8fb3", "#b58cff", "#6fd6d6", "#ffa46b", "#9ad36b"];
+  const colorFor = (n) => (n.hyper ? "#8b97a7" : palette[(n.type_id || 0) % palette.length]);
+  const REPULSE = 2000, SPRING = 0.02, SPRING_LEN = 72, GRAVITY = 0.018, DAMP = 0.86, MAXTICKS = 280;
+  let ticks = 0, selected = null, hover = null, dragNode = null;
+
+  function step() {
+    for (let i = 0; i < nodes.length; i++) {
+      const a = nodes[i];
+      for (let j = i + 1; j < nodes.length; j++) {
+        const b = nodes[j];
+        let dx = a.x - b.x, dy = a.y - b.y, d2 = dx * dx + dy * dy || 0.01, d = Math.sqrt(d2);
+        const f = REPULSE / d2, fx = (dx / d) * f, fy = (dy / d) * f;
+        a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
+      }
+    }
+    for (const l of links) {
+      let dx = l.target.x - l.source.x, dy = l.target.y - l.source.y, d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      const f = SPRING * (d - SPRING_LEN), fx = (dx / d) * f, fy = (dy / d) * f;
+      l.source.vx += fx; l.source.vy += fy; l.target.vx -= fx; l.target.vy -= fy;
+    }
+    for (const n of nodes) {
+      n.vx += (W / 2 - n.x) * GRAVITY; n.vy += (H / 2 - n.y) * GRAVITY;
+      n.vx *= DAMP; n.vy *= DAMP;
+      if (n !== dragNode) { n.x += n.vx; n.y += n.vy; }
+    }
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    for (const l of links) {
+      const hot = selected && (l.source === selected || l.target === selected);
+      ctx.strokeStyle = hot ? "#5db0ff" : (l.kind === "hyperedge" ? "#3b4a5c" : "#2a3644");
+      ctx.lineWidth = hot ? 1.6 : 1;
+      ctx.beginPath(); ctx.moveTo(l.source.x, l.source.y); ctx.lineTo(l.target.x, l.target.y); ctx.stroke();
+    }
+    for (const n of nodes) {
+      const r = n.hyper ? 4 : (n === selected || n === hover ? 7 : 5);
+      ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+      ctx.globalAlpha = n.hyper ? 0.75 : 1; ctx.fillStyle = colorFor(n); ctx.fill(); ctx.globalAlpha = 1;
+      if (n === selected) { ctx.lineWidth = 2; ctx.strokeStyle = "#fff"; ctx.stroke(); }
+    }
+    ctx.fillStyle = "#cdd6e3"; ctx.font = "11px ui-sans-serif, system-ui";
+    const labelAll = nodes.length <= 45;
+    for (const n of nodes) {
+      if (labelAll || n === selected || n === hover) ctx.fillText(n.label || n.id.slice(0, 6), n.x + 8, n.y + 3);
+    }
+  }
+
+  function loop() {
+    step(); ticks++;
+    draw();
+    if (ticks < MAXTICKS || dragNode) GRAPH_ANIM = requestAnimationFrame(loop);
+    else GRAPH_ANIM = null;
+  }
+  loop();
+
+  const at = (e) => { const rc = canvas.getBoundingClientRect(); return { x: e.clientX - rc.left, y: e.clientY - rc.top }; };
+  const pick = (p) => { let best = null, bd = 169; for (const n of nodes) { const dx = n.x - p.x, dy = n.y - p.y, d = dx * dx + dy * dy; if (d < bd) { bd = d; best = n; } } return best; };
+  function resume() { if (!GRAPH_ANIM) GRAPH_ANIM = requestAnimationFrame(loop); }
+
+  canvas.onmousemove = (e) => {
+    const p = at(e);
+    if (dragNode) { dragNode.x = p.x; dragNode.y = p.y; ticks = Math.min(ticks, MAXTICKS - 40); resume(); }
+    else { const h = pick(p); if (h !== hover) { hover = h; canvas.style.cursor = h ? "pointer" : "default"; if (!GRAPH_ANIM) draw(); } }
+  };
+  canvas.onmousedown = (e) => { dragNode = pick(at(e)); if (dragNode) { selected = dragNode; showInfo(selected); resume(); } };
+  canvas.onmouseup = () => { dragNode = null; };
+  canvas.onmouseleave = () => { dragNode = null; hover = null; if (!GRAPH_ANIM) draw(); };
+
+  function showInfo(n) {
+    const info = $("ginfo");
+    info.className = "ginfo";
+    info.innerHTML = `<div class="gi-kind">${esc(n.kind)}${n.hyper ? " · N-ary edge" : ""}</div><div class="gi-label">${esc(n.label || "(no label)")}</div><div class="gi-id">${esc(n.id)}</div>` + (n.hyper ? "" : `<button class="gi-open">open in table</button>`);
+    const open = info.querySelector(".gi-open");
+    if (open) open.onclick = () => { const k = CATALOG.find((kk) => kk.type_id === n.type_id); if (k) { MODE = "table"; selectKind(k); } };
+  }
 }
 
 // ---- Per-cell history popover ----

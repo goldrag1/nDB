@@ -68,8 +68,20 @@ pub fn from_json(j: &J) -> Result<Value, String> {
             }
         }
         J::String(s) => Ok(Value::String(s.clone())),
+        // An entity reference round-trips as `{"$ref": "<uuid>"}` — the same
+        // shape `to_json` emits — so a relationship can be created/edited from
+        // the UI (a graph edge), not only displayed.
+        J::Object(map) if map.len() == 1 => {
+            if let Some(J::String(id)) = map.get("$ref") {
+                let uuid = uuid::Uuid::parse_str(id)
+                    .map_err(|_| format!("invalid entity ref uuid: {id}"))?;
+                Ok(Value::EntityRef(ndb_engine::id::EntityId::from_bytes(*uuid.as_bytes())))
+            } else {
+                Err("unsupported object value (only {\"$ref\": uuid} is accepted)".to_string())
+            }
+        }
         J::Array(_) | J::Object(_) => {
-            Err("v1 can only edit scalar values (null, bool, number, string)".to_string())
+            Err("v1 can only edit scalars or {\"$ref\": uuid} references".to_string())
         }
     }
 }

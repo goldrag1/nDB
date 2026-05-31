@@ -97,6 +97,26 @@ fn cell_key(v: Option<&Value>) -> String {
     }
 }
 
+/// A human label for an entity node: the first `name`/`title`/`label`
+/// string property, else the first string property, else empty (the UI then
+/// falls back to a short id).
+fn entity_label(e: &EntityRecord, names: &Names) -> String {
+    for (pid, v) in &e.properties {
+        if let (Some(n), Value::String(s)) = (names.prop_name.get(&pid.get()), v) {
+            let nl = n.to_ascii_lowercase();
+            if nl == "name" || nl == "title" || nl == "label" {
+                return s.clone();
+            }
+        }
+    }
+    for (_, v) in &e.properties {
+        if let Value::String(s) = v {
+            return s.clone();
+        }
+    }
+    String::new()
+}
+
 /// Numeric coercion for `sum` aggregation; non-numbers contribute 0.
 fn numeric(v: &Value) -> f64 {
     match v {
@@ -454,6 +474,111 @@ impl Store {
         })
     }
 
+    /// A graph projection of the database: entities become nodes; edges come
+    /// from `EntityRef`-valued properties (a directed `ref` link labelled by
+    /// the property) and from hyperedges. A binary hyperedge is one link
+    /// between its two members; an N-ary (>2) hyperedge becomes its own node
+    /// with a star of links to each member — so N-ary structure is shown
+    /// faithfully rather than flattened into pairwise edges.
+    ///
+    /// Entities are capped at `limit` (deterministic snapshot order); links
+    /// are kept only between included nodes.
+    #[must_use]
+    pub fn graph(&self, as_of: Option<u64>, limit: usize) -> J {
+        let snap = self.snapshot(as_of);
+        let recs = self.records(snap);
+        let names = Self::names(&recs);
+
+        let mut included: BTreeSet<Uuid> = BTreeSet::new();
+        let mut nodes: Vec<J> = Vec::new();
+        let mut total_entities = 0usize;
+        for r in &recs {
+            let Record::Entity(e) = r else { continue };
+            total_entities += 1;
+            if included.len() >= limit {
+                continue;
+            }
+            let id = e.entity_id.into_uuid();
+            if included.insert(id) {
+                nodes.push(json!({
+                    "id": id.to_string(),
+                    "type_id": e.type_id.get(),
+                    "kind": names.type_name.get(&e.type_id.get()).cloned()
+                        .unwrap_or_else(|| format!("kind:{}", e.type_id.get())),
+                    "label": entity_label(e, &names),
+                }));
+            }
+        }
+
+        let mut links: Vec<J> = Vec::new();
+        for r in &recs {
+            match r {
+                Record::Entity(e) => {
+                    let sid = e.entity_id.into_uuid();
+                    if !included.contains(&sid) {
+                        continue;
+                    }
+                    for (pid, v) in &e.properties {
+                        if let Value::EntityRef(t) = v {
+                            let tid = t.into_uuid();
+                            if included.contains(&tid) {
+                                links.push(json!({
+                                    "source": sid.to_string(),
+                                    "target": tid.to_string(),
+                                    "kind": "ref",
+                                    "label": names.prop_name.get(&pid.get()).cloned()
+                                        .unwrap_or_else(|| format!("prop:{}", pid.get())),
+                                }));
+                            }
+                        }
+                    }
+                }
+                Record::HyperEdge(h) => {
+                    let members: Vec<String> = h
+                        .roles
+                        .iter()
+                        .map(|(_, eid)| eid.into_uuid())
+                        .filter(|id| included.contains(id))
+                        .map(|id| id.to_string())
+                        .collect();
+                    if members.len() < 2 {
+                        continue;
+                    }
+                    let label = names.type_name.get(&h.type_id.get()).cloned()
+                        .unwrap_or_else(|| format!("edge:{}", h.type_id.get()));
+                    if members.len() == 2 {
+                        links.push(json!({
+                            "source": members[0], "target": members[1],
+                            "kind": "hyperedge", "label": label,
+                        }));
+                    } else {
+                        let hid = h.hyperedge_id.into_uuid().to_string();
+                        nodes.push(json!({
+                            "id": hid, "type_id": h.type_id.get(),
+                            "kind": label, "label": label, "hyper": true,
+                        }));
+                        for m in &members {
+                            links.push(json!({
+                                "source": hid, "target": m,
+                                "kind": "hyperedge", "label": label,
+                            }));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        json!({
+            "as_of": snap.get(),
+            "nodes": nodes,
+            "links": links,
+            "total_entities": total_entities,
+            "shown": included.len(),
+            "truncated": total_entities > included.len(),
+        })
+    }
+
     // ---- write paths ----------------------------------------------------
 
     /// Create a new entity of `kind` with the given `(property_name, value)`
@@ -747,6 +872,84 @@ mod tests {
         // Hanoi/active=30, Hanoi/inactive=40, HCMC/active=25
         assert_eq!(sum["cells"], json!([[25.0, 0.0], [30.0, 40.0]]));
         assert_eq!(sum["grand_total"], 95.0);
+    }
+
+    /// The graph projection: `EntityRef` props are `ref` links, binary
+    /// hyperedges are single links, and N-ary hyperedges become a hub node
+    /// with a star of links.
+    #[test]
+    fn graph_projects_refs_and_hyperedges() {
+        use ndb_engine::id::{HyperedgeId, RoleId};
+        use ndb_engine::record::HyperEdgeRecord;
+
+        let store = fresh();
+        let (a, b, c, d) = (
+            EntityId::now_v7(),
+            EntityId::now_v7(),
+            EntityId::now_v7(),
+            EntityId::now_v7(),
+        );
+        store
+            .engine
+            .with_write_txn(|mut txn| {
+                txn.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(1), name: "Person".into() }));
+                txn.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(2), name: "Knows".into() }));
+                txn.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(3), name: "Trio".into() }));
+                txn.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(1), name: "name".into() }));
+                txn.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(2), name: "friend".into() }));
+                for (eid, nm, friend) in [(a, "A", Some(b)), (b, "B", None), (c, "C", None), (d, "D", None)] {
+                    let mut props = vec![(PropertyId::new(1), Value::String(nm.into()))];
+                    if let Some(f) = friend {
+                        props.push((PropertyId::new(2), Value::EntityRef(f)));
+                    }
+                    txn.put_entity(EntityRecord {
+                        entity_id: eid,
+                        type_id: TypeId::new(1),
+                        tx_id_assert: TxId::ACTIVE,
+                        tx_id_supersede: TxId::ACTIVE,
+                        properties: props,
+                    });
+                }
+                // Binary hyperedge A—B, N-ary hyperedge B-C-D.
+                txn.put_hyperedge(HyperEdgeRecord {
+                    hyperedge_id: HyperedgeId::now_v7(),
+                    type_id: TypeId::new(2),
+                    tx_id_assert: TxId::ACTIVE,
+                    tx_id_supersede: TxId::ACTIVE,
+                    roles: vec![(RoleId::new(1), a), (RoleId::new(2), b)],
+                    hyperedge_roles: vec![],
+                    properties: vec![],
+                });
+                txn.put_hyperedge(HyperEdgeRecord {
+                    hyperedge_id: HyperedgeId::now_v7(),
+                    type_id: TypeId::new(3),
+                    tx_id_assert: TxId::ACTIVE,
+                    tx_id_supersede: TxId::ACTIVE,
+                    roles: vec![(RoleId::new(1), b), (RoleId::new(2), c), (RoleId::new(3), d)],
+                    hyperedge_roles: vec![],
+                    properties: vec![],
+                });
+                txn.commit()
+            })
+            .expect("seed graph");
+
+        let proj = store.graph(None, 300);
+        let nodes = proj["nodes"].as_array().unwrap();
+        let links = proj["links"].as_array().unwrap();
+        // 4 entity nodes + 1 hub node for the N-ary edge.
+        assert_eq!(proj["total_entities"], 4);
+        assert_eq!(nodes.len(), 5);
+        assert_eq!(nodes.iter().filter(|n| n["hyper"] == true).count(), 1, "one N-ary hub");
+        // 1 ref + 1 binary hyperedge + 3 star links from the hub.
+        assert_eq!(links.len(), 5);
+        assert_eq!(links.iter().filter(|l| l["kind"] == "ref").count(), 1);
+        assert_eq!(links.iter().filter(|l| l["kind"] == "hyperedge").count(), 4);
+        assert_eq!(proj["truncated"], false);
+
+        // Limit caps entities and drops links to excluded nodes.
+        let capped = store.graph(None, 2);
+        assert_eq!(capped["shown"], 2);
+        assert_eq!(capped["truncated"], true);
     }
 
     /// Editing a record that does not exist is a typed `NotFound` (HTTP 404).

@@ -13,6 +13,7 @@
 //! - `GET  /api/record`     → one record's full property list (`?id=&as_of=`)
 //! - `GET  /api/history`    → a record's version chain (`?id=&property=`)
 //! - `GET  /api/pivot`      → 2-D pivot (`?kind=&row=&col=&agg=&value=&as_of=`)
+//! - `GET  /api/graph`      → node/link projection (`?as_of=&limit=`)
 //! - `POST /api/commit`     → create / set / delete (body: `{op, ...}`)
 
 use std::collections::HashMap;
@@ -137,6 +138,10 @@ fn dispatch(store: &Store, method: &str, path: &str, qp: &Query, body: &[u8]) ->
                 200,
                 store.pivot(kind as u32, row, col, agg, qp.get("value"), qp.u64("as_of")),
             )
+        }
+        ("GET", "/api/graph") => {
+            let limit = usize::try_from(qp.u64("limit").unwrap_or(300)).unwrap_or(300);
+            (200, store.graph(qp.u64("as_of"), limit))
         }
         ("POST", "/api/commit") => commit(store, body),
         _ => (404, err("not_found", "unknown endpoint")),
