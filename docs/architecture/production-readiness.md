@@ -164,7 +164,7 @@ crash would. This is also the bootstrap step for replication (below).
 |---|---|---|
 | **Log-shipping replication primitives** | **Landed** | `replication.rs` |
 | **Replication network daemon** (leader `/replicate` + follower `poll_once`) | **Landed** | `replication.rs`, `ndb-server` |
-| Continuous cross-WAL-rotation cursor | **Planned** | follower re-bootstraps via base backup on a `rotated` batch today |
+| **Continuous cross-WAL-rotation cursor** (opt-in WAL archiving) | **Landed** | `engine.rs`, `replication.rs`, `ndb-server` |
 | Raft consensus | **Planned** | big lift; defer until a design partner needs it |
 
 **Replication.** nDB replicates the PostgreSQL way: a base backup bootstraps
@@ -188,10 +188,20 @@ user-facing `/subscribe` change-feed, which strips it. The follower side is
 auto-flushes, so the follower builds SSTables exactly like the leader) plus
 `poll_once(engine, cursor, fetch)` — the reusable daemon step, with the
 transport in a closure so the engine takes no network dependency and the loop
-is deterministically testable. A `rotated` batch (the follower fell behind a
-flush) signals re-bootstrap from a base backup. End-to-end tests cover the
-library loop and the full HTTP path. What remains is a cursor that spans WAL
-rotation continuously (via WAL archiving) without the base-backup re-sync.
+is deterministically testable. End-to-end tests cover the library loop and the
+full HTTP path.
+
+**Continuous cross-rotation streaming** is now landed too. Opt-in WAL
+archiving (`EngineConfig.wal_archive_segments` / `NDB_WAL_ARCHIVE=N`) makes
+flush KEEP the sealed segment instead of deleting it, pruning the archive to
+the last `N`. Because WAL seqs are non-contiguous, the leader supplies the
+`next_wal_seq` to advance to: `serve_replication` reads any segment (active or
+archived) and reports `{available, segment_sealed, next_wal_seq, …}`, and the
+follower's `poll_once` drains a sealed segment then advances — streaming
+straight through the leader's flushes with no re-bootstrap. Only a follower
+that falls more than `N` segments behind (segment pruned → `available:false`)
+re-bootstraps from a base backup. A test interleaves commits with four
+flushes under a live follower loop and the replica loses nothing.
 
 ## Honest summary
 
@@ -205,7 +215,7 @@ backpressure, no-rebuild compaction install, and opt-in block compression
 landed and tested.**
 
 What's left is a short list of clearly-scoped follow-on enhancements, not gaps
-in the sweep: a continuous cross-WAL-rotation replication cursor (via WAL
-archiving), bounded-RAM on-demand block decompression, an incremental index
+in the sweep: bounded-RAM on-demand block decompression, an incremental index
 update at compaction install in default mode, and — when a design partner
-needs it — Raft consensus. All design-clear, none blocking.
+needs it — multi-follower replication coordination + Raft consensus. All
+design-clear, none blocking.
