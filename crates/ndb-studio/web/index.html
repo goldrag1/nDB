@@ -142,6 +142,16 @@
   .danger-btn { border-color: #54262a; color: #ffb3b3; }
   .danger-btn:hover { border-color: var(--danger); background: #2a1416; }
   .pager { display: flex; align-items: center; gap: 12px; justify-content: center; margin: 14px 0; }
+  .kind.edge .n { color: var(--accent2); }
+  .edgehint { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+  .erole { display: inline-flex; align-items: baseline; gap: 6px; cursor: pointer; }
+  .erole:hover { color: var(--accent); }
+  .ekind { color: var(--muted); font-size: 10px; }
+  .erow { display: grid; grid-template-columns: 130px 1fr auto; gap: 8px; margin-bottom: 6px; align-items: center; }
+  .erow input, .erow select { background: #0c1118; color: var(--ink); border: 1px solid #2c3a4a; border-radius: 6px; padding: 5px 7px; font: inherit; }
+  .erm { color: var(--danger); border: none; background: none; cursor: pointer; }
+  .edgehdr { display: flex; align-items: center; justify-content: space-between; }
+  .edgeadd { font-size: 11px; padding: 1px 7px; }
 </style>
 </head>
 <body>
@@ -213,6 +223,15 @@
     <div class="dlg-actions"><button onclick="document.getElementById('nodeDlg').close()">Close</button></div>
   </dialog>
 
+  <dialog id="edgeDlg">
+    <h3>New edge · N-ary relationship</h3>
+    <div class="field" style="grid-template-columns:110px 1fr"><label>Edge kind</label><input id="neKind" placeholder="e.g. Authorship" autocomplete="off" /></div>
+    <h4 style="margin:12px 0 6px;color:var(--muted)">Roles → entities</h4>
+    <div id="neRoles"></div>
+    <button id="neAddRole" style="margin-top:6px">+ role</button>
+    <div class="dlg-actions"><button onclick="document.getElementById('edgeDlg').close()">Cancel</button><button class="primary" id="neSave">Create edge</button></div>
+  </dialog>
+
   <div id="login" class="login hidden">
     <form id="loginForm" class="loginCard">
       <h2>nDB <b>Studio</b></h2>
@@ -228,7 +247,7 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-let HEAD = 0, ASOF = null, SEL = null, CATALOG = [], MODE = "table";
+let HEAD = 0, ASOF = null, SEL = null, CATALOG = [], MODE = "table", EDGES = [], SEL_EDGE = null;
 let PIVOT = { row: null, col: null, agg: "count", value: null };
 let GRAPH_ANIM = null;
 let ME = { authed: false, user: null, role: null };
@@ -258,34 +277,138 @@ const readOnly = () => ASOF !== null && ASOF < HEAD;
 
 async function loadCatalog() {
   const c = await api.get("/catalog?" + (ASOF === null ? "" : "as_of=" + ASOF));
-  HEAD = c.head; CATALOG = c.kinds || [];
+  HEAD = c.head; CATALOG = c.kinds || []; EDGES = c.edges || [];
   const slider = $("asof");
   slider.max = String(HEAD);
   if (ASOF === null) slider.value = String(HEAD);
-  $("dbhead").textContent = "head tx " + HEAD + " · " + CATALOG.length + " kinds";
+  $("dbhead").textContent = "head tx " + HEAD + " · " + CATALOG.length + " kinds · " + EDGES.length + " edge types";
   renderKinds();
 }
 
 function renderKinds() {
   const el = $("kinds"); el.innerHTML = "";
-  if (!CATALOG.length) { el.innerHTML = '<div class="empty" style="font-size:12px">empty database</div>'; }
+  if (!CATALOG.length && !EDGES.length) { el.innerHTML = '<div class="empty" style="font-size:12px">empty database</div>'; }
   for (const k of CATALOG) {
     const d = document.createElement("div");
-    d.className = "kind" + (SEL && SEL.type_id === k.type_id ? " sel" : "");
+    d.className = "kind" + (!SEL_EDGE && SEL && SEL.type_id === k.type_id ? " sel" : "");
     d.innerHTML = `<span>${esc(k.name)}</span><span class="n">${k.count}</span>`;
     d.onclick = () => selectKind(k);
+    el.appendChild(d);
+  }
+  const h = document.createElement("h4");
+  h.className = "edgehdr";
+  h.innerHTML = `<span>Edges (N-ary)</span>`;
+  h.style.marginTop = "14px";
+  if (canWrite()) {
+    const add = document.createElement("button");
+    add.className = "edgeadd"; add.textContent = "+ new"; add.title = "New N-ary edge";
+    add.onclick = openNewEdge;
+    h.appendChild(add);
+  }
+  el.appendChild(h);
+  if (!EDGES.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty"; empty.style.fontSize = "11px"; empty.style.padding = "4px 8px";
+    empty.textContent = "no edges yet";
+    el.appendChild(empty);
+  }
+  for (const e of EDGES) {
+    const d = document.createElement("div");
+    d.className = "kind edge" + (SEL_EDGE && SEL_EDGE.type_id === e.type_id ? " sel" : "");
+    d.innerHTML = `<span>⬡ ${esc(e.name)}</span><span class="n">${e.count}</span>`;
+    d.onclick = () => selectEdge(e);
     el.appendChild(d);
   }
 }
 
 async function selectKind(k) {
   SEL = k;
+  SEL_EDGE = null;
   // Reset pivot axes to this kind's first two properties when switching kinds.
   PIVOT = { row: k.properties[0]?.name || null, col: k.properties[1]?.name || k.properties[0]?.name || null, agg: "count", value: null };
   TBL = newTableState();
   renderKinds();
   await renderMain();
 }
+
+// ---- N-ary hyperedge workbench ----
+let EDGE_ENTITIES = [];
+async function selectEdge(e) { SEL_EDGE = e; renderKinds(); await loadEdges(); }
+async function loadEdges() {
+  if (!SEL_EDGE) return;
+  renderEdges(await api.get(`/hyperedges?kind=${SEL_EDGE.type_id}${asofQuery()}&limit=500`));
+}
+function renderEdges(d) {
+  cancelGraphAnim();
+  const c = $("content");
+  const writable = !readOnly() && canWrite();
+  const roles = d.roles || [], edges = d.edges || [];
+  let html = "";
+  if (readOnly()) html += `<div class="banner">Viewing history as of tx ${ASOF} — read only.</div>`;
+  html += `<div class="toolbar"><h2>⬡ ${esc(d.kind)}</h2><span class="badge">${d.shown} / ${d.total} edges · ${roles.length} roles</span><div class="spacer" style="flex:1"></div>`;
+  if (writable) html += `<button class="primary" id="newEdgeBtn">+ New edge</button>`;
+  html += `</div>`;
+  html += `<div class="edgehint">Each row is <b>one</b> N-ary edge — a single relationship spanning ${roles.length || "N"} entities by role. A relational table needs junction rows to express this.</div>`;
+  if (!edges.length) {
+    html += `<div class="empty">No edges of this kind yet.</div>`;
+  } else {
+    html += `<table><thead><tr>`;
+    for (const r of roles) html += `<th>${esc(r)}</th>`;
+    html += `</tr></thead><tbody>`;
+    for (const e of edges) {
+      html += "<tr>";
+      for (const r of roles) {
+        const f = e.fillers[r];
+        html += f
+          ? `<td><span class="erole qref" data-id="${esc(f.id)}" title="${esc(f.id)}">${esc(f.label || f.id.slice(0, 8))}<span class="ekind">${esc(f.kind)}</span></span></td>`
+          : `<td><span class="tag">∅</span></td>`;
+      }
+      html += "</tr>";
+    }
+    html += "</tbody></table>";
+  }
+  c.innerHTML = html;
+  c.querySelectorAll(".qref").forEach((el) => (el.onclick = () => openRecord(el.dataset.id)));
+  if (writable) $("newEdgeBtn").onclick = openNewEdge;
+}
+
+async function openNewEdge() {
+  const g = await api.get("/graph?limit=1000");
+  EDGE_ENTITIES = (g.nodes || []).filter((n) => !n.hyper);
+  $("neKind").value = SEL_EDGE ? SEL_EDGE.name : "";
+  $("neRoles").innerHTML = "";
+  addEdgeRole(); addEdgeRole();
+  $("edgeDlg").showModal();
+}
+function entityOptions() {
+  return `<option value="">— pick entity —</option>` +
+    EDGE_ENTITIES.map((n) => `<option value="${esc(n.id)}">${esc(n.kind)}: ${esc(n.label || n.id.slice(0, 8))}</option>`).join("");
+}
+function addEdgeRole(role) {
+  const row = document.createElement("div");
+  row.className = "erow";
+  row.innerHTML = `<input class="erole-name" placeholder="role" value="${esc(role || "")}" autocomplete="off" /><select class="erole-ent">${entityOptions()}</select><button class="erm" title="remove">✕</button>`;
+  row.querySelector(".erm").onclick = () => row.remove();
+  $("neRoles").appendChild(row);
+}
+$("neAddRole").onclick = () => addEdgeRole();
+$("neSave").onclick = async () => {
+  const kind = $("neKind").value.trim();
+  if (!kind) { toast("edge kind required", true); return; }
+  const roles = [];
+  $("neRoles").querySelectorAll(".erow").forEach((row) => {
+    const role = row.querySelector(".erole-name").value.trim();
+    const ref = row.querySelector(".erole-ent").value;
+    if (role && ref) roles.push({ role, ref });
+  });
+  if (!roles.length) { toast("add at least one role + entity", true); return; }
+  const r = await api.commit({ op: "create_edge", kind, roles });
+  if (r.status === 200) { $("edgeDlg").close(); toast("edge created · tx " + r.body.tx); await refreshAll(); }
+  else toast(r.body.error?.message || "error", true);
+};
+
+// Re-render whichever view (entity mode or edge) is active.
+async function reloadView() { return SEL_EDGE ? loadEdges() : renderMain(); }
 
 // Dispatch the main pane on the current view mode.
 async function renderMain() {
@@ -785,10 +908,16 @@ function jumpTo(tx) {
   const slider = $("asof");
   slider.value = String(tx);
   slider.dispatchEvent(new Event("input"));
-  loadCatalog().then(() => { if (SEL) SEL = CATALOG.find((k) => k.type_id === SEL.type_id) || SEL; renderKinds(); renderMain(); });
+  loadCatalog().then(() => { if (SEL) SEL = CATALOG.find((k) => k.type_id === SEL.type_id) || SEL; renderKinds(); reloadView(); });
 }
 
-async function refreshAll() { await loadCatalog(); if (SEL) { SEL = CATALOG.find((k) => k.type_id === SEL.type_id) || SEL; } await renderMain(); }
+async function refreshAll() {
+  await loadCatalog();
+  if (SEL) SEL = CATALOG.find((k) => k.type_id === SEL.type_id) || SEL;
+  if (SEL_EDGE) { SEL_EDGE = EDGES.find((e) => e.type_id === SEL_EDGE.type_id) || SEL_EDGE; }
+  renderKinds();
+  await reloadView();
+}
 
 $("asof").oninput = (e) => {
   const v = parseInt(e.target.value, 10);
@@ -797,7 +926,7 @@ $("asof").oninput = (e) => {
   if (ASOF === null) { lbl.textContent = "now"; lbl.className = "asof live"; }
   else { lbl.textContent = "tx " + ASOF; lbl.className = "asof past"; }
 };
-$("asof").onchange = async () => { await loadCatalog(); if (SEL) SEL = CATALOG.find((k) => k.type_id === SEL.type_id) || CATALOG[0]; renderKinds(); await renderMain(); };
+$("asof").onchange = async () => { await loadCatalog(); if (SEL) SEL = CATALOG.find((k) => k.type_id === SEL.type_id) || CATALOG[0]; if (SEL_EDGE) SEL_EDGE = EDGES.find((e) => e.type_id === SEL_EDGE.type_id) || SEL_EDGE; renderKinds(); await reloadView(); };
 
 // ---- auth / session ----
 function showLogin() { $("login").classList.remove("hidden"); setTimeout(() => $("luser").focus(), 0); }

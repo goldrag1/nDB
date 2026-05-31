@@ -13,9 +13,11 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use ndb_engine::engine::EngineError;
-use ndb_engine::id::{EntityId, PropertyId, TxId, TypeId};
+use ndb_engine::id::{EntityId, HyperedgeId, PropertyId, RoleId, TxId, TypeId};
 use ndb_engine::mvcc::Resolved;
-use ndb_engine::record::{EntityRecord, PropertyKeyRecord, Record, TypeNameRecord};
+use ndb_engine::record::{
+    EntityRecord, HyperEdgeRecord, PropertyKeyRecord, Record, RoleNameRecord, TypeNameRecord,
+};
 use ndb_engine::shared::SharedEngine;
 use ndb_engine::value::Value;
 use serde_json::{Value as J, json};
@@ -176,10 +178,13 @@ impl TableQuery {
 struct Names {
     type_name: BTreeMap<u32, String>,
     prop_name: BTreeMap<u32, String>,
+    role_name: BTreeMap<u32, String>,
     type_id: HashMap<String, u32>,
     prop_id: HashMap<String, u32>,
+    role_id: HashMap<String, u32>,
     max_type: u32,
     max_prop: u32,
+    max_role: u32,
 }
 
 impl Store {
@@ -207,10 +212,13 @@ impl Store {
         let mut n = Names {
             type_name: BTreeMap::new(),
             prop_name: BTreeMap::new(),
+            role_name: BTreeMap::new(),
             type_id: HashMap::new(),
             prop_id: HashMap::new(),
+            role_id: HashMap::new(),
             max_type: 0,
             max_prop: 0,
+            max_role: 0,
         };
         for r in recs {
             match r {
@@ -225,6 +233,12 @@ impl Store {
                     n.prop_name.insert(id, p.name.clone());
                     n.prop_id.insert(p.name.clone(), id);
                     n.max_prop = n.max_prop.max(id);
+                }
+                Record::RoleName(r) => {
+                    let id = r.id.get();
+                    n.role_name.insert(id, r.name.clone());
+                    n.role_id.insert(r.name.clone(), id);
+                    n.max_role = n.max_role.max(id);
                 }
                 _ => {}
             }
@@ -282,7 +296,26 @@ impl Store {
             })
             .collect();
 
-        json!({ "head": self.head(), "as_of": snap.get(), "kinds": kinds_json })
+        // Hyperedge kinds present (with counts) — the N-ary relationship axis.
+        let mut edge_kinds: BTreeMap<u32, u64> = BTreeMap::new();
+        for r in &recs {
+            if let Record::HyperEdge(h) = r {
+                *edge_kinds.entry(h.type_id.get()).or_default() += 1;
+            }
+        }
+        let edges_json: Vec<J> = edge_kinds
+            .iter()
+            .filter_map(|(tid, count)| {
+                let name = names.type_name.get(tid).cloned()
+                    .unwrap_or_else(|| format!("edge:{tid}"));
+                if is_reserved(&name) {
+                    return None;
+                }
+                Some(json!({ "type_id": tid, "name": name, "count": count }))
+            })
+            .collect();
+
+        json!({ "head": self.head(), "as_of": snap.get(), "kinds": kinds_json, "edges": edges_json })
     }
 
     /// One record-kind projected to a table page: a header row of property
@@ -711,6 +744,65 @@ impl Store {
         }
     }
 
+    /// Hyperedges of one kind, with each role resolved to its filler entity
+    /// (id + label + kind). `roles` is the union of role names across the
+    /// edges (the table's columns). This is the N-ary relationship view a
+    /// relational table can't hold in one row.
+    #[must_use]
+    pub fn hyperedges(&self, type_id: u32, as_of: Option<u64>, limit: usize) -> J {
+        let snap = self.snapshot(as_of);
+        let recs = self.records(snap);
+        let names = Self::names(&recs);
+        let tid = TypeId::new(type_id);
+        let kind = names.type_name.get(&type_id).cloned().unwrap_or_else(|| format!("edge:{type_id}"));
+        if is_reserved(&kind) {
+            return json!({ "type_id": type_id, "as_of": snap.get(), "kind": kind, "roles": [], "edges": [], "total": 0, "shown": 0 });
+        }
+
+        // id → (label, kind) for resolving role fillers.
+        let mut ent: HashMap<Uuid, (String, String)> = HashMap::new();
+        for r in &recs {
+            if let Record::Entity(e) = r {
+                let k = names.type_name.get(&e.type_id.get()).cloned()
+                    .unwrap_or_else(|| format!("kind:{}", e.type_id.get()));
+                ent.insert(e.entity_id.into_uuid(), (entity_label(e, &names), k));
+            }
+        }
+
+        let mut role_ids: BTreeSet<u32> = BTreeSet::new();
+        let mut edges: Vec<J> = Vec::new();
+        let mut total = 0usize;
+        for r in &recs {
+            if let Record::HyperEdge(h) = r
+                && h.type_id == tid
+            {
+                total += 1;
+                if edges.len() >= limit {
+                    continue;
+                }
+                let mut fillers = serde_json::Map::new();
+                for (rid, eid) in &h.roles {
+                    role_ids.insert(rid.get());
+                    let rn = names.role_name.get(&rid.get()).cloned()
+                        .unwrap_or_else(|| format!("role:{}", rid.get()));
+                    let id = eid.into_uuid();
+                    let (label, k) = ent.get(&id).cloned().unwrap_or_default();
+                    fillers.insert(rn, json!({ "id": id.to_string(), "label": label, "kind": k }));
+                }
+                edges.push(json!({ "id": h.hyperedge_id.into_uuid().to_string(), "fillers": fillers }));
+            }
+        }
+        let roles: Vec<String> = role_ids
+            .iter()
+            .map(|rid| names.role_name.get(rid).cloned().unwrap_or_else(|| format!("role:{rid}")))
+            .collect();
+
+        json!({
+            "type_id": type_id, "as_of": snap.get(), "kind": kind,
+            "roles": roles, "edges": edges, "total": total, "shown": edges.len(),
+        })
+    }
+
     // ---- write paths ----------------------------------------------------
 
     /// Create a new entity of `kind` with the given `(property_name, value)`
@@ -749,6 +841,40 @@ impl Store {
                 tx_id_assert: TxId::ACTIVE,
                 tx_id_supersede: TxId::ACTIVE,
                 properties: entity_props,
+            });
+            txn.commit()
+        })?;
+        Ok(tx.get())
+    }
+
+    /// Create an N-ary hyperedge of `kind` linking entities by named role.
+    /// Unknown kind/role names are interned. Returns the new tx id.
+    ///
+    /// # Errors
+    /// `BadValue` if no roles are given; engine errors otherwise.
+    pub fn create_hyperedge(&self, kind: &str, roles: &[(String, Uuid)]) -> Result<u64, StoreError> {
+        if roles.is_empty() {
+            return Err(StoreError::BadValue("an edge needs at least one role".to_string()));
+        }
+        let recs = self.records(self.snapshot(None));
+        let names = Self::names(&recs);
+        let mut alloc = Allocator::new(&names);
+
+        let tx = self.engine.with_write_txn(|mut txn| {
+            let type_id = alloc.type_id(kind, &mut txn);
+            let mut role_fillers = Vec::with_capacity(roles.len());
+            for (rname, ent) in roles {
+                let rid = alloc.role_id(rname, &mut txn);
+                role_fillers.push((rid, EntityId::from_bytes(*ent.as_bytes())));
+            }
+            txn.put_hyperedge(HyperEdgeRecord {
+                hyperedge_id: HyperedgeId::now_v7(),
+                type_id,
+                tx_id_assert: TxId::ACTIVE,
+                tx_id_supersede: TxId::ACTIVE,
+                roles: role_fillers,
+                hyperedge_roles: Vec::new(),
+                properties: Vec::new(),
             });
             txn.commit()
         })?;
@@ -960,12 +1086,14 @@ impl Store {
 }
 
 /// Resolves names to ids within a write transaction, allocating + writing a
-/// `TypeName` / `PropertyKey` record for any name not yet in the dictionary.
+/// `TypeName` / `PropertyKey` / `RoleName` record for any name not yet known.
 struct Allocator {
     type_id: HashMap<String, u32>,
     prop_id: HashMap<String, u32>,
+    role_id: HashMap<String, u32>,
     next_type: u32,
     next_prop: u32,
+    next_role: u32,
 }
 
 impl Allocator {
@@ -973,9 +1101,25 @@ impl Allocator {
         Self {
             type_id: names.type_id.clone(),
             prop_id: names.prop_id.clone(),
+            role_id: names.role_id.clone(),
             next_type: names.max_type + 1,
             next_prop: names.max_prop + 1,
+            next_role: names.max_role + 1,
         }
+    }
+
+    fn role_id(&mut self, name: &str, txn: &mut ndb_engine::engine::WriteTxn<'_>) -> RoleId {
+        if let Some(id) = self.role_id.get(name) {
+            return RoleId::new(*id);
+        }
+        let id = self.next_role;
+        self.next_role += 1;
+        self.role_id.insert(name.to_string(), id);
+        txn.put_raw(Record::RoleName(RoleNameRecord {
+            id: RoleId::new(id),
+            name: name.to_string(),
+        }));
+        RoleId::new(id)
     }
 
     fn type_id(&mut self, name: &str, txn: &mut ndb_engine::engine::WriteTxn<'_>) -> TypeId {
@@ -1391,6 +1535,41 @@ mod tests {
         assert_eq!(p["total"], 5);
         assert_eq!(p["shown"], 2);
         assert_eq!(p["rows"][0]["cells"][0], "Cara");
+    }
+
+    /// N-ary hyperedge workbench: create an edge by named role, see it in the
+    /// catalog's edges, and read it back with roles resolved to fillers.
+    #[test]
+    fn hyperedge_create_list_and_resolve() {
+        let store = fresh();
+        store.create("Person", &[("name".into(), s("Alice"))], None).expect("p");
+        store.create("Paper", &[("title".into(), s("nDB"))], None).expect("paper");
+        let cat = store.catalog(None);
+        let person_tid = u32::try_from(cat["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
+        let paper_tid = u32::try_from(cat["kinds"][1]["type_id"].as_u64().unwrap()).unwrap();
+        let alice = Uuid::parse_str(store.table(person_tid, &TableQuery::new(None, 5))["rows"][0]["id"].as_str().unwrap()).unwrap();
+        let paper = Uuid::parse_str(store.table(paper_tid, &TableQuery::new(None, 5))["rows"][0]["id"].as_str().unwrap()).unwrap();
+
+        store.create_hyperedge("Authorship", &[("author".into(), alice), ("paper".into(), paper)]).expect("edge");
+
+        // Catalog lists the edge kind.
+        let cat = store.catalog(None);
+        let edges = cat["edges"].as_array().unwrap();
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0]["name"], "Authorship");
+        assert_eq!(edges[0]["count"], 1);
+
+        // hyperedges() resolves roles → fillers.
+        let etid = u32::try_from(edges[0]["type_id"].as_u64().unwrap()).unwrap();
+        let he = store.hyperedges(etid, None, 50);
+        assert_eq!(he["total"], 1);
+        let roles: Vec<&str> = he["roles"].as_array().unwrap().iter().map(|r| r.as_str().unwrap()).collect();
+        assert!(roles.contains(&"author") && roles.contains(&"paper"));
+        assert_eq!(he["edges"][0]["fillers"]["author"]["label"], "Alice");
+        assert_eq!(he["edges"][0]["fillers"]["paper"]["kind"], "Paper");
+
+        // An empty edge is rejected.
+        assert!(store.create_hyperedge("X", &[]).is_err());
     }
 
     /// Editing a record that does not exist is a typed `NotFound` (HTTP 404).

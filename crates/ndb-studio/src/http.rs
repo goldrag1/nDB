@@ -224,6 +224,14 @@ fn dispatch(
             let limit = usize::try_from(qp.u64("limit").unwrap_or(300)).unwrap_or(300);
             Resp::ok(store.graph(qp.u64("as_of"), limit))
         }),
+        ("GET", "/api/hyperedges") => guard_read(session.as_ref(), || {
+            let Some(kind) = qp.u64("kind") else {
+                return Resp::fail(400, "bad_request", "missing kind");
+            };
+            let limit = usize::try_from(qp.u64("limit").unwrap_or(500)).unwrap_or(500);
+            #[allow(clippy::cast_possible_truncation)]
+            Resp::ok(store.hyperedges(kind as u32, qp.u64("as_of"), limit))
+        }),
         ("POST", "/api/query") => guard_read(session.as_ref(), || run_query(store, body)),
 
         // ---- writes (editor / admin) ----
@@ -516,6 +524,27 @@ fn commit(store: &Store, body: &[u8], author: &str) -> Resp {
                 return Resp::fail(400, "bad_request", "missing or invalid id");
             };
             finish(store.delete(id))
+        }
+        "create_edge" => {
+            let kind = req.get("kind").and_then(J::as_str).unwrap_or("");
+            if kind.is_empty() {
+                return Resp::fail(400, "bad_request", "missing edge kind");
+            }
+            let mut roles = Vec::new();
+            if let Some(arr) = req.get("roles").and_then(J::as_array) {
+                for r in arr {
+                    let role = r.get("role").and_then(J::as_str).unwrap_or("");
+                    let Some(target) = r.get("ref").and_then(J::as_str).and_then(|s| Uuid::parse_str(s).ok())
+                    else {
+                        return Resp::fail(400, "bad_request", "role missing valid 'ref' entity id");
+                    };
+                    if role.is_empty() {
+                        return Resp::fail(400, "bad_request", "role missing name");
+                    }
+                    roles.push((role.to_string(), target));
+                }
+            }
+            finish(store.create_hyperedge(kind, &roles))
         }
         _ => Resp::fail(400, "bad_request", "unknown op"),
     }
