@@ -1523,6 +1523,7 @@ impl Server {
             }
             ("POST", "/flush") => self.handle_flush(out, outcome),
             ("POST", "/compact") => self.handle_compact(out, outcome),
+            ("POST", "/replicate") => self.handle_replicate(body, out, outcome),
             ("POST", "/lookup") => self.handle_lookup(body, out, outcome),
             ("POST", "/vector_search") => self.handle_vector_search(body, out, outcome),
             ("POST", "/property_lookup") => self.handle_property_lookup(body, out, outcome),
@@ -1675,6 +1676,63 @@ impl Server {
                 "records_out": stats.records_out,
                 "sstables_in": stats.sstables_in,
                 "new_sstable_seq": stats.new_sstable_seq,
+            }),
+        )
+    }
+
+    /// **Leader side of replication.** Serve committed WAL records past a
+    /// follower's `(wal_seq, after)` watermark. Request:
+    /// `{"wal_seq": N, "after": M}`. Response:
+    /// `{"wal_seq", "next_offset", "rotated", "records"}` where `records` is a
+    /// base64 record batch (every record kind, incl. metadata) and `rotated`
+    /// is true when the requested segment is no longer the active one (the
+    /// follower must re-bootstrap from a base backup). Admin-gated.
+    fn handle_replicate(
+        &self,
+        body: &[u8],
+        out: &mut dyn Write,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
+        #[derive(serde::Deserialize)]
+        struct ReplicateRequest {
+            wal_seq: u64,
+            after: u64,
+        }
+        let req: ReplicateRequest = match serde_json::from_slice(body) {
+            Ok(r) => r,
+            Err(e) => return bad_json(out, outcome, "replicate body", &e.to_string()),
+        };
+
+        let engine = self.engine.read().expect("engine lock poisoned");
+        let current_seq = engine.active_wal_seq();
+        if req.wal_seq != current_seq {
+            // The follower is asking about a segment that's no longer active
+            // (the leader has since flushed + rotated). The old segment's
+            // tail may be gone — the follower must re-bootstrap.
+            outcome.status = 200;
+            return write_json(
+                out,
+                200,
+                &serde_json::json!({
+                    "wal_seq": current_seq,
+                    "next_offset": req.after,
+                    "rotated": true,
+                    "records": "",
+                }),
+            );
+        }
+        let batch = engine.wal_delta_since(req.after)?;
+        let records = ndb_engine::encode_records_b64(&batch.records);
+        drop(engine);
+        outcome.status = 200;
+        write_json(
+            out,
+            200,
+            &serde_json::json!({
+                "wal_seq": current_seq,
+                "next_offset": batch.next_offset,
+                "rotated": false,
+                "records": records,
             }),
         )
     }
@@ -2900,7 +2958,7 @@ fn required_capability(method: &str, path: &str) -> Option<Capability> {
         ("POST", "/flush") => Some(Capability::Flush),
         ("POST", "/compact") => Some(Capability::Compact),
         // Operator-only lifecycle route: requires the Admin wildcard.
-        ("POST", "/admin/shutdown") => Some(Capability::Admin),
+        ("POST", "/admin/shutdown" | "/replicate") => Some(Capability::Admin),
         // Indexed query + traversal + query-language + subscribe routes
         // — all gated by Read.
         (
@@ -2926,6 +2984,7 @@ fn route_label(method: &str, path: &str) -> &'static str {
         ("GET", "/iter") => "/iter",
         ("POST", "/flush") => "/flush",
         ("POST", "/compact") => "/compact",
+        ("POST", "/replicate") => "/replicate",
         ("POST", "/lookup") => "/lookup",
         ("POST", "/vector_search") => "/vector_search",
         ("POST", "/property_lookup") => "/property_lookup",

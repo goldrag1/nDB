@@ -68,7 +68,10 @@ pub use engine::{
     merge_planned,
 };
 pub use shared::{CompactionPolicy, CompactorHandle, SharedEngine, run_offlock_compaction};
-pub use replication::{ReplicationBatch, apply_batch, read_wal_since};
+pub use replication::{
+    BatchDecodeError, FollowerCursor, PollOutcome, ReplicationBatch, StreamedBatch, apply_batch,
+    decode_records_b64, encode_records_b64, poll_once, read_wal_since,
+};
 pub use error::{DecodeError, EncodeError};
 pub use id::{EntityId, HyperedgeId, PropertyId, RoleId, TX_ACTIVE, TYPE_UNTYPED, TxId, TypeId};
 pub use index::{
