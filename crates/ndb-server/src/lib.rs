@@ -1683,10 +1683,13 @@ impl Server {
     /// **Leader side of replication.** Serve committed WAL records past a
     /// follower's `(wal_seq, after)` watermark. Request:
     /// `{"wal_seq": N, "after": M}`. Response:
-    /// `{"wal_seq", "next_offset", "rotated", "records"}` where `records` is a
-    /// base64 record batch (every record kind, incl. metadata) and `rotated`
-    /// is true when the requested segment is no longer the active one (the
-    /// follower must re-bootstrap from a base backup). Admin-gated.
+    /// `{"current_wal_seq", "available", "segment_sealed", "next_wal_seq",
+    /// "next_offset", "records"}` where `records` is a base64 record batch
+    /// (every record kind, incl. metadata). `available=false` means the
+    /// segment was pruned past the archive window (the follower must
+    /// re-bootstrap from a base backup); `segment_sealed` + `next_wal_seq` let
+    /// a follower stream continuously across the leader's WAL rotations when
+    /// WAL archiving is enabled. Admin-gated.
     fn handle_replicate(
         &self,
         body: &[u8],
@@ -1704,34 +1707,23 @@ impl Server {
         };
 
         let engine = self.engine.read().expect("engine lock poisoned");
-        let current_seq = engine.active_wal_seq();
-        if req.wal_seq != current_seq {
-            // The follower is asking about a segment that's no longer active
-            // (the leader has since flushed + rotated). The old segment's
-            // tail may be gone — the follower must re-bootstrap.
-            outcome.status = 200;
-            return write_json(
-                out,
-                200,
-                &serde_json::json!({
-                    "wal_seq": current_seq,
-                    "next_offset": req.after,
-                    "rotated": true,
-                    "records": "",
-                }),
-            );
-        }
-        let batch = engine.wal_delta_since(req.after)?;
-        let records = ndb_engine::encode_records_b64(&batch.records);
+        // serve_replication is the single source of truth: it reads the
+        // requested segment (active or archived), and reports whether it still
+        // exists, whether it's sealed, and the next segment to advance to —
+        // everything the follower needs to stream across WAL rotations.
+        let sb = engine.serve_replication(req.wal_seq, req.after)?;
+        let records = ndb_engine::encode_records_b64(&sb.records);
         drop(engine);
         outcome.status = 200;
         write_json(
             out,
             200,
             &serde_json::json!({
-                "wal_seq": current_seq,
-                "next_offset": batch.next_offset,
-                "rotated": false,
+                "current_wal_seq": sb.current_wal_seq,
+                "available": sb.available,
+                "segment_sealed": sb.segment_sealed,
+                "next_wal_seq": sb.next_wal_seq,
+                "next_offset": sb.next_offset,
                 "records": records,
             }),
         )

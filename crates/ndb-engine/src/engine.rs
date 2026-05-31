@@ -437,6 +437,15 @@ pub struct EngineConfig {
     /// both, so the setting can change between runs and existing files keep
     /// working.
     pub compression: crate::compression::Codec,
+    /// Number of sealed (rotated) WAL segments to retain for replication
+    /// followers, instead of deleting them on flush. `0` (default) keeps the
+    /// historical behaviour: the old WAL is deleted the moment its records are
+    /// durable in an SSTable. With `N > 0`, flush keeps the last `N` sealed
+    /// segments so a follower can finish streaming a segment after the leader
+    /// rotates past it (continuous cross-rotation replication). A follower
+    /// that falls more than `N` segments behind must re-bootstrap from a base
+    /// backup. Costs disk: up to `N` extra WAL segments.
+    pub wal_archive_segments: usize,
 }
 
 impl Default for EngineConfig {
@@ -448,6 +457,7 @@ impl Default for EngineConfig {
             memtable_flush_threshold_bytes: 0,
             l0_stall_threshold: 0,
             compression: crate::compression::Codec::Stored,
+            wal_archive_segments: 0,
         }
     }
 }
@@ -490,6 +500,7 @@ impl EngineConfig {
             memtable_flush_threshold_bytes: parse("NDB_MEMTABLE_FLUSH_BYTES").unwrap_or(0),
             l0_stall_threshold: parse("NDB_L0_STALL").unwrap_or(0),
             compression,
+            wal_archive_segments: parse("NDB_WAL_ARCHIVE").unwrap_or(0),
             ..Self::default()
         }
     }
@@ -1617,12 +1628,119 @@ impl Engine {
         after: u64,
     ) -> Result<crate::replication::ReplicationBatch, EngineError> {
         let seq = self.db.manifest().active_wal_seq;
+        self.wal_delta_for(seq, after)
+            .map(|o| o.unwrap_or_else(|| crate::replication::ReplicationBatch {
+                records: Vec::new(),
+                next_offset: after,
+            }))
+    }
+
+    /// Read a SPECIFIC WAL segment (`seq`) from byte offset `after`. Returns
+    /// `Ok(None)` when that segment no longer exists — pruned past the archive
+    /// window, so the follower must re-bootstrap. Used by cross-rotation
+    /// replication: the follower streams a sealed (archived) segment to its
+    /// end, then advances to [`next_wal_seq_after`](Self::next_wal_seq_after).
+    pub fn wal_delta_for(
+        &self,
+        seq: u64,
+        after: u64,
+    ) -> Result<Option<crate::replication::ReplicationBatch>, EngineError> {
         let path = wal_path(self.db.path(), seq);
-        Ok(crate::replication::read_wal_since(
+        if !path.exists() {
+            return Ok(None);
+        }
+        Ok(Some(crate::replication::read_wal_since(
             &path,
             self.cipher.clone(),
             after,
-        )?)
+        )?))
+    }
+
+    /// Sorted seqs of every WAL segment (`*.ndblog`) currently on disk — the
+    /// active one plus any archived (sealed) segments retained for replication.
+    #[must_use]
+    pub fn wal_segments(&self) -> Vec<u64> {
+        let mut segs = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(self.db.path()) {
+            for e in rd.flatten() {
+                let name = e.file_name();
+                let Some(name) = name.to_str() else { continue };
+                if let Some(stem) = name.strip_suffix(WAL_FILENAME_SUFFIX)
+                    && let Ok(seq) = stem.parse::<u64>()
+                {
+                    segs.push(seq);
+                }
+            }
+        }
+        segs.sort_unstable();
+        segs
+    }
+
+    /// The smallest WAL segment seq strictly greater than `seq` that still
+    /// exists — the next segment a follower should advance to after draining a
+    /// sealed one. `None` when `seq` is (or is past) the newest segment. WAL
+    /// seqs are NOT contiguous (flush allocates from the shared file-seq
+    /// counter), so a follower can't compute the next seq itself.
+    #[must_use]
+    pub fn next_wal_seq_after(&self, seq: u64) -> Option<u64> {
+        self.wal_segments().into_iter().find(|&s| s > seq)
+    }
+
+    /// Delete archived (sealed) WAL segments older than the configured
+    /// `wal_archive_segments` window. Never touches the active segment. Called
+    /// from flush when archiving is on.
+    fn prune_archived_wal(&self) {
+        let active = self.db.manifest().active_wal_seq;
+        let keep = self.config.wal_archive_segments;
+        // Sealed segments = everything except the active one, oldest first.
+        let mut sealed: Vec<u64> = self
+            .wal_segments()
+            .into_iter()
+            .filter(|&s| s != active)
+            .collect();
+        // Keep the newest `keep`; delete the rest (the oldest ones).
+        if sealed.len() > keep {
+            let cut = sealed.len() - keep;
+            sealed.truncate(cut);
+            for seq in sealed {
+                let _ = std::fs::remove_file(wal_path(self.db.path(), seq));
+            }
+        }
+    }
+
+    /// **Leader side, one source of truth.** Produce the replication batch for
+    /// a follower at `(seq, after)` — the records to ship plus the metadata
+    /// the follower needs to advance across WAL rotations: whether the segment
+    /// still exists, whether it's sealed, and the next segment to move to.
+    /// Both the HTTP `/replicate` handler and tests call this; the wire just
+    /// base64-encodes the records.
+    pub fn serve_replication(
+        &self,
+        seq: u64,
+        after: u64,
+    ) -> Result<crate::replication::StreamedBatch, EngineError> {
+        let active = self.active_wal_seq();
+        let sealed = seq != active;
+        match self.wal_delta_for(seq, after)? {
+            None => Ok(crate::replication::StreamedBatch {
+                current_wal_seq: active,
+                available: false,
+                segment_sealed: sealed,
+                next_wal_seq: None,
+                records: Vec::new(),
+                next_offset: after,
+            }),
+            Some(b) => Ok(crate::replication::StreamedBatch {
+                current_wal_seq: active,
+                available: true,
+                segment_sealed: sealed,
+                // Only resolve the next segment for a sealed one (an active
+                // segment is the newest — nothing to advance to yet).
+                next_wal_seq: if sealed { self.next_wal_seq_after(seq) } else { None },
+                records: b.records,
+                next_offset: b.next_offset,
+            }),
+        }
     }
 
     /// **Follower side.** Ingest a batch of records streamed from a leader,
@@ -2494,11 +2612,18 @@ impl Engine {
             let _ = old.close();
         }
 
-        // Step 6: remove the old WAL file. Safe because all its records
-        // are now durable in the new SSTable.
+        // Step 6: retire the old WAL file. Its records are now durable in the
+        // new SSTable, so it is no longer needed for crash recovery. When WAL
+        // archiving is on (for replication), keep the sealed segment instead
+        // of deleting it — and prune the archive to the configured window so
+        // it can't grow without bound.
         if old_wal_seq != 0 {
-            let old = wal_path(self.db.path(), old_wal_seq);
-            let _ = std::fs::remove_file(&old);
+            if self.config.wal_archive_segments > 0 {
+                self.prune_archived_wal();
+            } else {
+                let old = wal_path(self.db.path(), old_wal_seq);
+                let _ = std::fs::remove_file(&old);
+            }
         }
 
         Ok(())

@@ -197,7 +197,8 @@ fn replicate_route_streams_wal_delta_into_a_follower() {
     );
     assert_eq!(resp.status, 200);
     let body: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
-    assert_eq!(body["rotated"], false);
+    assert_eq!(body["available"], true);
+    assert_eq!(body["segment_sealed"], false, "active segment isn't sealed");
     let recs1 = ndb_engine::decode_records_b64(body["records"].as_str().unwrap()).unwrap();
     let next = body["next_offset"].as_u64().unwrap();
 
