@@ -1,0 +1,28 @@
+[package]
+name         = "ndb-studio"
+version      = "0.1.0"
+edition      = { workspace = true }
+rust-version = { workspace = true }
+description  = "nDB Studio — open any nDB as familiar tables, creative projections, and versioned edits with time-travel."
+
+[[bin]]
+name = "ndb-studio"
+path = "src/main.rs"
+
+[lib]
+name = "ndb_studio"
+path = "src/lib.rs"
+
+[dependencies]
+ndb-engine = { path = "../ndb-engine" }
+ndb-query  = { path = "../ndb-query" }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+uuid       = { workspace = true }
+# Local-account password hashing (salted, iterated SHA-256) + CSPRNG for
+# salts and session tokens. Pure-Rust, already in the dependency tree.
+sha2       = "0.10"
+getrandom  = "0.2"
+
+[lints]
+workspace = true

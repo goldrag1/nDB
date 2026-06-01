@@ -1,0 +1,1356 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>nDB Studio</title>
+<style>
+  :root {
+    --bg: #0f1216; --panel: #161b22; --line: #232a33; --ink: #e7ebf3;
+    --muted: #8b97a7; --accent: #5db0ff; --accent2: #58d39a; --danger: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--ink); overflow: hidden;
+    font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: grid; grid-template-rows: auto 1fr; grid-template-columns: 240px 1fr;
+    grid-template-areas: "top top" "side main";
+  }
+  header {
+    grid-area: top; display: flex; align-items: center; gap: 16px;
+    padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  header .brand { font-weight: 600; letter-spacing: .2px; }
+  header .brand b { color: var(--accent); }
+  header .spacer { flex: 1; }
+  .slider { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+  .slider input { width: 220px; }
+  .badge { font-size: 11px; color: var(--muted); }
+  .asof.live { color: var(--accent2); } .asof.past { color: #f0c674; }
+  aside {
+    grid-area: side; border-right: 1px solid var(--line); background: var(--panel);
+    overflow-y: auto; padding: 8px;
+  }
+  aside h4 { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; margin: 8px 6px; }
+  .kind {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 7px 10px; border-radius: 7px; cursor: pointer; border: 1px solid transparent;
+  }
+  .kind:hover { background: #1d242e; }
+  .kind.sel { background: #1d2733; border-color: #2c3a4a; }
+  .kind .n { color: var(--muted); font-size: 11px; }
+  main { grid-area: main; overflow: auto; padding: 14px; }
+  .toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .toolbar h2 { margin: 0; font-size: 15px; }
+  button {
+    background: #1d2733; color: var(--ink); border: 1px solid #2c3a4a; border-radius: 7px;
+    padding: 6px 11px; cursor: pointer; font: inherit;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: #143; border-color: #2c6; color: #cffbe4; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid var(--line); padding: 6px 9px; text-align: left; vertical-align: top; }
+  th { background: #131922; color: var(--muted); font-weight: 600; position: sticky; top: 0; }
+  td.id { font-family: ui-monospace, monospace; color: var(--muted); font-size: 11px; white-space: nowrap; }
+  td.editable { cursor: text; } td.editable:hover { background: #18222e; }
+  td .tag { color: var(--accent); font-size: 11px; }
+  td input { width: 100%; background: #0c1118; color: var(--ink); border: 1px solid var(--accent); border-radius: 4px; padding: 3px 5px; font: inherit; }
+  .rowdel { color: var(--danger); cursor: pointer; border: none; background: none; padding: 2px 6px; }
+  .empty { color: var(--muted); padding: 30px; text-align: center; }
+  .banner { background: #2a2410; color: #f0c674; border: 1px solid #54461a; border-radius: 7px; padding: 7px 11px; margin-bottom: 12px; }
+  dialog { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 12px; padding: 18px; min-width: 380px; }
+  dialog::backdrop { background: rgba(0,0,0,.5); }
+  dialog h3 { margin: 0 0 12px; }
+  .field { display: grid; grid-template-columns: 130px 1fr; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .field input { background: #0c1118; color: var(--ink); border: 1px solid #2c3a4a; border-radius: 6px; padding: 5px 7px; font: inherit; }
+  .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  #toast { position: fixed; bottom: 16px; right: 16px; background: #1d2733; border: 1px solid #2c3a4a; border-radius: 8px; padding: 9px 14px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  #toast.show { opacity: 1; } #toast.err { border-color: var(--danger); color: #ffd0d0; }
+  .modetabs { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+  .modetabs button { border: none; border-radius: 0; background: #131922; color: var(--muted); padding: 5px 12px; }
+  .modetabs button.active { background: #1d2733; color: var(--ink); }
+  .modetabs button:hover { color: var(--ink); }
+  .cellval { position: relative; }
+  .cellval .cv { display: inline; }
+  .histbtn { background: none; border: none; padding: 0 0 0 6px; opacity: 0; cursor: pointer; font-size: 11px; line-height: 1; }
+  .cellval:hover .histbtn { opacity: .55; }
+  .histbtn:hover { opacity: 1 !important; border: none; }
+  .pivot-controls { display: flex; gap: 16px; align-items: center; margin-bottom: 12px; color: var(--muted); }
+  .pivot-controls select { background: #0c1118; color: var(--ink); border: 1px solid #2c3a4a; border-radius: 6px; padding: 4px 6px; font: inherit; }
+  .pivot-controls .hidden { display: none; }
+  table.pivot th.corner { color: var(--muted); font-weight: 600; }
+  table.pivot tbody th { background: #131922; color: var(--ink); text-align: left; position: static; }
+  table.pivot td { text-align: right; }
+  table.pivot td.total, table.pivot th.total { color: var(--accent); text-align: right; }
+  table.pivot tr.totals th, table.pivot tr.totals td { background: #131922; }
+  table.pivot .grand { color: var(--accent2); font-weight: 600; text-align: right; }
+  .histbody { max-height: 320px; overflow: auto; margin: 4px 0; }
+  .hrow { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  .hrow .htx { color: var(--muted); font-family: ui-monospace, monospace; font-size: 11px; min-width: 52px; }
+  .hrow .hval { flex: 1; }
+  .hrow.del .hval { color: var(--danger); }
+  .hjump { font-size: 11px; padding: 2px 8px; }
+  .graphwrap { position: relative; width: 100%; height: calc(100vh - 132px); border: 1px solid var(--line); border-radius: 8px; background: #0b0f15; overflow: hidden; }
+  #gcanvas { display: block; }
+  .glegend { position: absolute; bottom: 10px; left: 12px; color: var(--muted); font-size: 11px; pointer-events: none; }
+  .ginfo { position: absolute; top: 12px; right: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 180px; max-width: 260px; }
+  .ginfo.hidden { display: none; }
+  .gi-kind { color: var(--accent); font-size: 11px; }
+  .gi-label { font-weight: 600; margin: 2px 0; }
+  .gi-id { color: var(--muted); font-family: ui-monospace, monospace; font-size: 10px; word-break: break-all; }
+  .gi-open { margin-top: 8px; font-size: 11px; }
+  .userbox { display: flex; align-items: center; gap: 8px; margin-left: 16px; }
+  .ubadge { color: var(--muted); font-size: 12px; }
+  .hidden { display: none !important; }
+  .login { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 50; }
+  .loginCard { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 26px 28px; width: 320px; display: flex; flex-direction: column; gap: 12px; }
+  .loginCard h2 { margin: 0; } .loginCard h2 b { color: var(--accent); }
+  .loginCard .lsub { margin: 0 0 6px; color: var(--muted); font-size: 12px; }
+  .loginCard label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
+  .loginCard input { background: #0c1118; color: var(--ink); border: 1px solid #2c3a4a; border-radius: 6px; padding: 7px 9px; font: inherit; }
+  .loginCard .primary { margin-top: 6px; padding: 9px; }
+  .lerr { color: var(--danger); font-size: 12px; min-height: 14px; }
+  .userslist { max-height: 260px; overflow: auto; }
+  .urow { display: flex; align-items: center; gap: 10px; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+  .urow .un { flex: 1; }
+  #usersDlg .field { grid-template-columns: 1fr 1fr; }
+  #usersDlg select { background: #0c1118; color: var(--ink); border: 1px solid #2c3a4a; border-radius: 6px; padding: 5px 7px; font: inherit; }
+  .hauthor { color: var(--accent2); font-size: 11px; }
+  .gi-actions { display: flex; gap: 6px; margin-top: 8px; }
+  .gi-actions button { font-size: 11px; }
+  .qwrap { display: flex; flex-direction: column; gap: 10px; }
+  .qeditor { width: 100%; min-height: 120px; resize: vertical; background: #0c1118; color: var(--ink); border: 1px solid #2c3a4a; border-radius: 8px; padding: 10px 12px; font: 13px/1.5 ui-monospace, monospace; }
+  .qeditor:focus { outline: none; border-color: var(--accent); }
+  .qbar { display: flex; align-items: center; gap: 12px; }
+  .qhint { color: var(--muted); font-size: 12px; }
+  .qref { color: var(--accent); cursor: pointer; font-family: ui-monospace, monospace; }
+  .qref:hover { text-decoration: underline; }
+  .qerr { background: #2a1416; border: 1px solid #54262a; border-radius: 8px; padding: 10px 12px; color: #ffd0d0; }
+  .qerr .qcode { color: var(--muted); }
+  .qerr .qdetail { margin-top: 6px; font-family: ui-monospace, monospace; font-size: 12px; }
+  .nhint { color: var(--muted); font-size: 12px; margin: 10px 0; line-height: 1.5; }
+  .nhint code { background: #0c1118; padding: 1px 5px; border-radius: 4px; }
+  .tblsearch { background: #0c1118; color: var(--ink); border: 1px solid #2c3a4a; border-radius: 6px; padding: 5px 9px; font: inherit; width: 220px; }
+  .tblsearch:focus { outline: none; border-color: var(--accent); }
+  th.sortable { cursor: pointer; user-select: none; } th.sortable:hover { color: var(--ink); }
+  th.cb, td.cb { width: 28px; text-align: center; }
+  tr.filterrow th { position: static; padding: 3px 4px; background: #0f141b; }
+  .colf { width: 100%; background: #0c1118; color: var(--ink); border: 1px solid #232a33; border-radius: 4px; padding: 2px 5px; font: 11px ui-sans-serif; }
+  .colf:focus { outline: none; border-color: var(--accent); }
+  .idlink { cursor: pointer; } .idlink:hover { color: var(--accent); }
+  .danger-btn { border-color: #54262a; color: #ffb3b3; }
+  .danger-btn:hover { border-color: var(--danger); background: #2a1416; }
+  .pager { display: flex; align-items: center; gap: 12px; justify-content: center; margin: 14px 0; }
+  .kind.edge .n { color: var(--accent2); }
+  .edgehint { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+  .erole { display: inline-flex; align-items: baseline; gap: 6px; cursor: pointer; }
+  .erole:hover { color: var(--accent); }
+  .ekind { color: var(--muted); font-size: 10px; }
+  .erow { display: grid; grid-template-columns: 130px 1fr auto; gap: 8px; margin-bottom: 6px; align-items: center; }
+  .erow input, .erow select { background: #0c1118; color: var(--ink); border: 1px solid #2c3a4a; border-radius: 6px; padding: 5px 7px; font: inherit; }
+  .erm { color: var(--danger); border: none; background: none; cursor: pointer; }
+  .edgehdr { display: flex; align-items: center; justify-content: space-between; }
+  .edgeadd { font-size: 11px; padding: 1px 7px; }
+  .recsec { margin-bottom: 10px; }
+  .recsh { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .07em; margin: 8px 0 4px; }
+  .recempty { color: var(--muted); font-size: 12px; padding: 4px 8px; }
+  #recDlg .qref { color: var(--accent); cursor: pointer; }
+  #recDlg .qref.erole { color: var(--ink); border: 1px solid #2c3a4a; border-radius: 5px; padding: 1px 6px; margin-right: 4px; display: inline-block; }
+  #recDlg .qref.erole:hover { border-color: var(--accent); }
+  #recDlg { min-width: 420px; max-width: 520px; }
+  #diffBtn { font-size: 11px; padding: 3px 8px; margin-left: 4px; }
+  .diffbar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .diffbar input { width: 90px; background: #0c1118; color: var(--ink); border: 1px solid #2c3a4a; border-radius: 6px; padding: 4px 6px; font: inherit; }
+  .diffresult { max-height: 360px; overflow: auto; min-width: 380px; }
+  .diffcounts { display: flex; gap: 14px; margin-bottom: 10px; font-size: 13px; }
+  .dadd { color: var(--accent2); } .drem { color: var(--danger); } .dchg { color: #f0c674; }
+  .diffsec { margin-bottom: 8px; }
+  .dfield { padding: 2px 8px 2px 22px; font-size: 12px; font-family: ui-monospace, monospace; }
+  .dfn { color: var(--muted); } .dold { color: var(--danger); } .dnew { color: var(--accent2); }
+  .simbtn { font-size: 11px; padding: 1px 7px; margin-left: 6px; }
+  .simresult { margin: 4px 0 0; padding-left: 4px; border-left: 2px solid var(--accent); }
+  .qlayout { display: grid; grid-template-columns: 1fr 240px; gap: 16px; }
+  .qside { border-left: 1px solid var(--line); padding-left: 14px; }
+  .qitem { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 3px 0; }
+  .qload { color: var(--accent); cursor: pointer; font-size: 12px; font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .qload:hover { text-decoration: underline; }
+  .qdel { color: var(--danger); border: none; background: none; cursor: pointer; font-size: 11px; }
+  .dbchip { color: var(--accent2); font-size: 12px; font-weight: 600; }
+  #dbBtn { font-size: 11px; padding: 2px 7px; }
+  #helpDlg { min-width: 520px; max-width: 640px; }
+  .helpintro { color: var(--muted); font-size: 12.5px; line-height: 1.5; margin: 0 0 10px; }
+  .helpbody { max-height: 60vh; overflow: auto; }
+  .cgroup { margin-bottom: 14px; }
+  .ccard { border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 7px; padding: 8px 11px; margin-bottom: 7px; background: #131922; }
+  .cterm { font-weight: 600; }
+  .csql { color: var(--muted); font-weight: 400; font-size: 11.5px; }
+  .cdesc { font-size: 12.5px; line-height: 1.5; margin: 3px 0; }
+  .ceg { color: var(--accent2); font-size: 12px; font-family: ui-monospace, monospace; }
+</style>
+</head>
+<body>
+  <header>
+    <span class="brand">nDB <b>Studio</b></span>
+    <span class="dbchip" id="dbActive"></span>
+    <button id="dbBtn" class="hidden" title="Databases">switch ▾</button>
+    <span class="badge" id="dbhead"></span>
+    <div class="spacer"></div>
+    <div class="slider">
+      <span>⏱</span>
+      <input type="range" id="asof" min="0" max="0" value="0" step="1" />
+      <span class="asof live" id="asofLabel">now</span>
+      <button id="diffBtn" title="Diff two points in time">⇄ Diff</button>
+    </div>
+    <div class="userbox">
+      <span class="ubadge" id="who"></span>
+      <button id="helpBtn" title="nDB concepts &amp; how-to">? Concepts</button>
+      <button id="schemaBtn">Schema</button>
+      <button id="nodeBtn" class="hidden">Node</button>
+      <button id="usersBtn" class="hidden">Users</button>
+      <button id="logoutBtn">Logout</button>
+    </div>
+  </header>
+  <aside>
+    <h4>Kinds</h4>
+    <div id="kinds"></div>
+  </aside>
+  <main>
+    <div id="content"><div class="empty">Select a kind on the left.</div></div>
+  </main>
+
+  <dialog id="newDlg">
+    <h3>New record · <span id="newKind"></span></h3>
+    <div id="newFields"></div>
+    <button id="addField" style="margin-top:6px">+ field</button>
+    <div class="dlg-actions">
+      <button onclick="document.getElementById('newDlg').close()">Cancel</button>
+      <button class="primary" id="newSave">Create</button>
+    </div>
+  </dialog>
+
+  <dialog id="histDlg">
+    <h3>History · <span id="histTitle"></span> <span class="badge" id="histId"></span></h3>
+    <div id="histBody" class="histbody"></div>
+    <div class="dlg-actions">
+      <button onclick="document.getElementById('histDlg').close()">Close</button>
+    </div>
+  </dialog>
+
+  <dialog id="usersDlg">
+    <h3>Users</h3>
+    <div id="usersList" class="userslist"></div>
+    <h4 style="margin:14px 0 6px;color:var(--muted)">Add user</h4>
+    <div class="field"><input id="nuUser" placeholder="username" autocomplete="off" /><input id="nuPass" type="password" placeholder="password" autocomplete="new-password" /></div>
+    <div class="field"><select id="nuRole"><option value="viewer">viewer</option><option value="editor">editor</option><option value="admin">admin</option></select><button class="primary" id="nuAdd">Add user</button></div>
+    <div class="dlg-actions"><button onclick="document.getElementById('usersDlg').close()">Close</button></div>
+  </dialog>
+
+  <dialog id="recDlg">
+    <h3>Record · <span id="recTitle"></span> <span class="badge" id="recId"></span></h3>
+    <div id="recBody" class="histbody"></div>
+    <div class="dlg-actions"><button onclick="document.getElementById('recDlg').close()">Close</button></div>
+  </dialog>
+
+  <dialog id="nodeDlg">
+    <h3>Node · replication</h3>
+    <div id="nodeStatus" class="histbody"></div>
+    <h4 style="margin:14px 0 6px;color:var(--muted)">Pull from a peer (leader)</h4>
+    <div class="field" style="grid-template-columns:1fr"><input id="npPeer" placeholder="http://host:port" autocomplete="off" /></div>
+    <div class="field" style="grid-template-columns:1fr auto"><input id="npToken" placeholder="peer admin session token" autocomplete="off" /><button class="primary" id="npPull">Pull now</button></div>
+    <div class="nhint">This node becomes a follower: it streams the peer leader's WAL delta and applies it, preserving the leader's tx ids. Get the peer token from its <code>ndb_session</code> cookie while logged in there as admin (sessions are in-memory).</div>
+    <div id="npResult" class="badge" style="margin-top:8px"></div>
+    <div class="dlg-actions"><button onclick="document.getElementById('nodeDlg').close()">Close</button></div>
+  </dialog>
+
+  <dialog id="importDlg">
+    <h3>Import records</h3>
+    <div class="field" style="grid-template-columns:110px 1fr"><label>Into kind</label><input id="impKind" placeholder="Person" autocomplete="off" /></div>
+    <p class="nhint">Paste a JSON array of objects, or CSV with a header row. An <code>id</code> column is ignored (new records get fresh ids). Values like <code>ref:&lt;uuid&gt;</code> become links.</p>
+    <textarea id="impText" class="qeditor" style="min-height:140px" placeholder='[{"name":"Zoe","city":"Hue"}]  — or —  name,city&#10;Zoe,Hue'></textarea>
+    <div class="dlg-actions"><span id="impStatus" class="badge"></span><div class="spacer" style="flex:1"></div><button onclick="document.getElementById('importDlg').close()">Close</button><button class="primary" id="impRun">Import</button></div>
+  </dialog>
+
+  <dialog id="dbDlg">
+    <h3>Databases</h3>
+    <div id="dbList" class="histbody"></div>
+    <h4 style="margin:12px 0 6px;color:var(--muted)">Create new</h4>
+    <div class="field" style="grid-template-columns:1fr auto"><input id="dbNew" placeholder="name — letters, digits, - or _" autocomplete="off" /><button class="primary" id="dbCreate">Create + open</button></div>
+    <div class="nhint">The launch database holds accounts; new databases are data-only and share this login.</div>
+    <div class="dlg-actions"><button onclick="document.getElementById('dbDlg').close()">Close</button></div>
+  </dialog>
+
+  <dialog id="helpDlg">
+    <h3>nDB concepts <span class="badge">for people coming from SQL</span></h3>
+    <p class="helpintro">nDB stores objects n-dimensionally — entities, N-ary relationships, versions and vectors in one log — and projects them for you (tables, pivots, graph). A few terms have no relational equivalent:</p>
+    <div id="helpBody" class="helpbody"></div>
+    <div class="dlg-actions"><button onclick="document.getElementById('helpDlg').close()">Close</button></div>
+  </dialog>
+
+  <dialog id="schemaDlg">
+    <h3>Schema overview</h3>
+    <div id="schemaBody" class="histbody"></div>
+    <div class="dlg-actions"><button onclick="document.getElementById('schemaDlg').close()">Close</button></div>
+  </dialog>
+
+  <dialog id="diffDlg">
+    <h3>Temporal diff</h3>
+    <div class="diffbar">
+      <label>from tx <input type="number" id="dFrom" min="0" /></label>
+      <label>to tx <input type="number" id="dTo" min="0" /></label>
+      <button class="primary" id="dRun">Diff ▸</button>
+    </div>
+    <div id="diffResult" class="diffresult"></div>
+    <div class="dlg-actions"><button onclick="document.getElementById('diffDlg').close()">Close</button></div>
+  </dialog>
+
+  <dialog id="edgeDlg">
+    <h3>New edge · N-ary relationship</h3>
+    <div class="field" style="grid-template-columns:110px 1fr"><label>Edge kind</label><input id="neKind" placeholder="e.g. Authorship" autocomplete="off" /></div>
+    <h4 style="margin:12px 0 6px;color:var(--muted)">Roles → entities</h4>
+    <div id="neRoles"></div>
+    <button id="neAddRole" style="margin-top:6px">+ role</button>
+    <div class="dlg-actions"><button onclick="document.getElementById('edgeDlg').close()">Cancel</button><button class="primary" id="neSave">Create edge</button></div>
+  </dialog>
+
+  <div id="login" class="login hidden">
+    <form id="loginForm" class="loginCard">
+      <h2>nDB <b>Studio</b></h2>
+      <p class="lsub">Sign in to open this database.</p>
+      <label>Username<input id="luser" autocomplete="username" /></label>
+      <label>Password<input id="lpass" type="password" autocomplete="current-password" /></label>
+      <div class="lerr" id="lerr"></div>
+      <button class="primary" type="submit">Sign in</button>
+    </form>
+  </div>
+
+  <div id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let HEAD = 0, ASOF = null, SEL = null, CATALOG = [], MODE = "table", EDGES = [], SEL_EDGE = null;
+let PIVOT = { row: null, col: null, agg: "count", value: null };
+let GRAPH_ANIM = null;
+let ME = { authed: false, user: null, role: null };
+const canWrite = () => ME.role === "editor" || ME.role === "admin";
+
+const api = {
+  async get(path) {
+    const r = await fetch("/api" + path, { cache: "no-store" });
+    if (r.status === 401) showLogin();
+    return r.json();
+  },
+  async post(path, body) {
+    const r = await fetch("/api" + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 401 && path !== "/login") showLogin();
+    return { status: r.status, body: j };
+  },
+  commit(body) { return this.post("/commit", body); },
+};
+
+function toast(msg, isErr) {
+  const t = $("toast"); t.textContent = msg; t.className = "show" + (isErr ? " err" : "");
+  setTimeout(() => { t.className = ""; }, 2200);
+}
+const asofQuery = () => (ASOF === null ? "" : "&as_of=" + ASOF);
+const readOnly = () => ASOF !== null && ASOF < HEAD;
+
+async function loadCatalog() {
+  const c = await api.get("/catalog?" + (ASOF === null ? "" : "as_of=" + ASOF));
+  HEAD = c.head; CATALOG = c.kinds || []; EDGES = c.edges || [];
+  const slider = $("asof");
+  slider.max = String(HEAD);
+  if (ASOF === null) slider.value = String(HEAD);
+  $("dbhead").textContent = "head tx " + HEAD + " · " + CATALOG.length + " kinds · " + EDGES.length + " edge types";
+  renderKinds();
+}
+
+function renderKinds() {
+  const el = $("kinds"); el.innerHTML = "";
+  if (!CATALOG.length && !EDGES.length) { el.innerHTML = '<div class="empty" style="font-size:12px">empty database</div>'; }
+  for (const k of CATALOG) {
+    const d = document.createElement("div");
+    d.className = "kind" + (!SEL_EDGE && SEL && SEL.type_id === k.type_id ? " sel" : "");
+    d.innerHTML = `<span>${esc(k.name)}</span><span class="n">${k.count}</span>`;
+    d.onclick = () => selectKind(k);
+    el.appendChild(d);
+  }
+  const h = document.createElement("h4");
+  h.className = "edgehdr";
+  h.innerHTML = `<span>Edges (N-ary)</span>`;
+  h.style.marginTop = "14px";
+  if (canWrite()) {
+    const add = document.createElement("button");
+    add.className = "edgeadd"; add.textContent = "+ new"; add.title = "New N-ary edge";
+    add.onclick = openNewEdge;
+    h.appendChild(add);
+  }
+  el.appendChild(h);
+  if (!EDGES.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty"; empty.style.fontSize = "11px"; empty.style.padding = "4px 8px";
+    empty.textContent = "no edges yet";
+    el.appendChild(empty);
+  }
+  for (const e of EDGES) {
+    const d = document.createElement("div");
+    d.className = "kind edge" + (SEL_EDGE && SEL_EDGE.type_id === e.type_id ? " sel" : "");
+    d.innerHTML = `<span>⬡ ${esc(e.name)}</span><span class="n">${e.count}</span>`;
+    d.onclick = () => selectEdge(e);
+    el.appendChild(d);
+  }
+}
+
+async function selectKind(k) {
+  SEL = k;
+  SEL_EDGE = null;
+  // Reset pivot axes to this kind's first two properties when switching kinds.
+  PIVOT = { row: k.properties[0]?.name || null, col: k.properties[1]?.name || k.properties[0]?.name || null, agg: "count", value: null };
+  TBL = newTableState();
+  renderKinds();
+  await renderMain();
+}
+
+// ---- Concepts / help ----
+const CONCEPTS = [
+  { group: "The data model", items: [
+    { term: "Entity", sql: "row — but schemaless", desc: "A record with its own set of properties. Two entities of the same kind need not share the same columns; there is no table definition to alter.", eg: "Add a property to one record (click a cell) without touching the others." },
+    { term: "Kind", sql: "table / type", desc: "Just a label on entities (e.g. Person). It isn't declared — kinds and their columns are derived by scanning the data (schema-on-read). New kinds appear the moment you use them.", eg: "Create a record of a brand-new kind and it shows up in the sidebar — no CREATE TABLE." },
+    { term: "Property", sql: "column — but per-entity", desc: "A name→value pair on a single entity. Types are inferred per value, not fixed per column.", eg: "One Person can have an extra `nickname` while others don't." },
+  ]},
+  { group: "Relationships", items: [
+    { term: "Entity reference", sql: "foreign key — as a value", desc: "A property whose value points at another entity: a directed edge. Shown as $ref:…", eg: "Type ref:<uuid> in a cell or New-record field to link two records (see them connect in Graph)." },
+    { term: "Hyperedge (N-ary edge)", sql: "no equivalent — junction tables", desc: "ONE edge that connects N entities at once, each filling a named role. Where SQL needs a junction table (a row per pair), nDB keeps it as a single first-class object.", eg: "Sidebar → Edges (N-ary) → + new: Authorship { author→Alice, paper→…, venue→… }. One row spans all of them." },
+    { term: "Role", sql: "the columns of the junction", desc: "The named slot an entity fills in a hyperedge (author, paper, venue…). An edge table's columns are its roles.", eg: "Open an edge kind to see one column per role." },
+  ]},
+  { group: "Time (built-in MVCC)", items: [
+    { term: "Transaction (tx)", sql: "—", desc: "Every commit gets a monotonic number; the head tx is “now”. The time-slider picks which tx you view.", eg: "Slide left to read the database as of an earlier tx." },
+    { term: "Time-travel / as-of", sql: "audit triggers / temporal tables", desc: "Read the WHOLE database as it was at any past tx — no audit tables, it's intrinsic.", eg: "Slide back: edit buttons disappear and old values appear." },
+    { term: "Version & history", sql: "—", desc: "Every edit is a new version; nothing is overwritten. Each value carries its timeline and who wrote it.", eg: "Click the 🕘 on a cell to see that value change over time, with authors, and jump to any point." },
+    { term: "Tombstone", sql: "soft-delete row", desc: "A delete marks the record deleted at a tx but keeps its history; time-travel still shows it before then.", eg: "Delete a row, then slide back — it's there again." },
+    { term: "Diff", sql: "—", desc: "Compare two tx points: what was added / changed (old→new per field) / removed.", eg: "The ⇄ Diff button by the slider." },
+  ]},
+  { group: "Vectors", items: [
+    { term: "Vector property", sql: "needs a separate vector DB", desc: "A property holding an embedding (array of floats). Register it once, then nearest-neighbour search runs inside the database.", eg: "Open a record with a vector → “find similar” (cosine kNN). Input vectors as {\"$vec\":[…]}." },
+  ]},
+  { group: "Conventions", items: [
+    { term: "$-names", sql: "system catalog", desc: "Kinds/properties starting with $ are app metadata (e.g. $User accounts, $author attribution) and are hidden from data views.", eg: "You won't see $User in the sidebar, but the author shows in a value's history." },
+    { term: "Query", sql: "SELECT", desc: "A small read-only pattern language over the current snapshot.", eg: "Query tab → match Person(name: ?n, age: ?a) return ?n, ?a limit 50" },
+    { term: "Database switch", sql: "USE database", desc: "The launch DB holds the accounts; admins can create/open/switch additional data-only databases that share this login.", eg: "The “switch ▾” control by the db chip (top-left)." },
+  ]},
+];
+
+$("helpBtn").onclick = () => {
+  if ($("helpBody").childElementCount === 0) renderHelp();
+  $("helpDlg").showModal();
+};
+function renderHelp() {
+  $("helpBody").innerHTML = CONCEPTS.map((s) =>
+    `<div class="cgroup"><div class="recsh">${esc(s.group)}</div>` +
+    s.items.map((c) =>
+      `<div class="ccard"><div class="cterm">${esc(c.term)} <span class="csql">≈ ${esc(c.sql)}</span></div>` +
+      `<div class="cdesc">${esc(c.desc)}</div><div class="ceg">▸ ${esc(c.eg)}</div></div>`
+    ).join("") + `</div>`
+  ).join("");
+}
+
+// ---- Schema overview ----
+$("schemaBtn").onclick = async () => {
+  const s = await api.get("/schema");
+  let h = `<div class="recsec"><div class="recsh">Kinds</div>` +
+    ((s.kinds || []).map((k) => `<div class="hrow"><span class="hval">${esc(k.name)}</span><span class="htx">${k.count} records · ${k.properties} props</span></div>`).join("") || `<div class="recempty">none</div>`) + `</div>`;
+  if ((s.edges || []).length) h += `<div class="recsec"><div class="recsh">Edge types (N-ary)</div>` +
+    s.edges.map((e) => `<div class="hrow"><span class="hval">⬡ ${esc(e.name)}</span><span class="htx">${e.count} · roles: ${e.roles.map(esc).join(", ")}</span></div>`).join("") + `</div>`;
+  if ((s.relationships || []).length) h += `<div class="recsec"><div class="recsh">Relationships</div>` +
+    s.relationships.map((r) => `<div class="hrow"><span class="hval">${esc(r.source)} <span class="ekind">${esc(r.property)}</span> → ${esc(r.target)}</span><span class="htx">${r.count}</span></div>`).join("") + `</div>`;
+  $("schemaBody").innerHTML = h;
+  $("schemaDlg").showModal();
+};
+
+// ---- Temporal diff ----
+$("diffBtn").onclick = () => {
+  $("dFrom").value = ASOF === null ? Math.max(0, HEAD - 1) : ASOF;
+  $("dTo").value = HEAD;
+  $("diffResult").innerHTML = "";
+  $("diffDlg").showModal();
+  runDiff();
+};
+$("dRun").onclick = runDiff;
+async function runDiff() {
+  const from = parseInt($("dFrom").value, 10) || 0, to = parseInt($("dTo").value, 10) || 0;
+  const d = await api.get(`/diff?from=${from}&to=${to}`);
+  const out = $("diffResult");
+  const c = d.counts || { added: 0, removed: 0, changed: 0 };
+  let h = `<div class="diffcounts"><span class="dadd">+${c.added} added</span><span class="dchg">~${c.changed} changed</span><span class="drem">−${c.removed} removed</span></div>`;
+  const idChip = (x) => `<span class="qref" data-id="${esc(x.id)}">${esc(x.label || x.id.slice(0, 8))} <span class="ekind">${esc(x.kind)}</span></span>`;
+  if (c.added) h += `<div class="diffsec"><div class="recsh">Added</div>` + d.added.map((x) => `<div class="hrow dadd">+ ${idChip(x)}</div>`).join("") + `</div>`;
+  if (c.changed) h += `<div class="diffsec"><div class="recsh">Changed</div>` + d.changed.map((x) =>
+    `<div class="hrow dchg">~ ${idChip(x)}</div>` + x.fields.map((f) => `<div class="dfield"><span class="dfn">${esc(f.name)}</span> <span class="dold">${fmt(f.old)}</span> → <span class="dnew">${fmt(f.new)}</span></div>`).join("")
+  ).join("") + `</div>`;
+  if (c.removed) h += `<div class="diffsec"><div class="recsh">Removed</div>` + d.removed.map((x) => `<div class="hrow drem">− ${idChip(x)}</div>`).join("") + `</div>`;
+  if (!c.added && !c.changed && !c.removed) h += `<div class="recempty">No differences between tx ${from} and ${to}.</div>`;
+  out.innerHTML = h;
+  out.querySelectorAll(".qref").forEach((el) => (el.onclick = () => openRecord(el.dataset.id)));
+}
+
+// ---- N-ary hyperedge workbench ----
+let EDGE_ENTITIES = [];
+async function selectEdge(e) { SEL_EDGE = e; renderKinds(); await loadEdges(); }
+async function loadEdges() {
+  if (!SEL_EDGE) return;
+  renderEdges(await api.get(`/hyperedges?kind=${SEL_EDGE.type_id}${asofQuery()}&limit=500`));
+}
+function renderEdges(d) {
+  cancelGraphAnim();
+  const c = $("content");
+  const writable = !readOnly() && canWrite();
+  const roles = d.roles || [], edges = d.edges || [];
+  let html = "";
+  if (readOnly()) html += `<div class="banner">Viewing history as of tx ${ASOF} — read only.</div>`;
+  html += `<div class="toolbar"><h2>⬡ ${esc(d.kind)}</h2><span class="badge">${d.shown} / ${d.total} edges · ${roles.length} roles</span><div class="spacer" style="flex:1"></div>`;
+  if (writable) html += `<button class="primary" id="newEdgeBtn">+ New edge</button>`;
+  html += `</div>`;
+  html += `<div class="edgehint">Each row is <b>one</b> N-ary edge — a single relationship spanning ${roles.length || "N"} entities by role. A relational table needs junction rows to express this.</div>`;
+  if (!edges.length) {
+    html += `<div class="empty">No edges of this kind yet.</div>`;
+  } else {
+    html += `<table><thead><tr>`;
+    for (const r of roles) html += `<th>${esc(r)}</th>`;
+    html += `</tr></thead><tbody>`;
+    for (const e of edges) {
+      html += "<tr>";
+      for (const r of roles) {
+        const f = e.fillers[r];
+        html += f
+          ? `<td><span class="erole qref" data-id="${esc(f.id)}" title="${esc(f.id)}">${esc(f.label || f.id.slice(0, 8))}<span class="ekind">${esc(f.kind)}</span></span></td>`
+          : `<td><span class="tag">∅</span></td>`;
+      }
+      html += "</tr>";
+    }
+    html += "</tbody></table>";
+  }
+  c.innerHTML = html;
+  c.querySelectorAll(".qref").forEach((el) => (el.onclick = () => openRecord(el.dataset.id)));
+  if (writable) $("newEdgeBtn").onclick = openNewEdge;
+}
+
+async function openNewEdge() {
+  const g = await api.get("/graph?limit=1000");
+  EDGE_ENTITIES = (g.nodes || []).filter((n) => !n.hyper);
+  $("neKind").value = SEL_EDGE ? SEL_EDGE.name : "";
+  $("neRoles").innerHTML = "";
+  addEdgeRole(); addEdgeRole();
+  $("edgeDlg").showModal();
+}
+function entityOptions() {
+  return `<option value="">— pick entity —</option>` +
+    EDGE_ENTITIES.map((n) => `<option value="${esc(n.id)}">${esc(n.kind)}: ${esc(n.label || n.id.slice(0, 8))}</option>`).join("");
+}
+function addEdgeRole(role) {
+  const row = document.createElement("div");
+  row.className = "erow";
+  row.innerHTML = `<input class="erole-name" placeholder="role" value="${esc(role || "")}" autocomplete="off" /><select class="erole-ent">${entityOptions()}</select><button class="erm" title="remove">✕</button>`;
+  row.querySelector(".erm").onclick = () => row.remove();
+  $("neRoles").appendChild(row);
+}
+$("neAddRole").onclick = () => addEdgeRole();
+$("neSave").onclick = async () => {
+  const kind = $("neKind").value.trim();
+  if (!kind) { toast("edge kind required", true); return; }
+  const roles = [];
+  $("neRoles").querySelectorAll(".erow").forEach((row) => {
+    const role = row.querySelector(".erole-name").value.trim();
+    const ref = row.querySelector(".erole-ent").value;
+    if (role && ref) roles.push({ role, ref });
+  });
+  if (!roles.length) { toast("add at least one role + entity", true); return; }
+  const r = await api.commit({ op: "create_edge", kind, roles });
+  if (r.status === 200) { $("edgeDlg").close(); toast("edge created · tx " + r.body.tx); await refreshAll(); }
+  else toast(r.body.error?.message || "error", true);
+};
+
+// Re-render whichever view (entity mode or edge) is active.
+async function reloadView() { return SEL_EDGE ? loadEdges() : renderMain(); }
+
+// Dispatch the main pane on the current view mode.
+async function renderMain() {
+  cancelGraphAnim();
+  if (MODE === "graph") return loadGraph();
+  if (MODE === "query") return renderQuery();
+  if (!SEL) return;
+  if (MODE === "pivot") return loadPivot();
+  return loadTable();
+}
+
+function modeTabsHtml() {
+  return `<div class="modetabs">
+    <button data-mode="table" class="${MODE === "table" ? "active" : ""}">Table</button>
+    <button data-mode="pivot" class="${MODE === "pivot" ? "active" : ""}">Pivot</button>
+    <button data-mode="graph" class="${MODE === "graph" ? "active" : ""}">Graph</button>
+    <button data-mode="query" class="${MODE === "query" ? "active" : ""}">Query</button>
+  </div>`;
+}
+function wireModeTabs() {
+  document.querySelectorAll(".modetabs button").forEach((b) => {
+    b.onclick = async () => { MODE = b.dataset.mode; await renderMain(); };
+  });
+}
+
+let TBL = newTableState();
+function newTableState() { return { offset: 0, limit: 50, sort: null, desc: false, q: "", filters: {}, sel: new Set(), focus: null }; }
+let TBL_DEBOUNCE = null;
+function tblReload(resetPage) { if (resetPage) TBL.offset = 0; clearTimeout(TBL_DEBOUNCE); TBL_DEBOUNCE = setTimeout(loadTable, 280); }
+
+async function loadTable() {
+  if (!SEL) return;
+  const p = new URLSearchParams({ kind: SEL.type_id, limit: TBL.limit, offset: TBL.offset });
+  if (ASOF !== null) p.set("as_of", ASOF);
+  if (TBL.sort) { p.set("sort", TBL.sort); p.set("dir", TBL.desc ? "desc" : "asc"); }
+  if (TBL.q) p.set("q", TBL.q);
+  for (const [k, v] of Object.entries(TBL.filters)) if (v) p.set("f_" + k, v);
+  renderTable(await api.get("/table?" + p.toString()));
+}
+
+function renderTable(t) {
+  const c = $("content");
+  const headers = t.headers || [];
+  const writable = !readOnly() && canWrite();
+  const pageIds = (t.rows || []).map((r) => r.id);
+  // drop selections no longer on this page-set is fine; keep cross-page selections
+  let html = "";
+  if (readOnly()) html += `<div class="banner">Viewing history as of tx ${ASOF} — read only. Slide to “now” to edit.</div>`;
+  else if (!canWrite()) html += `<div class="banner">Read-only — your role is <b>${esc(ME.role || "viewer")}</b>.</div>`;
+
+  const from = t.total ? t.offset + 1 : 0, to = t.offset + t.shown;
+  html += `<div class="toolbar"><h2>${esc(SEL.name)}</h2>${modeTabsHtml()}`;
+  html += `<input id="tblq" class="tblsearch" placeholder="search all columns…" value="${esc(TBL.q)}" />`;
+  html += `<span class="badge">${from}–${to} of ${t.total}</span><div class="spacer" style="flex:1"></div>`;
+  if (writable && TBL.sel.size) html += `<button class="danger-btn" id="bulkDel">Delete ${TBL.sel.size}</button>`;
+  html += `<button id="expCsv">Export CSV</button><button id="expJson">JSON</button>`;
+  if (writable) html += `<button id="impBtn">Import</button><button class="primary" id="newBtn">+ New record</button>`;
+  html += `</div>`;
+
+  if (!headers.length && !t.rows.length && !TBL.q && !Object.values(TBL.filters).some(Boolean)) {
+    html += `<div class="empty">No records yet.</div>`;
+    c.innerHTML = html;
+    wireModeTabs();
+    if (writable) $("newBtn").onclick = openNew;
+    wireSearch();
+    return;
+  }
+
+  const arrow = (h) => (TBL.sort === h.name ? (TBL.desc ? " ▾" : " ▴") : "");
+  html += `<table><thead><tr>`;
+  html += writable ? `<th class="cb"><input type="checkbox" id="selAll" /></th>` : `<th class="cb"></th>`;
+  html += `<th>id</th>`;
+  for (const h of headers) html += `<th class="sortable" data-prop="${esc(h.name)}">${esc(h.name)}${arrow(h)}</th>`;
+  html += `<th></th></tr>`;
+  // filter row
+  html += `<tr class="filterrow"><th class="cb"></th><th></th>`;
+  for (const h of headers) html += `<th><input class="colf" data-prop="${esc(h.name)}" placeholder="filter" value="${esc(TBL.filters[h.name] || "")}" /></th>`;
+  html += `<th></th></tr></thead><tbody>`;
+  for (const row of t.rows) {
+    const checked = TBL.sel.has(row.id) ? "checked" : "";
+    html += `<tr data-id="${row.id}">`;
+    html += writable ? `<td class="cb"><input type="checkbox" class="rowcb" ${checked} /></td>` : `<td class="cb"></td>`;
+    html += `<td class="id idlink" title="${row.id}">${row.id.slice(0, 8)}…</td>`;
+    row.cells.forEach((cell, i) => {
+      const h = headers[i];
+      const canEdit = editable(cell) && writable;
+      html += `<td class="cellval ${canEdit ? "editable" : ""}" data-prop="${esc(h.name)}" data-i="${i}"><span class="cv">${fmt(cell)}</span><button class="histbtn" title="History of this value" data-prop="${esc(h.name)}">🕘</button></td>`;
+    });
+    html += writable ? `<td><button class="rowdel" title="Delete">✕</button></td>` : "<td></td>";
+    html += "</tr>";
+  }
+  html += "</tbody></table>";
+  // pagination
+  const pages = Math.max(1, Math.ceil(t.total / TBL.limit)), cur = Math.floor(t.offset / TBL.limit) + 1;
+  html += `<div class="pager"><button id="pgPrev" ${t.offset <= 0 ? "disabled" : ""}>‹ Prev</button><span class="badge">page ${cur} / ${pages}</span><button id="pgNext" ${to >= t.total ? "disabled" : ""}>Next ›</button></div>`;
+
+  c.innerHTML = html;
+  wireModeTabs();
+  wireSearch();
+  c.querySelectorAll("th.sortable").forEach((th) => (th.onclick = () => {
+    const p = th.dataset.prop;
+    if (TBL.sort === p) TBL.desc = !TBL.desc; else { TBL.sort = p; TBL.desc = false; }
+    tblReload(true);
+  }));
+  c.querySelectorAll(".colf").forEach((inp) => (inp.oninput = () => { TBL.filters[inp.dataset.prop] = inp.value; TBL.focus = "f::" + inp.dataset.prop; tblReload(true); }));
+  c.querySelectorAll(".idlink").forEach((td) => (td.onclick = () => openRecord(td.closest("tr").dataset.id)));
+  c.querySelectorAll(".histbtn").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); openHistory(b.closest("tr").dataset.id, b.dataset.prop); }));
+  const prev = $("pgPrev"), next = $("pgNext");
+  if (prev) prev.onclick = () => { TBL.offset = Math.max(0, TBL.offset - TBL.limit); loadTable(); };
+  if (next) next.onclick = () => { TBL.offset += TBL.limit; loadTable(); };
+  $("expCsv").onclick = () => exportTable("csv");
+  $("expJson").onclick = () => exportTable("json");
+  if (writable) {
+    const ib = $("impBtn"); if (ib) ib.onclick = openImport;
+    $("newBtn").onclick = openNew;
+    const bd = $("bulkDel"); if (bd) bd.onclick = bulkDelete;
+    const sa = $("selAll");
+    if (sa) {
+      sa.checked = pageIds.length > 0 && pageIds.every((id) => TBL.sel.has(id));
+      sa.onclick = () => { if (sa.checked) pageIds.forEach((id) => TBL.sel.add(id)); else pageIds.forEach((id) => TBL.sel.delete(id)); loadTable(); };
+    }
+    c.querySelectorAll(".rowcb").forEach((cb) => (cb.onclick = () => {
+      const id = cb.closest("tr").dataset.id;
+      if (cb.checked) TBL.sel.add(id); else TBL.sel.delete(id);
+      loadTable();
+    }));
+    c.querySelectorAll("td.editable").forEach((td) => (td.onclick = (e) => { if (e.target.closest(".histbtn")) return; beginEdit(td); }));
+    c.querySelectorAll(".rowdel").forEach((b) => (b.onclick = () => delRow(b.closest("tr").dataset.id)));
+  }
+  restoreFocus();
+}
+
+function wireSearch() {
+  const q = $("tblq");
+  if (q) q.oninput = () => { TBL.q = q.value; TBL.focus = "q::"; tblReload(true); };
+}
+function restoreFocus() {
+  if (!TBL.focus) return;
+  const [kind, name] = TBL.focus.split("::");
+  const el = kind === "q" ? $("tblq") : document.querySelector(`.colf[data-prop="${CSS.escape(name)}"]`);
+  if (el) { el.focus(); const n = el.value.length; el.setSelectionRange(n, n); }
+  TBL.focus = null;
+}
+
+// ---- export / import ----
+function cellPlain(cell) {
+  if (cell === null || cell === undefined) return "";
+  if (typeof cell === "object") { const k = Object.keys(cell)[0]; return `${k}:${cell[k]}`; }
+  return cell;
+}
+function downloadBlob(blob, name) {
+  const u = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = u; a.download = name; a.click();
+  URL.revokeObjectURL(u);
+}
+async function exportTable(fmt) {
+  if (!SEL) return;
+  const p = new URLSearchParams({ kind: SEL.type_id, limit: 100000, offset: 0 });
+  if (ASOF !== null) p.set("as_of", ASOF);
+  if (TBL.sort) { p.set("sort", TBL.sort); p.set("dir", TBL.desc ? "desc" : "asc"); }
+  if (TBL.q) p.set("q", TBL.q);
+  for (const [k, v] of Object.entries(TBL.filters)) if (v) p.set("f_" + k, v);
+  const t = await api.get("/table?" + p.toString());
+  const headers = (t.headers || []).map((h) => h.name), rows = t.rows || [];
+  if (fmt === "json") {
+    const objs = rows.map((r) => { const o = { id: r.id }; headers.forEach((h, i) => (o[h] = cellPlain(r.cells[i]))); return o; });
+    downloadBlob(new Blob([JSON.stringify(objs, null, 2)], { type: "application/json" }), `${SEL.name}.json`);
+  } else {
+    const q = (s) => { s = String(s ?? ""); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const lines = [["id", ...headers].map(q).join(",")];
+    for (const r of rows) lines.push([r.id, ...headers.map((h, i) => cellPlain(r.cells[i]))].map(q).join(","));
+    downloadBlob(new Blob([lines.join("\n")], { type: "text/csv" }), `${SEL.name}.csv`);
+  }
+  toast(`exported ${rows.length} rows`);
+}
+
+function openImport() {
+  $("impKind").value = SEL ? SEL.name : "";
+  $("impText").value = "";
+  $("impStatus").textContent = "";
+  $("importDlg").showModal();
+}
+// Parse pasted CSV (header row) or JSON array into [{name,value}] property lists.
+function parseImport(text) {
+  text = text.trim();
+  if (text.startsWith("[")) {
+    return JSON.parse(text).map((o) => Object.entries(o).filter(([k]) => k !== "id").map(([k, v]) => ({ name: k, value: v })));
+  }
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  if (lines.length < 2) return [];
+  const splitCsv = (line) => { const out = []; let cur = "", inq = false; for (let i = 0; i < line.length; i++) { const c = line[i]; if (inq) { if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; } else if (c === '"') inq = false; else cur += c; } else if (c === '"') inq = true; else if (c === ",") { out.push(cur); cur = ""; } else cur += c; } out.push(cur); return out; };
+  const headers = splitCsv(lines[0]);
+  return lines.slice(1).map((l) => { const cells = splitCsv(l); return headers.map((h, i) => ({ name: h, value: cells[i] })).filter((p) => p.name !== "id" && p.value !== undefined && p.value !== ""); });
+}
+$("impRun").onclick = async () => {
+  const kind = $("impKind").value.trim();
+  if (!kind) { toast("target kind required", true); return; }
+  let recs;
+  try { recs = parseImport($("impText").value); } catch (e) { $("impStatus").textContent = "parse error: " + e.message; return; }
+  if (!recs.length) { $("impStatus").textContent = "nothing to import"; return; }
+  let ok = 0;
+  for (const props of recs) {
+    // CSV values are strings → parseScalar; JSON values pass through.
+    const properties = props.map((p) => ({ name: p.name, value: typeof p.value === "string" ? parseScalar(p.value) : p.value }));
+    const r = await api.commit({ op: "create", kind, properties });
+    if (r.status === 200) ok++;
+  }
+  $("impStatus").textContent = `imported ${ok}/${recs.length}`;
+  toast(`imported ${ok} records`);
+  await refreshAll();
+};
+
+async function bulkDelete() {
+  const ids = [...TBL.sel];
+  if (!ids.length) return;
+  if (!confirm(`Delete ${ids.length} record(s)? This tombstones them (history kept).`)) return;
+  let ok = 0;
+  for (const id of ids) { const r = await api.commit({ op: "delete", id }); if (r.status === 200) ok++; }
+  TBL.sel.clear();
+  toast(`deleted ${ok}/${ids.length}`);
+  await refreshAll();
+}
+
+function editable(cell) {
+  return cell === null || ["string", "number", "boolean"].includes(typeof cell);
+}
+function fmt(cell) {
+  if (cell === null) return '<span class="tag">∅</span>';
+  if (typeof cell === "object") {
+    const k = Object.keys(cell)[0];
+    return `<span class="tag">${k}: ${esc(String(cell[k]))}</span>`;
+  }
+  return esc(String(cell));
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+function parseScalar(text) {
+  if (text === "") return null;
+  if (text === "true") return true;
+  if (text === "false") return false;
+  if (text === "null") return null;
+  if (/^ref:[0-9a-fA-F-]{36}$/.test(text)) return { "$ref": text.slice(4) };
+  if (/^-?\d+$/.test(text)) return parseInt(text, 10);
+  if (/^-?\d*\.\d+$/.test(text)) return parseFloat(text);
+  return text;
+}
+
+function beginEdit(td) {
+  const id = td.closest("tr").dataset.id;
+  const prop = td.dataset.prop;
+  const cvEl = td.querySelector(".cv");
+  const curText = cvEl ? cvEl.textContent : td.textContent;
+  const cur = curText === "∅" ? "" : curText;
+  td.innerHTML = `<input value="${esc(cur)}" />`;
+  const inp = td.querySelector("input");
+  inp.focus(); inp.select();
+  const done = async (commit) => {
+    inp.onblur = null;
+    if (!commit) return loadTable();
+    const value = parseScalar(inp.value);
+    const r = await api.commit({ op: "set", id, property: prop, value });
+    if (r.status === 200) { toast("saved · tx " + r.body.tx); await refreshAll(); }
+    else { toast(r.body.error?.message || "error", true); await loadTable(); }
+  };
+  inp.onkeydown = (e) => { if (e.key === "Enter") done(true); if (e.key === "Escape") done(false); };
+  inp.onblur = () => done(true);
+}
+
+async function delRow(id) {
+  const r = await api.commit({ op: "delete", id });
+  if (r.status === 200) { toast("deleted · tx " + r.body.tx); await refreshAll(); }
+  else toast(r.body.error?.message || "error", true);
+}
+
+function openNew() {
+  $("newKind").textContent = SEL.name;
+  const f = $("newFields"); f.innerHTML = "";
+  for (const p of SEL.properties) addNewField(p.name, "");
+  if (!SEL.properties.length) addNewField("", "");
+  $("newDlg").showModal();
+}
+function addNewField(name, val) {
+  const f = $("newFields");
+  const row = document.createElement("div");
+  row.className = "field";
+  row.innerHTML = `<input class="fname" placeholder="property" value="${esc(name)}" /><input class="fval" placeholder="value or ref:&lt;uuid&gt;" value="${esc(val)}" />`;
+  f.appendChild(row);
+}
+$("addField").onclick = () => addNewField("", "");
+$("newSave").onclick = async () => {
+  const props = [];
+  $("newFields").querySelectorAll(".field").forEach((row) => {
+    const name = row.querySelector(".fname").value.trim();
+    if (!name) return;
+    props.push({ name, value: parseScalar(row.querySelector(".fval").value) });
+  });
+  const r = await api.commit({ op: "create", kind: SEL.name, properties: props });
+  if (r.status === 200) { $("newDlg").close(); toast("created · tx " + r.body.tx); await refreshAll(); }
+  else toast(r.body.error?.message || "error", true);
+};
+
+// ---- Pivot view ----
+function propOptions(selected) {
+  return (SEL.properties || []).map((pr) => `<option value="${esc(pr.name)}" ${pr.name === selected ? "selected" : ""}>${esc(pr.name)}</option>`).join("");
+}
+function numericPropOptions(selected) {
+  return (SEL.properties || []).filter((pr) => pr.type === "int" || pr.type === "float")
+    .map((pr) => `<option value="${esc(pr.name)}" ${pr.name === selected ? "selected" : ""}>${esc(pr.name)}</option>`).join("");
+}
+function numfmt(n) { if (n === undefined || n === null) return "0"; return Number.isInteger(n) ? String(n) : n.toFixed(2); }
+
+async function loadPivot() {
+  const params = new URLSearchParams({ kind: SEL.type_id, row: PIVOT.row || "", col: PIVOT.col || "", agg: PIVOT.agg });
+  if (PIVOT.agg === "sum" && PIVOT.value) params.set("value", PIVOT.value);
+  if (ASOF !== null) params.set("as_of", ASOF);
+  renderPivot(await api.get("/pivot?" + params.toString()));
+}
+
+function renderPivot(p) {
+  const c = $("content");
+  let html = "";
+  if (readOnly()) html += `<div class="banner">Pivot as of tx ${ASOF}.</div>`;
+  html += `<div class="toolbar"><h2>${esc(SEL.name)}</h2>${modeTabsHtml()}<div class="spacer" style="flex:1"></div></div>`;
+  html += `<div class="pivot-controls">
+    <label>Rows <select id="pvRow">${propOptions(PIVOT.row)}</select></label>
+    <label>Columns <select id="pvCol">${propOptions(PIVOT.col)}</select></label>
+    <label>Aggregate <select id="pvAgg"><option value="count" ${PIVOT.agg === "count" ? "selected" : ""}>count</option><option value="sum" ${PIVOT.agg === "sum" ? "selected" : ""}>sum</option></select></label>
+    <label id="pvValueWrap" class="${PIVOT.agg === "sum" ? "" : "hidden"}">of <select id="pvValue">${numericPropOptions(PIVOT.value)}</select></label>
+  </div>`;
+  const rows = p.rows || [], cols = p.cols || [], cells = p.cells || [];
+  if (!rows.length) {
+    html += `<div class="empty">No data — pick properties present on records of this kind.</div>`;
+  } else {
+    html += `<table class="pivot"><thead><tr><th class="corner">${esc(p.row_prop || "")} \\ ${esc(p.col_prop || "")}</th>`;
+    for (const cv of cols) html += `<th>${esc(cv)}</th>`;
+    html += `<th class="total">Σ</th></tr></thead><tbody>`;
+    rows.forEach((rv, ri) => {
+      html += `<tr><th>${esc(rv)}</th>`;
+      (cells[ri] || []).forEach((n) => (html += `<td>${numfmt(n)}</td>`));
+      html += `<td class="total">${numfmt(p.row_totals[ri])}</td></tr>`;
+    });
+    html += `<tr class="totals"><th>Σ</th>`;
+    (p.col_totals || []).forEach((n) => (html += `<td class="total">${numfmt(n)}</td>`));
+    html += `<td class="grand">${numfmt(p.grand_total)}</td></tr></tbody></table>`;
+  }
+  c.innerHTML = html;
+  wireModeTabs();
+  $("pvRow").onchange = (e) => { PIVOT.row = e.target.value; loadPivot(); };
+  $("pvCol").onchange = (e) => { PIVOT.col = e.target.value; loadPivot(); };
+  $("pvAgg").onchange = (e) => {
+    PIVOT.agg = e.target.value;
+    if (PIVOT.agg === "sum" && !PIVOT.value) {
+      const n = (SEL.properties || []).find((pr) => pr.type === "int" || pr.type === "float");
+      PIVOT.value = n ? n.name : null;
+    }
+    loadPivot();
+  };
+  const pv = $("pvValue");
+  if (pv) pv.onchange = (e) => { PIVOT.value = e.target.value; loadPivot(); };
+}
+
+// ---- Query console ----
+let QUERY_TEXT = "match Person(name: ?n) return ?n limit 50";
+
+const qStore = {
+  hist: () => { try { return JSON.parse(localStorage.getItem("ndb_qhist") || "[]"); } catch { return []; } },
+  pushHist: (q) => { let h = qStore.hist().filter((x) => x !== q); h.unshift(q); h = h.slice(0, 15); localStorage.setItem("ndb_qhist", JSON.stringify(h)); },
+  saved: () => { try { return JSON.parse(localStorage.getItem("ndb_qsaved") || "[]"); } catch { return []; } },
+  setSaved: (arr) => localStorage.setItem("ndb_qsaved", JSON.stringify(arr)),
+};
+
+function renderQuery() {
+  cancelGraphAnim();
+  const c = $("content");
+  let html = `<div class="toolbar"><h2>Query</h2>${modeTabsHtml()}<div class="spacer" style="flex:1"></div></div>`;
+  html += `<div class="qlayout"><div class="qmain">
+    <textarea id="qtext" class="qeditor" spellcheck="false" placeholder="match Kind(prop: ?v) return ?v limit 50">${esc(QUERY_TEXT)}</textarea>
+    <div class="qbar"><button class="primary" id="qrun">Run ▸</button><button id="qsave">★ Save</button><span class="qhint">read-only · Ctrl/⌘+Enter to run · ids are clickable</span></div>
+    <div id="qresult"></div>
+  </div><div class="qside"><div class="recsh">Saved</div><div id="qsaved"></div><div class="recsh" style="margin-top:10px">Recent</div><div id="qhist"></div></div></div>`;
+  c.innerHTML = html;
+  wireModeTabs();
+  $("qtext").oninput = (e) => { QUERY_TEXT = e.target.value; };
+  $("qtext").onkeydown = (e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); runQuery(); } };
+  $("qrun").onclick = runQuery;
+  $("qsave").onclick = () => {
+    const name = prompt("Save query as:", "");
+    if (!name) return;
+    const arr = qStore.saved().filter((x) => x.name !== name);
+    arr.push({ name, q: QUERY_TEXT });
+    qStore.setSaved(arr);
+    renderQuerySide();
+    toast("query saved");
+  };
+  renderQuerySide();
+}
+
+function renderQuerySide() {
+  const sv = $("qsaved"), hi = $("qhist");
+  if (!sv || !hi) return;
+  const saved = qStore.saved();
+  sv.innerHTML = saved.length
+    ? saved.map((s, i) => `<div class="qitem"><span class="qload" data-q="${esc(s.q)}" title="${esc(s.q)}">${esc(s.name)}</span><button class="qdel" data-i="${i}" title="delete">✕</button></div>`).join("")
+    : `<div class="recempty">none</div>`;
+  hi.innerHTML = qStore.hist().map((q) => `<div class="qitem"><span class="qload" data-q="${esc(q)}" title="${esc(q)}">${esc(q.length > 38 ? q.slice(0, 38) + "…" : q)}</span></div>`).join("") || `<div class="recempty">none</div>`;
+  document.querySelectorAll(".qload").forEach((el) => (el.onclick = () => { QUERY_TEXT = el.dataset.q; $("qtext").value = QUERY_TEXT; runQuery(); }));
+  document.querySelectorAll(".qdel").forEach((el) => (el.onclick = () => { const arr = qStore.saved(); arr.splice(Number(el.dataset.i), 1); qStore.setSaved(arr); renderQuerySide(); }));
+}
+
+async function runQuery() {
+  const out = $("qresult");
+  out.innerHTML = `<div class="badge">running…</div>`;
+  const r = await api.post("/query", { query: QUERY_TEXT });
+  if (r.status === 200) { qStore.pushHist(QUERY_TEXT); renderQuerySide(); }
+  if (r.status !== 200) {
+    const e = r.body || {};
+    out.innerHTML = `<div class="qerr"><b>${esc(e.error || "error")}</b> · <span class="qcode">${esc(e.code || "")}</span><div class="qdetail">${esc(e.detail || "query failed")}</div></div>`;
+    return;
+  }
+  const columns = r.body.columns || [], rows = r.body.rows || [];
+  if (!rows.length) { out.innerHTML = `<div class="empty">No results.</div>`; return; }
+  let h = `<div class="badge" style="margin:8px 0 6px">${rows.length} row${rows.length === 1 ? "" : "s"}${r.body.truncated ? " · truncated" : ""}</div><table><thead><tr>`;
+  for (const col of columns) h += `<th>${esc(col)}</th>`;
+  h += `</tr></thead><tbody>`;
+  for (const row of rows) {
+    h += "<tr>";
+    for (const cell of row) h += `<td>${qcell(cell)}</td>`;
+    h += "</tr>";
+  }
+  h += "</tbody></table>";
+  out.innerHTML = h;
+  out.querySelectorAll(".qref").forEach((el) => (el.onclick = () => openRecord(el.dataset.id)));
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// A query result cell is either a scalar or a {tag, value} typed wrapper.
+function qcell(cell) {
+  let tag = null, val = cell;
+  if (cell && typeof cell === "object" && "value" in cell) { tag = cell.tag; val = cell.value; }
+  if (val === null || val === undefined) return '<span class="tag">∅</span>';
+  const s = String(val);
+  if (tag === "entity" || tag === "ref" || UUID_RE.test(s)) {
+    return `<span class="qref" data-id="${esc(s)}" title="open record">${esc(s.slice(0, 8))}…</span>`;
+  }
+  return esc(s);
+}
+
+// Promote a query result (or graph node) to its full record.
+async function openRecord(id) {
+  const rec = await api.get(`/record?id=${id}`);
+  if (!rec || !rec.id) { toast("record not found", true); return; }
+  $("recTitle").textContent = rec.kind;
+  $("recId").textContent = id.slice(0, 8) + "…";
+  let h = "";
+
+  // Properties
+  h += `<div class="recsec"><div class="recsh">Properties</div>`;
+  h += (rec.properties || []).map((p) => `<div class="hrow"><span class="htx">${esc(p.name)}</span><span class="hval">${fmt(p.value)}</span></div>`).join("") || `<div class="recempty">none</div>`;
+  if (rec.author) h += `<div class="hrow"><span class="htx">author</span><span class="hauthor">${esc(rec.author)}</span></div>`;
+  h += `</div>`;
+
+  // Relationships (entity refs, both directions)
+  const relRow = (r, dir) => `<div class="hrow"><span class="htx">${dir === "out" ? "→" : "←"} ${esc(r.property)}</span><span class="hval qref" data-id="${esc(r.id)}">${esc(r.label || r.id.slice(0, 8))} <span class="ekind">${esc(r.kind)}</span></span></div>`;
+  if ((rec.out_refs || []).length || (rec.in_refs || []).length) {
+    h += `<div class="recsec"><div class="recsh">Relationships</div>`;
+    h += (rec.out_refs || []).map((r) => relRow(r, "out")).join("");
+    h += (rec.in_refs || []).map((r) => relRow(r, "in")).join("");
+    h += `</div>`;
+  }
+
+  // N-ary edge memberships
+  if ((rec.roles || []).length) {
+    h += `<div class="recsec"><div class="recsh">N-ary edges</div>`;
+    h += rec.roles.map((rr) => {
+      const co = rr.members.map((m) => `<span class="qref erole" data-id="${esc(m.id)}">${esc(m.role)}: ${esc(m.label || m.id.slice(0, 8))}</span>`).join(" ");
+      return `<div class="hrow"><span class="htx">⬡ ${esc(rr.edge_kind)} <span class="ekind">as ${esc(rr.role)}</span></span><span class="hval">${co || "—"}</span></div>`;
+    }).join("");
+    h += `</div>`;
+  }
+
+  // Meta: history depth + vector
+  h += `<div class="recsec"><div class="recsh">Meta</div>`;
+  h += `<div class="hrow"><span class="htx">versions</span><span class="hval">${rec.versions ?? "?"}</span></div>`;
+  if (rec.vector) {
+    h += `<div class="hrow"><span class="htx">vector</span><span class="hval">${esc(rec.vector.property)} · dim ${rec.vector.dim} <button class="simbtn" data-prop="${esc(rec.vector.property)}" data-id="${esc(rec.id)}">find similar ▸</button></span></div>`;
+    h += `<div id="simResult" class="simresult"></div>`;
+  }
+  h += `</div>`;
+
+  $("recBody").innerHTML = h;
+  $("recBody").querySelectorAll(".qref").forEach((el) => (el.onclick = () => openRecord(el.dataset.id)));
+  const sb = $("recBody").querySelector(".simbtn");
+  if (sb) sb.onclick = async () => {
+    const sr = $("simResult");
+    sr.innerHTML = `<span class="badge">searching…</span>`;
+    const r = await api.get(`/similar?id=${sb.dataset.id}&property=${encodeURIComponent(sb.dataset.prop)}&k=8`);
+    if (r.error) { sr.innerHTML = `<div class="recempty">${esc(r.error.message || "error")}</div>`; return; }
+    sr.innerHTML = `<div class="recsh">Nearest (cosine)</div>` + ((r.results || []).map((x) =>
+      `<div class="hrow"><span class="hval qref" data-id="${esc(x.id)}">${esc(x.label || x.id.slice(0, 8))} <span class="ekind">${esc(x.kind)}</span></span><span class="htx">${Number(x.distance).toFixed(4)}</span></div>`).join("") || `<div class="recempty">no neighbours</div>`);
+    sr.querySelectorAll(".qref").forEach((el) => (el.onclick = () => openRecord(el.dataset.id)));
+  };
+  if (!$("recDlg").open) $("recDlg").showModal();
+}
+
+// ---- Graph view (self-contained 2-D force layout on canvas) ----
+function cancelGraphAnim() { if (GRAPH_ANIM) { cancelAnimationFrame(GRAPH_ANIM); GRAPH_ANIM = null; } }
+
+async function loadGraph() {
+  const g = await api.get(`/graph?${ASOF === null ? "" : "as_of=" + ASOF + "&"}limit=300`);
+  renderGraph(g);
+}
+
+function renderGraph(g) {
+  cancelGraphAnim();
+  const c = $("content");
+  let html = "";
+  if (readOnly()) html += `<div class="banner">Graph as of tx ${ASOF}.</div>`;
+  html += `<div class="toolbar"><h2>Graph</h2>${modeTabsHtml()}<span class="badge" id="gstat"></span><div class="spacer" style="flex:1"></div></div>`;
+  if (!(g.nodes || []).length) {
+    html += `<div class="empty">No entities to graph yet.</div>`;
+    c.innerHTML = html; wireModeTabs(); return;
+  }
+  html += `<div class="graphwrap"><canvas id="gcanvas"></canvas><div id="ginfo" class="ginfo hidden"></div><div class="glegend">drag to rearrange · hover for labels · click a node</div></div>`;
+  c.innerHTML = html;
+  wireModeTabs();
+  startGraph(g);
+}
+
+function startGraph(g) {
+  const canvas = $("gcanvas"), wrap = canvas.parentElement;
+  const W = wrap.clientWidth, H = wrap.clientHeight, dpr = window.devicePixelRatio || 1;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + "px"; canvas.style.height = H + "px";
+  const ctx = canvas.getContext("2d"); ctx.scale(dpr, dpr);
+
+  const nodes = (g.nodes || []).map((n, i) => {
+    const a = (i / (g.nodes.length || 1)) * Math.PI * 2, rad = Math.min(W, H) * 0.32;
+    return { ...n, x: W / 2 + Math.cos(a) * rad * (0.5 + 0.5 * Math.random()), y: H / 2 + Math.sin(a) * rad * (0.5 + 0.5 * Math.random()), vx: 0, vy: 0 };
+  });
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const links = (g.links || []).map((l) => ({ ...l, source: byId.get(l.source), target: byId.get(l.target) })).filter((l) => l.source && l.target);
+  $("gstat").textContent = `${nodes.length} nodes · ${links.length} links${g.truncated ? " · truncated to " + g.shown : ""}`;
+
+  const palette = ["#5db0ff", "#58d39a", "#f0c674", "#ff8fb3", "#b58cff", "#6fd6d6", "#ffa46b", "#9ad36b"];
+  const colorFor = (n) => (n.hyper ? "#8b97a7" : palette[(n.type_id || 0) % palette.length]);
+  const REPULSE = 2000, SPRING = 0.02, SPRING_LEN = 72, GRAVITY = 0.018, DAMP = 0.86, MAXTICKS = 280;
+  let ticks = 0, selected = null, hover = null, dragNode = null;
+
+  function step() {
+    for (let i = 0; i < nodes.length; i++) {
+      const a = nodes[i];
+      for (let j = i + 1; j < nodes.length; j++) {
+        const b = nodes[j];
+        let dx = a.x - b.x, dy = a.y - b.y, d2 = dx * dx + dy * dy || 0.01, d = Math.sqrt(d2);
+        const f = REPULSE / d2, fx = (dx / d) * f, fy = (dy / d) * f;
+        a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
+      }
+    }
+    for (const l of links) {
+      let dx = l.target.x - l.source.x, dy = l.target.y - l.source.y, d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      const f = SPRING * (d - SPRING_LEN), fx = (dx / d) * f, fy = (dy / d) * f;
+      l.source.vx += fx; l.source.vy += fy; l.target.vx -= fx; l.target.vy -= fy;
+    }
+    for (const n of nodes) {
+      n.vx += (W / 2 - n.x) * GRAVITY; n.vy += (H / 2 - n.y) * GRAVITY;
+      n.vx *= DAMP; n.vy *= DAMP;
+      if (n !== dragNode) { n.x += n.vx; n.y += n.vy; }
+    }
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    for (const l of links) {
+      const hot = selected && (l.source === selected || l.target === selected);
+      ctx.strokeStyle = hot ? "#5db0ff" : (l.kind === "hyperedge" ? "#3b4a5c" : "#2a3644");
+      ctx.lineWidth = hot ? 1.6 : 1;
+      ctx.beginPath(); ctx.moveTo(l.source.x, l.source.y); ctx.lineTo(l.target.x, l.target.y); ctx.stroke();
+    }
+    for (const n of nodes) {
+      const r = n.hyper ? 4 : (n === selected || n === hover ? 7 : 5);
+      ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+      ctx.globalAlpha = n.hyper ? 0.75 : 1; ctx.fillStyle = colorFor(n); ctx.fill(); ctx.globalAlpha = 1;
+      if (n === selected) { ctx.lineWidth = 2; ctx.strokeStyle = "#fff"; ctx.stroke(); }
+    }
+    ctx.fillStyle = "#cdd6e3"; ctx.font = "11px ui-sans-serif, system-ui";
+    const labelAll = nodes.length <= 45;
+    for (const n of nodes) {
+      if (labelAll || n === selected || n === hover) ctx.fillText(n.label || n.id.slice(0, 6), n.x + 8, n.y + 3);
+    }
+  }
+
+  function loop() {
+    step(); ticks++;
+    draw();
+    if (ticks < MAXTICKS || dragNode) GRAPH_ANIM = requestAnimationFrame(loop);
+    else GRAPH_ANIM = null;
+  }
+  loop();
+
+  const at = (e) => { const rc = canvas.getBoundingClientRect(); return { x: e.clientX - rc.left, y: e.clientY - rc.top }; };
+  const pick = (p) => { let best = null, bd = 169; for (const n of nodes) { const dx = n.x - p.x, dy = n.y - p.y, d = dx * dx + dy * dy; if (d < bd) { bd = d; best = n; } } return best; };
+  function resume() { if (!GRAPH_ANIM) GRAPH_ANIM = requestAnimationFrame(loop); }
+
+  canvas.onmousemove = (e) => {
+    const p = at(e);
+    if (dragNode) { dragNode.x = p.x; dragNode.y = p.y; ticks = Math.min(ticks, MAXTICKS - 40); resume(); }
+    else { const h = pick(p); if (h !== hover) { hover = h; canvas.style.cursor = h ? "pointer" : "default"; if (!GRAPH_ANIM) draw(); } }
+  };
+  canvas.onmousedown = (e) => { dragNode = pick(at(e)); if (dragNode) { selected = dragNode; showInfo(selected); resume(); } };
+  canvas.onmouseup = () => { dragNode = null; };
+  canvas.onmouseleave = () => { dragNode = null; hover = null; if (!GRAPH_ANIM) draw(); };
+
+  function showInfo(n) {
+    const info = $("ginfo");
+    info.className = "ginfo";
+    info.innerHTML = `<div class="gi-kind">${esc(n.kind)}${n.hyper ? " · N-ary edge" : ""}</div><div class="gi-label">${esc(n.label || "(no label)")}</div><div class="gi-id">${esc(n.id)}</div>` + (n.hyper ? "" : `<div class="gi-actions"><button class="gi-rec">open record</button><button class="gi-open">open in table</button></div>`);
+    const open = info.querySelector(".gi-open");
+    if (open) open.onclick = () => { const k = CATALOG.find((kk) => kk.type_id === n.type_id); if (k) { MODE = "table"; selectKind(k); } };
+    const rec = info.querySelector(".gi-rec");
+    if (rec) rec.onclick = () => openRecord(n.id);
+  }
+}
+
+// ---- Per-cell history popover ----
+async function openHistory(id, prop) {
+  const h = await api.get(`/history?id=${id}&property=${encodeURIComponent(prop)}`);
+  $("histTitle").textContent = prop;
+  $("histId").textContent = id.slice(0, 8) + "…";
+  const body = $("histBody");
+  const vs = h.versions || [];
+  if (!vs.length) {
+    body.innerHTML = `<div class="empty" style="padding:14px">No recorded history.</div>`;
+  } else {
+    body.innerHTML = vs.map((v) => v.deleted
+      ? `<div class="hrow del"><span class="htx">tx ${v.tx}</span><span class="hval">deleted</span></div>`
+      : `<div class="hrow"><span class="htx">tx ${v.tx}</span><span class="hval">${fmt(v.value)}</span>${v.author ? `<span class="hauthor">${esc(v.author)}</span>` : ""}<button class="hjump" data-tx="${v.tx}" title="View the database at this point">view</button></div>`
+    ).join("");
+    body.querySelectorAll(".hjump").forEach((b) => (b.onclick = () => { jumpTo(parseInt(b.dataset.tx, 10)); $("histDlg").close(); }));
+  }
+  $("histDlg").showModal();
+}
+
+function jumpTo(tx) {
+  const slider = $("asof");
+  slider.value = String(tx);
+  slider.dispatchEvent(new Event("input"));
+  loadCatalog().then(() => { if (SEL) SEL = CATALOG.find((k) => k.type_id === SEL.type_id) || SEL; renderKinds(); reloadView(); });
+}
+
+async function refreshAll() {
+  await loadCatalog();
+  if (SEL) SEL = CATALOG.find((k) => k.type_id === SEL.type_id) || SEL;
+  if (SEL_EDGE) { SEL_EDGE = EDGES.find((e) => e.type_id === SEL_EDGE.type_id) || SEL_EDGE; }
+  renderKinds();
+  await reloadView();
+}
+
+$("asof").oninput = (e) => {
+  const v = parseInt(e.target.value, 10);
+  ASOF = v >= HEAD ? null : v;
+  const lbl = $("asofLabel");
+  if (ASOF === null) { lbl.textContent = "now"; lbl.className = "asof live"; }
+  else { lbl.textContent = "tx " + ASOF; lbl.className = "asof past"; }
+};
+$("asof").onchange = async () => { await loadCatalog(); if (SEL) SEL = CATALOG.find((k) => k.type_id === SEL.type_id) || CATALOG[0]; if (SEL_EDGE) SEL_EDGE = EDGES.find((e) => e.type_id === SEL_EDGE.type_id) || SEL_EDGE; renderKinds(); await reloadView(); };
+
+// ---- auth / session ----
+function showLogin() { $("login").classList.remove("hidden"); setTimeout(() => $("luser").focus(), 0); }
+function hideLogin() { $("login").classList.add("hidden"); }
+function renderUser() {
+  $("who").textContent = ME.user ? `${ME.user} · ${ME.role}` : "";
+  $("usersBtn").classList.toggle("hidden", ME.role !== "admin");
+  $("nodeBtn").classList.toggle("hidden", ME.role !== "admin");
+  $("dbActive").textContent = ME.db ? "▦ " + ME.db : "";
+  $("dbBtn").classList.toggle("hidden", ME.role !== "admin");
+}
+
+// ---- databases (admin) ----
+$("dbBtn").onclick = openDbDlg;
+async function openDbDlg() {
+  const d = await api.get("/databases");
+  const list = $("dbList");
+  let h = (d.open || []).map((x) =>
+    `<div class="hrow"><span class="hval ${x.active ? "" : "qload"}" ${x.active ? "" : `data-use="${esc(x.name)}"`}>▦ ${esc(x.name)}${x.name === d.primary ? " · primary" : ""}</span><span class="htx">${x.active ? "active" : ""}</span></div>`).join("");
+  if ((d.available || []).length) {
+    h += `<div class="recsh" style="margin-top:8px">On disk (not open)</div>`;
+    h += d.available.map((n) => `<div class="hrow"><span class="hval qload" data-open="${esc(n)}">▦ ${esc(n)}</span><span class="htx">open</span></div>`).join("");
+  }
+  list.innerHTML = h;
+  list.querySelectorAll("[data-use]").forEach((el) => (el.onclick = () => switchDb("use", el.dataset.use)));
+  list.querySelectorAll("[data-open]").forEach((el) => (el.onclick = async () => { await switchDb("open", el.dataset.open); await switchDb("use", el.dataset.open); }));
+  $("dbDlg").showModal();
+}
+$("dbCreate").onclick = async () => {
+  const name = $("dbNew").value.trim();
+  if (!name) { toast("name required", true); return; }
+  const r = await api.post("/databases", { name });
+  if (r.status === 200) { $("dbNew").value = ""; await afterDbChange(name); }
+  else toast(r.body.error?.message || "create failed", true);
+};
+async function switchDb(action, name) {
+  const r = await api.post("/databases/" + (action === "use" ? "use" : "open"), { name });
+  if (r.status !== 200) { toast(r.body.error?.message || "failed", true); return; }
+  if (action === "use") await afterDbChange(name);
+  else await openDbDlg();
+}
+async function afterDbChange(name) {
+  $("dbDlg").close();
+  ME.db = name; renderUser();
+  SEL = null; SEL_EDGE = null; MODE = "table";
+  await loadCatalog();
+  if (CATALOG.length) selectKind(CATALOG[0]); else { $("content").innerHTML = `<div class="empty">Empty database — create records via the API or import.</div>`; renderKinds(); }
+  toast("switched to " + name);
+}
+
+async function init() {
+  ME = await api.get("/me");
+  if (!ME.authed) { renderUser(); showLogin(); return; }
+  hideLogin();
+  renderUser();
+  await loadCatalog();
+  if (CATALOG.length) selectKind(CATALOG[0]);
+}
+
+$("loginForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const r = await api.post("/login", { username: $("luser").value, password: $("lpass").value });
+  if (r.status === 200) { $("lerr").textContent = ""; $("lpass").value = ""; await init(); }
+  else { $("lerr").textContent = r.body.error?.message || "login failed"; }
+};
+$("logoutBtn").onclick = async () => { await api.post("/logout", {}); location.reload(); };
+
+// ---- users panel (admin) ----
+async function openUsers() {
+  const r = await api.get("/users");
+  const list = $("usersList");
+  list.innerHTML = (r.users || []).map((u) =>
+    `<div class="urow"><span class="un">${esc(u.username)}</span><span class="ubadge">${esc(u.role)}</span>` +
+    (u.username === ME.user ? `<span class="badge">you</span>` : `<button class="rowdel" data-u="${esc(u.username)}" title="Delete">✕</button>`) +
+    `</div>`).join("");
+  list.querySelectorAll(".rowdel").forEach((b) => (b.onclick = async () => {
+    const rr = await api.post("/users/delete", { username: b.dataset.u });
+    if (rr.status === 200) openUsers(); else toast(rr.body.error?.message || "error", true);
+  }));
+  $("usersDlg").showModal();
+}
+$("usersBtn").onclick = openUsers;
+
+// ---- node / replication panel (admin) ----
+async function refreshNodeStatus() {
+  const s = await api.get("/replication/status");
+  $("nodeStatus").innerHTML =
+    `<div class="hrow"><span class="htx">head tx</span><span class="hval">${s.head ?? "?"}</span></div>` +
+    `<div class="hrow"><span class="htx">sstables</span><span class="hval">${s.sstables ?? "?"}</span></div>` +
+    `<div class="hrow"><span class="htx">wal seq</span><span class="hval">${s.wal_seq ?? "?"}</span></div>`;
+}
+async function openNode() { await refreshNodeStatus(); $("npResult").textContent = ""; $("nodeDlg").showModal(); }
+$("nodeBtn").onclick = openNode;
+$("npPull").onclick = async () => {
+  $("npResult").textContent = "pulling…";
+  const r = await api.post("/replication/pull", { peer: $("npPeer").value.trim(), token: $("npToken").value.trim() });
+  if (r.status === 200) {
+    $("npResult").textContent = `applied ${r.body.applied} record(s) · head now ${r.body.head}`;
+    await refreshNodeStatus();
+    toast(`replicated ${r.body.applied} records`);
+    await refreshAll();
+  } else {
+    $("npResult").textContent = "";
+    toast(r.body.error?.message || "pull failed", true);
+  }
+};
+$("nuAdd").onclick = async () => {
+  const rr = await api.post("/users", { username: $("nuUser").value.trim(), password: $("nuPass").value, role: $("nuRole").value });
+  if (rr.status === 200) { $("nuUser").value = ""; $("nuPass").value = ""; toast("user added"); openUsers(); }
+  else toast(rr.body.error?.message || "error", true);
+};
+
+init();
+</script>
+</body>
+</html>

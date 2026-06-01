@@ -11,6 +11,8 @@ members = [
     "crates/ndb-index-vector-hnsw",
     "crates/ndb-client-rust",
     "crates/ndb-query",
+    "crates/ndb-studio",
+    "crates/nstack",
     "crates/bench-race-sqlite-rust",
     "tools/langgraph",
 ]
