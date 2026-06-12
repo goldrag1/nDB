@@ -9,8 +9,11 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Build + test the agent surface (MCP) and the GPU on-ramp (Arrow), plus the
-  # HTTP server that now exposes the Arrow export endpoints.
+  # Full workspace test. Previously this ran only -p ndb-mcp-server / ndb-arrow
+  # / ndb-server, which left the engine (the storage core, with the decoder
+  # robustness/fuzz-lite suite), slicer, query, and renderer UNTESTED in CI —
+  # a real OOM bug in the engine decoder once shipped because of it. Test the
+  # whole workspace so every crate's suite gates merges.
   test:
     runs-on: ubuntu-latest
     steps:
@@ -19,8 +22,25 @@ jobs:
         run: rustup show
       - name: Format
         run: cargo fmt --all -- --check
-      - name: Test (agent + Arrow + server)
-        run: cargo test -p ndb-mcp-server -p ndb-arrow -p ndb-server
+      - name: Test (whole workspace)
+        run: cargo test --workspace
+      - name: Decoder robustness suite (explicit)
+        run: cargo test -p ndb-engine --test robustness
+
+  # Lint gate. ADVISORY for now: there is a backlog of ~42 pre-existing
+  # pedantic warnings in ndb-engine. `continue-on-error` keeps the signal
+  # visible (the job surfaces the warnings) without blocking merges. Once the
+  # backlog is cleared, drop `continue-on-error` and add `-D warnings` to make
+  # this blocking so no NEW warnings can land.
+  clippy:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain (pinned via rust-toolchain.toml)
+        run: rustup show
+      - name: Clippy (advisory)
+        run: cargo clippy --workspace --all-targets
 
   # Portability guard: the store / index / export path must keep compiling for
   # NVIDIA DGX Spark (GB10 Grace Blackwell — aarch64). See docs/gpu-dgx-spark.md.

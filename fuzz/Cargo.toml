@@ -1,0 +1,38 @@
+# Coverage-guided fuzzing for nDB's byte-level decoders.
+#
+# Run (requires nightly + the cargo-fuzz subcommand):
+#   cargo install cargo-fuzz
+#   cargo +nightly fuzz run record_decode
+#   cargo +nightly fuzz run value_decode
+#
+# Deliberately NOT a workspace member: cargo-fuzz builds this crate with
+# libFuzzer instrumentation under its own target dir, separate from the
+# normal `cargo build`. The deterministic "fuzz-lite" tests in
+# crates/ndb-engine/tests/robustness.rs are the always-on CI guard; these
+# targets are the coverage-guided campaign you run before a release.
+[package]
+name = "ndb-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ndb-engine = { path = "../crates/ndb-engine" }
+
+[[bin]]
+name = "record_decode"
+path = "fuzz_targets/record_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "value_decode"
+path = "fuzz_targets/value_decode.rs"
+test = false
+doc = false
+bench = false

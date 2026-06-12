@@ -16,6 +16,9 @@ members = [
     "crates/bench-race-sqlite-rust",
     "tools/langgraph",
 ]
+# cargo-fuzz crate: built only by `cargo fuzz` with libFuzzer instrumentation,
+# never part of the normal workspace build/test.
+exclude = ["fuzz"]
 
 [workspace.package]
 edition      = "2024"
