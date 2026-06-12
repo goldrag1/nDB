@@ -9,12 +9,13 @@
 
 nDB already speaks **Model Context Protocol** (`crates/ndb-mcp-server`): JSON-RPC 2.0
 over stdio, embedded engine, per-tool **capability gating (ReBAC)** + **audit log**.
-That's the protocol Claude / coding agents already speak. The gap is not the
-transport — it's that the v1 tool surface doesn't expose nDB's *distinctive* model
-(hyperedges, time-travel). An agent can read/write flat entities but cannot create
-or traverse the n-ary relationships that make nDB nDB.
+That's the protocol Claude / coding agents already speak. The v1 gap was that the
+tool surface didn't expose nDB's *distinctive* model (hyperedges, time-travel) —
+**now closed (A1–A4)**: agents can create and traverse n-ary relationships, do
+time-travel reads, paginate, read typed tool schemas, and pull schema/stats as MCP
+resources.
 
-### A1. Hyperedge agent tools — **Building (this branch)**
+### A1. Hyperedge agent tools — **✅ Shipped (this branch)**
 
 The differentiator from the storage comparison: a relationship of any arity is one
 record. Exposed as MCP tools so an agent can model n-ary knowledge directly.
@@ -29,19 +30,19 @@ These three close the create / traverse / time-travel gap. Built on existing eng
 primitives: `WriteTxn::put_hyperedge`, `Engine::hyperedges_for_entity_capped`,
 `Engine::tx_at_or_before` + `snapshot_read`.
 
-### A2. Richer tool descriptions & JSON schemas — **Planned**
+### A2. Richer tool descriptions & JSON schemas — **✅ Shipped (this branch)**
 
 v1 `tools/list` returns name + one-line description only. Agents call tools more
 reliably with `inputSchema` (JSON Schema) per tool. Add `inputSchema` to every entry
 in `tool_list()`.
 
-### A3. Streaming / pagination — **Planned**
+### A3. Streaming / pagination — **✅ Shipped (this branch)**
 
 `ndb.iter` is hard-capped at 1000 records, no cursor. Add `{cursor, limit}` →
 `{records, next_cursor}` so an agent can walk an arbitrarily large DB. Pairs with the
 Arrow chunking work in Part B.
 
-### A4. MCP resources & prompts — **Planned**
+### A4. MCP resources & prompts — **✅ Shipped (this branch)**
 
 v1 ships `tools/*` only. Resources (read-only context blobs: schema/dictionary
 snapshots) and prompts (query templates) would let an agent discover the schema
@@ -62,33 +63,46 @@ nDB (CPU: store · MVCC · hyperedges · ANN candidate filter)
 GPU framework (Blackwell: batched ANN re-rank · GNN train/infer · embedding gen)
 ```
 
-### B1. Chunked / streaming Arrow export — **Planned (next after A1)**
+**Target hardware includes NVIDIA DGX Spark (GB10 Grace Blackwell).** Two facts
+shaped the work: it's **aarch64** (so the path must build on ARM — verified, see
+B0) and it has **128 GB unified Grace↔Blackwell memory** (so the Arrow buffers
+nDB writes are GPU-addressable with no host→device copy). Full details and Python
+recipes in [`gpu-dgx-spark.md`](./gpu-dgx-spark.md).
 
-Today `ndb-arrow` is single-batch, in-memory ("for very large databases callers
-should chunk themselves"). Add `snapshot_iter_chunked(by: (record_kind, type_id),
-batch_rows)` → an iterator of `RecordBatch` so a GPU consumer can stream a dataset
-larger than host RAM. This is the unlock for feeding Blackwell at scale.
+### B0. aarch64 / DGX Spark portability — **✅ Verified (this branch)**
 
-### B2. Vector column → GPU ANN handoff — **Planned**
+`cargo check --target aarch64-unknown-linux-gnu` passes for `ndb-engine`,
+`ndb-index-vector-hnsw`, and `ndb-arrow` — the whole store/index/export path runs
+on Grace ARM. Works because the hot paths are pure-safe-Rust with no x86
+intrinsics and no C++ toolchain.
 
-`Value::Vector` already maps to Arrow `List<Float32>`. Document + provide a thin
-Python recipe: nDB HNSW returns top-N candidates on CPU → hand the candidate vectors
-(as one Arrow batch) to cuVS for exact GPU re-rank. nDB stays the source of truth and
-the coarse filter; the GPU does the heavy distance math.
+### B1. Chunked / streaming Arrow export — **✅ Shipped (this branch)**
 
-### B3. Hyperedge → GNN edge-index export — **Planned**
+`ndb-arrow` gained `records_to_batches(records, batch_rows)` and
+`records_to_ipc_stream_chunked(...)`: the column set is discovered once across all
+records, then data rows are windowed into many `RecordBatch`es under one schema —
+streamable to a GPU consumer for datasets larger than host RAM.
 
-Hyperedges already flatten to an Arrow `roles` column
-(`List<Struct{role_id, entity_id}>`). Add a helper that emits a bipartite
-(hyperedge, participant) edge index directly, so cuGraph/PyG can build a hypergraph
-GNN without a re-join — the structural advantage from the storage comparison carried
-all the way to the GPU.
+### B2. Vector column → GPU ANN handoff — **✅ Shipped (this branch)**
 
-### B4. Lossless decimal & GPUDirect — **Later**
+`vector_column_batch(records, type_id, property_id)` emits a dense
+`primary_id + embedding: FixedSizeList<Float32, dim>` batch — the `[n, dim]`
+layout cuVS wants. nDB HNSW returns coarse candidates on CPU; the GPU does exact
+re-rank over their vectors. Python recipe in `gpu-dgx-spark.md`.
 
-`Value::Decimal` currently widens to `Float64` (lossy). Move to Arrow's native decimal
-type. GPUDirect Storage (disk → GPU, bypassing host RAM) is a much larger effort and
-explicitly out of near-term scope.
+### B3. Hyperedge → GNN edge-index export — **✅ Shipped (this branch)**
+
+`hyperedge_edge_index(records)` flattens every hyperedge into the bipartite
+`(hyperedge_id, role_id, participant_id, participant_kind)` incidence list cuGraph
+/ DGL / PyG consume — no junction-table re-join, the structural advantage carried
+to the GPU.
+
+### B4. Lossless decimal — **✅ Shipped** · GPUDirect — **Later**
+
+`Value::Decimal` now maps to Arrow `Decimal128(38, scale)` — exact, not the old
+lossy `Float64`; mixed-scale columns widen to the max scale and rescale each value
+losslessly. GPUDirect Storage (disk → GPU, bypassing host RAM) remains a much
+larger effort, explicitly out of near-term scope.
 
 ## Target applications where a GPU uses nDB as the data layer
 
@@ -101,8 +115,14 @@ explicitly out of near-term scope.
 
 ## Sequence
 
-1. **A1 — hyperedge agent tools** ← in progress on this branch.
-2. A2 — per-tool JSON schemas (cheap, high agent-reliability payoff).
-3. B1 — chunked Arrow export (unlocks every GPU path).
-4. A3 / B2 / B3 — streaming + GPU handoff recipes.
-5. A4 / B4 — resources/prompts, lossless decimal, GPUDirect.
+**Done on this branch:** A1, A2, A3, A4 (agent surface) and B0, B1, B2, B3, B4
+(GPU on-ramp + aarch64/DGX-Spark portability). All compile, are unit-tested, and
+are clippy-clean in their crates.
+
+**Remaining / future:**
+1. Wire the new `ndb-arrow` GPU helpers through `ndb-server` / `ndb-mcp-server`
+   so an agent can request an Arrow export over the wire (currently a library
+   API).
+2. End-to-end validation on real DGX Spark hardware (cuVS re-rank, cuGraph GNN)
+   — code is aarch64-clean but unverified on-device.
+3. GPUDirect Storage (disk → GPU) — large effort, deferred.
