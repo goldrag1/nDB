@@ -548,8 +548,34 @@ impl Pipeline {
         self
     }
 
-    /// Run the pipeline over an iterator of records.
+    /// Run the pipeline over an iterator of records, choosing the best
+    /// execution engine automatically.
+    ///
+    /// Group-by / aggregate pipelines go through the streaming columnar
+    /// engine ([`Self::run_columnar`]) — single pass, no per-record row
+    /// allocation, only referenced columns decoded. Pure projection stays
+    /// on the row engine ([`Self::run_row`]). The two engines are proven
+    /// to return identical tables (see `columnar_matches_row_engine_*`),
+    /// so this dispatch is transparent to callers — existing code gets
+    /// the faster path with no change.
     pub fn run<I>(&self, records: I) -> Table
+    where
+        I: IntoIterator<Item = Record>,
+    {
+        if self.group_by.is_empty() && self.aggregates.is_empty() {
+            self.run_row(records)
+        } else {
+            self.run_columnar(records)
+        }
+    }
+
+    /// Row-materialising engine: filter + project every record into a
+    /// `Vec<Vec<Value>>`, then group/aggregate in a second pass. Retained
+    /// as the reference implementation and equivalence oracle for
+    /// [`Self::run_columnar`]; [`Self::run`] now prefers the columnar
+    /// engine for aggregate queries. Use this directly only when you
+    /// specifically want the row path.
+    pub fn run_row<I>(&self, records: I) -> Table
     where
         I: IntoIterator<Item = Record>,
     {
@@ -1970,12 +1996,18 @@ mod tests {
         Column::entity_property(&format!("c{prop}"), PropertyId::new(prop))
     }
 
-    /// Assert both engines agree for the given pipeline over `records`.
+    /// Assert the row engine and the columnar engine agree for the given
+    /// pipeline. Compares `run_row` (the reference) against `run_columnar`
+    /// explicitly — `run` now dispatches to the columnar engine for
+    /// aggregates, so it can't be used as the oracle here.
     fn assert_engines_agree(build: impl Fn() -> Pipeline, records: &[Record]) {
-        let row = build().run(records.to_vec());
+        let row = build().run_row(records.to_vec());
         let columnar = build().run_columnar(records.to_vec());
         assert_eq!(row.headers, columnar.headers, "headers diverged");
         assert_eq!(row.rows, columnar.rows, "rows diverged");
+        // `run` must match the engine it dispatches to.
+        let auto = build().run(records.to_vec());
+        assert_eq!(auto.rows, columnar.rows, "run() dispatch diverged");
     }
 
     #[test]
