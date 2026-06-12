@@ -12,8 +12,18 @@ license      = { workspace = true }
 name = "ndb_slicer"
 path = "src/lib.rs"
 
+[features]
+# Optional GPU compute kernel for global numeric reductions. Off by
+# default: it pulls in wgpu and only pays off for very large scans on a
+# machine with a real GPU adapter. The CPU path is always available and
+# is the fallback when no adapter is found.
+gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+
 [dependencies]
 ndb-engine = { path = "../ndb-engine" }
+wgpu       = { version = "22", optional = true }
+pollster   = { version = "0.3", optional = true }
+bytemuck   = { version = "1", optional = true, features = ["derive"] }
 
 [lints]
 workspace = true

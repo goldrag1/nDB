@@ -152,6 +152,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         run_pipeline(&engine, snap, &filter_agg)
     });
 
+    // Global numeric reduction over a single column — the shape the GPU
+    // kernel targets. CPU SIMD path always runs; GPU path runs only with
+    // `--features gpu` AND a real adapter, otherwise it reports a skip.
+    {
+        use ndb_slicer::F64Column;
+        let amount_src = ndb_slicer::ColumnSource::EntityProperty {
+            type_id: Some(TypeId::new(TYPE_ORDER)),
+            property: PropertyId::new(PROP_AMOUNT),
+        };
+        let col = F64Column::build(
+            &amount_src,
+            engine.snapshot_iter_streaming(snap).filter_map(Result::ok),
+        );
+        eprintln!("\nglobal sum over {} values:", col.len());
+        bench("sum_cpu_simd", iters, n_entities, || {
+            std::hint::black_box(col.sum());
+            col.len()
+        });
+        #[cfg(feature = "gpu")]
+        {
+            if ndb_slicer::gpu::is_available() {
+                bench("sum_gpu", iters, n_entities, || {
+                    std::hint::black_box(ndb_slicer::gpu::gpu_sum(&col));
+                    col.len()
+                });
+            } else {
+                eprintln!("sum_gpu     : no GPU adapter present — CPU fallback is used");
+            }
+        }
+    }
+
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }
