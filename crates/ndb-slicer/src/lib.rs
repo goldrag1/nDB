@@ -583,13 +583,21 @@ impl Pipeline {
         }
 
         // 2. Group + aggregate (if requested).
-        let (headers, mut rows) = if !self.group_by.is_empty() || !self.aggregates.is_empty() {
+        let (headers, rows) = if !self.group_by.is_empty() || !self.aggregates.is_empty() {
             self.apply_group_and_agg(rows)
         } else {
             let headers: Vec<String> = self.columns.iter().map(|c| c.header.clone()).collect();
             (headers, rows)
         };
 
+        self.finish(headers, rows)
+    }
+
+    /// Post-aggregation pipeline tail shared by [`Self::run`] and
+    /// [`Self::run_columnar`]: HAVING (§2.4) → sort (§2.6) → limit. Kept
+    /// in one place so the row and columnar engines can never drift on
+    /// these semantics.
+    fn finish(&self, headers: Vec<String>, mut rows: Vec<Vec<Value>>) -> Table {
         // 2.5. Post-aggregate filter (HAVING — v2.1 §2.4). No-op when
         // no aggregates are configured; the v2.0 pre-aggregate
         // `filter()` is the supported tool for that case.
@@ -665,6 +673,271 @@ impl Pipeline {
             out.push(row);
         }
         (headers, out)
+    }
+
+    /// Single-pass, column-fused execution of group-by + aggregate
+    /// pipelines — the "columnar" engine (step 3).
+    ///
+    /// Where [`Self::run`] materialises every projected row into a
+    /// `Vec<Vec<Value>>` and then makes a second grouping pass, this path
+    /// streams: each record is filtered, only the columns actually
+    /// referenced by `group_by`/aggregates are extracted, the group key
+    /// is computed, and per-group accumulators are updated in place. No
+    /// intermediate row set is built, so it does not allocate a `Vec` per
+    /// input record and touches no column the query doesn't use.
+    ///
+    /// Results are identical to [`Self::run`] — group order, aggregate
+    /// types, null handling and the HAVING/sort/limit tail are all the
+    /// same — so callers can pick either freely. Pipelines with no
+    /// `group_by` and no aggregates are pure projection and have nothing
+    /// to fuse, so they delegate straight to [`Self::run`].
+    pub fn run_columnar<I>(&self, records: I) -> Table
+    where
+        I: IntoIterator<Item = Record>,
+    {
+        if self.group_by.is_empty() && self.aggregates.is_empty() {
+            return self.run(records);
+        }
+
+        // Only the columns named by group_by or by an aggregate need to
+        // be extracted per record. `referenced[i]` is true iff output
+        // column `i` feeds the grouping or an aggregate.
+        let mut referenced = vec![false; self.columns.len()];
+        for &i in &self.group_by {
+            referenced[i] = true;
+        }
+        for a in &self.aggregates {
+            referenced[a.column] = true;
+        }
+        // A referenced column may MOVE its property out of the record
+        // when it is the last reader of that property (same rule as
+        // `run`); the per-record scratch row is reused across records.
+        let can_take: Vec<bool> = self
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                referenced[i]
+                    && consumed_property(&c.source).is_some_and(|key| {
+                        !self.columns[i + 1..]
+                            .iter()
+                            .enumerate()
+                            .any(|(j, later)| {
+                                referenced[i + 1 + j] && read_property(&later.source) == Some(key)
+                            })
+                    })
+            })
+            .collect();
+
+        let mut groups: BTreeMap<Vec<u8>, GroupState> = BTreeMap::new();
+        let mut key: Vec<u8> = Vec::new();
+        // Scratch projected values for the referenced columns, reused per
+        // record. Unreferenced slots stay `Null` and are never read.
+        let mut scratch: Vec<Value> = vec![Value::Null; self.columns.len()];
+
+        for mut rec in records {
+            if let Some(f) = &self.filter
+                && !f(&rec)
+            {
+                continue;
+            }
+            for (i, c) in self.columns.iter().enumerate() {
+                if !referenced[i] {
+                    continue;
+                }
+                scratch[i] = if can_take[i] {
+                    extract_take(&mut rec, &c.source)
+                } else {
+                    extract(&rec, &c.source)
+                }
+                .unwrap_or(Value::Null);
+            }
+
+            key.clear();
+            for &i in &self.group_by {
+                value_key_bytes_into(&mut key, &scratch[i]);
+            }
+            let state = if let Some(s) = groups.get_mut(&key) {
+                s
+            } else {
+                // New group: clone the key (once) and the representative
+                // group-by values (once per group, not per row).
+                let state = GroupState {
+                    group_vals: self.group_by.iter().map(|&i| scratch[i].clone()).collect(),
+                    accs: self.aggregates.iter().map(|a| AggAccum::new(a.agg)).collect(),
+                };
+                groups.entry(key.clone()).or_insert(state)
+            };
+            for (acc, spec) in state.accs.iter_mut().zip(&self.aggregates) {
+                acc.update(&scratch[spec.column]);
+            }
+        }
+
+        let mut headers: Vec<String> = Vec::with_capacity(self.group_by.len() + self.aggregates.len());
+        for &i in &self.group_by {
+            headers.push(self.columns[i].header.clone());
+        }
+        for agg in &self.aggregates {
+            headers.push(agg.header.clone());
+        }
+
+        let mut out: Vec<Vec<Value>> = Vec::with_capacity(groups.len());
+        for (_key, state) in groups {
+            let mut row = state.group_vals;
+            for acc in state.accs {
+                row.push(acc.finalize());
+            }
+            out.push(row);
+        }
+
+        self.finish(headers, out)
+    }
+}
+
+/// Per-group accumulator set for the streaming columnar engine.
+struct GroupState {
+    /// Representative group-by values, stored once per group.
+    group_vals: Vec<Value>,
+    /// One accumulator per configured aggregate.
+    accs: Vec<AggAccum>,
+}
+
+/// Streaming accumulator — the incremental form of [`compute_aggregate`].
+/// Each variant folds one value at a time and `finalize`s to the exact
+/// same `Value` the batch function would return for the same inputs.
+enum AggAccum {
+    Count {
+        n: usize,
+    },
+    /// Mirrors `Aggregate::Sum`: integer accumulation until the first
+    /// float promotes the running total to f64 (per group, like `run`).
+    Sum {
+        acc_i: i64,
+        acc_f: f64,
+        as_float: bool,
+        any: bool,
+    },
+    Avg {
+        n: i64,
+        acc: f64,
+    },
+    Extremum {
+        want_min: bool,
+        best: Option<Value>,
+    },
+    /// Percentile needs the full sample, same as the batch path; it
+    /// collects per group then sorts at finalize.
+    Percentile {
+        p: f64,
+        xs: Vec<f64>,
+    },
+}
+
+impl AggAccum {
+    fn new(agg: Aggregate) -> Self {
+        match agg {
+            Aggregate::Count => Self::Count { n: 0 },
+            Aggregate::Sum => Self::Sum {
+                acc_i: 0,
+                acc_f: 0.0,
+                as_float: false,
+                any: false,
+            },
+            Aggregate::Avg => Self::Avg { n: 0, acc: 0.0 },
+            Aggregate::Min => Self::Extremum { want_min: true, best: None },
+            Aggregate::Max => Self::Extremum { want_min: false, best: None },
+            Aggregate::Percentile { p } => Self::Percentile { p, xs: Vec::new() },
+        }
+    }
+
+    #[inline]
+    fn update(&mut self, v: &Value) {
+        match self {
+            Self::Count { n } => {
+                if !matches!(v, Value::Null) {
+                    *n += 1;
+                }
+            }
+            Self::Sum { acc_i, acc_f, as_float, any } => match v {
+                Value::I64(x) => {
+                    *any = true;
+                    if *as_float {
+                        *acc_f += *x as f64;
+                    } else {
+                        *acc_i = acc_i.saturating_add(*x);
+                    }
+                }
+                Value::F64(x) => {
+                    *any = true;
+                    if !*as_float {
+                        *acc_f = *acc_i as f64;
+                        *as_float = true;
+                    }
+                    *acc_f += *x;
+                }
+                _ => {}
+            },
+            Self::Avg { n, acc } => match v {
+                Value::I64(x) => {
+                    *acc += *x as f64;
+                    *n += 1;
+                }
+                Value::F64(x) => {
+                    *acc += *x;
+                    *n += 1;
+                }
+                _ => {}
+            },
+            Self::Extremum { want_min, best } => {
+                if matches!(v, Value::Null) {
+                    return;
+                }
+                match best {
+                    None => *best = Some(v.clone()),
+                    Some(b) => {
+                        let ord = value_partial_cmp(v, b).unwrap_or(Ordering::Equal);
+                        let take = if *want_min {
+                            ord == Ordering::Less
+                        } else {
+                            ord == Ordering::Greater
+                        };
+                        if take {
+                            *best = Some(v.clone());
+                        }
+                    }
+                }
+            }
+            Self::Percentile { xs, .. } => match v {
+                Value::I64(x) => xs.push(*x as f64),
+                Value::F64(x) => xs.push(*x),
+                Value::Timestamp(t) => xs.push(*t as f64),
+                _ => {}
+            },
+        }
+    }
+
+    fn finalize(self) -> Value {
+        match self {
+            Self::Count { n } => Value::I64(i64::try_from(n).unwrap_or(i64::MAX)),
+            Self::Sum { acc_i, acc_f, as_float, any } => {
+                if !any {
+                    Value::Null
+                } else if as_float {
+                    Value::F64(acc_f)
+                } else {
+                    Value::I64(acc_i)
+                }
+            }
+            Self::Avg { n, acc } => {
+                if n == 0 {
+                    Value::Null
+                } else {
+                    Value::F64(acc / n as f64)
+                }
+            }
+            Self::Extremum { best, .. } => best.unwrap_or(Value::Null),
+            Self::Percentile { p, xs } => percentile_from(xs, p),
+        }
     }
 }
 
@@ -768,7 +1041,14 @@ fn percentile(rows: &[Vec<Value>], col: usize, p: f64) -> Value {
             _ => {}
         }
     }
-    if xs.is_empty() {
+    percentile_from(xs, p)
+}
+
+/// R-7 (linear) percentile core over an already-collected sample. Shared
+/// by the batch [`percentile`] and the streaming [`AggAccum::Percentile`]
+/// so both produce identical results.
+fn percentile_from(mut xs: Vec<f64>, p: f64) -> Value {
+    if !(p > 0.0 && p <= 1.0) || xs.is_empty() {
         return Value::Null;
     }
     xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -1529,5 +1809,180 @@ mod tests {
         assert_eq!(p99, compute_aggregate(Aggregate::Percentile { p: 0.99 }, 0, &rows));
         // Sanity: p50 ≈ 50.5 (R-7 on 1..=100)
         assert!(matches!(p50, Value::F64(v) if (v - 50.5).abs() < 1e-9));
+    }
+
+    // ---------------------------------------------------------------------
+    // Step 3: columnar engine ≡ row engine
+    //
+    // The columnar path is only safe if it returns BYTE-FOR-BYTE the same
+    // table as `run` for every supported pipeline shape. These tests pin
+    // that equivalence across a deterministic pseudo-random dataset that
+    // exercises ints, floats, strings, nulls, multiple groups and every
+    // aggregate.
+    // ---------------------------------------------------------------------
+
+    const G_PROP: u32 = 10; // group key (string)
+    const N_PROP: u32 = 11; // numeric (mixed i64 across rows)
+    const F_PROP: u32 = 12; // float
+    const T_PROP: u32 = 13; // timestamp
+
+    /// Deterministic LCG so the dataset is reproducible without a dep.
+    fn synthetic_records(n: usize) -> Vec<Record> {
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state >> 33
+        };
+        let groups = ["red", "green", "blue", "amber"];
+        (0..n)
+            .map(|_| {
+                let g = groups[(next() as usize) % groups.len()];
+                let mut props = vec![(G_PROP, Value::String(g.into()))];
+                // ~10% of numeric cells missing → exercises null handling.
+                if next() % 10 != 0 {
+                    props.push((N_PROP, Value::I64((next() % 1000) as i64 - 500)));
+                }
+                props.push((F_PROP, Value::F64((next() % 10000) as f64 / 7.0)));
+                props.push((T_PROP, Value::Timestamp((next() % 1_000_000) as i64)));
+                entity(EntityId::now_v7(), 1, props)
+            })
+            .collect()
+    }
+
+    fn col(prop: u32) -> Column {
+        Column::entity_property(&format!("c{prop}"), PropertyId::new(prop))
+    }
+
+    /// Assert both engines agree for the given pipeline over `records`.
+    fn assert_engines_agree(build: impl Fn() -> Pipeline, records: &[Record]) {
+        let row = build().run(records.to_vec());
+        let columnar = build().run_columnar(records.to_vec());
+        assert_eq!(row.headers, columnar.headers, "headers diverged");
+        assert_eq!(row.rows, columnar.rows, "rows diverged");
+    }
+
+    #[test]
+    fn columnar_matches_row_engine_across_shapes() {
+        let recs = synthetic_records(5_000);
+
+        // group_by string + every aggregate over the int column.
+        assert_engines_agree(
+            || {
+                Pipeline::new()
+                    .select(col(G_PROP))
+                    .select(col(N_PROP))
+                    .group_by([0])
+                    .aggregate(AggSpec { header: "cnt".into(), column: 1, agg: Aggregate::Count })
+                    .aggregate(AggSpec { header: "sum".into(), column: 1, agg: Aggregate::Sum })
+                    .aggregate(AggSpec { header: "avg".into(), column: 1, agg: Aggregate::Avg })
+                    .aggregate(AggSpec { header: "min".into(), column: 1, agg: Aggregate::Min })
+                    .aggregate(AggSpec { header: "max".into(), column: 1, agg: Aggregate::Max })
+                    .aggregate(AggSpec { header: "p95".into(), column: 1, agg: Aggregate::P95 })
+            },
+            &recs,
+        );
+
+        // float aggregates (Sum must stay F64 here).
+        assert_engines_agree(
+            || {
+                Pipeline::new()
+                    .select(col(G_PROP))
+                    .select(col(F_PROP))
+                    .group_by([0])
+                    .aggregate(AggSpec { header: "fsum".into(), column: 1, agg: Aggregate::Sum })
+                    .aggregate(AggSpec { header: "favg".into(), column: 1, agg: Aggregate::Avg })
+            },
+            &recs,
+        );
+
+        // Global aggregation (no group_by) — single bucket.
+        assert_engines_agree(
+            || {
+                Pipeline::new()
+                    .select(col(N_PROP))
+                    .aggregate(AggSpec { header: "total".into(), column: 0, agg: Aggregate::Sum })
+                    .aggregate(AggSpec { header: "cnt".into(), column: 0, agg: Aggregate::Count })
+            },
+            &recs,
+        );
+
+        // group_by + HAVING + sort + limit (exercises the shared tail).
+        assert_engines_agree(
+            || {
+                Pipeline::new()
+                    .select(col(G_PROP))
+                    .select(col(N_PROP))
+                    .group_by([0])
+                    .aggregate(AggSpec { header: "sum".into(), column: 1, agg: Aggregate::Sum })
+                    .having(|r| !matches!(&r[1], Value::Null))
+                    .sort([SortKey::desc(1)])
+                    .limit(2)
+            },
+            &recs,
+        );
+
+        // pre-aggregate filter + group_by on a non-zero column index.
+        assert_engines_agree(
+            || {
+                Pipeline::new()
+                    .select(col(N_PROP))
+                    .select(col(G_PROP))
+                    .filter(|rec| match rec {
+                        Record::Entity(e) => e
+                            .properties
+                            .iter()
+                            .any(|(p, v)| p.get() == N_PROP && matches!(v, Value::I64(n) if *n >= 0)),
+                        _ => false,
+                    })
+                    .group_by([1])
+                    .aggregate(AggSpec { header: "sum".into(), column: 0, agg: Aggregate::Sum })
+            },
+            &recs,
+        );
+
+        // Multi-key group_by (string + timestamp-bucketed).
+        assert_engines_agree(
+            || {
+                Pipeline::new()
+                    .select(col(G_PROP))
+                    .select(Column {
+                        header: "day".into(),
+                        source: ColumnSource::TimestampBucket {
+                            type_id: None,
+                            property: PropertyId::new(T_PROP),
+                            interval_us: 100_000,
+                            origin_us: 0,
+                        },
+                    })
+                    .select(col(N_PROP))
+                    .group_by([0, 1])
+                    .aggregate(AggSpec { header: "cnt".into(), column: 2, agg: Aggregate::Count })
+            },
+            &recs,
+        );
+    }
+
+    #[test]
+    fn columnar_projection_only_delegates_to_run() {
+        let recs = synthetic_records(100);
+        let build = || Pipeline::new().select(col(G_PROP)).select(col(N_PROP)).limit(10);
+        let row = build().run(recs.clone());
+        let columnar = build().run_columnar(recs);
+        assert_eq!(row.rows, columnar.rows);
+    }
+
+    #[test]
+    fn columnar_empty_input_matches() {
+        let build = || {
+            Pipeline::new()
+                .select(col(G_PROP))
+                .select(col(N_PROP))
+                .group_by([0])
+                .aggregate(AggSpec { header: "sum".into(), column: 1, agg: Aggregate::Sum })
+        };
+        let row = build().run(Vec::<Record>::new());
+        let columnar = build().run_columnar(Vec::<Record>::new());
+        assert_eq!(row.rows, columnar.rows);
+        assert!(columnar.rows.is_empty());
     }
 }

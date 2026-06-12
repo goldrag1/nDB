@@ -121,6 +121,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     bench("group_sum", iters, n_entities, || {
         run_pipeline(&engine, snap, &group_sum)
     });
+    bench("group_sum_col", iters, n_entities, || {
+        run_pipeline_columnar(&engine, snap, &group_sum)
+    });
 
     let filter_agg = Pipeline::new()
         .select(Column::typed_entity_property(
@@ -155,6 +158,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn run_pipeline(engine: &Engine, snap: TxId, p: &Pipeline) -> usize {
     let table = p.run(engine.snapshot_iter_streaming(snap).filter_map(Result::ok));
+    table.len()
+}
+
+fn run_pipeline_columnar(engine: &Engine, snap: TxId, p: &Pipeline) -> usize {
+    let table = p.run_columnar(engine.snapshot_iter_streaming(snap).filter_map(Result::ok));
     table.len()
 }
 
