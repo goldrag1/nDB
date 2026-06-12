@@ -29,6 +29,13 @@
 //! - `ndb.read` — `{"uuid": "..."}` → `ReadResponse`
 //! - `ndb.commit_entity` — `{"type_id", "properties":[{prop_id, value}]}`
 //!   → `{"tx_id", "entity_id"}`
+//! - `ndb.commit_hyperedge` — `{"type_id", "roles":[{role_id, entity_id}],
+//!   "hyperedge_roles"?:[{role_id, hyperedge_id}], "properties"?}` →
+//!   `{"tx_id", "hyperedge_id"}`. Models an n-ary relationship as one record.
+//! - `ndb.neighbors` — `{"uuid", "limit"?}` → `{"hyperedges":[...]}`. One-hop
+//!   traversal: live hyperedges incident to an entity, with their role-fillers.
+//! - `ndb.read_as_of` — `{"uuid", "as_of_tx"? | "as_of_timestamp_us"?}` →
+//!   time-travel read at a past snapshot.
 //! - `ndb.iter` — `{}` → array of records (capped at 1000 in v1; full
 //!   streaming MCP shape is a v2 conversation)
 //! - `ndb.lookup_by_key` — `{"property_id", "value"}` → entity uuid or null
@@ -47,8 +54,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ndb_engine::{
-    Distance, Engine, EngineError, EntityId, EntityRecord, JsonRecord, JsonValue, PropertyId,
-    Resolved, TxId, TypeId, Value,
+    Distance, Engine, EngineError, EntityId, EntityRecord, HyperEdgeRecord, HyperedgeId,
+    JsonRecord, JsonValue, PropertyId, Record, Resolved, RoleId, TxId, TypeId, Value,
 };
 use ndb_server::{AuditEntry, AuditLog, Capability, Principal};
 use serde::{Deserialize, Serialize};
@@ -97,12 +104,14 @@ fn tool_capability(tool: &str) -> Option<Capability> {
     match tool {
         "ndb.health" => Some(Capability::Health),
         "ndb.read"
+        | "ndb.read_as_of"
+        | "ndb.neighbors"
         | "ndb.lookup_by_key"
         | "ndb.vector_search"
         | "ndb.property_lookup"
         | "ndb.property_range" => Some(Capability::Read),
         "ndb.iter" => Some(Capability::Iter),
-        "ndb.commit_entity" => Some(Capability::Commit),
+        "ndb.commit_entity" | "ndb.commit_hyperedge" => Some(Capability::Commit),
         _ => None,
     }
 }
@@ -258,13 +267,7 @@ impl McpServer {
             .map(|a| a.lock().expect("audit mutex poisoned").path().to_path_buf())
     }
 
-    fn record_audit(
-        &self,
-        principal: &str,
-        tool: &str,
-        status: u16,
-        failure: Option<&str>,
-    ) {
+    fn record_audit(&self, principal: &str, tool: &str, status: u16, failure: Option<&str>) {
         if let Some(log) = &self.audit {
             let entry = AuditEntry {
                 ts_us: now_micros(),
@@ -371,6 +374,9 @@ impl McpServer {
             "ndb.health" => Ok(serde_json::json!({"status": "ok"})),
             "ndb.read" => self.tool_read(args),
             "ndb.commit_entity" => self.tool_commit_entity(args),
+            "ndb.commit_hyperedge" => self.tool_commit_hyperedge(args),
+            "ndb.neighbors" => self.tool_neighbors(args),
+            "ndb.read_as_of" => self.tool_read_as_of(args),
             "ndb.iter" => self.tool_iter(args),
             "ndb.lookup_by_key" => self.tool_lookup_by_key(args),
             "ndb.vector_search" => self.tool_vector_search(args),
@@ -392,7 +398,7 @@ impl McpServer {
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| McpError::BadArgs("read: missing 'uuid'".into()))?;
         let uuid = Uuid::parse_str(uuid_str).map_err(|e| McpError::Convert(e.to_string()))?;
-        let mut engine = self.engine.write().expect("engine lock poisoned");
+        let engine = self.engine.write().expect("engine lock poisoned");
         let snap = TxId::new(engine.manifest().last_tx_id);
         let resolved = engine.snapshot_read(&uuid, snap)?;
         Ok(match resolved {
@@ -462,7 +468,7 @@ impl McpServer {
             .get("limit")
             .and_then(serde_json::Value::as_u64)
             .map_or(1000_usize, |n| n.try_into().unwrap_or(1000));
-        let mut engine = self.engine.write().expect("engine lock poisoned");
+        let engine = self.engine.write().expect("engine lock poisoned");
         let snap = TxId::new(engine.manifest().last_tx_id);
         let records = engine.snapshot_iter(snap)?;
         // Filter internal v2.0 metadata records, then truncate.
@@ -601,6 +607,227 @@ impl McpServer {
                 .collect::<Vec<_>>(),
         }))
     }
+
+    /// Commit an n-ary relationship as a single hyperedge record. This is the
+    /// agent-facing surface for nDB's distinctive model: a relationship of any
+    /// arity is one record, not a junction table. `roles` connect entities;
+    /// optional `hyperedge_roles` connect other hyperedges (e.g. a pathway
+    /// whose fillers are reaction hyperedges). Total arity must be ≥ 1.
+    fn tool_commit_hyperedge(
+        &self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value, McpError> {
+        let type_id = args
+            .get("type_id")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| McpError::BadArgs("commit_hyperedge: missing 'type_id'".into()))?;
+        let type_id = u32::try_from(type_id)
+            .map_err(|_| McpError::BadArgs("commit_hyperedge: type_id must fit in u32".into()))?;
+
+        let roles = parse_role_list::<EntityId>(args.get("roles"), "roles")?;
+        let hyperedge_roles =
+            parse_role_list::<HyperedgeId>(args.get("hyperedge_roles"), "hyperedge_roles")?;
+        if roles.is_empty() && hyperedge_roles.is_empty() {
+            return Err(McpError::BadArgs(
+                "commit_hyperedge: total arity must be ≥ 1 (provide 'roles' and/or 'hyperedge_roles')".into(),
+            ));
+        }
+        let properties = parse_property_list(args.get("properties"))?;
+
+        let mut engine = self.engine.write().expect("engine lock poisoned");
+        let mut txn = engine.begin_write();
+        let hyperedge_id = HyperedgeId::now_v7();
+        txn.put_hyperedge(HyperEdgeRecord {
+            hyperedge_id,
+            type_id: TypeId::new(type_id),
+            tx_id_assert: TxId::new(0),
+            tx_id_supersede: TxId::ACTIVE,
+            roles,
+            hyperedge_roles,
+            properties,
+        });
+        let tx = txn.commit()?;
+        Ok(serde_json::json!({
+            "tx_id": tx.get(),
+            "hyperedge_id": hyperedge_id.into_uuid().to_string(),
+        }))
+    }
+
+    /// One-hop traversal: given an entity UUID, return the live hyperedges
+    /// incident to it, each with its role-fillers, so an agent can walk the
+    /// graph without re-joining a junction table. Bounded by `limit`
+    /// (default 100) to stay cheap on power-law hubs.
+    fn tool_neighbors(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+        let uuid_str = args
+            .get("uuid")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| McpError::BadArgs("neighbors: missing 'uuid'".into()))?;
+        let uuid = Uuid::parse_str(uuid_str).map_err(|e| McpError::Convert(e.to_string()))?;
+        let limit = args
+            .get("limit")
+            .and_then(serde_json::Value::as_u64)
+            .map_or(100_usize, |n| n.try_into().unwrap_or(100));
+        let entity = EntityId::from_uuid(uuid);
+
+        let engine = self.engine.write().expect("engine lock poisoned");
+        let snap = TxId::new(engine.manifest().last_tx_id);
+        let incident = engine.hyperedges_for_entity_capped(entity, limit);
+        let mut edges = Vec::with_capacity(incident.len());
+        for hid in incident {
+            if let Resolved::Live(Record::HyperEdge(hr)) =
+                engine.snapshot_read(&hid.into_uuid(), snap)?
+            {
+                let jr: JsonRecord = (&Record::HyperEdge(hr)).into();
+                edges.push(jr);
+            }
+        }
+        Ok(serde_json::json!({
+            "entity_id": uuid.to_string(),
+            "hyperedges": edges,
+        }))
+    }
+
+    /// Time-travel read. Resolve a snapshot from either an explicit
+    /// `as_of_tx` or a wall-clock `as_of_timestamp_us` (microseconds since the
+    /// Unix epoch, mapped via the last commit at-or-before that instant), then
+    /// read `uuid` as it existed at that snapshot.
+    fn tool_read_as_of(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+        let uuid_str = args
+            .get("uuid")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| McpError::BadArgs("read_as_of: missing 'uuid'".into()))?;
+        let uuid = Uuid::parse_str(uuid_str).map_err(|e| McpError::Convert(e.to_string()))?;
+
+        let engine = self.engine.write().expect("engine lock poisoned");
+        let snap = if let Some(tx) = args.get("as_of_tx").and_then(serde_json::Value::as_u64) {
+            TxId::new(tx)
+        } else if let Some(ts) = args
+            .get("as_of_timestamp_us")
+            .and_then(serde_json::Value::as_i64)
+        {
+            match engine.tx_at_or_before(ts) {
+                Some(tx) => tx,
+                // No commit at-or-before that instant: the entity could not
+                // have existed yet.
+                None => {
+                    return Ok(serde_json::json!({"outcome": "missing", "as_of_tx": 0}));
+                }
+            }
+        } else {
+            return Err(McpError::BadArgs(
+                "read_as_of: provide 'as_of_tx' or 'as_of_timestamp_us'".into(),
+            ));
+        };
+
+        let resolved = engine.snapshot_read(&uuid, snap)?;
+        Ok(match resolved {
+            Resolved::Missing => serde_json::json!({"outcome": "missing", "as_of_tx": snap.get()}),
+            Resolved::Deleted { deleted_at } => serde_json::json!({
+                "outcome": "deleted",
+                "deleted_at": deleted_at.get(),
+                "as_of_tx": snap.get(),
+            }),
+            Resolved::Live(r) => {
+                let jr: JsonRecord = (&r).into();
+                serde_json::json!({"outcome": "live", "record": jr, "as_of_tx": snap.get()})
+            }
+        })
+    }
+}
+
+/// Parse a `[{role_id, <id_field>}]` JSON array into role-filler pairs. `T` is
+/// the filler id type (`EntityId` for `roles`, `HyperedgeId` for
+/// `hyperedge_roles`); both wrap a UUID and the field name is `<field>` minus
+/// its trailing `s` is not assumed — the id key is the singular id field.
+fn parse_role_list<T: FromUuid>(
+    value: Option<&serde_json::Value>,
+    field: &str,
+) -> Result<Vec<(RoleId, T)>, McpError> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let arr = value
+        .as_array()
+        .ok_or_else(|| McpError::BadArgs(format!("'{field}' must be an array")))?;
+    let id_key = T::ID_KEY;
+    let mut out = Vec::with_capacity(arr.len());
+    for r in arr {
+        let role_id = r
+            .get("role_id")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| McpError::BadArgs(format!("{field}[].role_id required")))?;
+        let role_id = u32::try_from(role_id)
+            .map_err(|_| McpError::BadArgs(format!("{field}[].role_id must fit in u32")))?;
+        if role_id == 0 {
+            return Err(McpError::BadArgs(format!(
+                "{field}[].role_id must be non-zero"
+            )));
+        }
+        let id_str = r
+            .get(id_key)
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| McpError::BadArgs(format!("{field}[].{id_key} required")))?;
+        let id = Uuid::parse_str(id_str).map_err(|e| McpError::Convert(e.to_string()))?;
+        out.push((RoleId::new(role_id), T::from_uuid(id)));
+    }
+    Ok(out)
+}
+
+/// Bridge trait so `parse_role_list` can build either an `EntityId` or a
+/// `HyperedgeId` from a UUID, and knows which JSON key carries the id.
+trait FromUuid {
+    /// JSON key the filler id is read from (`"entity_id"` / `"hyperedge_id"`).
+    const ID_KEY: &'static str;
+    /// Wrap a parsed UUID in the concrete id newtype.
+    fn from_uuid(u: Uuid) -> Self;
+}
+
+impl FromUuid for EntityId {
+    const ID_KEY: &'static str = "entity_id";
+    fn from_uuid(u: Uuid) -> Self {
+        EntityId::from_uuid(u)
+    }
+}
+
+impl FromUuid for HyperedgeId {
+    const ID_KEY: &'static str = "hyperedge_id";
+    fn from_uuid(u: Uuid) -> Self {
+        HyperedgeId::from_uuid(u)
+    }
+}
+
+/// Parse a `[{prop_id, value}]` JSON array into property pairs. Accepts a
+/// missing/absent list as empty. Shared by hyperedge commit; entity commit
+/// keeps its own inline copy.
+fn parse_property_list(
+    value: Option<&serde_json::Value>,
+) -> Result<Vec<(PropertyId, Value)>, McpError> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let arr = value
+        .as_array()
+        .ok_or_else(|| McpError::BadArgs("'properties' must be an array".into()))?;
+    let mut out = Vec::with_capacity(arr.len());
+    for p in arr {
+        let prop_id = p
+            .get("prop_id")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| McpError::BadArgs("properties[].prop_id required".into()))?;
+        let prop_id = u32::try_from(prop_id)
+            .map_err(|_| McpError::BadArgs("prop_id must fit in u32".into()))?;
+        let jv: JsonValue = serde_json::from_value(
+            p.get("value")
+                .cloned()
+                .ok_or_else(|| McpError::BadArgs("properties[].value required".into()))?,
+        )
+        .map_err(|e| McpError::Convert(e.to_string()))?;
+        let v: Value = jv
+            .try_into()
+            .map_err(|e: ndb_engine::WireError| McpError::Convert(e.to_string()))?;
+        out.push((PropertyId::new(prop_id), v));
+    }
+    Ok(out)
 }
 
 fn parse_type_prop_value(
@@ -636,6 +863,9 @@ fn tool_list() -> Vec<serde_json::Value> {
         serde_json::json!({"name": "ndb.health", "description": "liveness probe"}),
         serde_json::json!({"name": "ndb.read", "description": "look up a UUID at the latest snapshot"}),
         serde_json::json!({"name": "ndb.commit_entity", "description": "commit a new entity with a type and properties"}),
+        serde_json::json!({"name": "ndb.commit_hyperedge", "description": "commit an n-ary relationship (hyperedge) connecting entities and/or other hyperedges by role"}),
+        serde_json::json!({"name": "ndb.neighbors", "description": "one-hop traversal: live hyperedges incident to an entity UUID, with their role-fillers (limit default 100)"}),
+        serde_json::json!({"name": "ndb.read_as_of", "description": "time-travel read of a UUID at a past snapshot (as_of_tx or as_of_timestamp_us)"}),
         serde_json::json!({"name": "ndb.iter", "description": "list visible records (capped at 'limit' or 1000)"}),
         serde_json::json!({"name": "ndb.lookup_by_key", "description": "find an entity by external lookup-key value"}),
         serde_json::json!({"name": "ndb.vector_search", "description": "k-NN search over a vector-indexed property"}),
@@ -868,6 +1098,119 @@ mod tests {
         );
         let recs = resp["result"]["records"].as_array().unwrap();
         assert_eq!(recs.len(), 3);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Commit a bare entity of `type_id` with no properties; return its UUID.
+    fn commit_bare_entity(server: &McpServer, type_id: u32) -> String {
+        let resp = call(
+            server,
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{
+                    "name":"ndb.commit_entity",
+                    "arguments":{{"type_id":{type_id},"properties":[]}}
+                }}}}"#
+            ),
+        );
+        resp["result"]["entity_id"].as_str().unwrap().to_owned()
+    }
+
+    #[test]
+    fn commit_hyperedge_and_neighbors_round_trip() {
+        let dir = temp_dir("hyperedge");
+        let server = McpServer::open(&dir).unwrap();
+        let a = commit_bare_entity(&server, 5);
+        let b = commit_bare_entity(&server, 5);
+
+        // type 7, two entity role-fillers (roles 1 and 2).
+        let resp = call(
+            &server,
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{{
+                    "name":"ndb.commit_hyperedge",
+                    "arguments":{{
+                        "type_id":7,
+                        "roles":[
+                            {{"role_id":1,"entity_id":"{a}"}},
+                            {{"role_id":2,"entity_id":"{b}"}}
+                        ]
+                    }}
+                }}}}"#
+            ),
+        );
+        let hid = resp["result"]["hyperedge_id"].as_str().unwrap().to_owned();
+        assert!(resp["result"]["tx_id"].as_u64().unwrap() > 0);
+
+        // neighbors(a) must surface the hyperedge with both role-fillers.
+        let nb = call(
+            &server,
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{{
+                    "name":"ndb.neighbors","arguments":{{"uuid":"{a}"}}
+                }}}}"#
+            ),
+        );
+        let edges = nb["result"]["hyperedges"].as_array().unwrap();
+        assert_eq!(edges.len(), 1, "entity a participates in exactly one edge");
+        assert_eq!(edges[0]["kind"], "hyper_edge");
+        assert_eq!(edges[0]["hyperedge_id"], hid);
+        let roles = edges[0]["roles"].as_array().unwrap();
+        assert_eq!(roles.len(), 2, "edge is binary");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn commit_hyperedge_rejects_zero_arity() {
+        let dir = temp_dir("hyperedge_zero");
+        let server = McpServer::open(&dir).unwrap();
+        let resp = call(
+            &server,
+            r#"{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{
+                "name":"ndb.commit_hyperedge","arguments":{"type_id":7,"roles":[]}
+            }}"#,
+        );
+        // A hyperedge with no role-fillers is rejected before touching the engine.
+        assert!(resp["error"].is_object(), "zero-arity must error");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn read_as_of_sees_history() {
+        let dir = temp_dir("as_of");
+        let server = McpServer::open(&dir).unwrap();
+        let resp = call(
+            &server,
+            r#"{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{
+                "name":"ndb.commit_entity",
+                "arguments":{"type_id":5,"properties":[]}
+            }}"#,
+        );
+        let tx = resp["result"]["tx_id"].as_u64().unwrap();
+        let uuid = resp["result"]["entity_id"].as_str().unwrap().to_owned();
+
+        // At the creating tx: live.
+        let at = call(
+            &server,
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{{
+                    "name":"ndb.read_as_of","arguments":{{"uuid":"{uuid}","as_of_tx":{tx}}}
+                }}}}"#
+            ),
+        );
+        assert_eq!(at["result"]["outcome"], "live");
+        assert_eq!(at["result"]["as_of_tx"], tx);
+
+        // One tx earlier: the entity did not exist yet.
+        let before = call(
+            &server,
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{{
+                    "name":"ndb.read_as_of","arguments":{{"uuid":"{uuid}","as_of_tx":{}}}
+                }}}}"#,
+                tx - 1
+            ),
+        );
+        assert_eq!(before["result"]["outcome"], "missing");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
