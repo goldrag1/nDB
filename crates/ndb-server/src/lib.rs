@@ -11,6 +11,11 @@
 //!   responds `ReadResponse { outcome: missing|deleted|live, ... }`.
 //! - `GET  /iter` — streams every visible record at the latest snapshot
 //!   as JSONL (one `JsonRecord` per line, `Content-Type: application/jsonl`).
+//! - `GET  /arrow/export[?batch_rows=N]` — all records as an Arrow IPC
+//!   stream of fixed-size batches (`application/vnd.apache.arrow.stream`).
+//! - `GET  /arrow/vectors?type_id=T&property_id=P` — dense embedding matrix
+//!   (`FixedSizeList<Float32,dim>`) for GPU ANN; Arrow IPC.
+//! - `GET  /arrow/edge_index` — hyperedge incidence list for GNNs; Arrow IPC.
 //!
 //! v1 design decisions, locked here:
 //!
@@ -44,6 +49,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use ndb_engine::id::{EntityId, PropertyId, TypeId};
+use ndb_engine::index::Distance;
+use ndb_engine::value::Value;
 use ndb_engine::{
     CommitRequest, CommitResponse, Engine, EngineError, ErrorResponse, JsonRecord, JsonValue,
     LookupRequest, LookupResponse, PropertyLookupRequest, PropertyLookupResponse,
@@ -52,9 +60,6 @@ use ndb_engine::{
     VectorSearchRequest, VectorSearchResponse, WireError, WriteTxn, execute_query,
     run_offlock_compaction,
 };
-use ndb_engine::id::{EntityId, PropertyId, TypeId};
-use ndb_engine::index::Distance;
-use ndb_engine::value::Value;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -213,7 +218,10 @@ impl ServerMetrics {
         s.push_str("# HELP ndb_requests_total Total HTTP requests dispatched, by route.\n");
         s.push_str("# TYPE ndb_requests_total counter\n");
         {
-            let by_route = self.requests_by_route.lock().expect("metrics mutex poisoned");
+            let by_route = self
+                .requests_by_route
+                .lock()
+                .expect("metrics mutex poisoned");
             if by_route.is_empty() {
                 s.push_str("ndb_requests_total 0\n");
             } else {
@@ -227,7 +235,10 @@ impl ServerMetrics {
         s.push_str("# HELP ndb_responses_total Total HTTP responses, by status code.\n");
         s.push_str("# TYPE ndb_responses_total counter\n");
         {
-            let by_status = self.responses_by_status.lock().expect("metrics mutex poisoned");
+            let by_status = self
+                .responses_by_status
+                .lock()
+                .expect("metrics mutex poisoned");
             if by_status.is_empty() {
                 s.push_str("ndb_responses_total 0\n");
             } else {
@@ -667,10 +678,7 @@ pub struct AuditEntry<'a> {
 /// Commit every principal in `p` to the engine as one principal entity
 /// plus one capability hyperedge per granted capability. Returns the
 /// number of capability hyperedges committed.
-fn commit_principals_to_engine(
-    engine: &mut Engine,
-    p: &Principals,
-) -> Result<usize, ServerError> {
+fn commit_principals_to_engine(engine: &mut Engine, p: &Principals) -> Result<usize, ServerError> {
     use ndb_engine::{
         EntityRecord, HyperEdgeRecord, PROP_ACTION, PROP_EXPIRES_AT, PROP_GRANTED_AT,
         PROP_PRINCIPAL_NAME, PROP_PRINCIPAL_TOKEN, PROP_TARGET, ROLE_SUBJECT, TYPE_CAPABILITY,
@@ -720,8 +728,8 @@ fn commit_principals_to_engine(
 /// capability hyperedges incident on that entity.
 fn principals_from_engine(engine: &Arc<RwLock<Engine>>) -> Result<Principals, ServerError> {
     use ndb_engine::{
-        PROP_ACTION, PROP_PRINCIPAL_NAME, PROP_PRINCIPAL_TOKEN, ROLE_SUBJECT, Record, TYPE_CAPABILITY,
-        TYPE_PRINCIPAL, Value,
+        PROP_ACTION, PROP_PRINCIPAL_NAME, PROP_PRINCIPAL_TOKEN, ROLE_SUBJECT, Record,
+        TYPE_CAPABILITY, TYPE_PRINCIPAL, Value,
     };
     let eng = engine.read().expect("engine lock poisoned");
     let snapshot = TxId::new(eng.manifest().last_tx_id);
@@ -760,7 +768,9 @@ fn principals_from_engine(engine: &Arc<RwLock<Engine>>) -> Result<Principals, Se
             let resolved = eng.snapshot_read(&hid.into_uuid(), snapshot)?;
             if let Resolved::Live(Record::HyperEdge(h)) = resolved
                 && h.type_id == TYPE_CAPABILITY
-                && h.roles.iter().any(|(rid, e)| *rid == ROLE_SUBJECT && *e == eid)
+                && h.roles
+                    .iter()
+                    .any(|(rid, e)| *rid == ROLE_SUBJECT && *e == eid)
             {
                 for (pid, val) in &h.properties {
                     if *pid == PROP_ACTION
@@ -1283,11 +1293,7 @@ impl Server {
     /// the plain (`handle_connection`) and TLS (`BoundTlsServer::handle_one`)
     /// paths. Enforces the request-size limits during parse and writes the
     /// matching `413`/`431`/`400` response on failure.
-    fn serve_one<R: Read, W: Write>(
-        &self,
-        reader: R,
-        writer: &mut W,
-    ) -> Result<(), ServerError> {
+    fn serve_one<R: Read, W: Write>(&self, reader: R, writer: &mut W) -> Result<(), ServerError> {
         let start = Instant::now();
         let parsed = match parse_request(
             reader,
@@ -1300,7 +1306,9 @@ impl Server {
         self.metrics
             .bytes_read
             .fetch_add(parsed.bytes_read as u64, Ordering::Relaxed);
-        let ParsedRequest { request: req, body, .. } = parsed;
+        let ParsedRequest {
+            request: req, body, ..
+        } = parsed;
         self.dispatch_instrumented(&req, &body, writer, start)
     }
 
@@ -1454,8 +1462,7 @@ impl Server {
                             // in-memory capability set — same behaviour as
                             // v2.0.
                             let allowed = if let Some(eid) = p.entity_id {
-                                let now_us =
-                                    i64::try_from(now_micros()).unwrap_or(i64::MAX);
+                                let now_us = i64::try_from(now_micros()).unwrap_or(i64::MAX);
                                 let eng = self.engine.read().expect("engine lock poisoned");
                                 match eng.has_capability(eid, cap.as_action(), "*", now_us) {
                                     Ok(b) => b,
@@ -1520,6 +1527,18 @@ impl Server {
             ("GET", "/iter") => {
                 let query = full_path.split_once('?').map(|(_, q)| q);
                 self.handle_iter(query, out, outcome)
+            }
+            ("GET", "/arrow/export") => {
+                let query = full_path.split_once('?').map(|(_, q)| q);
+                self.handle_arrow_export(query, out, outcome)
+            }
+            ("GET", "/arrow/vectors") => {
+                let query = full_path.split_once('?').map(|(_, q)| q);
+                self.handle_arrow_vectors(query, out, outcome)
+            }
+            ("GET", "/arrow/edge_index") => {
+                let query = full_path.split_once('?').map(|(_, q)| q);
+                self.handle_arrow_edge_index(query, out, outcome)
             }
             ("POST", "/flush") => self.handle_flush(out, outcome),
             ("POST", "/compact") => self.handle_compact(out, outcome),
@@ -1626,7 +1645,9 @@ impl Server {
         out: &mut dyn Write,
         outcome: &mut DispatchOutcome,
     ) -> Result<(), ServerError> {
-        if self.read_only { return reject_read_only(out, outcome, "/flush"); }
+        if self.read_only {
+            return reject_read_only(out, outcome, "/flush");
+        }
         let mut engine = self.engine.write().expect("engine lock poisoned");
         engine.flush()?;
         let (records, bytes) = engine.memtable_stats();
@@ -1647,7 +1668,9 @@ impl Server {
         out: &mut dyn Write,
         outcome: &mut DispatchOutcome,
     ) -> Result<(), ServerError> {
-        if self.read_only { return reject_read_only(out, outcome, "/compact"); }
+        if self.read_only {
+            return reject_read_only(out, outcome, "/compact");
+        }
         // Off-lock compaction: the heavy merge runs WITHOUT the engine write
         // lock, so this no longer blocks commits/reads for its whole duration
         // — only the brief plan + install phases take the lock.
@@ -1661,12 +1684,10 @@ impl Server {
         // lock acquisitions (paginated/streamed at a fixed past tx) must
         // enroll it in a snapshot registry, or off-lock compaction may drop a
         // version it still needs.
-        let stats = run_offlock_compaction(
-            &self.engine,
-            &self.compaction_lock,
-            TxId::ACTIVE,
-            || TxId::ACTIVE,
-        )?;
+        let stats =
+            run_offlock_compaction(&self.engine, &self.compaction_lock, TxId::ACTIVE, || {
+                TxId::ACTIVE
+            })?;
         outcome.status = 200;
         write_json(
             out,
@@ -1735,7 +1756,9 @@ impl Server {
         out: &mut dyn Write,
         outcome: &mut DispatchOutcome,
     ) -> Result<(), ServerError> {
-        if self.read_only { return reject_read_only(out, outcome, "/commit"); }
+        if self.read_only {
+            return reject_read_only(out, outcome, "/commit");
+        }
         let req: CommitRequest = match serde_json::from_slice(body) {
             Ok(r) => r,
             Err(e) => {
@@ -1873,6 +1896,109 @@ impl Server {
         Ok(())
     }
 
+    /// `GET /arrow/export[?batch_rows=N&snapshot=...]` — every visible record
+    /// at the snapshot as an Arrow IPC stream of fixed-size batches (one
+    /// schema). The on-ramp for Polars / pandas / DuckDB / cuDF and the GPU
+    /// pipeline (see `docs/gpu-dgx-spark.md`). Gated by `Read`.
+    fn handle_arrow_export(
+        &self,
+        query: Option<&str>,
+        out: &mut dyn Write,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
+        let batch_rows = parse_query_u64(query, "batch_rows")
+            .and_then(|n| usize::try_from(n).ok())
+            .unwrap_or(65_536)
+            .max(1);
+        let engine = self.engine.read().expect("engine lock poisoned");
+        let snapshot = match resolve_snapshot_param(&engine, query) {
+            Ok(s) => s,
+            Err(detail) => return bad_request(out, outcome, "bad_snapshot_param", &detail),
+        };
+        let records = engine.snapshot_iter(snapshot)?;
+        drop(engine);
+        match ndb_arrow::records_to_ipc_stream_chunked(&records, batch_rows) {
+            Ok(ipc) => {
+                outcome.status = 200;
+                write_arrow(out, &ipc)
+            }
+            Err(e) => arrow_error(out, outcome, &e),
+        }
+    }
+
+    /// `GET /arrow/vectors?type_id=T&property_id=P[&snapshot=...]` — a dense
+    /// `primary_id + embedding: FixedSizeList<Float32, dim>` batch, the layout
+    /// cuVS / RAPIDS expect for GPU ANN re-rank. Gated by `Read`.
+    fn handle_arrow_vectors(
+        &self,
+        query: Option<&str>,
+        out: &mut dyn Write,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
+        let (Some(type_id), Some(property_id)) = (
+            parse_query_u64(query, "type_id").and_then(|n| u32::try_from(n).ok()),
+            parse_query_u64(query, "property_id").and_then(|n| u32::try_from(n).ok()),
+        ) else {
+            return bad_request(
+                out,
+                outcome,
+                "missing_param",
+                &"type_id and property_id query params are required",
+            );
+        };
+        let engine = self.engine.read().expect("engine lock poisoned");
+        let snapshot = match resolve_snapshot_param(&engine, query) {
+            Ok(s) => s,
+            Err(detail) => return bad_request(out, outcome, "bad_snapshot_param", &detail),
+        };
+        let records = engine.snapshot_iter(snapshot)?;
+        drop(engine);
+        let batch = match ndb_arrow::vector_column_batch(
+            &records,
+            TypeId::new(type_id),
+            PropertyId::new(property_id),
+        ) {
+            Ok(b) => b,
+            Err(e) => return arrow_error(out, outcome, &e),
+        };
+        match ndb_arrow::batch_to_ipc_stream(&batch) {
+            Ok(ipc) => {
+                outcome.status = 200;
+                write_arrow(out, &ipc)
+            }
+            Err(e) => arrow_error(out, outcome, &e),
+        }
+    }
+
+    /// `GET /arrow/edge_index[?snapshot=...]` — every hyperedge flattened into
+    /// a bipartite `(hyperedge_id, role_id, participant_id, participant_kind)`
+    /// incidence list for cuGraph / DGL / PyG. Gated by `Read`.
+    fn handle_arrow_edge_index(
+        &self,
+        query: Option<&str>,
+        out: &mut dyn Write,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
+        let engine = self.engine.read().expect("engine lock poisoned");
+        let snapshot = match resolve_snapshot_param(&engine, query) {
+            Ok(s) => s,
+            Err(detail) => return bad_request(out, outcome, "bad_snapshot_param", &detail),
+        };
+        let records = engine.snapshot_iter(snapshot)?;
+        drop(engine);
+        let batch = match ndb_arrow::hyperedge_edge_index(&records) {
+            Ok(b) => b,
+            Err(e) => return arrow_error(out, outcome, &e),
+        };
+        match ndb_arrow::batch_to_ipc_stream(&batch) {
+            Ok(ipc) => {
+                outcome.status = 200;
+                write_arrow(out, &ipc)
+            }
+            Err(e) => arrow_error(out, outcome, &e),
+        }
+    }
+
     fn handle_lookup(
         &self,
         body: &[u8],
@@ -1920,7 +2046,8 @@ impl Server {
             VectorMetric::Cosine => Distance::Cosine,
         };
         let engine = self.engine.read().expect("engine lock poisoned");
-        let hits = engine.vector_search(PropertyId::new(req.property_id), &req.query, req.k, metric);
+        let hits =
+            engine.vector_search(PropertyId::new(req.property_id), &req.query, req.k, metric);
         let resp = VectorSearchResponse {
             hits: hits
                 .into_iter()
@@ -1955,7 +2082,10 @@ impl Server {
             &value,
         );
         let resp = PropertyLookupResponse {
-            entity_ids: hits.into_iter().map(|eid| eid.into_uuid().to_string()).collect(),
+            entity_ids: hits
+                .into_iter()
+                .map(|eid| eid.into_uuid().to_string())
+                .collect(),
         };
         outcome.status = 200;
         write_json(out, 200, &resp)
@@ -1991,7 +2121,10 @@ impl Server {
             high.as_ref(),
         );
         let resp = PropertyRangeResponse {
-            entity_ids: hits.into_iter().map(|eid| eid.into_uuid().to_string()).collect(),
+            entity_ids: hits
+                .into_iter()
+                .map(|eid| eid.into_uuid().to_string())
+                .collect(),
         };
         outcome.status = 200;
         write_json(out, 200, &resp)
@@ -2024,8 +2157,7 @@ impl Server {
         let mut frontier: std::collections::HashSet<EntityId> =
             std::collections::HashSet::from([start]);
         for hop in &req.hops {
-            let mut next: std::collections::HashSet<EntityId> =
-                std::collections::HashSet::new();
+            let mut next: std::collections::HashSet<EntityId> = std::collections::HashSet::new();
             for &current in &frontier {
                 // Pull every hyperedge incident on `current`. The
                 // adjacency index returns IDs; we read each to get role
@@ -2176,7 +2308,7 @@ impl Server {
                 let env = e.envelope();
                 let status = match e {
                     ndb_query::RunError::Parse(_) | ndb_query::RunError::Resolve(_) => 400,
-                    ndb_query::RunError::Query(_) | ndb_query::RunError::Engine(_)  => 500,
+                    ndb_query::RunError::Query(_) | ndb_query::RunError::Engine(_) => 500,
                 };
                 outcome.status = status;
                 outcome.failure = Some(env.detail.clone());
@@ -2432,10 +2564,7 @@ fn split_path_query(s: &str) -> (&str, Option<&str>) {
 ///
 /// Specifying both `snapshot` and `timestamp_us` is rejected to avoid
 /// ambiguity. Unknown keys are ignored.
-fn resolve_snapshot_param(
-    engine: &Engine,
-    query: Option<&str>,
-) -> Result<TxId, String> {
+fn resolve_snapshot_param(engine: &Engine, query: Option<&str>) -> Result<TxId, String> {
     let mut tx_id: Option<u64> = None;
     let mut timestamp_us: Option<i64> = None;
     if let Some(q) = query {
@@ -2518,9 +2647,7 @@ fn build_rustls_config(
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let cfg = rustls::ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
-        .map_err(|e| {
-            ServerError::Io(std::io::Error::other(format!("rustls protocol error: {e}")))
-        })?
+        .map_err(|e| ServerError::Io(std::io::Error::other(format!("rustls protocol error: {e}"))))?
         .with_no_client_auth()
         .with_single_cert(certs, key)
         .map_err(|e| {
@@ -2583,11 +2710,12 @@ impl BoundServer<'_> {
     /// On a server that's never asked to shut down, this runs forever.
     pub fn serve(&self) -> Result<(), ServerError> {
         std::thread::scope(|scope| {
-            self.server.accept_loop(&self.listener, scope, |srv, stream| {
-                if let Err(e) = srv.handle_connection(stream) {
-                    eprintln!("connection error: {e}");
-                }
-            });
+            self.server
+                .accept_loop(&self.listener, scope, |srv, stream| {
+                    if let Err(e) = srv.handle_connection(stream) {
+                        eprintln!("connection error: {e}");
+                    }
+                });
         });
         Ok(())
     }
@@ -2617,10 +2745,9 @@ impl BoundServer<'_> {
                     break;
                 }
                 let (stream, _addr) = self.listener.accept()?;
-                if let Some(guard) = ConnGuard::acquire(
-                    &self.server.metrics,
-                    self.server.config.max_connections,
-                ) {
+                if let Some(guard) =
+                    ConnGuard::acquire(&self.server.metrics, self.server.config.max_connections)
+                {
                     let server = self.server;
                     handles.push(scope.spawn(move || {
                         let _guard = guard;
@@ -2691,8 +2818,11 @@ impl BoundTlsServer<'_> {
             .metrics
             .bytes_read
             .fetch_add(parsed.bytes_read as u64, Ordering::Relaxed);
-        let ParsedRequest { request: req, body, .. } = parsed;
-        self.server.dispatch_instrumented(&req, &body, &mut tls, start)
+        let ParsedRequest {
+            request: req, body, ..
+        } = parsed;
+        self.server
+            .dispatch_instrumented(&req, &body, &mut tls, start)
     }
 
     /// Accept and serve until graceful shutdown is requested. Bounded
@@ -2720,8 +2850,7 @@ impl BoundTlsServer<'_> {
         let mut drain_deadline: Option<Instant> = None;
         loop {
             if drain_deadline.is_none() && self.server.is_shutting_down() {
-                drain_deadline =
-                    Some(Instant::now() + self.server.config.shutdown_drain_timeout);
+                drain_deadline = Some(Instant::now() + self.server.config.shutdown_drain_timeout);
             }
             if let Some(deadline) = drain_deadline
                 && (self.server.in_flight() == 0 || Instant::now() >= deadline)
@@ -2749,10 +2878,9 @@ impl BoundTlsServer<'_> {
         scope: &'scope std::thread::Scope<'scope, '_>,
         stream: TcpStream,
     ) -> Option<std::thread::ScopedJoinHandle<'scope, ()>> {
-        if let Some(guard) = ConnGuard::acquire(
-            &self.server.metrics,
-            self.server.config.max_connections,
-        ) {
+        if let Some(guard) =
+            ConnGuard::acquire(&self.server.metrics, self.server.config.max_connections)
+        {
             let me = self;
             Some(scope.spawn(move || {
                 let _guard = guard;
@@ -2951,12 +3079,13 @@ fn required_capability(method: &str, path: &str) -> Option<Capability> {
         ("POST", "/compact") => Some(Capability::Compact),
         // Operator-only lifecycle route: requires the Admin wildcard.
         ("POST", "/admin/shutdown" | "/replicate") => Some(Capability::Admin),
-        // Indexed query + traversal + query-language + subscribe routes
-        // — all gated by Read.
-        (
+        // Read-gated routes: indexed query / traversal / query-language /
+        // subscribe, plus the Arrow / GPU export egress (`/arrow/*`).
+        ("GET", "/arrow/export" | "/arrow/vectors" | "/arrow/edge_index")
+        | (
             "POST",
             "/lookup" | "/vector_search" | "/property_lookup" | "/property_range" | "/traverse"
-                | "/query" | "/query/text" | "/query_stream" | "/subscribe",
+            | "/query" | "/query/text" | "/query_stream" | "/subscribe",
         ) => Some(Capability::Read),
         _ => None,
     }
@@ -2974,6 +3103,9 @@ fn route_label(method: &str, path: &str) -> &'static str {
         ("POST", "/commit") => "/commit",
         ("GET", p) if p.starts_with("/read/") => "/read/:id",
         ("GET", "/iter") => "/iter",
+        ("GET", "/arrow/export") => "/arrow/export",
+        ("GET", "/arrow/vectors") => "/arrow/vectors",
+        ("GET", "/arrow/edge_index") => "/arrow/edge_index",
         ("POST", "/flush") => "/flush",
         ("POST", "/compact") => "/compact",
         ("POST", "/replicate") => "/replicate",
@@ -2995,8 +3127,10 @@ fn route_label(method: &str, path: &str) -> &'static str {
 
 /// Has at least one mutating clause (create / delete / set / merge)?
 fn query_request_has_writes(req: &QueryRequest) -> bool {
-    !req.creates.is_empty() || !req.deletes.is_empty()
-        || !req.sets.is_empty() || !req.merges.is_empty()
+    !req.creates.is_empty()
+        || !req.deletes.is_empty()
+        || !req.sets.is_empty()
+        || !req.merges.is_empty()
 }
 
 /// 403 reply for read-only-mode rejection. Same shape as other
@@ -3101,6 +3235,41 @@ fn write_status_line(out: &mut dyn Write, code: u16) -> std::io::Result<()> {
     write!(out, "HTTP/1.1 {code} {}\r\n", status_text(code))
 }
 
+/// Write a raw Arrow IPC stream body with the canonical Arrow content type.
+fn write_arrow(out: &mut dyn Write, bytes: &[u8]) -> Result<(), ServerError> {
+    write_status_line(out, 200)?;
+    write!(
+        out,
+        "Content-Type: application/vnd.apache.arrow.stream\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\r\n",
+        bytes.len()
+    )?;
+    out.write_all(bytes)?;
+    Ok(())
+}
+
+/// Map an `ndb_arrow` conversion failure to a `422` JSON error (the request was
+/// well-formed but the records can't be represented as the asked-for Arrow
+/// shape — e.g. mixed-type column, vector dimension mismatch).
+fn arrow_error(
+    out: &mut dyn Write,
+    outcome: &mut DispatchOutcome,
+    e: &ndb_arrow::ArrowError,
+) -> Result<(), ServerError> {
+    outcome.status = 422;
+    outcome.failure = Some(e.to_string());
+    write_error(out, 422, "arrow_error", &e.to_string())
+}
+
+/// Pull a `u64`-valued query parameter out of a raw `key=val&key=val` string.
+fn parse_query_u64(query: Option<&str>, key: &str) -> Option<u64> {
+    query?.split('&').find_map(|pair| {
+        let (k, v) = pair.split_once('=')?;
+        (k == key).then(|| v.parse().ok()).flatten()
+    })
+}
+
 fn write_json<T: Serialize>(out: &mut dyn Write, code: u16, body: &T) -> Result<(), ServerError> {
     let bytes = serde_json::to_vec(body)
         .map_err(|e| ServerError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
@@ -3186,11 +3355,7 @@ impl<W: Write> Write for HeaderInjector<'_, W> {
             return self.inner.write(b);
         }
         self.pending.extend_from_slice(b);
-        if let Some(pos) = self
-            .pending
-            .windows(4)
-            .position(|w| w == b"\r\n\r\n")
-        {
+        if let Some(pos) = self.pending.windows(4).position(|w| w == b"\r\n\r\n") {
             // Skip injection if the response already carries an
             // Access-Control-Allow-Origin header — preflight responses
             // emit their own ACAO inline; double-emitting it produces

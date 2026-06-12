@@ -1,9 +1,14 @@
 //! Apache Arrow IPC interop for nDB.
 //!
 //! Bridges [`Engine::snapshot_iter`] output to Arrow `RecordBatch` and to the
-//! IPC byte stream. Consumers: Polars, pandas (via pyarrow), DuckDB, anything
-//! else that speaks Arrow. Single-batch, in-memory; for very large databases
-//! callers should chunk by `(record_kind, type_id)` themselves.
+//! IPC byte stream. Consumers: Polars, pandas (via pyarrow), DuckDB, cuDF /
+//! RAPIDS, anything else that speaks Arrow. [`records_to_batch`] is the
+//! single-batch path; [`records_to_batches`] / [`records_to_ipc_stream_chunked`]
+//! emit many fixed-size batches under one schema for datasets larger than host
+//! RAM and for GPU frameworks. GPU hand-off helpers: [`vector_column_batch`]
+//! (dense embedding matrix for cuVS) and [`hyperedge_edge_index`] (incidence
+//! list for cuGraph/PyG). See `docs/gpu-dgx-spark.md` for the unified-memory
+//! zero-copy path on NVIDIA DGX Spark (GB10).
 //!
 //! # v1 decisions baked in here
 //!
@@ -30,9 +35,10 @@
 //!   conversion time — by design; Arrow columns are typed, the engine is not.
 //!   Workaround for mixed-type properties: filter the record set first.
 //!
-//! - **`Value::Vector` becomes `List<Float32>`.** `Value::Decimal` widens to
-//!   `Float64` (lossy past ~15 digits — acceptable for v1; v2 will use Arrow's
-//!   native decimal type). `Value::Extension` becomes `Binary`.
+//! - **`Value::Vector` becomes `List<Float32>`.** `Value::Decimal` maps to
+//!   Arrow's native `Decimal128(38, scale)` — lossless (B4); mixed-scale
+//!   columns widen to the max scale and rescale each value exactly.
+//!   `Value::Extension` becomes `Binary`.
 //!
 //! - **Hyperedge roles are flattened into one `roles` column of type
 //!   `List<Struct{role_id: UInt32, entity_id: FixedSizeBinary(16)}>`.** Empty
@@ -55,10 +61,11 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arrow_array::builder::{
-    BinaryBuilder, BooleanBuilder, FixedSizeBinaryBuilder, Float32Builder, Float64Builder,
-    Int64Builder, ListBuilder, StringBuilder, StructBuilder, UInt32Builder, UInt64Builder,
+    BinaryBuilder, BooleanBuilder, Decimal128Builder, FixedSizeBinaryBuilder, FixedSizeListBuilder,
+    Float32Builder, Float64Builder, Int64Builder, ListBuilder, StringBuilder, StructBuilder,
+    UInt32Builder, UInt64Builder,
 };
-use arrow_array::{ArrayRef, RecordBatch};
+use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_ipc::writer::{IpcWriteOptions, StreamWriter};
 use arrow_schema::{ArrowError as SchemaArrowError, DataType, Field, Schema, SchemaRef};
 
@@ -89,7 +96,9 @@ pub enum ArrowError {
     /// require fixed inner length, so this is currently informational; v2 may
     /// upgrade vectors to `FixedSizeList` once stable per-column dimension is
     /// declared via schema metadata.
-    #[error("vector dimension mismatch in column {column}: expected {expected}, observed {observed}")]
+    #[error(
+        "vector dimension mismatch in column {column}: expected {expected}, observed {observed}"
+    )]
     VectorDimMismatch {
         /// Column name.
         column: String,
@@ -159,6 +168,73 @@ pub fn records_to_ipc_stream(records: &[Record]) -> Result<Vec<u8>, ArrowError> 
     Ok(buf)
 }
 
+/// Convert records into a sequence of `RecordBatch`es of at most `batch_rows`
+/// data rows each, all sharing one schema (B1). This is the streaming on-ramp
+/// for datasets larger than host RAM and for GPU frameworks that pull
+/// fixed-size batches: the column set is discovered once across *all* records,
+/// then the data rows are windowed.
+///
+/// Always returns at least one batch (an empty, schema-only batch for an empty
+/// input) so a consumer can read the schema before any data arrives. On
+/// NVIDIA DGX Spark (GB10, unified Grace↔Blackwell memory) these batches are
+/// addressable by the GPU without a host→device copy; see
+/// `docs/gpu-dgx-spark.md`.
+pub fn records_to_batches(
+    records: &[Record],
+    batch_rows: usize,
+) -> Result<Vec<RecordBatch>, ArrowError> {
+    let batch_rows = batch_rows.max(1);
+    let prop_cols = discover_prop_columns(records)?;
+    let rows: Vec<&Record> = records.iter().filter(|r| is_data_row(r)).collect();
+    if rows.is_empty() {
+        return Ok(vec![build_batch_rows(&[], &prop_cols)?]);
+    }
+    let mut batches = Vec::with_capacity(rows.len().div_ceil(batch_rows));
+    for chunk in rows.chunks(batch_rows) {
+        batches.push(build_batch_rows(chunk, &prop_cols)?);
+    }
+    Ok(batches)
+}
+
+/// Serialise a single `RecordBatch` to an Arrow IPC stream. Used to ship the
+/// GPU hand-off batches ([`vector_column_batch`], [`hyperedge_edge_index`])
+/// over the wire.
+pub fn batch_to_ipc_stream(batch: &RecordBatch) -> Result<Vec<u8>, ArrowError> {
+    let mut buf = Vec::with_capacity(64 * 1024);
+    {
+        let mut writer = StreamWriter::try_new_with_options(
+            &mut buf,
+            &batch.schema(),
+            IpcWriteOptions::default(),
+        )?;
+        writer.write(batch)?;
+        writer.finish()?;
+    }
+    Ok(buf)
+}
+
+/// Convert records to a single Arrow IPC stream carrying *multiple* batches of
+/// at most `batch_rows` rows each (B1). The schema frame is written once;
+/// each batch follows. Readers (pyarrow, Polars, DuckDB, cuDF) consume it as
+/// one stream regardless of how many batches it holds.
+pub fn records_to_ipc_stream_chunked(
+    records: &[Record],
+    batch_rows: usize,
+) -> Result<Vec<u8>, ArrowError> {
+    let batches = records_to_batches(records, batch_rows)?;
+    let schema = batches[0].schema();
+    let mut buf = Vec::with_capacity(64 * 1024);
+    {
+        let mut writer =
+            StreamWriter::try_new_with_options(&mut buf, &schema, IpcWriteOptions::default())?;
+        for batch in &batches {
+            writer.write(batch)?;
+        }
+        writer.finish()?;
+    }
+    Ok(buf)
+}
+
 /// Strip dictionary records out of a slice and return them grouped by kind.
 /// The first member of each tuple is the dictionary id, the second the name.
 #[derive(Debug, Default, Clone)]
@@ -190,9 +266,7 @@ pub fn build_dictionaries(records: &[Record]) -> Dictionaries {
 // Column discovery
 // ---------------------------------------------------------------------------
 
-fn discover_prop_columns(
-    records: &[Record],
-) -> Result<BTreeMap<PropColKey, DataType>, ArrowError> {
+fn discover_prop_columns(records: &[Record]) -> Result<BTreeMap<PropColKey, DataType>, ArrowError> {
     let mut out: BTreeMap<PropColKey, DataType> = BTreeMap::new();
     for r in records {
         match r {
@@ -233,6 +307,14 @@ fn bind_prop_column(
         Some(_) if matches!(v, Value::Null) => {
             // Null is compatible with any existing dtype.
         }
+        // Two decimals that differ only in scale are compatible: widen the
+        // column to the larger scale so every value rescales losslessly (B4).
+        Some(DataType::Decimal128(p, s_old)) if matches!(dt, DataType::Decimal128(..)) => {
+            if let DataType::Decimal128(_, s_new) = dt {
+                let widened = DataType::Decimal128(*p, (*s_old).max(s_new));
+                out.insert(key, widened);
+            }
+        }
         Some(existing) => {
             return Err(ArrowError::TypeMismatch {
                 column: key.column_name(),
@@ -242,6 +324,13 @@ fn bind_prop_column(
         }
     }
     Ok(())
+}
+
+/// Clamp an nDB decimal scale to the `Decimal128` ceiling (38) and narrow to
+/// the `i8` Arrow uses for scale.
+fn decimal_scale(scale: u8) -> i8 {
+    // min(38) keeps it within Decimal128's range and well inside i8.
+    i8::try_from(scale.min(38)).unwrap_or(38)
 }
 
 fn value_to_dtype(v: &Value) -> DataType {
@@ -254,12 +343,15 @@ fn value_to_dtype(v: &Value) -> DataType {
         Value::Bytes(_) => DataType::Binary,
         Value::Timestamp(_) => DataType::Int64,
         Value::EntityRef(_) => DataType::FixedSizeBinary(16),
-        // i128 mantissa would need Decimal128(38, scale); for v1 we widen to f64.
-        // Acceptable up to ~15 significant digits; documented in module preamble.
-        Value::Decimal { .. } => DataType::Float64,
-        Value::Vector(_) => {
-            DataType::List(Arc::new(Field::new("item", DataType::Float32, false)))
-        }
+        // Lossless (B4): the i128 mantissa maps to Arrow's native
+        // Decimal128(precision=38, scale). nDB scales are clamped to 38 (the
+        // Decimal128 ceiling); larger scales are not expected for stored money/
+        // measurement decimals. Mixed-scale columns widen to the max scale in
+        // `bind_prop_column`, then values are rescaled losslessly on append.
+        Value::Decimal { scale, .. } => DataType::Decimal128(38, decimal_scale(*scale)),
+        // Inner `item` is nullable to match what `ListBuilder<Float32Builder>`
+        // actually builds — the schema field and the array must agree.
+        Value::Vector(_) => DataType::List(Arc::new(Field::new("item", DataType::Float32, true))),
         Value::Extension(_) => DataType::Binary,
     }
 }
@@ -278,6 +370,9 @@ enum PropBuilder {
     Bin(BinaryBuilder),
     Uuid(FixedSizeBinaryBuilder),
     Vector(ListBuilder<Float32Builder>),
+    /// Decimal128 builder plus the column scale it was bound to. Values are
+    /// rescaled to this scale on append (B4).
+    Decimal(Decimal128Builder, i8),
 }
 
 impl PropBuilder {
@@ -291,6 +386,12 @@ impl PropBuilder {
             DataType::Binary => Self::Bin(BinaryBuilder::new()),
             DataType::FixedSizeBinary(16) => Self::Uuid(FixedSizeBinaryBuilder::new(16)),
             DataType::List(_) => Self::Vector(ListBuilder::new(Float32Builder::new())),
+            DataType::Decimal128(p, s) => Self::Decimal(
+                Decimal128Builder::new()
+                    .with_precision_and_scale(*p, *s)
+                    .expect("precision 38 / clamped scale is always valid"),
+                *s,
+            ),
             _ => unreachable!("value_to_dtype produces a fixed shape"),
         }
     }
@@ -305,6 +406,7 @@ impl PropBuilder {
             Self::Bin(b) => b.append_null(),
             Self::Uuid(b) => b.append_null(),
             Self::Vector(b) => b.append_null(),
+            Self::Decimal(b, _) => b.append_null(),
         }
     }
 
@@ -334,11 +436,9 @@ impl PropBuilder {
                 b.append_value(*x);
                 Ok(())
             }
-            (Self::F64(b), Value::Decimal { scale, mantissa }) => {
-                let denom = 10f64.powi(i32::from(*scale));
-                #[allow(clippy::cast_precision_loss)]
-                let raw = (*mantissa) as f64;
-                b.append_value(raw / denom);
+            (Self::Decimal(b, col_scale), Value::Decimal { scale, mantissa }) => {
+                let scaled = rescale_mantissa(*mantissa, *scale, *col_scale)?;
+                b.append_value(scaled);
                 Ok(())
             }
             (Self::Utf8(b), Value::String(x)) => {
@@ -383,8 +483,9 @@ impl PropBuilder {
             Self::Bin(_) => DataType::Binary,
             Self::Uuid(_) => DataType::FixedSizeBinary(16),
             Self::Vector(_) => {
-                DataType::List(Arc::new(Field::new("item", DataType::Float32, false)))
+                DataType::List(Arc::new(Field::new("item", DataType::Float32, true)))
             }
+            Self::Decimal(_, s) => DataType::Decimal128(38, *s),
         }
     }
 
@@ -398,8 +499,29 @@ impl PropBuilder {
             Self::Bin(mut b) => Arc::new(b.finish()),
             Self::Uuid(mut b) => Arc::new(b.finish()),
             Self::Vector(mut b) => Arc::new(b.finish()),
+            Self::Decimal(mut b, _) => Arc::new(b.finish()),
         }
     }
+}
+
+/// Rescale an nDB decimal mantissa from its own scale to a (≥) column scale,
+/// losslessly (B4). Widening only multiplies by a power of ten, so no digits
+/// are lost; overflow of the i128 mantissa is surfaced as an error rather than
+/// silently wrapping.
+fn rescale_mantissa(mantissa: i128, from_scale: u8, to_scale: i8) -> Result<i128, ArrowError> {
+    let diff = i32::from(to_scale) - i32::from(decimal_scale(from_scale));
+    if diff <= 0 {
+        return Ok(mantissa);
+    }
+    let overflow = || {
+        ArrowError::Arrow(SchemaArrowError::ComputeError(
+            "decimal rescale overflowed i128".to_string(),
+        ))
+    };
+    let factor = 10_i128
+        .checked_pow(u32::try_from(diff).map_err(|_| overflow())?)
+        .ok_or_else(overflow)?;
+    mantissa.checked_mul(factor).ok_or_else(overflow)
 }
 
 fn roles_field() -> Field {
@@ -434,21 +556,31 @@ fn build_roles_builder() -> ListBuilder<StructBuilder> {
     ListBuilder::new(StructBuilder::new(fields, builders))
 }
 
+/// True for records that become a row in the denormalised batch. Dictionary
+/// and internal-metadata records carry no row-level data.
+fn is_data_row(r: &Record) -> bool {
+    matches!(
+        r,
+        Record::Entity(_) | Record::HyperEdge(_) | Record::Tombstone(_)
+    )
+}
+
 fn build_batch(
     records: &[Record],
     prop_cols: &BTreeMap<PropColKey, DataType>,
 ) -> Result<RecordBatch, ArrowError> {
-    // Filter to data rows (entity / hyperedge / tombstone). Dictionary
-    // records carry no row-level data — they're metadata and are dropped here.
-    let rows: Vec<&Record> = records
-        .iter()
-        .filter(|r| {
-            matches!(
-                r,
-                Record::Entity(_) | Record::HyperEdge(_) | Record::Tombstone(_)
-            )
-        })
-        .collect();
+    let rows: Vec<&Record> = records.iter().filter(|r| is_data_row(r)).collect();
+    build_batch_rows(&rows, prop_cols)
+}
+
+/// Build one `RecordBatch` from an already-filtered slice of data rows against
+/// a *shared* column set. Splitting this out lets the chunked exporter
+/// (`records_to_batches`) emit many batches that all carry the identical schema
+/// — a hard requirement for a multi-batch Arrow IPC stream.
+fn build_batch_rows(
+    rows: &[&Record],
+    prop_cols: &BTreeMap<PropColKey, DataType>,
+) -> Result<RecordBatch, ArrowError> {
     let n_rows = rows.len();
 
     // Identity columns.
@@ -466,7 +598,7 @@ fn build_batch(
         .map(|(k, dt)| (*k, PropBuilder::for_dtype(dt), k.column_name()))
         .collect();
 
-    for rec in &rows {
+    for rec in rows {
         let (kind_str, primary_bytes, type_id_opt, tx_assert_opt, tx_super_opt): (
             &str,
             [u8; 16],
@@ -570,11 +702,7 @@ fn build_batch(
     fields.push(Field::new("tx_id_supersede", DataType::UInt64, true));
     fields.push(roles_field());
     for (key, builder, _) in &prop_builders {
-        fields.push(Field::new(
-            key.column_name(),
-            builder.declared_type(),
-            true,
-        ));
+        fields.push(Field::new(key.column_name(), builder.declared_type(), true));
     }
     let schema: SchemaRef = Arc::new(Schema::new(fields));
 
@@ -601,13 +729,148 @@ fn supersede_opt(t: ndb_engine::id::TxId) -> Option<u64> {
 }
 
 // ---------------------------------------------------------------------------
+// GPU hand-off helpers (B2 / B3)
+// ---------------------------------------------------------------------------
+
+/// Extract a single vector-valued property into a dense, GPU-ready batch (B2):
+/// two columns — `primary_id: FixedSizeBinary(16)` and
+/// `embedding: FixedSizeList<Float32, dim>`. The fixed-size list is the layout
+/// cuVS / RAPIDS expect for a contiguous `[n_rows, dim]` device matrix, so the
+/// typical flow is: nDB HNSW returns coarse candidates on CPU → this batch
+/// hands their vectors to the GPU for exact re-rank, zero-copy on DGX Spark's
+/// unified memory.
+///
+/// Only live `Entity` records of `type_id` carrying `property_id` as a
+/// `Value::Vector` contribute a row. All vectors must share one dimension;
+/// a mismatch is a [`ArrowError::VectorDimMismatch`]. An empty result yields a
+/// zero-row batch whose `embedding` column is an empty `List<Float32>` (the
+/// dimension is unknown with no data to read it from).
+pub fn vector_column_batch(
+    records: &[Record],
+    type_id: TypeId,
+    property_id: PropertyId,
+) -> Result<RecordBatch, ArrowError> {
+    // Gather (primary_id bytes, &vector) for matching entities.
+    let mut rows: Vec<(&[u8; 16], &Vec<f32>)> = Vec::new();
+    let mut dim: Option<usize> = None;
+    for r in records {
+        let Record::Entity(e) = r else { continue };
+        if e.type_id != type_id {
+            continue;
+        }
+        for (pid, v) in &e.properties {
+            if *pid == property_id
+                && let Value::Vector(xs) = v
+            {
+                match dim {
+                    None => dim = Some(xs.len()),
+                    Some(d) if d != xs.len() => {
+                        return Err(ArrowError::VectorDimMismatch {
+                            column: format!("vector:{}:{}", type_id.0, property_id.0),
+                            expected: d,
+                            observed: xs.len(),
+                        });
+                    }
+                    Some(_) => {}
+                }
+                rows.push((e.entity_id.as_bytes(), xs));
+            }
+        }
+    }
+
+    let mut id_b = FixedSizeBinaryBuilder::new(16);
+    let id_field = Field::new("primary_id", DataType::FixedSizeBinary(16), false);
+
+    let Some(dim) = dim else {
+        // No data: emit a zero-row batch with a variable List column. Derive
+        // the field from the built array so the inner-field nullability matches.
+        let embedding = Arc::new(ListBuilder::new(Float32Builder::new()).finish());
+        let embedding_field = Field::new("embedding", embedding.data_type().clone(), false);
+        let schema = Arc::new(Schema::new(vec![id_field, embedding_field]));
+        return RecordBatch::try_new(schema, vec![Arc::new(id_b.finish()), embedding])
+            .map_err(ArrowError::from);
+    };
+
+    let dim_i32 = i32::try_from(dim).map_err(|_| ArrowError::VectorDimMismatch {
+        column: format!("vector:{}:{}", type_id.0, property_id.0),
+        expected: dim,
+        observed: dim,
+    })?;
+    let mut vec_b = FixedSizeListBuilder::new(Float32Builder::new(), dim_i32);
+    for (id, xs) in rows {
+        id_b.append_value(id).map_err(ArrowError::Arrow)?;
+        vec_b.values().append_slice(xs);
+        vec_b.append(true);
+    }
+
+    // Build the array first, then take its exact data type for the field — the
+    // builder marks the inner `item` field nullable, and the schema must match.
+    let embedding = Arc::new(vec_b.finish());
+    let embedding_field = Field::new("embedding", embedding.data_type().clone(), false);
+    let schema = Arc::new(Schema::new(vec![id_field, embedding_field]));
+    RecordBatch::try_new(schema, vec![Arc::new(id_b.finish()), embedding]).map_err(ArrowError::from)
+}
+
+/// Flatten every hyperedge into a bipartite incidence list (B3): one row per
+/// `(hyperedge, participant)` pair, columns
+/// `hyperedge_id: FixedSizeBinary(16)`, `role_id: UInt32`,
+/// `participant_id: FixedSizeBinary(16)`, `participant_kind: Utf8`
+/// (`"entity"` or `"hyperedge"`). This is the edge index a hypergraph-GNN
+/// stack (cuGraph / DGL / PyG) consumes directly — no re-join of a junction
+/// table, the structural win from the storage model carried to the GPU.
+pub fn hyperedge_edge_index(records: &[Record]) -> Result<RecordBatch, ArrowError> {
+    let mut edge_b = FixedSizeBinaryBuilder::new(16);
+    let mut role_b = UInt32Builder::new();
+    let mut part_b = FixedSizeBinaryBuilder::new(16);
+    let mut kind_b = StringBuilder::new();
+
+    for r in records {
+        let Record::HyperEdge(h) = r else { continue };
+        let edge = h.hyperedge_id.as_bytes();
+        for (role_id, entity_id) in &h.roles {
+            edge_b.append_value(edge).map_err(ArrowError::Arrow)?;
+            role_b.append_value(role_id.0);
+            part_b
+                .append_value(entity_id.as_bytes())
+                .map_err(ArrowError::Arrow)?;
+            kind_b.append_value("entity");
+        }
+        for (role_id, hid) in &h.hyperedge_roles {
+            edge_b.append_value(edge).map_err(ArrowError::Arrow)?;
+            role_b.append_value(role_id.0);
+            part_b
+                .append_value(hid.as_bytes())
+                .map_err(ArrowError::Arrow)?;
+            kind_b.append_value("hyperedge");
+        }
+    }
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("hyperedge_id", DataType::FixedSizeBinary(16), false),
+        Field::new("role_id", DataType::UInt32, false),
+        Field::new("participant_id", DataType::FixedSizeBinary(16), false),
+        Field::new("participant_kind", DataType::Utf8, false),
+    ]));
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(edge_b.finish()),
+            Arc::new(role_b.finish()),
+            Arc::new(part_b.finish()),
+            Arc::new(kind_b.finish()),
+        ],
+    )
+    .map_err(ArrowError::from)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::{Array, BooleanArray, Float64Array, Int64Array, StringArray};
+    use arrow_array::{Array, BooleanArray, Decimal128Array, Int64Array, StringArray};
     use ndb_engine::id::{EntityId, HyperedgeId, PropertyId, RoleId, TxId, TypeId};
     use ndb_engine::record::{
         EntityRecord, HyperEdgeRecord, PropertyKeyRecord, Record, TombstoneRecord, TypeNameRecord,
@@ -620,21 +883,13 @@ mod tests {
         ]))
     }
 
-    fn entity(
-        id: u8,
-        type_id: u32,
-        tx: u64,
-        props: Vec<(u32, Value)>,
-    ) -> Record {
+    fn entity(id: u8, type_id: u32, tx: u64, props: Vec<(u32, Value)>) -> Record {
         Record::Entity(EntityRecord {
             entity_id: ent_id(id),
             type_id: TypeId(type_id),
             tx_id_assert: TxId(tx),
             tx_id_supersede: TxId::ACTIVE,
-            properties: props
-                .into_iter()
-                .map(|(p, v)| (PropertyId(p), v))
-                .collect(),
+            properties: props.into_iter().map(|(p, v)| (PropertyId(p), v)).collect(),
         })
     }
 
@@ -652,10 +907,7 @@ mod tests {
             1,
             10,
             42,
-            vec![
-                (100, Value::String("alice".into())),
-                (101, Value::I64(42)),
-            ],
+            vec![(100, Value::String("alice".into())), (101, Value::I64(42))],
         )];
         let batch = records_to_batch(&recs).unwrap();
         assert_eq!(batch.num_rows(), 1);
@@ -761,10 +1013,7 @@ mod tests {
             type_id: TypeId(50),
             tx_id_assert: TxId(1),
             tx_id_supersede: TxId::ACTIVE,
-            roles: vec![
-                (RoleId(1), ent_id(1)),
-                (RoleId(2), ent_id(2)),
-            ],
+            roles: vec![(RoleId(1), ent_id(1)), (RoleId(2), ent_id(2))],
             hyperedge_roles: Vec::new(),
             properties: vec![(PropertyId(200), Value::Bool(true))],
         })];
@@ -808,28 +1057,152 @@ mod tests {
     }
 
     #[test]
-    fn decimal_widens_to_float64() {
-        let recs = vec![entity(
-            1,
-            10,
-            1,
-            vec![(
-                100,
-                Value::Decimal {
-                    scale: 2,
-                    mantissa: 12345,
-                },
-            )],
-        )];
+    fn decimal_maps_to_lossless_decimal128() {
+        // B4: decimals are exact via Arrow Decimal128, not widened to f64.
+        // Two values at different scales (2 and 4) must share one column at the
+        // wider scale, each rescaled losslessly.
+        let recs = vec![
+            entity(
+                1,
+                10,
+                1,
+                vec![(
+                    100,
+                    Value::Decimal {
+                        scale: 2,
+                        mantissa: 12345,
+                    },
+                )], // 123.45
+            ),
+            entity(
+                2,
+                10,
+                2,
+                vec![(
+                    100,
+                    Value::Decimal {
+                        scale: 4,
+                        mantissa: 6789,
+                    },
+                )], // 0.6789
+            ),
+        ];
         let batch = records_to_batch(&recs).unwrap();
+        let field = batch
+            .schema()
+            .field_with_name("prop:entity:10:100")
+            .unwrap()
+            .clone();
+        // Column widened to the larger scale (4).
+        assert_eq!(*field.data_type(), DataType::Decimal128(38, 4));
         let col = batch
             .column_by_name("prop:entity:10:100")
             .unwrap()
             .as_any()
-            .downcast_ref::<Float64Array>()
+            .downcast_ref::<Decimal128Array>()
             .unwrap();
-        let got = col.value(0);
-        assert!((got - 123.45).abs() < 1e-9, "got {got}");
+        // 123.45 at scale 4 → mantissa 1_234_500 (rescaled losslessly).
+        assert_eq!(col.value(0), 1_234_500_i128);
+        // 0.6789 already at scale 4 → mantissa 6789.
+        assert_eq!(col.value(1), 6_789_i128);
+    }
+
+    #[test]
+    fn vector_property_round_trips_through_denormalised_batch() {
+        // Regression: the List inner-field nullability must match the builder,
+        // or RecordBatch::try_new rejects the vector column.
+        let recs = vec![entity(
+            1,
+            10,
+            1,
+            vec![(100, Value::Vector(vec![1.0, 2.0, 3.0]))],
+        )];
+        let batch = records_to_batch(&recs).unwrap();
+        assert_eq!(batch.num_rows(), 1);
+        let ipc = records_to_ipc_stream(&recs).unwrap();
+        assert!(!ipc.is_empty());
+    }
+
+    #[test]
+    fn chunked_export_covers_all_rows_with_one_schema() {
+        // B1: many small batches, identical schema, every row present once.
+        let recs: Vec<Record> = (0..5u8)
+            .map(|i| {
+                entity(
+                    i,
+                    10,
+                    u64::from(i) + 1,
+                    vec![(100, Value::I64(i64::from(i)))],
+                )
+            })
+            .collect();
+        let batches = records_to_batches(&recs, 2).unwrap();
+        assert_eq!(batches.len(), 3, "5 rows / 2 per batch → 3 batches");
+        let schema0 = batches[0].schema();
+        let total: usize = batches.iter().map(RecordBatch::num_rows).sum();
+        assert_eq!(total, 5);
+        for b in &batches {
+            assert_eq!(b.schema(), schema0, "all chunks share one schema");
+        }
+        // The multi-batch IPC stream round-trips through an Arrow reader.
+        let ipc = records_to_ipc_stream_chunked(&recs, 2).unwrap();
+        assert!(!ipc.is_empty());
+    }
+
+    #[test]
+    fn vector_column_batch_is_fixed_size_list() {
+        // B2: GPU-ready dense embedding matrix.
+        let recs = vec![
+            entity(1, 10, 1, vec![(100, Value::Vector(vec![1.0, 2.0, 3.0]))]),
+            entity(2, 10, 2, vec![(100, Value::Vector(vec![4.0, 5.0, 6.0]))]),
+            // Different type / no vector → excluded.
+            entity(3, 11, 3, vec![(100, Value::I64(7))]),
+        ];
+        let batch = vector_column_batch(&recs, TypeId(10), PropertyId(100)).unwrap();
+        assert_eq!(batch.num_rows(), 2);
+        let emb = batch.schema().field_with_name("embedding").unwrap().clone();
+        // Fixed-size list of width 3 — the dense [n, dim] layout cuVS wants.
+        match emb.data_type() {
+            DataType::FixedSizeList(item, 3) => {
+                assert_eq!(*item.data_type(), DataType::Float32);
+            }
+            other => panic!("expected FixedSizeList(_, 3), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn vector_column_dim_mismatch_errors() {
+        let recs = vec![
+            entity(1, 10, 1, vec![(100, Value::Vector(vec![1.0, 2.0]))]),
+            entity(2, 10, 2, vec![(100, Value::Vector(vec![1.0, 2.0, 3.0]))]),
+        ];
+        let err = vector_column_batch(&recs, TypeId(10), PropertyId(100)).unwrap_err();
+        assert!(matches!(err, ArrowError::VectorDimMismatch { .. }));
+    }
+
+    #[test]
+    fn hyperedge_edge_index_flattens_participants() {
+        // B3: bipartite incidence list for a hypergraph GNN.
+        let e1 = ent_id(1);
+        let e2 = ent_id(2);
+        let h = Record::HyperEdge(HyperEdgeRecord {
+            hyperedge_id: HyperedgeId::from_uuid(Uuid::from_bytes([9; 16])),
+            type_id: TypeId(7),
+            tx_id_assert: TxId(1),
+            tx_id_supersede: TxId::ACTIVE,
+            roles: vec![(RoleId(1), e1), (RoleId(2), e2)],
+            hyperedge_roles: vec![],
+            properties: vec![],
+        });
+        let batch = hyperedge_edge_index(&[h]).unwrap();
+        assert_eq!(batch.num_rows(), 2, "one row per participant");
+        let kinds = batch
+            .column_by_name("participant_kind")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(kinds.value(0), "entity");
     }
 
     #[test]
@@ -864,6 +1237,69 @@ mod tests {
         let batches: Vec<_> = reader.collect::<Result<Vec<_>, _>>().unwrap();
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].num_rows(), 1);
+    }
+
+    /// Read an Arrow IPC stream back into batches via the same reader RAPIDS /
+    /// pyarrow use — proves the bytes our GPU hand-off helpers emit are a valid,
+    /// consumable Arrow stream (the data contract, machine-verified).
+    fn read_ipc(bytes: Vec<u8>) -> Vec<RecordBatch> {
+        let reader =
+            arrow_ipc::reader::StreamReader::try_new(std::io::Cursor::new(bytes), None).unwrap();
+        reader.collect::<Result<Vec<_>, _>>().unwrap()
+    }
+
+    #[test]
+    fn chunked_ipc_stream_reads_back_all_rows() {
+        let recs: Vec<Record> = (0..5u8)
+            .map(|i| {
+                entity(
+                    i,
+                    10,
+                    u64::from(i) + 1,
+                    vec![(100, Value::I64(i64::from(i)))],
+                )
+            })
+            .collect();
+        let batches = read_ipc(records_to_ipc_stream_chunked(&recs, 2).unwrap());
+        assert_eq!(batches.len(), 3, "3 batches in the stream");
+        let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
+        assert_eq!(rows, 5);
+    }
+
+    #[test]
+    fn vector_batch_ipc_reads_back_as_fixed_size_list() {
+        let recs = vec![
+            entity(1, 10, 1, vec![(100, Value::Vector(vec![1.0, 2.0, 3.0]))]),
+            entity(2, 10, 2, vec![(100, Value::Vector(vec![4.0, 5.0, 6.0]))]),
+        ];
+        let batch = vector_column_batch(&recs, TypeId(10), PropertyId(100)).unwrap();
+        let back = read_ipc(batch_to_ipc_stream(&batch).unwrap());
+        assert_eq!(back[0].num_rows(), 2);
+        match back[0]
+            .schema()
+            .field_with_name("embedding")
+            .unwrap()
+            .data_type()
+        {
+            DataType::FixedSizeList(_, 3) => {}
+            other => panic!("expected FixedSizeList(_, 3) after round-trip, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn edge_index_ipc_reads_back() {
+        let h = Record::HyperEdge(HyperEdgeRecord {
+            hyperedge_id: HyperedgeId::from_uuid(Uuid::from_bytes([9; 16])),
+            type_id: TypeId(7),
+            tx_id_assert: TxId(1),
+            tx_id_supersede: TxId::ACTIVE,
+            roles: vec![(RoleId(1), ent_id(1)), (RoleId(2), ent_id(2))],
+            hyperedge_roles: vec![],
+            properties: vec![],
+        });
+        let batch = hyperedge_edge_index(&[h]).unwrap();
+        let back = read_ipc(batch_to_ipc_stream(&batch).unwrap());
+        assert_eq!(back[0].num_rows(), 2);
     }
 
     #[test]

@@ -155,6 +155,59 @@ fn commit_then_read_round_trip() {
 }
 
 #[test]
+fn arrow_export_endpoints_return_arrow_ipc() {
+    let dir = temp_dir("arrow");
+    let server = Arc::new(Server::open(&dir).unwrap());
+    let addr = spawn_server(Arc::clone(&server), 6);
+
+    // Commit an entity (type 2) carrying a 3-d vector on property 20.
+    let e = EntityId::now_v7();
+    let body = serde_json::json!({
+        "records": [{
+            "kind": "entity",
+            "entity_id": e.into_uuid().to_string(),
+            "type_id": 2,
+            "tx_id_assert": 0,
+            "tx_id_supersede": "active",
+            "properties": [{"prop_id": 20, "value": {"tag": "vector", "value": [1.0, 2.0, 3.0]}}]
+        }]
+    })
+    .to_string();
+    assert_eq!(post(addr, "/commit", &body).status, 200);
+
+    // The Arrow IPC *stream* format begins with the 0xFFFFFFFF continuation
+    // marker — a cheap proof the bytes are a real Arrow stream, not JSON.
+    let is_arrow_stream = |b: &[u8]| b.len() >= 4 && b[..4] == [0xFF, 0xFF, 0xFF, 0xFF];
+
+    let exp = get(addr, "/arrow/export");
+    assert_eq!(
+        exp.status,
+        200,
+        "export body: {}",
+        String::from_utf8_lossy(&exp.body)
+    );
+    assert!(is_arrow_stream(&exp.body), "export is not an Arrow stream");
+
+    let vecs = get(addr, "/arrow/vectors?type_id=2&property_id=20");
+    assert_eq!(vecs.status, 200);
+    assert!(
+        is_arrow_stream(&vecs.body),
+        "vectors is not an Arrow stream"
+    );
+
+    let edges = get(addr, "/arrow/edge_index");
+    assert_eq!(
+        edges.status, 200,
+        "empty edge index is still a valid stream"
+    );
+
+    // Missing required params → 400.
+    assert_eq!(get(addr, "/arrow/vectors").status, 400);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn replicate_route_streams_wal_delta_into_a_follower() {
     // End-to-end replication over HTTP: a leader server serves /replicate; a
     // fresh follower engine streams the WAL delta and ingests it, ending up
@@ -286,7 +339,8 @@ fn compact_route_merges_sstables_offlock_and_data_survives() {
         assert_eq!(resp.status, 200);
         let body: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
         assert_eq!(
-            body["outcome"], "live",
+            body["outcome"],
+            "live",
             "entity {} lost after compact",
             eid.into_uuid()
         );
@@ -681,11 +735,7 @@ fn traverse_route_walks_2_hops() {
     assert_eq!(ids[0], acme.into_uuid().to_string());
 
     // Bad-uuid start → 400.
-    let resp = post(
-        addr,
-        "/traverse",
-        r#"{"start":"not-a-uuid","hops":[]}"#,
-    );
+    let resp = post(addr, "/traverse", r#"{"start":"not-a-uuid","hops":[]}"#);
     assert_eq!(resp.status, 400);
 
     std::fs::remove_dir_all(&dir).unwrap();
@@ -745,7 +795,12 @@ fn query_route_executes_entity_pattern_via_tcp() {
         }}"#,
     );
     let resp = post(addr, "/query", &body);
-    assert_eq!(resp.status, 200, "body = {:?}", String::from_utf8_lossy(&resp.body));
+    assert_eq!(
+        resp.status,
+        200,
+        "body = {:?}",
+        String::from_utf8_lossy(&resp.body)
+    );
     let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
     let columns = v["columns"].as_array().unwrap();
     assert_eq!(columns, &[serde_json::json!("c"), serde_json::json!("n")]);
@@ -813,14 +868,18 @@ fn query_explain_returns_plan_tree_without_executing() {
             id: ndb_engine::RoleId::new(ROLE_BUYER),
             name: "buyer".into(),
         }));
-        tx.put_raw(ndb_engine::Record::PropertyKey(ndb_engine::PropertyKeyRecord {
-            id: PropertyId::new(PROP_NAME),
-            name: "name".into(),
-        }));
-        tx.put_raw(ndb_engine::Record::PropertyKey(ndb_engine::PropertyKeyRecord {
-            id: PropertyId::new(PROP_REGION),
-            name: "region".into(),
-        }));
+        tx.put_raw(ndb_engine::Record::PropertyKey(
+            ndb_engine::PropertyKeyRecord {
+                id: PropertyId::new(PROP_NAME),
+                name: "name".into(),
+            },
+        ));
+        tx.put_raw(ndb_engine::Record::PropertyKey(
+            ndb_engine::PropertyKeyRecord {
+                id: PropertyId::new(PROP_REGION),
+                name: "region".into(),
+            },
+        ));
         tx.commit().unwrap();
         // Seed: register region B-tree + 1 Vietnam customer (Alice) + 10
         // Singapore fillers + 5 purchases tied to Alice. Entity B-tree
@@ -837,7 +896,10 @@ fn query_explain_returns_plan_tree_without_executing() {
             tx_id_supersede: ndb_engine::TxId::ACTIVE,
             properties: vec![
                 (PropertyId::new(PROP_NAME), Value::String("Alice".into())),
-                (PropertyId::new(PROP_REGION), Value::String("Vietnam".into())),
+                (
+                    PropertyId::new(PROP_REGION),
+                    Value::String("Vietnam".into()),
+                ),
             ],
         });
         tx.commit().unwrap();
@@ -850,7 +912,10 @@ fn query_explain_returns_plan_tree_without_executing() {
                 tx_id_supersede: ndb_engine::TxId::ACTIVE,
                 properties: vec![
                     (PropertyId::new(PROP_NAME), Value::String("filler".into())),
-                    (PropertyId::new(PROP_REGION), Value::String("Singapore".into())),
+                    (
+                        PropertyId::new(PROP_REGION),
+                        Value::String("Singapore".into()),
+                    ),
                 ],
             });
             tx.commit().unwrap();
@@ -881,23 +946,49 @@ fn query_explain_returns_plan_tree_without_executing() {
         body,
     );
     let resp = raw_request(addr, req.as_bytes());
-    assert_eq!(resp.status, 200, "body = {:?}", String::from_utf8_lossy(&resp.body));
+    assert_eq!(
+        resp.status,
+        200,
+        "body = {:?}",
+        String::from_utf8_lossy(&resp.body)
+    );
     let v: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
     assert_eq!(v["patterns"], 2);
     let plan = v["plan"].as_array().expect("plan array");
     assert_eq!(plan.len(), 2);
     // Planned first entry is the entity pattern (lower cardinality).
-    assert_eq!(plan[0]["pattern_index"], 1, "entity must seed; got {plan:?}");
+    assert_eq!(
+        plan[0]["pattern_index"], 1,
+        "entity must seed; got {plan:?}"
+    );
     assert_eq!(plan[0]["estimated_cardinality"], 1);
-    assert!(plan[0]["atom_summary"].as_str().unwrap().starts_with("entity"));
-    let binds: Vec<&str> = plan[0]["binds"].as_array().unwrap()
-        .iter().map(|x| x.as_str().unwrap()).collect();
+    assert!(
+        plan[0]["atom_summary"]
+            .as_str()
+            .unwrap()
+            .starts_with("entity")
+    );
+    let binds: Vec<&str> = plan[0]["binds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_str().unwrap())
+        .collect();
     assert!(binds.contains(&"c"), "seed must bind ?c; got {binds:?}");
     // Second entry references ?c via uses.
-    let uses1: Vec<&str> = plan[1]["uses"].as_array().unwrap()
-        .iter().map(|x| x.as_str().unwrap()).collect();
+    let uses1: Vec<&str> = plan[1]["uses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_str().unwrap())
+        .collect();
     assert!(uses1.contains(&"c"));
-    assert!(plan[1]["atom_summary"].as_str().unwrap().starts_with("hyperedge"));
+    assert!(
+        plan[1]["atom_summary"]
+            .as_str()
+            .unwrap()
+            .starts_with("hyperedge")
+    );
 
     // Parse error → 400 + envelope shape.
     let bad = "match no closing paren";
@@ -1086,7 +1177,10 @@ fn query_stream_emits_header_plus_one_line_per_row() {
                 tx_id_supersede: ndb_engine::TxId::ACTIVE,
                 properties: vec![
                     (PropertyId::new(PROP_NAME), Value::String(format!("c{n}"))),
-                    (PropertyId::new(PROP_REGION), Value::String("Vietnam".into())),
+                    (
+                        PropertyId::new(PROP_REGION),
+                        Value::String("Vietnam".into()),
+                    ),
                 ],
             });
             txn.commit().unwrap();
@@ -1331,7 +1425,7 @@ fn principals_load_from_disk() {
             Principal {
                 name: "disk-user".into(),
                 capabilities: BTreeSet::from([Capability::Iter]),
-            entity_id: None,
+                entity_id: None,
             },
         )]),
     };
@@ -1480,7 +1574,7 @@ fn engine_backed_dispatch_revokes_capability_without_restart() {
     // v2.1 §2.2 — capability revoked via engine commit takes effect on
     // the very next request. No server restart.
     use ndb_engine::{
-        HyperedgeId, PROP_ACTION, Record, Resolved, ROLE_SUBJECT, TYPE_CAPABILITY, TxId,
+        HyperedgeId, PROP_ACTION, ROLE_SUBJECT, Record, Resolved, TYPE_CAPABILITY, TxId,
     };
 
     let dir = temp_dir("auth-engine-dispatch");
@@ -1530,10 +1624,11 @@ fn engine_backed_dispatch_revokes_capability_without_restart() {
             if let Ok(Resolved::Live(Record::HyperEdge(h))) =
                 eng.snapshot_read(&hid.into_uuid(), snap)
                 && h.type_id == TYPE_CAPABILITY
-                && h.roles.iter().any(|(r, e)| *r == ROLE_SUBJECT && *e == alice_eid)
+                && h.roles
+                    .iter()
+                    .any(|(r, e)| *r == ROLE_SUBJECT && *e == alice_eid)
                 && h.properties.iter().any(|(p, v)| {
-                    *p == PROP_ACTION
-                        && matches!(v, ndb_engine::Value::String(s) if s == "iter")
+                    *p == PROP_ACTION && matches!(v, ndb_engine::Value::String(s) if s == "iter")
                 })
             {
                 iter_hid = Some(*hid);
@@ -1551,7 +1646,11 @@ fn engine_backed_dispatch_revokes_capability_without_restart() {
     //  used up both connections already.)
     let addr2 = spawn_server(Arc::clone(&server), 1);
     let resp = raw_request(addr2, req_with_token);
-    assert_eq!(resp.status, 403, "post-revocation /iter must 403; got {}", resp.status);
+    assert_eq!(
+        resp.status, 403,
+        "post-revocation /iter must 403; got {}",
+        resp.status
+    );
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -1715,7 +1814,11 @@ fn connection_cap_rejects_with_503_then_recovers() {
     while server.in_flight() == 0 && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(5));
     }
-    assert_eq!(server.in_flight(), 1, "slow connection should hold the slot");
+    assert_eq!(
+        server.in_flight(),
+        1,
+        "slow connection should hold the slot"
+    );
 
     // Connection B: a full request → rejected with 503 because we're at cap.
     // The rejection path closes the socket promptly, so tolerate a RST.
@@ -1725,12 +1828,17 @@ fn connection_cap_rejects_with_503_then_recovers() {
     )
     .expect("capacity rejection should have produced a 503 response");
     assert_eq!(status, 503, "expected capacity rejection; got:\n{raw}");
-    assert!(raw.contains("capacity"), "rejection body should mention capacity:\n{raw}");
+    assert!(
+        raw.contains("capacity"),
+        "rejection body should mention capacity:\n{raw}"
+    );
 
     // The rejected counter should have advanced.
     let metrics = server.metrics();
     assert!(
-        metrics.render().contains("ndb_connections_rejected_total 1"),
+        metrics
+            .render()
+            .contains("ndb_connections_rejected_total 1"),
         "rejected counter not incremented:\n{}",
         metrics.render(),
     );
@@ -1741,7 +1849,11 @@ fn connection_cap_rejects_with_503_then_recovers() {
     while server.in_flight() > 0 && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(20));
     }
-    assert_eq!(server.in_flight(), 0, "slot should free after slow conn closes");
+    assert_eq!(
+        server.in_flight(),
+        0,
+        "slot should free after slow conn closes"
+    );
 
     // And a fresh request now succeeds.
     let resp = get(addr, "/health");
@@ -1794,7 +1906,10 @@ fn header_size_limit_returns_431() {
     req.push_str("\r\nConnection: close\r\n\r\n");
     let (status, raw) = raw_full(addr, req.as_bytes());
     assert_eq!(status, 431, "expected 431 headers too large; got:\n{raw}");
-    assert!(raw.contains("headers_too_large"), "error code missing:\n{raw}");
+    assert!(
+        raw.contains("headers_too_large"),
+        "error code missing:\n{raw}"
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -1825,7 +1940,11 @@ fn read_timeout_releases_slot() {
     while server.in_flight() == 0 && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(5));
     }
-    assert_eq!(server.in_flight(), 1, "stalled connection should hold a slot");
+    assert_eq!(
+        server.in_flight(),
+        1,
+        "stalled connection should hold a slot"
+    );
 
     // Within ~the read timeout, the slot is reclaimed even though we never
     // closed the socket from our side.
@@ -1900,7 +2019,10 @@ fn ready_returns_200_when_engine_usable() {
     assert_eq!(resp.status, 200);
     let body: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
     assert_eq!(body["status"], "ready");
-    assert!(body["last_tx_id"].is_number(), "ready should report last_tx_id");
+    assert!(
+        body["last_tx_id"].is_number(),
+        "ready should report last_tx_id"
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -1934,7 +2056,10 @@ fn ready_returns_503_while_shutting_down() {
     while server.in_flight() == 0 && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(5));
     }
-    assert!(server.in_flight() >= 1, "held connection should be in-flight");
+    assert!(
+        server.in_flight() >= 1,
+        "held connection should be in-flight"
+    );
 
     // /health stays 200 (liveness) even before shutdown.
     assert_eq!(get(addr, "/health").status, 200);
@@ -1989,7 +2114,10 @@ fn graceful_shutdown_drains_and_serve_returns() {
 
     // serve() should return promptly (no in-flight to drain).
     worker.join().expect("serve worker should join");
-    assert!(returned.load(Ordering::SeqCst), "serve() must have returned");
+    assert!(
+        returned.load(Ordering::SeqCst),
+        "serve() must have returned"
+    );
     assert!(
         t0.elapsed() < Duration::from_secs(2),
         "shutdown should be prompt with no in-flight; took {:?}",
@@ -2015,12 +2143,17 @@ fn admin_shutdown_route_triggers_drain() {
     thread::sleep(Duration::from_millis(50));
 
     let resp = post(addr, "/admin/shutdown", "{}");
-    assert_eq!(resp.status, 202, "admin shutdown should return 202 Accepted");
+    assert_eq!(
+        resp.status, 202,
+        "admin shutdown should return 202 Accepted"
+    );
     let body: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
     assert_eq!(body["status"], "shutting_down");
 
     assert!(server.is_shutting_down(), "flag should be set");
-    worker.join().expect("serve should return after admin shutdown");
+    worker
+        .join()
+        .expect("serve should return after admin shutdown");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
