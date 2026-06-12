@@ -44,6 +44,12 @@ use ndb_engine::id::{PropertyId, TypeId};
 use ndb_engine::record::Record;
 use ndb_engine::value::Value;
 
+pub mod batch;
+#[cfg(feature = "gpu")]
+pub mod gpu;
+
+pub use batch::{sum_slice, F64Column};
+
 // ---------------------------------------------------------------------------
 // Column specification
 // ---------------------------------------------------------------------------
