@@ -37,8 +37,7 @@ fn count_items(engine: &Engine) -> usize {
 fn concurrent_readers_never_observe_a_half_applied_commit() {
     let dir = std::env::temp_dir().join(format!(
         "ndb-concurrency-{}",
-        Instant::now().elapsed().as_nanos()
-            ^ u128::from(std::process::id())
+        Instant::now().elapsed().as_nanos() ^ u128::from(std::process::id())
     ));
     let engine = Engine::create(&dir).expect("create");
     let engine = Arc::new(RwLock::new(engine));
