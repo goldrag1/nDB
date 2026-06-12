@@ -122,6 +122,11 @@ pub struct Client {
     token: String,
     read_timeout: Duration,
     write_timeout: Duration,
+    /// Max automatic retries on transient failures. `0` (default) keeps
+    /// the historical single-attempt behaviour.
+    max_retries: u32,
+    /// Base backoff delay; attempt `k` waits `retry_base * 2^k`.
+    retry_base: Duration,
 }
 
 impl Client {
@@ -135,7 +140,24 @@ impl Client {
             token,
             read_timeout: Duration::from_mins(1),
             write_timeout: Duration::from_secs(30),
+            max_retries: 0,
+            retry_base: Duration::from_millis(100),
         })
+    }
+
+    /// Enable automatic retries with exponential backoff (default: none).
+    ///
+    /// Retry safety is per-method: GET requests are idempotent and are
+    /// retried fully (on transport errors and transient 502/503/504
+    /// responses). POST requests (commit, query-with-mutations) are NOT
+    /// idempotent, so only the *connection* is retried — once the request
+    /// bytes have been sent, the client never re-sends them, so a write is
+    /// never silently duplicated.
+    #[must_use]
+    pub fn with_retries(mut self, max_retries: u32, base_backoff: Duration) -> Self {
+        self.max_retries = max_retries;
+        self.retry_base = base_backoff;
+        self
     }
 
     /// Override the read timeout (default: 60s).
@@ -369,7 +391,26 @@ impl Client {
             self.host_port,
             self.auth_header()
         );
-        self.issue(req.as_bytes())
+        // GET is idempotent: retry the whole round-trip.
+        let mut attempt = 0u32;
+        loop {
+            match self
+                .connect()
+                .map_err(ClientError::from)
+                .and_then(|s| self.send_recv(s, req.as_bytes()))
+            {
+                Ok((status, _body)) if is_transient(status) && attempt < self.max_retries => {
+                    self.backoff(attempt);
+                    attempt += 1;
+                }
+                Ok(resp) => return Ok(resp),
+                Err(_) if attempt < self.max_retries => {
+                    self.backoff(attempt);
+                    attempt += 1;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     fn post(&self, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), ClientError> {
@@ -381,11 +422,35 @@ impl Client {
         )
         .into_bytes();
         req.extend_from_slice(body);
-        self.issue(&req)
+        // POST is NOT idempotent: retry only the connect (pre-send), so a
+        // committed write is never re-sent.
+        let stream = self.connect_with_retry()?;
+        self.send_recv(stream, &req)
     }
 
-    fn issue(&self, request: &[u8]) -> Result<(u16, Vec<u8>), ClientError> {
-        let mut s = self.connect()?;
+    /// Retry `connect` (and only connect) with backoff — always safe
+    /// because no request bytes have been transmitted yet.
+    fn connect_with_retry(&self) -> Result<TcpStream, ClientError> {
+        let mut attempt = 0u32;
+        loop {
+            match self.connect() {
+                Ok(s) => return Ok(s),
+                Err(_) if attempt < self.max_retries => {
+                    self.backoff(attempt);
+                    attempt += 1;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
+    /// Sleep for the exponential-backoff delay of retry attempt `k`.
+    fn backoff(&self, attempt: u32) {
+        let delay = self.retry_base.saturating_mul(1u32 << attempt.min(16));
+        std::thread::sleep(delay);
+    }
+
+    fn send_recv(&self, mut s: TcpStream, request: &[u8]) -> Result<(u16, Vec<u8>), ClientError> {
         s.write_all(request)?;
         s.flush()?;
         let mut buf = Vec::new();
@@ -404,6 +469,13 @@ impl Client {
             .ok_or_else(|| ClientError::Parse("no status code".to_owned()))?;
         Ok((status, buf[header_end + 4..].to_vec()))
     }
+}
+
+/// Transient server statuses worth retrying for idempotent requests:
+/// `502` bad gateway, `503` unavailable (e.g. at connection cap or
+/// draining), `504` gateway timeout.
+fn is_transient(status: u16) -> bool {
+    matches!(status, 502 | 503 | 504)
 }
 
 fn parse_2xx<T: serde::de::DeserializeOwned>(status: u16, body: &[u8]) -> Result<T, ClientError> {
@@ -494,5 +566,41 @@ mod unit_tests {
             }
             other => panic!("expected Http, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn transient_status_classification() {
+        for s in [502, 503, 504] {
+            assert!(is_transient(s), "{s} should be transient");
+        }
+        for s in [200, 400, 401, 404, 409, 500] {
+            assert!(!is_transient(s), "{s} should not be transient");
+        }
+    }
+
+    #[test]
+    fn with_retries_sets_policy() {
+        let c = Client::new("127.0.0.1:1")
+            .unwrap()
+            .with_retries(3, Duration::from_millis(5));
+        assert_eq!(c.max_retries, 3);
+        assert_eq!(c.retry_base, Duration::from_millis(5));
+    }
+
+    #[test]
+    fn connect_failure_is_retried_then_surfaced() {
+        // Port 1 on loopback refuses immediately. With 2 retries the call
+        // must still ultimately fail with a transport error (not hang, not
+        // panic) — exercises the connect-retry path end to end. We bound
+        // the backoff so the test stays fast.
+        let c = Client::new("127.0.0.1:1")
+            .unwrap()
+            .with_retries(2, Duration::from_millis(1));
+        let start = std::time::Instant::now();
+        let err = c.health().expect_err("connection to a dead port must fail");
+        assert!(matches!(err, ClientError::Io(_)), "got {err:?}");
+        // Sanity: it actually waited for the two backoffs (1ms + 2ms), i.e.
+        // it retried rather than failing once.
+        assert!(start.elapsed() >= Duration::from_millis(3));
     }
 }
