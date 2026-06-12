@@ -128,8 +128,7 @@ impl Client {
     /// Build a client pointed at `url`. Accepts `http://host:port` or
     /// bare `host:port`; reads `NDB_TOKEN` from the env for auth.
     pub fn new(url: &str) -> Result<Self, ClientError> {
-        let host_port =
-            parse_host_port(url).ok_or_else(|| ClientError::BadUrl(url.to_owned()))?;
+        let host_port = parse_host_port(url).ok_or_else(|| ClientError::BadUrl(url.to_owned()))?;
         let token = std::env::var("NDB_TOKEN").unwrap_or_default();
         Ok(Self {
             host_port,
@@ -405,13 +404,9 @@ impl Client {
             .ok_or_else(|| ClientError::Parse("no status code".to_owned()))?;
         Ok((status, buf[header_end + 4..].to_vec()))
     }
-
 }
 
-fn parse_2xx<T: serde::de::DeserializeOwned>(
-    status: u16,
-    body: &[u8],
-) -> Result<T, ClientError> {
+fn parse_2xx<T: serde::de::DeserializeOwned>(status: u16, body: &[u8]) -> Result<T, ClientError> {
     if !(200..300).contains(&status) {
         return Err(http_error(status, body));
     }
@@ -420,7 +415,12 @@ fn parse_2xx<T: serde::de::DeserializeOwned>(
 
 fn http_error(status: u16, body: &[u8]) -> ClientError {
     let (error, detail) = serde_json::from_slice::<ErrorResponse>(body).map_or_else(
-        |_| ("http_error".to_owned(), String::from_utf8_lossy(body).into_owned()),
+        |_| {
+            (
+                "http_error".to_owned(),
+                String::from_utf8_lossy(body).into_owned(),
+            )
+        },
         |e| (e.error, e.detail),
     );
     ClientError::Http {

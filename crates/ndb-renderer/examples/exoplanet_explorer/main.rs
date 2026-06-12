@@ -24,7 +24,7 @@
 #![allow(
     clippy::too_many_lines,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
+    clippy::cast_sign_loss
 )]
 
 use std::collections::HashMap;
@@ -48,9 +48,9 @@ const T_MISSION: u32 = 4;
 
 // Hyperedge types. Same numbering convention as v22_explorer: low entity
 // types, ≥100 hyperedge types.
-const T_DISCOVERY: u32 = 100;       // arity-4: [star, planet, method, mission]
-const T_SYSTEM: u32 = 101;          // arity-(N+1): [star, planet_1, …, planet_N]
-const T_HABITABLE_ZONE: u32 = 102;  // arity-(M+1): [star, hz_planet_1, …]
+const T_DISCOVERY: u32 = 100; // arity-4: [star, planet, method, mission]
+const T_SYSTEM: u32 = 101; // arity-(N+1): [star, planet_1, …, planet_N]
+const T_HABITABLE_ZONE: u32 = 102; // arity-(M+1): [star, hz_planet_1, …]
 
 const ROLE_STAR: u32 = 10;
 const ROLE_PLANET: u32 = 11;
@@ -268,13 +268,27 @@ fn seed(engine: &mut Engine) {
     for s in &doc.stars {
         let eid = EntityId::now_v7();
         let mut props = vec![(PROP_NAME, Value::String(s.name.clone()))];
-        if let Some(v) = s.ra            { props.push((PROP_STAR_RA, Value::F64(v))); }
-        if let Some(v) = s.dec           { props.push((PROP_STAR_DEC, Value::F64(v))); }
-        if let Some(v) = s.distance_pc   { props.push((PROP_STAR_DIST_PC, Value::F64(v))); }
-        if let Some(v) = s.teff_k        { props.push((PROP_STAR_TEFF, Value::F64(v))); }
-        if let Some(v) = s.mass_msun     { props.push((PROP_STAR_MASS_MSUN, Value::F64(v))); }
-        if let Some(v) = s.radius_rsun   { props.push((PROP_STAR_RADIUS_RSUN, Value::F64(v))); }
-        if let Some(v) = s.age_gyr       { props.push((PROP_STAR_AGE_GYR, Value::F64(v))); }
+        if let Some(v) = s.ra {
+            props.push((PROP_STAR_RA, Value::F64(v)));
+        }
+        if let Some(v) = s.dec {
+            props.push((PROP_STAR_DEC, Value::F64(v)));
+        }
+        if let Some(v) = s.distance_pc {
+            props.push((PROP_STAR_DIST_PC, Value::F64(v)));
+        }
+        if let Some(v) = s.teff_k {
+            props.push((PROP_STAR_TEFF, Value::F64(v)));
+        }
+        if let Some(v) = s.mass_msun {
+            props.push((PROP_STAR_MASS_MSUN, Value::F64(v)));
+        }
+        if let Some(v) = s.radius_rsun {
+            props.push((PROP_STAR_RADIUS_RSUN, Value::F64(v)));
+        }
+        if let Some(v) = s.age_gyr {
+            props.push((PROP_STAR_AGE_GYR, Value::F64(v)));
+        }
         commit_entity(engine, eid, T_STAR, props);
         star_ids.insert(s.name.clone(), eid);
     }
@@ -282,19 +296,27 @@ fn seed(engine: &mut Engine) {
     // ── Methods
     for m in &doc.methods {
         let eid = EntityId::now_v7();
-        commit_entity(engine, eid, T_METHOD, vec![
-            (PROP_NAME, Value::String(m.name.clone())),
-        ]);
+        commit_entity(
+            engine,
+            eid,
+            T_METHOD,
+            vec![(PROP_NAME, Value::String(m.name.clone()))],
+        );
         method_ids.insert(m.name.clone(), eid);
     }
 
     // ── Missions
     for m in &doc.missions {
         let eid = EntityId::now_v7();
-        commit_entity(engine, eid, T_MISSION, vec![
-            (PROP_NAME, Value::String(m.short.clone())),
-            (PROP_MISSION_FULL_NAME, Value::String(m.full.clone())),
-        ]);
+        commit_entity(
+            engine,
+            eid,
+            T_MISSION,
+            vec![
+                (PROP_NAME, Value::String(m.short.clone())),
+                (PROP_MISSION_FULL_NAME, Value::String(m.full.clone())),
+            ],
+        );
         mission_ids.insert(m.short.clone(), eid);
     }
 
@@ -304,14 +326,30 @@ fn seed(engine: &mut Engine) {
         let mut props = vec![
             (PROP_NAME, Value::String(p.name.clone())),
             (PROP_PL_HOST_NAME, Value::String(p.host.clone())),
-            (PROP_PL_HABITABLE, Value::String(
-                if p.habitable { "yes".into() } else { "no".into() })),
+            (
+                PROP_PL_HABITABLE,
+                Value::String(if p.habitable {
+                    "yes".into()
+                } else {
+                    "no".into()
+                }),
+            ),
         ];
-        if let Some(v) = p.radius_re      { props.push((PROP_PL_RADIUS_RE, Value::F64(v))); }
-        if let Some(v) = p.mass_me        { props.push((PROP_PL_MASS_ME, Value::F64(v))); }
-        if let Some(v) = p.orbital_period { props.push((PROP_PL_ORBITAL_PERIOD, Value::F64(v))); }
-        if let Some(v) = p.semi_major_au  { props.push((PROP_PL_SEMI_MAJOR_AU, Value::F64(v))); }
-        if let Some(v) = p.eq_temp_k      { props.push((PROP_PL_EQ_TEMP_K, Value::F64(v))); }
+        if let Some(v) = p.radius_re {
+            props.push((PROP_PL_RADIUS_RE, Value::F64(v)));
+        }
+        if let Some(v) = p.mass_me {
+            props.push((PROP_PL_MASS_ME, Value::F64(v)));
+        }
+        if let Some(v) = p.orbital_period {
+            props.push((PROP_PL_ORBITAL_PERIOD, Value::F64(v)));
+        }
+        if let Some(v) = p.semi_major_au {
+            props.push((PROP_PL_SEMI_MAJOR_AU, Value::F64(v)));
+        }
+        if let Some(v) = p.eq_temp_k {
+            props.push((PROP_PL_EQ_TEMP_K, Value::F64(v)));
+        }
         commit_entity(engine, eid, T_PLANET, props);
         planet_ids.insert(p.name.clone(), eid);
     }
@@ -402,12 +440,7 @@ fn count_entities_of_type(engine: &Engine, type_id: u32) -> usize {
     n
 }
 
-fn commit_entity(
-    engine: &mut Engine,
-    eid: EntityId,
-    type_id: u32,
-    properties: Vec<(u32, Value)>,
-) {
+fn commit_entity(engine: &mut Engine, eid: EntityId, type_id: u32, properties: Vec<(u32, Value)>) {
     let mut txn = engine.begin_write();
     let tx_id = txn.tx_id();
     txn.put_entity(EntityRecord {
@@ -495,18 +528,22 @@ fn resolve_path(root: &Path, req_path: &str) -> Option<PathBuf> {
     } else {
         root.join(trimmed)
     };
-    if candidate.is_file() { Some(candidate) } else { None }
+    if candidate.is_file() {
+        Some(candidate)
+    } else {
+        None
+    }
 }
 
 fn content_type(p: &Path) -> &'static str {
     match p.extension().and_then(|e| e.to_str()) {
         Some("html") => "text/html; charset=utf-8",
-        Some("js")   => "application/javascript; charset=utf-8",
-        Some("css")  => "text/css; charset=utf-8",
+        Some("js") => "application/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
         Some("json") => "application/json; charset=utf-8",
-        Some("svg")  => "image/svg+xml",
-        Some("png")  => "image/png",
-        Some("ico")  => "image/x-icon",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("ico") => "image/x-icon",
         _ => "application/octet-stream",
     }
 }

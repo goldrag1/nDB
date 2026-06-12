@@ -49,9 +49,7 @@ use crate::engine::Engine;
 use crate::id::{EntityId, PropertyId, TypeId};
 use crate::value::Value;
 use crate::wire::JsonValue;
-use crate::wire_query::{
-    CmpOp, Pattern, PropertyFilter, Recursion, RoleBinding, Term,
-};
+use crate::wire_query::{CmpOp, Pattern, PropertyFilter, Recursion, RoleBinding, Term};
 
 /// Sentinel used when no index can offer a real estimate. Chosen large
 /// enough that the planner reliably sorts these atoms last, but not
@@ -140,12 +138,7 @@ pub fn explain(engine: &Engine, patterns: &[Pattern]) -> Vec<ExplainEntry> {
     let plan = plan(engine, patterns);
     let mut bound: HashSet<String> = HashSet::new();
     let mut out = Vec::with_capacity(plan.order.len());
-    for (slot, (&idx, &card)) in plan
-        .order
-        .iter()
-        .zip(plan.estimates.iter())
-        .enumerate()
-    {
+    for (slot, (&idx, &card)) in plan.order.iter().zip(plan.estimates.iter()).enumerate() {
         let _ = slot;
         let pattern = &patterns[idx];
         let atom_vars = atom_variables(pattern);
@@ -227,7 +220,13 @@ pub fn estimate_cardinality<S: BuildHasher>(
             type_id,
             self_var,
             property_filters,
-        } => estimate_entity(engine, *type_id, self_var.as_deref(), property_filters, bound),
+        } => estimate_entity(
+            engine,
+            *type_id,
+            self_var.as_deref(),
+            property_filters,
+            bound,
+        ),
         Pattern::Hyperedge {
             type_id,
             role_bindings,
@@ -308,7 +307,9 @@ fn estimate_hyperedge<S: BuildHasher>(
         // plan so the seed walk gets its anchor from a sibling
         // pattern first.
         let has_anchor = role_bindings.iter().any(|rb| match &rb.term {
-            Term::Literal { value: JsonValue::Uuid { .. } } => true,
+            Term::Literal {
+                value: JsonValue::Uuid { .. },
+            } => true,
             Term::Var { name } => bound.contains(name),
             _ => false,
         });
@@ -628,7 +629,9 @@ mod tests {
         // first (smaller seed), then B (shared ?c → adjacency degree).
         let mut engine = temp_engine("pick-seed");
         engine.register_property_btree(TypeId::new(T_CUSTOMER), PropertyId::new(P_REGION));
-        let vn: Vec<EntityId> = (0..3).map(|_| seed_customer(&mut engine, "Vietnam")).collect();
+        let vn: Vec<EntityId> = (0..3)
+            .map(|_| seed_customer(&mut engine, "Vietnam"))
+            .collect();
         for _ in 0..50 {
             seed_customer(&mut engine, "Singapore");
         }
@@ -639,7 +642,10 @@ mod tests {
             seed_sales_order(&mut engine, vn[0], 200);
         }
 
-        let patterns = vec![pattern_sales_order_by_customer(), pattern_entity_region("Vietnam")];
+        let patterns = vec![
+            pattern_sales_order_by_customer(),
+            pattern_entity_region("Vietnam"),
+        ];
         let plan = plan(&engine, &patterns);
 
         // Planner should reorder: entity pattern first (lower cardinality).
@@ -688,7 +694,10 @@ mod tests {
             seed_sales_order(&mut engine, cust, i);
         }
 
-        let patterns = vec![pattern_sales_order_by_customer(), pattern_entity_region("Vietnam")];
+        let patterns = vec![
+            pattern_sales_order_by_customer(),
+            pattern_entity_region("Vietnam"),
+        ];
         let entries = explain(&engine, &patterns);
         assert_eq!(entries.len(), 2);
         // Entries appear in PLANNED order (entity first).
@@ -718,7 +727,10 @@ mod tests {
             recursion: Some(Recursion::Star { max_depth: 8 }),
         };
         let card = estimate_cardinality(&engine, &pattern, &HashSet::new());
-        assert!(card > UNKNOWN_HIGH, "no-anchor recursive must sort behind any non-recursive pattern: got {card}");
+        assert!(
+            card > UNKNOWN_HIGH,
+            "no-anchor recursive must sort behind any non-recursive pattern: got {card}"
+        );
     }
 
     #[test]
@@ -737,13 +749,18 @@ mod tests {
             role_bindings: vec![RoleBinding {
                 role_id: R_CUSTOMER,
                 term: Term::Literal {
-                    value: JsonValue::Uuid { value: a.into_uuid().to_string() },
+                    value: JsonValue::Uuid {
+                        value: a.into_uuid().to_string(),
+                    },
                 },
             }],
             property_filters: vec![],
             recursion: Some(Recursion::Star { max_depth: 8 }),
         };
         let card = estimate_cardinality(&engine, &pattern, &HashSet::new());
-        assert!(card <= UNKNOWN_HIGH, "anchored recursive estimate should stay in normal range: got {card}");
+        assert!(
+            card <= UNKNOWN_HIGH,
+            "anchored recursive estimate should stay in normal range: got {card}"
+        );
     }
 }

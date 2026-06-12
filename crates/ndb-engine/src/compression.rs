@@ -113,8 +113,16 @@ pub fn encode_block(plaintext: &[u8], codec: Codec) -> Vec<u8> {
 
     let mut out = Vec::with_capacity(BLOCK_HEADER_SIZE + payload.len());
     out.push(chosen as u8);
-    out.extend_from_slice(&u32::try_from(uncompressed_len).unwrap_or(u32::MAX).to_le_bytes());
-    out.extend_from_slice(&u32::try_from(payload.len()).unwrap_or(u32::MAX).to_le_bytes());
+    out.extend_from_slice(
+        &u32::try_from(uncompressed_len)
+            .unwrap_or(u32::MAX)
+            .to_le_bytes(),
+    );
+    out.extend_from_slice(
+        &u32::try_from(payload.len())
+            .unwrap_or(u32::MAX)
+            .to_le_bytes(),
+    );
     out.extend_from_slice(&crc.to_le_bytes());
     out.extend_from_slice(&payload);
     out
@@ -221,7 +229,10 @@ mod tests {
     fn compressible_block_actually_shrinks() {
         let data = vec![0x7Fu8; 100_000];
         let block = encode_block(&data, Codec::Lz4);
-        assert!(block.len() < data.len() / 2, "repetitive data should compress well");
+        assert!(
+            block.len() < data.len() / 2,
+            "repetitive data should compress well"
+        );
         assert_eq!(block[0], Codec::Lz4 as u8);
     }
 
@@ -229,7 +240,11 @@ mod tests {
     fn incompressible_block_falls_back_to_stored_no_inflation() {
         let varied: Vec<u8> = (0..20_000u32).flat_map(|i| i.to_le_bytes()).collect();
         let block = encode_block(&varied, Codec::Lz4);
-        assert_eq!(block[0], Codec::Stored as u8, "should store raw when no win");
+        assert_eq!(
+            block[0],
+            Codec::Stored as u8,
+            "should store raw when no win"
+        );
         assert_eq!(block.len(), varied.len() + BLOCK_HEADER_SIZE);
     }
 
@@ -238,21 +253,33 @@ mod tests {
         let mut block = encode_block(&vec![1u8; 1000], Codec::Lz4);
         let last = block.len() - 1;
         block[last] ^= 0xff;
-        assert!(matches!(decode_block(&block), Err(CompressionError::Decompress(_) | CompressionError::CrcMismatch { .. })));
+        assert!(matches!(
+            decode_block(&block),
+            Err(CompressionError::Decompress(_) | CompressionError::CrcMismatch { .. })
+        ));
     }
 
     #[test]
     fn header_corruption_rejected() {
         let mut block = encode_block(b"payload bytes here", Codec::Stored);
         block[0] = 99; // unknown codec
-        assert!(matches!(decode_block(&block), Err(CompressionError::UnknownCodec(99))));
+        assert!(matches!(
+            decode_block(&block),
+            Err(CompressionError::UnknownCodec(99))
+        ));
     }
 
     #[test]
     fn truncation_rejected() {
         let block = encode_block(&vec![5u8; 2000], Codec::Lz4);
-        assert!(matches!(decode_block(&block[..BLOCK_HEADER_SIZE - 1]), Err(CompressionError::Truncated { .. })));
-        assert!(matches!(decode_block(&block[..block.len() - 3]), Err(CompressionError::Truncated { .. })));
+        assert!(matches!(
+            decode_block(&block[..BLOCK_HEADER_SIZE - 1]),
+            Err(CompressionError::Truncated { .. })
+        ));
+        assert!(matches!(
+            decode_block(&block[..block.len() - 3]),
+            Err(CompressionError::Truncated { .. })
+        ));
     }
 
     #[test]

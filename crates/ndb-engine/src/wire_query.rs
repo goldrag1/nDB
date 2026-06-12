@@ -298,14 +298,23 @@ impl ReturnItem {
     pub fn column_name(&self) -> String {
         match self {
             Self::Variable(name) => name.clone(),
-            Self::Path { variable, property, display } => match display {
+            Self::Path {
+                variable,
+                property,
+                display,
+            } => match display {
                 Some(d) => format!("{variable}.{d}"),
-                None    => format!("{variable}.{property}"),
+                None => format!("{variable}.{property}"),
             },
-            Self::Aggregate { func, variable, display, .. } => match (variable, display) {
-                (None, _)                  => format!("{func}()"),
-                (Some(v), Some(d))         => format!("{func}({v}.{d})"),
-                (Some(v), None)            => format!("{func}({v})"),
+            Self::Aggregate {
+                func,
+                variable,
+                display,
+                ..
+            } => match (variable, display) {
+                (None, _) => format!("{func}()"),
+                (Some(v), Some(d)) => format!("{func}({v}.{d})"),
+                (Some(v), None) => format!("{func}({v})"),
             },
         }
     }
@@ -329,10 +338,14 @@ impl ReturnItem {
 }
 
 impl From<&str> for ReturnItem {
-    fn from(s: &str) -> Self { Self::Variable(s.to_string()) }
+    fn from(s: &str) -> Self {
+        Self::Variable(s.to_string())
+    }
 }
 impl From<String> for ReturnItem {
-    fn from(s: String) -> Self { Self::Variable(s) }
+    fn from(s: String) -> Self {
+        Self::Variable(s)
+    }
 }
 
 /// `POST /query` response body.
@@ -674,7 +687,10 @@ mod tests {
 
         let l = lit_term(lit_str("fever"));
         let s = serde_json::to_string(&l).unwrap();
-        assert_eq!(s, r#"{"kind":"literal","value":{"tag":"string","value":"fever"}}"#);
+        assert_eq!(
+            s,
+            r#"{"kind":"literal","value":{"tag":"string","value":"fever"}}"#
+        );
         assert_eq!(round_trip(l.clone()), l);
     }
 

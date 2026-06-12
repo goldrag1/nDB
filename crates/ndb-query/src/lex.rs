@@ -144,14 +144,14 @@ impl TokKind {
             Self::Return => "`return`".into(),
             Self::Limit => "`limit`".into(),
             Self::Order => "`order`".into(),
-            Self::By    => "`by`".into(),
-            Self::Asc   => "`asc`".into(),
-            Self::Desc  => "`desc`".into(),
+            Self::By => "`by`".into(),
+            Self::Asc => "`asc`".into(),
+            Self::Desc => "`desc`".into(),
             Self::Create => "`create`".into(),
             Self::Delete => "`delete`".into(),
-            Self::Set    => "`set`".into(),
-            Self::Merge  => "`merge`".into(),
-            Self::Group  => "`group`".into(),
+            Self::Set => "`set`".into(),
+            Self::Merge => "`merge`".into(),
+            Self::Group => "`group`".into(),
             Self::As => "`as`".into(),
             Self::Of => "`of`".into(),
             Self::And => "`and`".into(),
@@ -270,14 +270,22 @@ fn lex_punct_or_op(bytes: &[u8], i: usize) -> Result<Option<(TokKind, usize)>, P
 
     // Comparison ops with optional `=` suffix.
     if b == b'<' {
-        let len = if bytes.get(i + 1) == Some(&b'=') { 2 } else { 1 };
+        let len = if bytes.get(i + 1) == Some(&b'=') {
+            2
+        } else {
+            1
+        };
         return Ok(Some((
             if len == 2 { TokKind::Le } else { TokKind::Lt },
             len,
         )));
     }
     if b == b'>' {
-        let len = if bytes.get(i + 1) == Some(&b'=') { 2 } else { 1 };
+        let len = if bytes.get(i + 1) == Some(&b'=') {
+            2
+        } else {
+            1
+        };
         return Ok(Some((
             if len == 2 { TokKind::Ge } else { TokKind::Gt },
             len,
@@ -533,14 +541,14 @@ fn lex_ident_or_uuid(source: &str, start: usize) -> Result<(Tok, usize), ParseEr
         "return" => TokKind::Return,
         "limit" => TokKind::Limit,
         "order" => TokKind::Order,
-        "by"    => TokKind::By,
-        "asc"   => TokKind::Asc,
-        "desc"  => TokKind::Desc,
+        "by" => TokKind::By,
+        "asc" => TokKind::Asc,
+        "desc" => TokKind::Desc,
         "create" => TokKind::Create,
         "delete" => TokKind::Delete,
-        "set"    => TokKind::Set,
-        "merge"  => TokKind::Merge,
-        "group"  => TokKind::Group,
+        "set" => TokKind::Set,
+        "merge" => TokKind::Merge,
+        "group" => TokKind::Group,
         "as" => TokKind::As,
         "of" => TokKind::Of,
         "and" => TokKind::And,

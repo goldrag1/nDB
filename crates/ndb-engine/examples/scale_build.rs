@@ -34,7 +34,10 @@ const CACHE: usize = 2 * 1024 * 1024 * 1024; // 2 GiB budget
 fn embed(seed: u64) -> Vec<f32> {
     (0..DIM)
         .map(|i| {
-            let x = seed.wrapping_mul(2_654_435_761).wrapping_add(i as u64 * 40_503) % 2_000;
+            let x = seed
+                .wrapping_mul(2_654_435_761)
+                .wrapping_add(i as u64 * 40_503)
+                % 2_000;
             (x as f32) / 1000.0 - 1.0
         })
         .collect()
@@ -44,7 +47,11 @@ fn rss_mb() -> f64 {
     let s = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
     for line in s.lines() {
         if let Some(rest) = line.strip_prefix("VmRSS:") {
-            let kb: f64 = rest.split_whitespace().next().and_then(|x| x.parse().ok()).unwrap_or(0.0);
+            let kb: f64 = rest
+                .split_whitespace()
+                .next()
+                .and_then(|x| x.parse().ok())
+                .unwrap_or(0.0);
             return kb / 1024.0;
         }
     }
@@ -89,8 +96,14 @@ fn build(dir: &Path, target_gb: f64) {
                 tx_id_assert: TxId::new(0),
                 tx_id_supersede: TxId::ACTIVE,
                 properties: vec![
-                    (PropertyId::new(PROP_NAME), Value::String(format!("paper-{n}"))),
-                    (PropertyId::new(PROP_CITES), Value::I64((n as i64 * 2_654_435_761) % 5_000_000)),
+                    (
+                        PropertyId::new(PROP_NAME),
+                        Value::String(format!("paper-{n}")),
+                    ),
+                    (
+                        PropertyId::new(PROP_CITES),
+                        Value::I64((n as i64 * 2_654_435_761) % 5_000_000),
+                    ),
                     (PropertyId::new(PROP_EMBED), Value::Vector(embed(n))),
                 ],
             });
@@ -167,18 +180,36 @@ fn measure(dir: &Path) {
     // --- BOUNDED queries (the tile-server workload) — RSS stays low. ---
     let t = Instant::now();
     let top = engine.property_top_k(paper, cites, 10);
-    println!("  [bounded] property_top_k(10): {} hits in {:.1} ms", top.len(), t.elapsed().as_secs_f64() * 1e3);
+    println!(
+        "  [bounded] property_top_k(10): {} hits in {:.1} ms",
+        top.len(),
+        t.elapsed().as_secs_f64() * 1e3
+    );
 
     if let Some(first) = top.first() {
         let t = Instant::now();
         let nb = engine.hyperedges_for_entity(*first);
-        println!("  [bounded] hyperedges_for_entity: {} in {:.1} ms", nb.len(), t.elapsed().as_secs_f64() * 1e3);
+        println!(
+            "  [bounded] hyperedges_for_entity: {} in {:.1} ms",
+            nb.len(),
+            t.elapsed().as_secs_f64() * 1e3
+        );
     }
 
     let t = Instant::now();
-    let hit = engine.lookup_by_external_key(PropertyId::new(PROP_NAME), &Value::String("paper-100000".into()));
-    println!("  [bounded] lookup_by_external_key: {} in {:.1} ms", hit.is_some(), t.elapsed().as_secs_f64() * 1e3);
-    println!("RSS after bounded queries: {:.0} MB  ← the held-low figure", rss_mb());
+    let hit = engine.lookup_by_external_key(
+        PropertyId::new(PROP_NAME),
+        &Value::String("paper-100000".into()),
+    );
+    println!(
+        "  [bounded] lookup_by_external_key: {} in {:.1} ms",
+        hit.is_some(),
+        t.elapsed().as_secs_f64() * 1e3
+    );
+    println!(
+        "RSS after bounded queries: {:.0} MB  ← the held-low figure",
+        rss_mb()
+    );
 
     // --- FULL-SCAN ops: inherently O(N). Brute-force kNN reads every
     //     embedding; verified count gathers every id. mmap keeps these
@@ -191,14 +222,21 @@ fn measure(dir: &Path) {
         knn.len(),
         t.elapsed().as_secs_f64() * 1e3
     );
-    println!("RSS after kNN scan: {:.0} MB (mmap-reclaimable; HNSW would bound this)", rss_mb());
+    println!(
+        "RSS after kNN scan: {:.0} MB (mmap-reclaimable; HNSW would bound this)",
+        rss_mb()
+    );
     engine.close().unwrap();
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cmd = args.first().map(String::as_str).unwrap_or("");
-    let dir = PathBuf::from(args.get(1).cloned().unwrap_or_else(|| "/tmp/ndb-scale".into()));
+    let dir = PathBuf::from(
+        args.get(1)
+            .cloned()
+            .unwrap_or_else(|| "/tmp/ndb-scale".into()),
+    );
     match cmd {
         "build" => {
             let gb: f64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(10.0);

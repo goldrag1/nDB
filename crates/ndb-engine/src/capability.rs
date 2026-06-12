@@ -180,9 +180,7 @@ impl Engine {
     /// entity. Used by the server's bootstrap-import flow to decide
     /// "should I migrate principals.json now?" without reading every
     /// record.
-    pub fn has_any_capability_or_principal(
-        &self,
-    ) -> Result<bool, crate::engine::EngineError> {
+    pub fn has_any_capability_or_principal(&self) -> Result<bool, crate::engine::EngineError> {
         if self.hyperedge_type_count(TYPE_CAPABILITY) > 0 {
             return Ok(true);
         }
@@ -312,7 +310,11 @@ mod tests {
         let mut engine = temp_engine("exact");
         let alice = seed_principal(&mut engine, "alice", "token-a");
         seed_capability(&mut engine, alice, "read", "/iter", 0);
-        assert!(engine.has_capability(alice, "read", "/iter", 1_000).unwrap());
+        assert!(
+            engine
+                .has_capability(alice, "read", "/iter", 1_000)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -330,7 +332,11 @@ mod tests {
         let alice = seed_principal(&mut engine, "alice", "tok");
         seed_capability(&mut engine, alice, "read", WILDCARD, 0);
         assert!(engine.has_capability(alice, "read", "/iter", 0).unwrap());
-        assert!(engine.has_capability(alice, "read", "/read/foo", 0).unwrap());
+        assert!(
+            engine
+                .has_capability(alice, "read", "/read/foo", 0)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -363,12 +369,24 @@ mod tests {
         let alice = seed_principal(&mut engine, "alice", "tok");
         seed_capability(&mut engine, alice, "read", "/iter", 500_000);
         // now > expires → reject
-        assert!(!engine.has_capability(alice, "read", "/iter", 1_000_000).unwrap());
+        assert!(
+            !engine
+                .has_capability(alice, "read", "/iter", 1_000_000)
+                .unwrap()
+        );
         // now < expires → allow
-        assert!(engine.has_capability(alice, "read", "/iter", 100_000).unwrap());
+        assert!(
+            engine
+                .has_capability(alice, "read", "/iter", 100_000)
+                .unwrap()
+        );
         // expires=0 → always allow (when seeded so)
         seed_capability(&mut engine, alice, "read", "/iter", 0);
-        assert!(engine.has_capability(alice, "read", "/iter", 9_999_999).unwrap());
+        assert!(
+            engine
+                .has_capability(alice, "read", "/iter", 9_999_999)
+                .unwrap()
+        );
     }
 
     #[test]

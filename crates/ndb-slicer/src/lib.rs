@@ -48,7 +48,7 @@ pub mod batch;
 #[cfg(feature = "gpu")]
 pub mod gpu;
 
-pub use batch::{sum_slice, F64Column};
+pub use batch::{F64Column, sum_slice};
 
 // ---------------------------------------------------------------------------
 // Column specification
@@ -244,14 +244,12 @@ fn extract(record: &Record, source: &ColumnSource) -> Option<Value> {
                 {
                     return None;
                 }
-                let ts = e
-                    .properties
-                    .iter()
-                    .find(|(p, _)| p == property)
-                    .and_then(|(_, v)| match v {
+                let ts = e.properties.iter().find(|(p, _)| p == property).and_then(
+                    |(_, v)| match v {
                         Value::Timestamp(t) => Some(*t),
                         _ => None,
-                    })?;
+                    },
+                )?;
                 Some(Value::Timestamp(bucket_floor(ts, *interval_us, *origin_us)))
             }
             _ => None,
@@ -408,12 +406,18 @@ impl SortKey {
     /// Shorthand for `SortKey { column, ascending: true }`.
     #[must_use]
     pub const fn asc(column: usize) -> Self {
-        Self { column, ascending: true }
+        Self {
+            column,
+            ascending: true,
+        }
     }
     /// Shorthand for `SortKey { column, ascending: false }`.
     #[must_use]
     pub const fn desc(column: usize) -> Self {
-        Self { column, ascending: false }
+        Self {
+            column,
+            ascending: false,
+        }
     }
 }
 
@@ -725,12 +729,9 @@ impl Pipeline {
             .map(|(i, c)| {
                 referenced[i]
                     && consumed_property(&c.source).is_some_and(|key| {
-                        !self.columns[i + 1..]
-                            .iter()
-                            .enumerate()
-                            .any(|(j, later)| {
-                                referenced[i + 1 + j] && read_property(&later.source) == Some(key)
-                            })
+                        !self.columns[i + 1..].iter().enumerate().any(|(j, later)| {
+                            referenced[i + 1 + j] && read_property(&later.source) == Some(key)
+                        })
                     })
             })
             .collect();
@@ -770,7 +771,11 @@ impl Pipeline {
                 // group-by values (once per group, not per row).
                 let state = GroupState {
                     group_vals: self.group_by.iter().map(|&i| scratch[i].clone()).collect(),
-                    accs: self.aggregates.iter().map(|a| AggAccum::new(a.agg)).collect(),
+                    accs: self
+                        .aggregates
+                        .iter()
+                        .map(|a| AggAccum::new(a.agg))
+                        .collect(),
                 };
                 groups.entry(key.clone()).or_insert(state)
             };
@@ -779,7 +784,8 @@ impl Pipeline {
             }
         }
 
-        let mut headers: Vec<String> = Vec::with_capacity(self.group_by.len() + self.aggregates.len());
+        let mut headers: Vec<String> =
+            Vec::with_capacity(self.group_by.len() + self.aggregates.len());
         for &i in &self.group_by {
             headers.push(self.columns[i].header.clone());
         }
@@ -850,8 +856,14 @@ impl AggAccum {
                 any: false,
             },
             Aggregate::Avg => Self::Avg { n: 0, acc: 0.0 },
-            Aggregate::Min => Self::Extremum { want_min: true, best: None },
-            Aggregate::Max => Self::Extremum { want_min: false, best: None },
+            Aggregate::Min => Self::Extremum {
+                want_min: true,
+                best: None,
+            },
+            Aggregate::Max => Self::Extremum {
+                want_min: false,
+                best: None,
+            },
             Aggregate::Percentile { p } => Self::Percentile { p, xs: Vec::new() },
         }
     }
@@ -864,7 +876,12 @@ impl AggAccum {
                     *n += 1;
                 }
             }
-            Self::Sum { acc_i, acc_f, as_float, any } => match v {
+            Self::Sum {
+                acc_i,
+                acc_f,
+                as_float,
+                any,
+            } => match v {
                 Value::I64(x) => {
                     *any = true;
                     if *as_float {
@@ -925,7 +942,12 @@ impl AggAccum {
     fn finalize(self) -> Value {
         match self {
             Self::Count { n } => Value::I64(i64::try_from(n).unwrap_or(i64::MAX)),
-            Self::Sum { acc_i, acc_f, as_float, any } => {
+            Self::Sum {
+                acc_i,
+                acc_f,
+                as_float,
+                any,
+            } => {
                 if !any {
                     Value::Null
                 } else if as_float {
@@ -1572,10 +1594,26 @@ mod tests {
     fn having_drops_groups_by_aggregate_result() {
         // Sum by group, drop sums ≤ 100.
         let records = vec![
-            entity(EntityId::now_v7(), 1, vec![(10, Value::String("a".into())), (11, Value::I64(60))]),
-            entity(EntityId::now_v7(), 1, vec![(10, Value::String("a".into())), (11, Value::I64(50))]),  // a → 110
-            entity(EntityId::now_v7(), 1, vec![(10, Value::String("b".into())), (11, Value::I64(30))]),  // b → 30 (dropped)
-            entity(EntityId::now_v7(), 1, vec![(10, Value::String("c".into())), (11, Value::I64(200))]), // c → 200
+            entity(
+                EntityId::now_v7(),
+                1,
+                vec![(10, Value::String("a".into())), (11, Value::I64(60))],
+            ),
+            entity(
+                EntityId::now_v7(),
+                1,
+                vec![(10, Value::String("a".into())), (11, Value::I64(50))],
+            ), // a → 110
+            entity(
+                EntityId::now_v7(),
+                1,
+                vec![(10, Value::String("b".into())), (11, Value::I64(30))],
+            ), // b → 30 (dropped)
+            entity(
+                EntityId::now_v7(),
+                1,
+                vec![(10, Value::String("c".into())), (11, Value::I64(200))],
+            ), // c → 200
         ];
         let p = Pipeline::new()
             .select(Column::entity_property("region", PropertyId::new(10)))
@@ -1596,7 +1634,13 @@ mod tests {
         let totals: Vec<i64> = t
             .rows
             .iter()
-            .filter_map(|r| if let Value::I64(n) = &r[1] { Some(*n) } else { None })
+            .filter_map(|r| {
+                if let Value::I64(n) = &r[1] {
+                    Some(*n)
+                } else {
+                    None
+                }
+            })
             .collect();
         assert!(totals.contains(&110));
         assert!(totals.contains(&200));
@@ -1608,9 +1652,21 @@ mod tests {
         // filter() drops records BEFORE aggregation; having() drops
         // groups AFTER aggregation. Both fire independently.
         let records = vec![
-            entity(EntityId::now_v7(), 1, vec![(10, Value::String("a".into())), (11, Value::I64(60))]),
-            entity(EntityId::now_v7(), 1, vec![(10, Value::String("a".into())), (11, Value::I64(50))]),
-            entity(EntityId::now_v7(), 1, vec![(10, Value::String("b".into())), (11, Value::I64(9999))]),
+            entity(
+                EntityId::now_v7(),
+                1,
+                vec![(10, Value::String("a".into())), (11, Value::I64(60))],
+            ),
+            entity(
+                EntityId::now_v7(),
+                1,
+                vec![(10, Value::String("a".into())), (11, Value::I64(50))],
+            ),
+            entity(
+                EntityId::now_v7(),
+                1,
+                vec![(10, Value::String("b".into())), (11, Value::I64(9999))],
+            ),
         ];
         let p = Pipeline::new()
             .select(Column::entity_property("region", PropertyId::new(10)))
@@ -1618,8 +1674,9 @@ mod tests {
             // Pre-aggregate filter: drop the 9999 outlier row.
             .filter(|rec| {
                 if let Record::Entity(e) = rec
-                    && e.properties.iter().any(|(p, v)|
-                        p.get() == 11 && matches!(v, Value::I64(n) if *n > 1000))
+                    && e.properties
+                        .iter()
+                        .any(|(p, v)| p.get() == 11 && matches!(v, Value::I64(n) if *n > 1000))
                 {
                     return false;
                 }
@@ -1652,9 +1709,24 @@ mod tests {
         // Three events: two at 12:30-ish, one at 13:15.
         let base_us = 1_700_000_000_000_000i64; // an arbitrary epoch-us starting point
         let records = vec![
-            entity(EntityId::now_v7(), 1, vec![(10, Value::Timestamp(base_us + 30 * 60 * 1_000_000))]),
-            entity(EntityId::now_v7(), 1, vec![(10, Value::Timestamp(base_us + 45 * 60 * 1_000_000))]),
-            entity(EntityId::now_v7(), 1, vec![(10, Value::Timestamp(base_us + HOUR_US + 15 * 60 * 1_000_000))]),
+            entity(
+                EntityId::now_v7(),
+                1,
+                vec![(10, Value::Timestamp(base_us + 30 * 60 * 1_000_000))],
+            ),
+            entity(
+                EntityId::now_v7(),
+                1,
+                vec![(10, Value::Timestamp(base_us + 45 * 60 * 1_000_000))],
+            ),
+            entity(
+                EntityId::now_v7(),
+                1,
+                vec![(
+                    10,
+                    Value::Timestamp(base_us + HOUR_US + 15 * 60 * 1_000_000),
+                )],
+            ),
         ];
         let p = Pipeline::new()
             .select(Column {
@@ -1678,7 +1750,13 @@ mod tests {
         let counts: Vec<i64> = t
             .rows
             .iter()
-            .filter_map(|r| if let Value::I64(n) = &r[1] { Some(*n) } else { None })
+            .filter_map(|r| {
+                if let Value::I64(n) = &r[1] {
+                    Some(*n)
+                } else {
+                    None
+                }
+            })
             .collect();
         assert!(counts.contains(&2));
         assert!(counts.contains(&1));
@@ -1746,10 +1824,26 @@ mod tests {
         // Sort primary region asc, secondary revenue desc → expected:
         //   (a, 100), (a, 50), (b, 30), (b, 10)
         let records = vec![
-            entity(EntityId::now_v7(), 1, vec![(10, Value::String("b".into())), (11, Value::I64(30))]),
-            entity(EntityId::now_v7(), 1, vec![(10, Value::String("a".into())), (11, Value::I64(50))]),
-            entity(EntityId::now_v7(), 1, vec![(10, Value::String("b".into())), (11, Value::I64(10))]),
-            entity(EntityId::now_v7(), 1, vec![(10, Value::String("a".into())), (11, Value::I64(100))]),
+            entity(
+                EntityId::now_v7(),
+                1,
+                vec![(10, Value::String("b".into())), (11, Value::I64(30))],
+            ),
+            entity(
+                EntityId::now_v7(),
+                1,
+                vec![(10, Value::String("a".into())), (11, Value::I64(50))],
+            ),
+            entity(
+                EntityId::now_v7(),
+                1,
+                vec![(10, Value::String("b".into())), (11, Value::I64(10))],
+            ),
+            entity(
+                EntityId::now_v7(),
+                1,
+                vec![(10, Value::String("a".into())), (11, Value::I64(100))],
+            ),
         ];
         let p = Pipeline::new()
             .select(Column::entity_property("region", PropertyId::new(10)))
@@ -1797,7 +1891,13 @@ mod tests {
         let vals: Vec<i64> = t_legacy
             .rows
             .iter()
-            .filter_map(|r| if let Value::I64(n) = &r[0] { Some(*n) } else { None })
+            .filter_map(|r| {
+                if let Value::I64(n) = &r[0] {
+                    Some(*n)
+                } else {
+                    None
+                }
+            })
             .collect();
         assert_eq!(vals, vec![1, 2, 3]);
     }
@@ -1810,9 +1910,18 @@ mod tests {
         let p50 = compute_aggregate(Aggregate::P50, 0, &rows);
         let p95 = compute_aggregate(Aggregate::P95, 0, &rows);
         let p99 = compute_aggregate(Aggregate::P99, 0, &rows);
-        assert_eq!(p50, compute_aggregate(Aggregate::Percentile { p: 0.50 }, 0, &rows));
-        assert_eq!(p95, compute_aggregate(Aggregate::Percentile { p: 0.95 }, 0, &rows));
-        assert_eq!(p99, compute_aggregate(Aggregate::Percentile { p: 0.99 }, 0, &rows));
+        assert_eq!(
+            p50,
+            compute_aggregate(Aggregate::Percentile { p: 0.50 }, 0, &rows)
+        );
+        assert_eq!(
+            p95,
+            compute_aggregate(Aggregate::Percentile { p: 0.95 }, 0, &rows)
+        );
+        assert_eq!(
+            p99,
+            compute_aggregate(Aggregate::Percentile { p: 0.99 }, 0, &rows)
+        );
         // Sanity: p50 ≈ 50.5 (R-7 on 1..=100)
         assert!(matches!(p50, Value::F64(v) if (v - 50.5).abs() < 1e-9));
     }
@@ -1836,7 +1945,9 @@ mod tests {
     fn synthetic_records(n: usize) -> Vec<Record> {
         let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
         let mut next = || {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             state >> 33
         };
         let groups = ["red", "green", "blue", "amber"];
@@ -1878,12 +1989,36 @@ mod tests {
                     .select(col(G_PROP))
                     .select(col(N_PROP))
                     .group_by([0])
-                    .aggregate(AggSpec { header: "cnt".into(), column: 1, agg: Aggregate::Count })
-                    .aggregate(AggSpec { header: "sum".into(), column: 1, agg: Aggregate::Sum })
-                    .aggregate(AggSpec { header: "avg".into(), column: 1, agg: Aggregate::Avg })
-                    .aggregate(AggSpec { header: "min".into(), column: 1, agg: Aggregate::Min })
-                    .aggregate(AggSpec { header: "max".into(), column: 1, agg: Aggregate::Max })
-                    .aggregate(AggSpec { header: "p95".into(), column: 1, agg: Aggregate::P95 })
+                    .aggregate(AggSpec {
+                        header: "cnt".into(),
+                        column: 1,
+                        agg: Aggregate::Count,
+                    })
+                    .aggregate(AggSpec {
+                        header: "sum".into(),
+                        column: 1,
+                        agg: Aggregate::Sum,
+                    })
+                    .aggregate(AggSpec {
+                        header: "avg".into(),
+                        column: 1,
+                        agg: Aggregate::Avg,
+                    })
+                    .aggregate(AggSpec {
+                        header: "min".into(),
+                        column: 1,
+                        agg: Aggregate::Min,
+                    })
+                    .aggregate(AggSpec {
+                        header: "max".into(),
+                        column: 1,
+                        agg: Aggregate::Max,
+                    })
+                    .aggregate(AggSpec {
+                        header: "p95".into(),
+                        column: 1,
+                        agg: Aggregate::P95,
+                    })
             },
             &recs,
         );
@@ -1895,8 +2030,16 @@ mod tests {
                     .select(col(G_PROP))
                     .select(col(F_PROP))
                     .group_by([0])
-                    .aggregate(AggSpec { header: "fsum".into(), column: 1, agg: Aggregate::Sum })
-                    .aggregate(AggSpec { header: "favg".into(), column: 1, agg: Aggregate::Avg })
+                    .aggregate(AggSpec {
+                        header: "fsum".into(),
+                        column: 1,
+                        agg: Aggregate::Sum,
+                    })
+                    .aggregate(AggSpec {
+                        header: "favg".into(),
+                        column: 1,
+                        agg: Aggregate::Avg,
+                    })
             },
             &recs,
         );
@@ -1906,8 +2049,16 @@ mod tests {
             || {
                 Pipeline::new()
                     .select(col(N_PROP))
-                    .aggregate(AggSpec { header: "total".into(), column: 0, agg: Aggregate::Sum })
-                    .aggregate(AggSpec { header: "cnt".into(), column: 0, agg: Aggregate::Count })
+                    .aggregate(AggSpec {
+                        header: "total".into(),
+                        column: 0,
+                        agg: Aggregate::Sum,
+                    })
+                    .aggregate(AggSpec {
+                        header: "cnt".into(),
+                        column: 0,
+                        agg: Aggregate::Count,
+                    })
             },
             &recs,
         );
@@ -1919,7 +2070,11 @@ mod tests {
                     .select(col(G_PROP))
                     .select(col(N_PROP))
                     .group_by([0])
-                    .aggregate(AggSpec { header: "sum".into(), column: 1, agg: Aggregate::Sum })
+                    .aggregate(AggSpec {
+                        header: "sum".into(),
+                        column: 1,
+                        agg: Aggregate::Sum,
+                    })
                     .having(|r| !matches!(&r[1], Value::Null))
                     .sort([SortKey::desc(1)])
                     .limit(2)
@@ -1934,14 +2089,17 @@ mod tests {
                     .select(col(N_PROP))
                     .select(col(G_PROP))
                     .filter(|rec| match rec {
-                        Record::Entity(e) => e
-                            .properties
-                            .iter()
-                            .any(|(p, v)| p.get() == N_PROP && matches!(v, Value::I64(n) if *n >= 0)),
+                        Record::Entity(e) => e.properties.iter().any(|(p, v)| {
+                            p.get() == N_PROP && matches!(v, Value::I64(n) if *n >= 0)
+                        }),
                         _ => false,
                     })
                     .group_by([1])
-                    .aggregate(AggSpec { header: "sum".into(), column: 0, agg: Aggregate::Sum })
+                    .aggregate(AggSpec {
+                        header: "sum".into(),
+                        column: 0,
+                        agg: Aggregate::Sum,
+                    })
             },
             &recs,
         );
@@ -1962,7 +2120,11 @@ mod tests {
                     })
                     .select(col(N_PROP))
                     .group_by([0, 1])
-                    .aggregate(AggSpec { header: "cnt".into(), column: 2, agg: Aggregate::Count })
+                    .aggregate(AggSpec {
+                        header: "cnt".into(),
+                        column: 2,
+                        agg: Aggregate::Count,
+                    })
             },
             &recs,
         );
@@ -1971,7 +2133,12 @@ mod tests {
     #[test]
     fn columnar_projection_only_delegates_to_run() {
         let recs = synthetic_records(100);
-        let build = || Pipeline::new().select(col(G_PROP)).select(col(N_PROP)).limit(10);
+        let build = || {
+            Pipeline::new()
+                .select(col(G_PROP))
+                .select(col(N_PROP))
+                .limit(10)
+        };
         let row = build().run(recs.clone());
         let columnar = build().run_columnar(recs);
         assert_eq!(row.rows, columnar.rows);
@@ -1984,7 +2151,11 @@ mod tests {
                 .select(col(G_PROP))
                 .select(col(N_PROP))
                 .group_by([0])
-                .aggregate(AggSpec { header: "sum".into(), column: 1, agg: Aggregate::Sum })
+                .aggregate(AggSpec {
+                    header: "sum".into(),
+                    column: 1,
+                    agg: Aggregate::Sum,
+                })
         };
         let row = build().run(Vec::<Record>::new());
         let columnar = build().run_columnar(Vec::<Record>::new());

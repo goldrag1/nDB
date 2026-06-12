@@ -30,8 +30,8 @@ pub mod resolve;
 pub mod run;
 
 pub use ast::{
-    NameAsOf, NameBinding, NameCmpOp, NameExpr, NamePattern, NameQuery, NameRecursion,
-    NameReturn, NameTerm,
+    NameAsOf, NameBinding, NameCmpOp, NameExpr, NamePattern, NameQuery, NameRecursion, NameReturn,
+    NameTerm,
 };
 pub use error::{ParseError, Span};
 pub use lex::{Tok, TokKind, lex};

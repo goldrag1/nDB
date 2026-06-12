@@ -37,8 +37,8 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crate::engine::{
-    CompactionPlan, CompactionStats, Engine, EngineError, IsolationLevel, RetentionPolicy, WriteTxn,
-    merge_planned,
+    CompactionPlan, CompactionStats, Engine, EngineError, IsolationLevel, RetentionPolicy,
+    WriteTxn, merge_planned,
 };
 use crate::id::{EntityId, HyperedgeId, PropertyId, TxId, TypeId};
 use crate::index::Distance;
@@ -498,10 +498,7 @@ impl SharedEngine {
     /// monitoring helper.
     #[must_use]
     pub fn active_snapshot_count(&self) -> usize {
-        self.snapshots
-            .lock()
-            .expect("snapshot map poisoned")
-            .len()
+        self.snapshots.lock().expect("snapshot map poisoned").len()
     }
 }
 
@@ -810,7 +807,10 @@ mod tests {
         compactor.join().unwrap();
 
         // Backpressure actually engaged, and progress was still made.
-        assert!(stalls > 0, "expected some writes to be stalled by backpressure");
+        assert!(
+            stalls > 0,
+            "expected some writes to be stalled by backpressure"
+        );
         assert!(!committed.is_empty(), "writer should still make progress");
 
         // Every committed entity survives the storm of flushes + compactions.
@@ -851,7 +851,10 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         handle.stop();
-        assert!(compacted, "auto-compactor should have collapsed the SSTables");
+        assert!(
+            compacted,
+            "auto-compactor should have collapsed the SSTables"
+        );
         assert_eq!(eng.sstable_count(), 1);
 
         // Data survives the background compaction.

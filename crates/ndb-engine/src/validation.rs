@@ -166,7 +166,10 @@ impl ValidationEngine {
     /// entities at runtime should call `Engine::reload_constraints` to
     /// pick the changes up (or directly mutate via `require_property` /
     /// `expect_value_tag` for ephemeral changes).
-    pub fn load_from_metadata<'a>(&mut self, records: impl IntoIterator<Item = &'a Record>) -> usize {
+    pub fn load_from_metadata<'a>(
+        &mut self,
+        records: impl IntoIterator<Item = &'a Record>,
+    ) -> usize {
         let mut loaded = 0;
         for r in records {
             let Record::Entity(e) = r else { continue };

@@ -14,8 +14,8 @@
 
 use ndb_engine::record::{peek_record_kind, peek_record_size};
 use ndb_engine::{
-    EntityId, EntityRecord, HyperEdgeRecord, HyperedgeId, PropertyId, Record, RoleId, TombstoneRecord,
-    TxId, TypeId, Value,
+    EntityId, EntityRecord, HyperEdgeRecord, HyperedgeId, PropertyId, Record, RoleId,
+    TombstoneRecord, TxId, TypeId, Value,
 };
 
 /// Tiny deterministic PRNG (xorshift64*). No external deps, no OS entropy.

@@ -24,7 +24,7 @@
 #![allow(
     clippy::too_many_lines,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
+    clippy::cast_sign_loss
 )]
 
 use std::collections::HashMap;
@@ -43,40 +43,40 @@ use serde::Deserialize;
 // ─── Schema (kept in lockstep with docs/chemistry/index.html) ───────
 const T_COMPOUND: u32 = 1;
 const T_CATALYST: u32 = 2;
-const T_SOLVENT:  u32 = 3;
-const T_PATHWAY:  u32 = 4;   // entity; carries an ordered list of reaction names
+const T_SOLVENT: u32 = 3;
+const T_PATHWAY: u32 = 4; // entity; carries an ordered list of reaction names
 
 const T_REACTION: u32 = 100; // arity 2..12 — repeated role slots encode stoichiometry
 
 const ROLE_REACTANT: u32 = 10;
-const ROLE_PRODUCT:  u32 = 11;
+const ROLE_PRODUCT: u32 = 11;
 const ROLE_CATALYST: u32 = 12;
-const ROLE_SOLVENT:  u32 = 13;
+const ROLE_SOLVENT: u32 = 13;
 
-const PROP_NAME:               u32 = 30;
-const PROP_SMILES:             u32 = 31;
-const PROP_FORMULA:            u32 = 32;
-const PROP_INCHIKEY:           u32 = 33;
-const PROP_COMPOUND_KIND:      u32 = 34;
-const PROP_EC_NUMBER:          u32 = 35;
-const PROP_PATHWAY_SHAPE:      u32 = 36;
+const PROP_NAME: u32 = 30;
+const PROP_SMILES: u32 = 31;
+const PROP_FORMULA: u32 = 32;
+const PROP_INCHIKEY: u32 = 33;
+const PROP_COMPOUND_KIND: u32 = 34;
+const PROP_EC_NUMBER: u32 = 35;
+const PROP_PATHWAY_SHAPE: u32 = 36;
 const PROP_PATHWAY_REACTIONS_JSON: u32 = 37;
 
 // Reaction edge properties
-const PROP_REACTION_NAME:      u32 = 48;
-const PROP_TEMPERATURE_K:      u32 = 40;
-const PROP_PRESSURE_ATM:       u32 = 41;
-const PROP_PH:                 u32 = 42;
-const PROP_GIBBS_KJMOL:        u32 = 43;
-const PROP_EQUILIBRIUM_K:      u32 = 44;
-const PROP_YIELD_PCT:          u32 = 45;
-const PROP_CITATION:           u32 = 46;
-const PROP_FAMILY:             u32 = 47;
-const PROP_PATHWAY_NAME:       u32 = 49;
-const PROP_PATHWAY_ORDER:      u32 = 50;
-const PROP_NOTE:               u32 = 51;
+const PROP_REACTION_NAME: u32 = 48;
+const PROP_TEMPERATURE_K: u32 = 40;
+const PROP_PRESSURE_ATM: u32 = 41;
+const PROP_PH: u32 = 42;
+const PROP_GIBBS_KJMOL: u32 = 43;
+const PROP_EQUILIBRIUM_K: u32 = 44;
+const PROP_YIELD_PCT: u32 = 45;
+const PROP_CITATION: u32 = 46;
+const PROP_FAMILY: u32 = 47;
+const PROP_PATHWAY_NAME: u32 = 49;
+const PROP_PATHWAY_ORDER: u32 = 50;
+const PROP_NOTE: u32 = 51;
 
-const API_PORT:    u16 = 8747;
+const API_PORT: u16 = 8747;
 const STATIC_PORT: u16 = 9879;
 
 // Seed JSON baked at build time. ~43 KB.
@@ -88,60 +88,62 @@ const SEED_JSON: &str = include_str!("seed.json");
 struct SeedDoc {
     compounds: Vec<CompoundRow>,
     catalysts: Vec<CompoundRow>,
-    solvents:  Vec<CompoundRow>,
+    solvents: Vec<CompoundRow>,
     reactions: Vec<ReactionRow>,
-    pathways:  Vec<PathwayRow>,
+    pathways: Vec<PathwayRow>,
 }
 
 #[derive(Deserialize)]
 struct CompoundRow {
-    name:     String,
-    smiles:   Option<String>,
-    formula:  Option<String>,
+    name: String,
+    smiles: Option<String>,
+    formula: Option<String>,
     inchikey: Option<String>,
-    kind:     Option<String>,
-    note:     Option<String>,
-    ec:       Option<String>,
+    kind: Option<String>,
+    note: Option<String>,
+    ec: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct ReactionRow {
-    name:          String,
-    reactants:     Vec<(f64, String)>,
-    products:      Vec<(f64, String)>,
-    catalyst:      Option<String>,
-    solvent:       Option<String>,
-    conditions:    serde_json::Value,
+    name: String,
+    reactants: Vec<(f64, String)>,
+    products: Vec<(f64, String)>,
+    catalyst: Option<String>,
+    solvent: Option<String>,
+    conditions: serde_json::Value,
     #[serde(default)]
-    gibbs_kjmol:   Option<f64>,
+    gibbs_kjmol: Option<f64>,
     #[serde(default, rename = "equilibrium_K")]
     equilibrium_k: Option<f64>,
     #[serde(default)]
-    yield_pct:     Option<f64>,
+    yield_pct: Option<f64>,
     #[serde(default)]
-    citation:      Option<String>,
+    citation: Option<String>,
     #[serde(default)]
-    family:        Option<String>,
+    family: Option<String>,
     #[serde(default)]
-    pathway:       Option<String>,
+    pathway: Option<String>,
     #[serde(default)]
     pathway_order: Option<i64>,
 }
 
 #[derive(Deserialize)]
 struct PathwayRow {
-    name:      String,
-    #[allow(dead_code)]  // surfaced to seed.json for the SPA but not used by the seeder
-    n_steps:   i64,
+    name: String,
+    #[allow(dead_code)] // surfaced to seed.json for the SPA but not used by the seeder
+    n_steps: i64,
     reactions: Vec<String>,
-    shape:     String,
+    shape: String,
 }
 
 // ─── Main ──────────────────────────────────────────────────────────
 
 fn main() {
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().and_then(Path::parent).expect("workspace root");
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root");
     let db_dir_owned = workspace_root.join(".demo-data/chemistry-ndb");
     let db_dir = db_dir_owned.as_path();
     if !db_dir.exists() {
@@ -161,7 +163,8 @@ fn main() {
     } else {
         eprintln!(
             "reusing existing nDB at {} ({} compound entities present)",
-            db_dir.display(), existing,
+            db_dir.display(),
+            existing,
         );
     }
     drop(engine);
@@ -172,7 +175,8 @@ fn main() {
     // visitor's browser. If a visitor wants to mutate, they'll get
     // 403 — that's the point.
     let server = Arc::new(
-        Server::open(db_dir).expect("server open")
+        Server::open(db_dir)
+            .expect("server open")
             .with_cors_origin("*")
             .with_read_only(true),
     );
@@ -195,7 +199,9 @@ fn main() {
     });
 
     let static_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().and_then(Path::parent).expect("workspace root")
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root")
         .join("docs/chemistry");
     let static_addr = format!("127.0.0.1:{STATIC_PORT}");
     let static_listener = TcpListener::bind(&static_addr).expect("bind static");
@@ -210,12 +216,16 @@ fn main() {
             let Ok(stream) = stream else { continue };
             let root = root.clone();
             std::thread::spawn(move || {
-                if let Err(e) = serve_static(stream, &root) { eprintln!("static connection: {e}"); }
+                if let Err(e) = serve_static(stream, &root) {
+                    eprintln!("static connection: {e}");
+                }
             });
         }
     });
 
-    loop { std::thread::park(); }
+    loop {
+        std::thread::park();
+    }
 }
 
 // ─── Seed ──────────────────────────────────────────────────────────
@@ -225,7 +235,7 @@ fn seed(engine: &mut Engine) {
 
     let mut compound_ids: HashMap<String, EntityId> = HashMap::with_capacity(doc.compounds.len());
     let mut catalyst_ids: HashMap<String, EntityId> = HashMap::with_capacity(doc.catalysts.len());
-    let mut solvent_ids:  HashMap<String, EntityId> = HashMap::with_capacity(doc.solvents.len());
+    let mut solvent_ids: HashMap<String, EntityId> = HashMap::with_capacity(doc.solvents.len());
 
     for c in &doc.compounds {
         let eid = EntityId::now_v7();
@@ -255,7 +265,9 @@ fn seed(engine: &mut Engine) {
                 continue;
             };
             let n = (*stoich).max(1.0).round() as usize;
-            for _ in 0..n { roles.push((RoleId::new(ROLE_REACTANT), *eid)); }
+            for _ in 0..n {
+                roles.push((RoleId::new(ROLE_REACTANT), *eid));
+            }
         }
         for (stoich, name) in &rx.products {
             let Some(eid) = compound_ids.get(name) else {
@@ -263,7 +275,9 @@ fn seed(engine: &mut Engine) {
                 continue;
             };
             let n = (*stoich).max(1.0).round() as usize;
-            for _ in 0..n { roles.push((RoleId::new(ROLE_PRODUCT), *eid)); }
+            for _ in 0..n {
+                roles.push((RoleId::new(ROLE_PRODUCT), *eid));
+            }
         }
         if let Some(cat) = &rx.catalyst {
             if let Some(eid) = catalyst_ids.get(cat) {
@@ -278,7 +292,7 @@ fn seed(engine: &mut Engine) {
 
         let mut props: Vec<(u32, Value)> = vec![
             (PROP_REACTION_NAME, Value::String(rx.name.clone())),
-            (PROP_NAME,          Value::String(rx.name.clone())),
+            (PROP_NAME, Value::String(rx.name.clone())),
         ];
         // Pull selected conditions onto edge properties so the SPA can
         // mutate them without having to parse a JSON blob.
@@ -291,15 +305,31 @@ fn seed(engine: &mut Engine) {
         if let Some(ph) = rx.conditions.get("ph").and_then(|v| v.as_f64()) {
             props.push((PROP_PH, Value::F64(ph)));
         }
-        if let Some(v) = rx.gibbs_kjmol   { props.push((PROP_GIBBS_KJMOL,   Value::F64(v))); }
-        if let Some(v) = rx.equilibrium_k { props.push((PROP_EQUILIBRIUM_K, Value::F64(v))); }
-        if let Some(v) = rx.yield_pct     { props.push((PROP_YIELD_PCT,     Value::F64(v))); }
-        if let Some(v) = &rx.citation     { props.push((PROP_CITATION,      Value::String(v.clone()))); }
-        if let Some(v) = &rx.family       { props.push((PROP_FAMILY,        Value::String(v.clone()))); }
-        if let Some(v) = &rx.pathway      { props.push((PROP_PATHWAY_NAME,  Value::String(v.clone()))); }
-        if let Some(v) = rx.pathway_order { props.push((PROP_PATHWAY_ORDER, Value::I64(v))); }
+        if let Some(v) = rx.gibbs_kjmol {
+            props.push((PROP_GIBBS_KJMOL, Value::F64(v)));
+        }
+        if let Some(v) = rx.equilibrium_k {
+            props.push((PROP_EQUILIBRIUM_K, Value::F64(v)));
+        }
+        if let Some(v) = rx.yield_pct {
+            props.push((PROP_YIELD_PCT, Value::F64(v)));
+        }
+        if let Some(v) = &rx.citation {
+            props.push((PROP_CITATION, Value::String(v.clone())));
+        }
+        if let Some(v) = &rx.family {
+            props.push((PROP_FAMILY, Value::String(v.clone())));
+        }
+        if let Some(v) = &rx.pathway {
+            props.push((PROP_PATHWAY_NAME, Value::String(v.clone())));
+        }
+        if let Some(v) = rx.pathway_order {
+            props.push((PROP_PATHWAY_ORDER, Value::I64(v)));
+        }
 
-        if roles.len() > max_arity { max_arity = roles.len(); }
+        if roles.len() > max_arity {
+            max_arity = roles.len();
+        }
         commit_hyperedge(engine, T_REACTION, roles, props);
         reactions_committed += 1;
     }
@@ -312,10 +342,12 @@ fn seed(engine: &mut Engine) {
     for p in &doc.pathways {
         let eid = EntityId::now_v7();
         let props = vec![
-            (PROP_NAME,                       Value::String(p.name.clone())),
-            (PROP_PATHWAY_SHAPE,              Value::String(p.shape.clone())),
-            (PROP_PATHWAY_REACTIONS_JSON,
-                Value::String(serde_json::to_string(&p.reactions).unwrap_or_else(|_| "[]".into()))),
+            (PROP_NAME, Value::String(p.name.clone())),
+            (PROP_PATHWAY_SHAPE, Value::String(p.shape.clone())),
+            (
+                PROP_PATHWAY_REACTIONS_JSON,
+                Value::String(serde_json::to_string(&p.reactions).unwrap_or_else(|_| "[]".into())),
+            ),
         ];
         commit_entity(engine, eid, T_PATHWAY, props);
     }
@@ -333,12 +365,24 @@ fn seed(engine: &mut Engine) {
 
 fn compound_props(c: &CompoundRow) -> Vec<(u32, Value)> {
     let mut props = vec![(PROP_NAME, Value::String(c.name.clone()))];
-    if let Some(v) = &c.smiles   { props.push((PROP_SMILES,   Value::String(v.clone()))); }
-    if let Some(v) = &c.formula  { props.push((PROP_FORMULA,  Value::String(v.clone()))); }
-    if let Some(v) = &c.inchikey { props.push((PROP_INCHIKEY, Value::String(v.clone()))); }
-    if let Some(v) = &c.kind     { props.push((PROP_COMPOUND_KIND, Value::String(v.clone()))); }
-    if let Some(v) = &c.ec       { props.push((PROP_EC_NUMBER, Value::String(v.clone()))); }
-    if let Some(v) = &c.note     { props.push((PROP_NOTE,     Value::String(v.clone()))); }
+    if let Some(v) = &c.smiles {
+        props.push((PROP_SMILES, Value::String(v.clone())));
+    }
+    if let Some(v) = &c.formula {
+        props.push((PROP_FORMULA, Value::String(v.clone())));
+    }
+    if let Some(v) = &c.inchikey {
+        props.push((PROP_INCHIKEY, Value::String(v.clone())));
+    }
+    if let Some(v) = &c.kind {
+        props.push((PROP_COMPOUND_KIND, Value::String(v.clone())));
+    }
+    if let Some(v) = &c.ec {
+        props.push((PROP_EC_NUMBER, Value::String(v.clone())));
+    }
+    if let Some(v) = &c.note {
+        props.push((PROP_NOTE, Value::String(v.clone())));
+    }
     props
 }
 
@@ -349,15 +393,14 @@ fn count_entities_of_type(engine: &Engine, type_id: u32) -> usize {
     for r in engine.snapshot_iter_streaming(TxId::ACTIVE).flatten() {
         if let Record::Entity(e) = r
             && e.type_id == TypeId::new(type_id)
-        { n += 1; }
+        {
+            n += 1;
+        }
     }
     n
 }
 
-fn commit_entity(
-    engine: &mut Engine, eid: EntityId, type_id: u32,
-    properties: Vec<(u32, Value)>,
-) {
+fn commit_entity(engine: &mut Engine, eid: EntityId, type_id: u32, properties: Vec<(u32, Value)>) {
     let mut txn = engine.begin_write();
     let tx_id = txn.tx_id();
     txn.put_entity(EntityRecord {
@@ -365,13 +408,17 @@ fn commit_entity(
         type_id: TypeId::new(type_id),
         tx_id_assert: tx_id,
         tx_id_supersede: TxId::ACTIVE,
-        properties: properties.into_iter().map(|(p, v)| (PropertyId::new(p), v)).collect(),
+        properties: properties
+            .into_iter()
+            .map(|(p, v)| (PropertyId::new(p), v))
+            .collect(),
     });
     txn.commit().expect("commit entity");
 }
 
 fn commit_hyperedge(
-    engine: &mut Engine, type_id: u32,
+    engine: &mut Engine,
+    type_id: u32,
     roles: Vec<(RoleId, EntityId)>,
     properties: Vec<(u32, Value)>,
 ) {
@@ -384,7 +431,10 @@ fn commit_hyperedge(
         tx_id_supersede: TxId::ACTIVE,
         roles,
         hyperedge_roles: Vec::new(),
-        properties: properties.into_iter().map(|(p, v)| (PropertyId::new(p), v)).collect(),
+        properties: properties
+            .into_iter()
+            .map(|(p, v)| (PropertyId::new(p), v))
+            .collect(),
     });
     txn.commit().expect("commit hyperedge");
 }
@@ -399,10 +449,18 @@ fn serve_static(stream: TcpStream, root: &Path) -> std::io::Result<()> {
     loop {
         header.clear();
         let n = reader.read_line(&mut header)?;
-        if n <= 2 { break; }
+        if n <= 2 {
+            break;
+        }
     }
-    let path = request_line.split_whitespace().nth(1).unwrap_or("/")
-        .split('?').next().unwrap_or("/").to_string();
+    let path = request_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("/")
+        .split('?')
+        .next()
+        .unwrap_or("/")
+        .to_string();
     let mut writer = &stream;
     match resolve_path(root, &path) {
         Some(p) => {
@@ -413,33 +471,54 @@ fn serve_static(stream: TcpStream, root: &Path) -> std::io::Result<()> {
                 write_response(&mut writer, 404, "text/plain", b"not found")?;
             }
         }
-        None => { write_response(&mut writer, 404, "text/plain", b"not found")?; }
+        None => {
+            write_response(&mut writer, 404, "text/plain", b"not found")?;
+        }
     }
     Ok(())
 }
 
 fn resolve_path(root: &Path, req_path: &str) -> Option<PathBuf> {
-    if req_path.contains("..") { return None; }
+    if req_path.contains("..") {
+        return None;
+    }
     let trimmed = req_path.trim_start_matches('/');
-    let candidate = if trimmed.is_empty() { root.join("index.html") } else { root.join(trimmed) };
-    if candidate.is_file() { Some(candidate) } else { None }
+    let candidate = if trimmed.is_empty() {
+        root.join("index.html")
+    } else {
+        root.join(trimmed)
+    };
+    if candidate.is_file() {
+        Some(candidate)
+    } else {
+        None
+    }
 }
 
 fn content_type(p: &Path) -> &'static str {
     match p.extension().and_then(|e| e.to_str()) {
         Some("html") => "text/html; charset=utf-8",
-        Some("js")   => "application/javascript; charset=utf-8",
-        Some("css")  => "text/css; charset=utf-8",
+        Some("js") => "application/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
         Some("json") => "application/json; charset=utf-8",
-        Some("svg")  => "image/svg+xml",
-        Some("png")  => "image/png",
-        Some("ico")  => "image/x-icon",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("ico") => "image/x-icon",
         _ => "application/octet-stream",
     }
 }
 
-fn write_response<W: Write>(w: &mut W, status: u16, ctype: &str, body: &[u8]) -> std::io::Result<()> {
-    let reason = match status { 200 => "OK", 404 => "Not Found", _ => "Status" };
+fn write_response<W: Write>(
+    w: &mut W,
+    status: u16,
+    ctype: &str,
+    body: &[u8],
+) -> std::io::Result<()> {
+    let reason = match status {
+        200 => "OK",
+        404 => "Not Found",
+        _ => "Status",
+    };
     write!(w, "HTTP/1.1 {status} {reason}\r\n")?;
     write!(w, "Content-Type: {ctype}\r\n")?;
     write!(w, "Content-Length: {}\r\n", body.len())?;

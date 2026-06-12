@@ -129,7 +129,10 @@ impl VectorIndexBuilder {
     /// for a property locks its dimension; later mismatched vectors are
     /// dropped (mirrors the in-RAM index).
     pub fn observe(&mut self, property: PropertyId, entity: EntityId, vector: &[f32]) {
-        let slot = self.props.entry(property.get()).or_insert((vector.len(), Vec::new()));
+        let slot = self
+            .props
+            .entry(property.get())
+            .or_insert((vector.len(), Vec::new()));
         if slot.0 != vector.len() {
             return; // dimension mismatch — drop
         }
@@ -149,13 +152,21 @@ impl VectorIndexBuilder {
         out.extend_from_slice(VECTOR_INDEX_MAGIC);
         out.push(VECTOR_INDEX_FORMAT_VERSION);
         out.extend_from_slice(&[0u8; 3]);
-        out.extend_from_slice(&u32::try_from(self.props.len()).unwrap_or(u32::MAX).to_le_bytes());
+        out.extend_from_slice(
+            &u32::try_from(self.props.len())
+                .unwrap_or(u32::MAX)
+                .to_le_bytes(),
+        );
         out.extend_from_slice(&[0u8; 4]); // reserved2
         debug_assert_eq!(out.len(), HEADER_LEN);
         for (prop_id, (dim, entries)) in &self.props {
             out.extend_from_slice(&prop_id.to_le_bytes());
             out.extend_from_slice(&u32::try_from(*dim).unwrap_or(u32::MAX).to_le_bytes());
-            out.extend_from_slice(&u32::try_from(entries.len()).unwrap_or(u32::MAX).to_le_bytes());
+            out.extend_from_slice(
+                &u32::try_from(entries.len())
+                    .unwrap_or(u32::MAX)
+                    .to_le_bytes(),
+            );
             for (eid, v) in entries {
                 out.extend_from_slice(eid.as_bytes());
                 for f in v {
@@ -213,7 +224,11 @@ pub fn write_streaming_single(
     iter: impl Iterator<Item = (EntityId, Vec<f32>)>,
 ) -> Result<(), VectorIndexError> {
     let tmp = tmp_sibling(path);
-    let file = OpenOptions::new().write(true).create(true).truncate(true).open(&tmp)?;
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&tmp)?;
     let mut w = BufWriter::new(file);
 
     // Header (16 bytes) — one property section.
@@ -243,7 +258,10 @@ pub fn write_streaming_single(
         }
         written += 1;
     }
-    debug_assert_eq!(written, count, "streamed entry count diverged from the pre-pass");
+    debug_assert_eq!(
+        written, count,
+        "streamed entry count diverged from the pre-pass"
+    );
 
     // CRC over the fixed header only (matches the reader + VectorIndexBuilder).
     let mut h = Hasher::new();
@@ -379,7 +397,14 @@ impl VectorIndexFile {
             if pos + section_len > trailer_off {
                 return Err(VectorIndexError::Malformed("entries overrun file"));
             }
-            dir.insert(prop_id, Section { dim, count, data_off: pos });
+            dir.insert(
+                prop_id,
+                Section {
+                    dim,
+                    count,
+                    data_off: pos,
+                },
+            );
             pos += section_len;
         }
 
@@ -516,7 +541,12 @@ mod tests {
                 (c, vec![0.9, 0.1, 0.0]),
             ],
         );
-        let got = f.search(PropertyId::new(10), &[1.0, 0.0, 0.0], 2, Distance::L2Squared);
+        let got = f.search(
+            PropertyId::new(10),
+            &[1.0, 0.0, 0.0],
+            2,
+            Distance::L2Squared,
+        );
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].0, a); // exact match, distance 0
         assert_eq!(got[1].0, c); // closest of the rest
@@ -547,7 +577,10 @@ mod tests {
     #[test]
     fn dimension_mismatch_returns_empty() {
         let f = build(10, 3, &[(eid(), vec![1.0, 2.0, 3.0])]);
-        assert!(f.search(PropertyId::new(10), &[1.0, 2.0], 5, Distance::L2Squared).is_empty());
+        assert!(
+            f.search(PropertyId::new(10), &[1.0, 2.0], 5, Distance::L2Squared)
+                .is_empty()
+        );
         assert_eq!(f.dimension(PropertyId::new(10)), Some(3));
     }
 
@@ -579,7 +612,10 @@ mod tests {
     #[test]
     fn empty_and_missing() {
         let f = VectorIndexFile::from_bytes(VectorIndexBuilder::new().encode()).unwrap();
-        assert!(f.search(PropertyId::new(1), &[1.0], 3, Distance::L2Squared).is_empty());
+        assert!(
+            f.search(PropertyId::new(1), &[1.0], 3, Distance::L2Squared)
+                .is_empty()
+        );
         assert_eq!(f.len(PropertyId::new(1)), 0);
     }
 
@@ -633,13 +669,19 @@ mod tests {
         let p = dir.join("000001.vidx");
         bld.finish(&p).unwrap();
         let f = VectorIndexFile::open(&p).unwrap().unwrap();
-        assert_eq!(f.search(PropertyId::new(7), &[3.0, 4.0], 1, Distance::L2Squared), vec![(a, 0.0)]);
+        assert_eq!(
+            f.search(PropertyId::new(7), &[3.0, 4.0], 1, Distance::L2Squared),
+            vec![(a, 0.0)]
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn open_missing_returns_none() {
-        let p = std::env::temp_dir().join(format!("ndb-vidx-missing-{}.vidx", uuid::Uuid::now_v7().simple()));
+        let p = std::env::temp_dir().join(format!(
+            "ndb-vidx-missing-{}.vidx",
+            uuid::Uuid::now_v7().simple()
+        ));
         assert!(VectorIndexFile::open(&p).unwrap().is_none());
     }
 

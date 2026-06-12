@@ -25,8 +25,12 @@
 //! Run:
 //!   cargo run --release -p langgraph --bin langgraph-server -- \
 //!       --db .demo-data/langgraph-ndb --bind 127.0.0.1:8791
-#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation,
-         clippy::cast_sign_loss, clippy::too_many_lines)]
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::too_many_lines
+)]
 
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
@@ -103,12 +107,12 @@ struct TopEntry {
 /// "constant-RAM" form of the view server.
 struct Index {
     engine: Engine,
-    clusters: Vec<(String, usize)>,        // (coarse field, count), ring order
+    clusters: Vec<(String, usize)>, // (coarse field, count), ring order
     cluster_pos: HashMap<String, (f64, f64)>,
-    top_fields: HashSet<String>,           // named (non-Other) fields → coarsening
-    top: Vec<TopEntry>,                    // pre-ranked top-cited cache (desc)
-    top_links: Vec<(EntityId, EntityId)>,  // precomputed CITES among top papers
-    cloud_path: String,                    // path to cloud.bin (all-papers point cloud)
+    top_fields: HashSet<String>, // named (non-Other) fields → coarsening
+    top: Vec<TopEntry>,          // pre-ranked top-cited cache (desc)
+    top_links: Vec<(EntityId, EntityId)>, // precomputed CITES among top papers
+    cloud_path: String,          // path to cloud.bin (all-papers point cloud)
     max_cit: f64,
     mid_year: f64,
     total_papers: usize,
@@ -122,12 +126,24 @@ struct Index {
 }
 
 fn str_prop(props: &[(PropertyId, Value)], pid: u32) -> String {
-    props.iter().find(|(p, _)| p.get() == pid).and_then(|(_, v)| match v {
-        Value::String(s) => Some(s.clone()), _ => None }).unwrap_or_default()
+    props
+        .iter()
+        .find(|(p, _)| p.get() == pid)
+        .and_then(|(_, v)| match v {
+            Value::String(s) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 fn i64_prop(props: &[(PropertyId, Value)], pid: u32) -> i64 {
-    props.iter().find(|(p, _)| p.get() == pid).and_then(|(_, v)| match v {
-        Value::I64(n) => Some(*n), _ => None }).unwrap_or(0)
+    props
+        .iter()
+        .find(|(p, _)| p.get() == pid)
+        .and_then(|(_, v)| match v {
+            Value::I64(n) => Some(*n),
+            _ => None,
+        })
+        .unwrap_or(0)
 }
 
 /// Matches the Rust ingestor + the JS explorer's embed() byte-for-byte.
@@ -138,18 +154,28 @@ fn embed(text: &str) -> Vec<f32> {
         v[(*c as u32).wrapping_mul(2_654_435_761) as usize % EMBED_DIM] += 1.0;
     }
     for w in chars.windows(2) {
-        let h = (w[0] as u32).wrapping_mul(31).wrapping_add(w[1] as u32)
-            .wrapping_mul(2_654_435_761) as usize % EMBED_DIM;
+        let h = (w[0] as u32)
+            .wrapping_mul(31)
+            .wrapping_add(w[1] as u32)
+            .wrapping_mul(2_654_435_761) as usize
+            % EMBED_DIM;
         v[h] += 1.0;
     }
     let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > 0.0 { for x in &mut v { *x /= norm; } }
+    if norm > 0.0 {
+        for x in &mut v {
+            *x /= norm;
+        }
+    }
     v
 }
 
 fn hash_str(s: &str) -> u64 {
     let mut h = 1469598103934665603u64;
-    for b in s.bytes() { h ^= b as u64; h = h.wrapping_mul(1099511628211); }
+    for b in s.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(1099511628211);
+    }
     h
 }
 
@@ -168,11 +194,18 @@ fn load_cluster_meta(engine: &Engine, db: &str) -> ClusterMeta {
     if let Ok(bytes) = std::fs::read(format!("{db}/clusters.json"))
         && let Ok(j) = serde_json::from_slice::<serde_json::Value>(&bytes)
     {
-        let clusters = j["clusters"].as_array().map(|a| a.iter().filter_map(|e| {
-            let f = e.get(0)?.as_str()?.to_string();
-            let c = e.get(1)?.as_u64()? as usize;
-            Some((f, c))
-        }).collect()).unwrap_or_default();
+        let clusters = j["clusters"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|e| {
+                        let f = e.get(0)?.as_str()?.to_string();
+                        let c = e.get(1)?.as_u64()? as usize;
+                        Some((f, c))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         return ClusterMeta {
             clusters,
             max_cit: j["max_cit"].as_f64().unwrap_or(1.0).max(1.0),
@@ -186,22 +219,50 @@ fn load_cluster_meta(engine: &Engine, db: &str) -> ClusterMeta {
     let mut fcount: HashMap<String, usize> = HashMap::new();
     let (mut max_cit, mut min_year, mut max_year, mut total) = (1i64, i64::MAX, i64::MIN, 0usize);
     for item in engine.snapshot_iter_streaming(TxId::ACTIVE) {
-        let Ok(Record::Entity(e)) = item else { continue };
-        if e.type_id != TypeId::new(TYPE_PAPER) { continue; }
+        let Ok(Record::Entity(e)) = item else {
+            continue;
+        };
+        if e.type_id != TypeId::new(TYPE_PAPER) {
+            continue;
+        }
         total += 1;
-        *fcount.entry(str_prop(&e.properties, PROP_FIELD)).or_default() += 1;
+        *fcount
+            .entry(str_prop(&e.properties, PROP_FIELD))
+            .or_default() += 1;
         let c = i64_prop(&e.properties, PROP_CITATIONS);
-        if c > max_cit { max_cit = c; }
+        if c > max_cit {
+            max_cit = c;
+        }
         let y = i64_prop(&e.properties, PROP_YEAR);
-        if y > 0 { min_year = min_year.min(y); max_year = max_year.max(y); }
+        if y > 0 {
+            min_year = min_year.min(y);
+            max_year = max_year.max(y);
+        }
     }
     let mut fc: Vec<(String, usize)> = fcount.into_iter().collect();
     fc.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     let top: HashSet<String> = fc.iter().take(18).map(|(f, _)| f.clone()).collect();
     let mut coarse: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
-    for (f, c) in &fc { *coarse.entry(if top.contains(f) { f.clone() } else { "Other".into() }).or_default() += c; }
-    if min_year == i64::MAX { min_year = 2020; max_year = 2020; }
-    ClusterMeta { clusters: coarse.into_iter().collect(), max_cit: max_cit as f64, min_year, max_year, total }
+    for (f, c) in &fc {
+        *coarse
+            .entry(if top.contains(f) {
+                f.clone()
+            } else {
+                "Other".into()
+            })
+            .or_default() += c;
+    }
+    if min_year == i64::MAX {
+        min_year = 2020;
+        max_year = 2020;
+    }
+    ClusterMeta {
+        clusters: coarse.into_iter().collect(),
+        max_cit: max_cit as f64,
+        min_year,
+        max_year,
+        total,
+    }
 }
 
 /// Pre-rank the top-`CACHE_TOP_N` papers by citations ONCE and cache to
@@ -210,7 +271,13 @@ fn load_cluster_meta(engine: &Engine, db: &str) -> ClusterMeta {
 /// single time, then every `/view/top` + `/view/cluster/*` request is an
 /// O(cache) slice. `top_fields` coarsens each field to match `/view/clusters`.
 fn load_or_build_top(engine: &Engine, db: &str, top_fields: &HashSet<String>) -> Vec<TopEntry> {
-    let coarse = |f: &str| if top_fields.contains(f) { f.to_string() } else { "Other".to_string() };
+    let coarse = |f: &str| {
+        if top_fields.contains(f) {
+            f.to_string()
+        } else {
+            "Other".to_string()
+        }
+    };
 
     // Fast path: the sidecar written by a previous run (or after --compact,
     // which deletes a stale one). Instant restart at any graph size.
@@ -218,18 +285,24 @@ fn load_or_build_top(engine: &Engine, db: &str, top_fields: &HashSet<String>) ->
         && let Ok(j) = serde_json::from_slice::<serde_json::Value>(&bytes)
         && let Some(arr) = j["top"].as_array()
     {
-        let top: Vec<TopEntry> = arr.iter().filter_map(|e| {
-            let eid = EntityId::from_uuid(e["u"].as_str()?.parse::<uuid::Uuid>().ok()?);
-            Some(TopEntry {
-                eid,
-                label: e["l"].as_str().unwrap_or("").to_string(),
-                field: e["f"].as_str().unwrap_or("Other").to_string(),
-                year: e["y"].as_i64().unwrap_or(0),
-                citations: e["c"].as_i64().unwrap_or(0),
+        let top: Vec<TopEntry> = arr
+            .iter()
+            .filter_map(|e| {
+                let eid = EntityId::from_uuid(e["u"].as_str()?.parse::<uuid::Uuid>().ok()?);
+                Some(TopEntry {
+                    eid,
+                    label: e["l"].as_str().unwrap_or("").to_string(),
+                    field: e["f"].as_str().unwrap_or("Other").to_string(),
+                    year: e["y"].as_i64().unwrap_or(0),
+                    citations: e["c"].as_i64().unwrap_or(0),
+                })
             })
-        }).collect();
+            .collect();
         if !top.is_empty() {
-            eprintln!("top cache: loaded {} pre-ranked papers from top.json", top.len());
+            eprintln!(
+                "top cache: loaded {} pre-ranked papers from top.json",
+                top.len()
+            );
             return top;
         }
     }
@@ -240,21 +313,28 @@ fn load_or_build_top(engine: &Engine, db: &str, top_fields: &HashSet<String>) ->
     // (k candidates each, each then verified with a random read): >16 min and
     // never finished at 204 sidecars (6.17M-paper real DB). The stream yields
     // current entities, so the heap is authoritative without verification.
-    eprintln!("top.json missing — pre-ranking top {CACHE_TOP_N} cited via streaming scan (one-time)…");
+    eprintln!(
+        "top.json missing — pre-ranking top {CACHE_TOP_N} cited via streaming scan (one-time)…"
+    );
     let t = std::time::Instant::now();
     let paper_t = TypeId::new(TYPE_PAPER);
     // Reverse → smallest of the current top-K sits on top, ready to evict.
     let mut heap: std::collections::BinaryHeap<std::cmp::Reverse<(i64, uuid::Uuid)>> =
         std::collections::BinaryHeap::with_capacity(CACHE_TOP_N + 1);
     for item in engine.snapshot_iter_streaming(TxId::ACTIVE) {
-        let Ok(Record::Entity(en)) = item else { continue };
+        let Ok(Record::Entity(en)) = item else {
+            continue;
+        };
         if en.type_id != paper_t {
             continue;
         }
         let cit = i64_prop(&en.properties, PROP_CITATIONS);
         if heap.len() < CACHE_TOP_N {
             heap.push(std::cmp::Reverse((cit, en.entity_id.into_uuid())));
-        } else if heap.peek().is_some_and(|std::cmp::Reverse((m, _))| cit > *m) {
+        } else if heap
+            .peek()
+            .is_some_and(|std::cmp::Reverse((m, _))| cit > *m)
+        {
             heap.pop();
             heap.push(std::cmp::Reverse((cit, en.entity_id.into_uuid())));
         }
@@ -275,7 +355,11 @@ fn load_or_build_top(engine: &Engine, db: &str, top_fields: &HashSet<String>) ->
         }
     }
     // Heap order isn't sorted — sort citations desc for the served slice.
-    top.sort_by(|a, b| b.citations.cmp(&a.citations).then(a.eid.into_uuid().cmp(&b.eid.into_uuid())));
+    top.sort_by(|a, b| {
+        b.citations
+            .cmp(&a.citations)
+            .then(a.eid.into_uuid().cmp(&b.eid.into_uuid()))
+    });
 
     // Persist atomically (temp + rename) so a kill mid-write never leaves a
     // half-file that load reads as authoritative.
@@ -285,11 +369,16 @@ fn load_or_build_top(engine: &Engine, db: &str, top_fields: &HashSet<String>) ->
     let payload = serde_json::json!({"version": 1, "n": top.len(), "top": arr});
     let tmp = format!("{db}/top.json.tmp");
     if std::fs::write(&tmp, serde_json::to_vec(&payload).unwrap_or_default())
-        .and_then(|()| std::fs::rename(&tmp, format!("{db}/top.json"))).is_err()
+        .and_then(|()| std::fs::rename(&tmp, format!("{db}/top.json")))
+        .is_err()
     {
         eprintln!("top cache: warning — could not persist top.json (serving from RAM this run)");
     }
-    eprintln!("top cache: pre-ranked {} papers in {:.1}s → top.json", top.len(), t.elapsed().as_secs_f64());
+    eprintln!(
+        "top cache: pre-ranked {} papers in {:.1}s → top.json",
+        top.len(),
+        t.elapsed().as_secs_f64()
+    );
     top
 }
 
@@ -308,13 +397,19 @@ fn load_or_build_top_links(
         && let Ok(j) = serde_json::from_slice::<serde_json::Value>(&bytes)
         && let Some(arr) = j["links"].as_array()
     {
-        let links: Vec<(EntityId, EntityId)> = arr.iter().filter_map(|e| {
-            let s = EntityId::from_uuid(e.get(0)?.as_str()?.parse::<uuid::Uuid>().ok()?);
-            let d = EntityId::from_uuid(e.get(1)?.as_str()?.parse::<uuid::Uuid>().ok()?);
-            Some((s, d))
-        }).collect();
+        let links: Vec<(EntityId, EntityId)> = arr
+            .iter()
+            .filter_map(|e| {
+                let s = EntityId::from_uuid(e.get(0)?.as_str()?.parse::<uuid::Uuid>().ok()?);
+                let d = EntityId::from_uuid(e.get(1)?.as_str()?.parse::<uuid::Uuid>().ok()?);
+                Some((s, d))
+            })
+            .collect();
         if !links.is_empty() {
-            eprintln!("top-links cache: loaded {} links from top-links.json", links.len());
+            eprintln!(
+                "top-links cache: loaded {} links from top-links.json",
+                links.len()
+            );
             return links;
         }
     }
@@ -323,7 +418,9 @@ fn load_or_build_top_links(
     let cites_t = TypeId::new(TYPE_CITES);
     let mut links: Vec<(EntityId, EntityId)> = Vec::new();
     for item in engine.snapshot_iter_streaming(TxId::ACTIVE) {
-        let Ok(Record::HyperEdge(h)) = item else { continue };
+        let Ok(Record::HyperEdge(h)) = item else {
+            continue;
+        };
         if h.type_id != cites_t {
             continue;
         }
@@ -340,17 +437,23 @@ fn load_or_build_top_links(
             }
         }
     }
-    let arr: Vec<serde_json::Value> = links.iter().map(|(s, d)| {
-        serde_json::json!([s.into_uuid().to_string(), d.into_uuid().to_string()])
-    }).collect();
+    let arr: Vec<serde_json::Value> = links
+        .iter()
+        .map(|(s, d)| serde_json::json!([s.into_uuid().to_string(), d.into_uuid().to_string()]))
+        .collect();
     let payload = serde_json::json!({"version": 1, "n": links.len(), "links": arr});
     let tmp = format!("{db}/top-links.json.tmp");
     if std::fs::write(&tmp, serde_json::to_vec(&payload).unwrap_or_default())
-        .and_then(|()| std::fs::rename(&tmp, &path)).is_err()
+        .and_then(|()| std::fs::rename(&tmp, &path))
+        .is_err()
     {
         eprintln!("top-links cache: warning — could not persist top-links.json");
     }
-    eprintln!("top-links cache: {} links in {:.1}s → top-links.json", links.len(), t0.elapsed().as_secs_f64());
+    eprintln!(
+        "top-links cache: {} links in {:.1}s → top-links.json",
+        links.len(),
+        t0.elapsed().as_secs_f64()
+    );
     links
 }
 
@@ -376,17 +479,26 @@ fn build_cloud_file(
 ) {
     let path = format!("{db}/cloud.bin");
     if std::fs::metadata(&path).is_ok_and(|m| m.len() > 16) {
-        eprintln!("cloud: cloud.bin present ({} MB)", std::fs::metadata(&path).map(|m| m.len() >> 20).unwrap_or(0));
+        eprintln!(
+            "cloud: cloud.bin present ({} MB)",
+            std::fs::metadata(&path).map(|m| m.len() >> 20).unwrap_or(0)
+        );
         return;
     }
     eprintln!("cloud: building cloud.bin (all papers, one-time)…");
     let t0 = std::time::Instant::now();
-    let field_idx: HashMap<&str, u16> = clusters.iter().enumerate()
-        .map(|(i, (f, _))| (f.as_str(), i as u16)).collect();
+    let field_idx: HashMap<&str, u16> = clusters
+        .iter()
+        .enumerate()
+        .map(|(i, (f, _))| (f.as_str(), i as u16))
+        .collect();
     let other_idx = *field_idx.get("Other").unwrap_or(&0);
     let ln_max = (max_cit + 1.0).ln().max(1e-9);
     let tmp = format!("{path}.tmp");
-    let Ok(f) = std::fs::File::create(&tmp) else { eprintln!("cloud: cannot create {tmp}"); return };
+    let Ok(f) = std::fs::File::create(&tmp) else {
+        eprintln!("cloud: cannot create {tmp}");
+        return;
+    };
     let mut w = std::io::BufWriter::new(f);
     let mut buf = [0u8; 16];
     let mut count: u32 = 0;
@@ -398,10 +510,18 @@ fn build_cloud_file(
     let _ = w.write_all(&0u32.to_le_bytes());
     let _ = w.write_all(&0u32.to_le_bytes());
     for item in engine.snapshot_iter_streaming(TxId::ACTIVE) {
-        let Ok(Record::Entity(e)) = item else { continue };
-        if e.type_id != TypeId::new(TYPE_PAPER) { continue; }
+        let Ok(Record::Entity(e)) = item else {
+            continue;
+        };
+        if e.type_id != TypeId::new(TYPE_PAPER) {
+            continue;
+        }
         let field_raw = str_prop(&e.properties, PROP_FIELD);
-        let field = if top_fields.contains(&field_raw) { field_raw.as_str() } else { "Other" };
+        let field = if top_fields.contains(&field_raw) {
+            field_raw.as_str()
+        } else {
+            "Other"
+        };
         let (ax, ay) = *cluster_pos.get(field).unwrap_or(&(0.0, 0.0));
         let cit = i64_prop(&e.properties, PROP_CITATIONS);
         let year = i64_prop(&e.properties, PROP_YEAR);
@@ -419,7 +539,10 @@ fn build_cloud_file(
         buf[8..12].copy_from_slice(&z.to_le_bytes());
         buf[12..14].copy_from_slice(&fi.to_le_bytes());
         buf[14..16].copy_from_slice(&sq.to_le_bytes());
-        if w.write_all(&buf).is_err() { eprintln!("cloud: write error"); return; }
+        if w.write_all(&buf).is_err() {
+            eprintln!("cloud: write error");
+            return;
+        }
         count += 1;
     }
     let _ = w.flush();
@@ -431,7 +554,12 @@ fn build_cloud_file(
         let _ = f.write_all(&count.to_le_bytes());
     }
     let _ = std::fs::rename(&tmp, &path);
-    eprintln!("cloud: {} points → cloud.bin ({} MB, {:.1}s)", count, (count as u64 * 16) >> 20, t0.elapsed().as_secs_f64());
+    eprintln!(
+        "cloud: {} points → cloud.bin ({} MB, {:.1}s)",
+        count,
+        (count as u64 * 16) >> 20,
+        t0.elapsed().as_secs_f64()
+    );
 }
 
 impl Index {
@@ -443,10 +571,18 @@ impl Index {
             let ang = std::f64::consts::TAU * (i as f64) / (k as f64);
             cluster_pos.insert(field.clone(), (RING * ang.cos(), RING * ang.sin()));
         }
-        let top_fields: HashSet<String> =
-            m.clusters.iter().map(|(f, _)| f.clone()).filter(|f| f != "Other").collect();
+        let top_fields: HashSet<String> = m
+            .clusters
+            .iter()
+            .map(|(f, _)| f.clone())
+            .filter(|f| f != "Other")
+            .collect();
         let mid_year = (m.min_year + m.max_year) as f64 / 2.0;
-        eprintln!("served lean: {} papers, {} clusters (no per-paper RAM)", m.total, m.clusters.len());
+        eprintln!(
+            "served lean: {} papers, {} clusters (no per-paper RAM)",
+            m.total,
+            m.clusters.len()
+        );
 
         // Pre-ranked top-cited cache: makes /view/top (the default first
         // tile) and /view/cluster/* O(cache) slices instead of a live
@@ -458,7 +594,15 @@ impl Index {
         let top_set: HashSet<EntityId> = top.iter().map(|t| t.eid).collect();
         let top_links = load_or_build_top_links(&engine, db, &top_set);
         // All-papers GPU point-cloud backdrop (one-time cloud.bin).
-        build_cloud_file(&engine, db, &m.clusters, &cluster_pos, &top_fields, m.max_cit.max(1.0), mid_year);
+        build_cloud_file(
+            &engine,
+            db,
+            &m.clusters,
+            &cluster_pos,
+            &top_fields,
+            m.max_cit.max(1.0),
+            mid_year,
+        );
         let cloud_path = format!("{db}/cloud.bin");
 
         // Resolve the kNN backend. Three modes:
@@ -481,10 +625,14 @@ impl Index {
                     true
                 }
                 _ => {
-                    eprintln!("kNN = snapshot: building global current-vector .vsnap (one-time full scan)…");
+                    eprintln!(
+                        "kNN = snapshot: building global current-vector .vsnap (one-time full scan)…"
+                    );
                     match engine.build_vector_snapshot(pid) {
                         Ok(n) => {
-                            eprintln!("kNN = snapshot: {n} vectors → .vsnap (mmap, bounded, no verify)");
+                            eprintln!(
+                                "kNN = snapshot: {n} vectors → .vsnap (mmap, bounded, no verify)"
+                            );
                             n > 0
                         }
                         Err(e) => {
@@ -500,7 +648,8 @@ impl Index {
         } else if knn_pref == "approx" {
             eprintln!(
                 "kNN = approx (HNSW): loading {} embeddings into RAM (~{} MB est)…",
-                m.total, est_vec_ram / 1_048_576
+                m.total,
+                est_vec_ram / 1_048_576
             );
             let mut h = HnswVectorIndex::new();
             h.register_property(PropertyId::new(PROP_EMBED));
@@ -510,7 +659,12 @@ impl Index {
                 }
             }
             // Trigger the graph build once so the first real query isn't slow.
-            let _ = h.search(PropertyId::new(PROP_EMBED), &embed("warmup"), 1, Distance::Cosine);
+            let _ = h.search(
+                PropertyId::new(PROP_EMBED),
+                &embed("warmup"),
+                1,
+                Distance::Cosine,
+            );
             eprintln!("kNN = approx (HNSW): graph ready");
             knn_hnsw = Some(Mutex::new(h));
             knn_mode = "approx-hnsw";
@@ -535,7 +689,11 @@ impl Index {
     }
 
     fn coarse(&self, field: &str) -> String {
-        if self.top_fields.contains(field) { field.to_string() } else { "Other".to_string() }
+        if self.top_fields.contains(field) {
+            field.to_string()
+        } else {
+            "Other".to_string()
+        }
     }
 
     /// Read one paper's display fields from nDB (one bounded snapshot_read).
@@ -587,7 +745,10 @@ impl Index {
     /// regardless of degree.
     fn cites_out(&self, eid: EntityId) -> Vec<EntityId> {
         let mut out = Vec::new();
-        for hid in self.engine.hyperedges_for_entity_capped(eid, MAX_INCIDENT_SCAN) {
+        for hid in self
+            .engine
+            .hyperedges_for_entity_capped(eid, MAX_INCIDENT_SCAN)
+        {
             if let Ok(ndb_engine::Resolved::Live(Record::HyperEdge(h))) =
                 self.engine.snapshot_read(&hid.into_uuid(), TxId::ACTIVE)
                 && h.type_id == TypeId::new(TYPE_CITES)
@@ -623,7 +784,9 @@ impl Index {
                     if set.contains(&cited)
                         && let Some(dst) = by_uuid.get(&cited)
                     {
-                        links.push(serde_json::json!({"source": src, "target": dst, "kind": "cites"}));
+                        links.push(
+                            serde_json::json!({"source": src, "target": dst, "kind": "cites"}),
+                        );
                     }
                 }
             }
@@ -682,7 +845,9 @@ impl Index {
     fn top_view(&self, limit: usize, as_of: Option<i64>) -> serde_json::Value {
         // O(cache) slice of the pre-ranked top-cited list (already desc) — nodes
         // straight from cache (no per-node reads), links bounded by tile_cached.
-        let entries: Vec<&TopEntry> = self.top.iter()
+        let entries: Vec<&TopEntry> = self
+            .top
+            .iter()
             .filter(|t| as_of.is_none_or(|y| t.year <= y))
             .take(limit)
             .collect();
@@ -694,11 +859,18 @@ impl Index {
         v
     }
 
-    fn cluster_papers_view(&self, field: &str, limit: usize, as_of: Option<i64>) -> serde_json::Value {
+    fn cluster_papers_view(
+        &self,
+        field: &str,
+        limit: usize,
+        as_of: Option<i64>,
+    ) -> serde_json::Value {
         // Filter the pre-ranked cache by (already-coarsened) field — O(cache),
         // no live property_top_k. A field's depth is bounded by how many of
         // its papers fall in the global top-CACHE_TOP_N.
-        let entries: Vec<&TopEntry> = self.top.iter()
+        let entries: Vec<&TopEntry> = self
+            .top
+            .iter()
             .filter(|t| t.field == field && as_of.is_none_or(|y| t.year <= y))
             .take(limit)
             .collect();
@@ -723,11 +895,20 @@ impl Index {
             let mut next = Vec::new();
             for &e in &frontier {
                 for cited in self.cites_out(e) {
-                    if seen.insert(cited) { next.push(cited); if seen.len() >= limit { break; } }
+                    if seen.insert(cited) {
+                        next.push(cited);
+                        if seen.len() >= limit {
+                            break;
+                        }
+                    }
                 }
-                if seen.len() >= limit { break; }
+                if seen.len() >= limit {
+                    break;
+                }
             }
-            if seen.len() >= limit { break; }
+            if seen.len() >= limit {
+                break;
+            }
             frontier = next;
         }
         let eids: Vec<EntityId> = seen.into_iter().collect();
@@ -742,7 +923,10 @@ impl Index {
         let hits = if let Some(h) = &self.knn_hnsw {
             // Approximate: HNSW (embeddings in RAM). Lock for the &mut search.
             h.lock().unwrap().search(pid, &qv, k, Distance::Cosine)
-        } else if let Some(r) = self.engine.vector_search_snapshot(pid, &qv, k, Distance::Cosine) {
+        } else if let Some(r) = self
+            .engine
+            .vector_search_snapshot(pid, &qv, k, Distance::Cosine)
+        {
             // Global current-vector snapshot: one mmap'd file, no fan-out/verify.
             r
         } else {
@@ -759,7 +943,13 @@ impl Index {
 // ── tiny HTTP/1.1 surface (std only) ──────────────────────────────────
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
-    let arg = |k: &str, d: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned().unwrap_or_else(|| d.into());
+    let arg = |k: &str, d: &str| {
+        args.iter()
+            .position(|a| a == k)
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+            .unwrap_or_else(|| d.into())
+    };
     let db = arg("--db", ".demo-data/langgraph-ndb");
     let bind = arg("--bind", "127.0.0.1:8791");
     // Low-RAM core: serve the engine's secondary indexes from disk instead
@@ -773,7 +963,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // vectors fit the cache budget, else exact). Default auto.
     let knn = arg("--knn", "auto");
 
-    eprintln!("opening nDB at {db}{}", if low_memory { " (low-memory)" } else { "" });
+    eprintln!(
+        "opening nDB at {db}{}",
+        if low_memory { " (low-memory)" } else { "" }
+    );
     let mut engine = if low_memory {
         Engine::open_with_config(&db, EngineConfig::low_memory(cache_mb * 1024 * 1024))?
     } else {
@@ -829,12 +1022,22 @@ fn handle(index: &Index, mut stream: TcpStream) -> std::io::Result<()> {
     let _method = parts.next().unwrap_or("");
     let target = parts.next().unwrap_or("/").to_string();
     // drain headers
-    loop { let mut h = String::new(); reader.read_line(&mut h)?; if h == "\r\n" || h.is_empty() { break; } }
+    loop {
+        let mut h = String::new();
+        reader.read_line(&mut h)?;
+        if h == "\r\n" || h.is_empty() {
+            break;
+        }
+    }
 
     let (path, query) = target.split_once('?').unwrap_or((&target, ""));
-    let qp: HashMap<String, String> = query.split('&').filter_map(|kv| {
-        let (k, v) = kv.split_once('=')?; Some((k.to_string(), urldecode(v)))
-    }).collect();
+    let qp: HashMap<String, String> = query
+        .split('&')
+        .filter_map(|kv| {
+            let (k, v) = kv.split_once('=')?;
+            Some((k.to_string(), urldecode(v)))
+        })
+        .collect();
     let num = |k: &str, d: usize| qp.get(k).and_then(|v| v.parse().ok()).unwrap_or(d);
     let as_of = qp.get("as_of").and_then(|v| v.parse::<i64>().ok());
     let limit = num("limit", DEFAULT_LIMIT).min(2000);
@@ -901,14 +1104,19 @@ fn handle(index: &Index, mut stream: TcpStream) -> std::io::Result<()> {
         "/view/clusters" => index.clusters_view(),
         "/view/top" => index.top_view(limit, as_of),
         "/view/knn" => index.knn_view(qp.get("q").map_or("", String::as_str), num("k", 8)),
-        p if p.starts_with("/view/cluster/") => index.cluster_papers_view(&urldecode(&p["/view/cluster/".len()..]), limit, as_of),
-        p if p.starts_with("/view/neighbors/") => index.neighbors_view(&p["/view/neighbors/".len()..], num("depth", 2), limit),
+        p if p.starts_with("/view/cluster/") => {
+            index.cluster_papers_view(&urldecode(&p["/view/cluster/".len()..]), limit, as_of)
+        }
+        p if p.starts_with("/view/neighbors/") => {
+            index.neighbors_view(&p["/view/neighbors/".len()..], num("depth", 2), limit)
+        }
         _ => serde_json::json!({"error": "unknown endpoint"}),
     };
     let payload = serde_json::to_vec(&body).unwrap_or_default();
     let header = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        payload.len());
+        payload.len()
+    );
     stream.write_all(header.as_bytes())?;
     stream.write_all(&payload)?;
     Ok(())
@@ -921,7 +1129,10 @@ fn urldecode(s: &str) -> String {
     while let Some(c) = it.next() {
         if c == b'%' {
             let h: String = (&mut it).take(2).map(|x| x as char).collect();
-            if let Ok(n) = u8::from_str_radix(&h, 16) { out.push(n); continue; }
+            if let Ok(n) = u8::from_str_radix(&h, 16) {
+                out.push(n);
+                continue;
+            }
         }
         out.push(c);
     }

@@ -2,7 +2,7 @@
 #![allow(
     clippy::too_many_lines,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
+    clippy::cast_sign_loss
 )]
 //!
 //! Seeds a structural-biology dataset (proteins + their encoding
@@ -116,7 +116,8 @@ fn main() {
     } else {
         eprintln!(
             "reusing existing nDB at {} ({} proteins already stored; CIFs + atoms preserved)",
-            db_dir.display(), existing_proteins
+            db_dir.display(),
+            existing_proteins
         );
     }
     drop(engine);
@@ -226,31 +227,211 @@ struct AfRecord {
     plddt_mean: Option<f64>,
 }
 const AF_SEED: &[AfRecord] = &[
-    AfRecord { name: "P53",   func: "tumor suppressor",   year: 1979, uniprot: "P04637", gene: "TP53",     organism: "Homo sapiens", seq_len: 393,  plddt_mean: Some(75.06) },
-    AfRecord { name: "MDM2",  func: "ubiquitin ligase",   year: 1991, uniprot: "Q00987", gene: "MDM2",     organism: "Homo sapiens", seq_len: 491,  plddt_mean: Some(62.59) },
-    AfRecord { name: "ATM",   func: "kinase, DNA damage", year: 1995, uniprot: "Q13315", gene: "ATM",      organism: "Homo sapiens", seq_len: 3056, plddt_mean: None         },
-    AfRecord { name: "CHK2",  func: "checkpoint kinase",  year: 1998, uniprot: "O96017", gene: "CHEK2",    organism: "Homo sapiens", seq_len: 543,  plddt_mean: Some(76.19) },
-    AfRecord { name: "BRCA1", func: "DNA repair",         year: 1994, uniprot: "P38398", gene: "BRCA1",    organism: "Homo sapiens", seq_len: 1863, plddt_mean: Some(41.59) },
-    AfRecord { name: "BRCA2", func: "DNA repair",         year: 1995, uniprot: "P51587", gene: "BRCA2",    organism: "Homo sapiens", seq_len: 3418, plddt_mean: None         },
-    AfRecord { name: "AKT1",  func: "kinase, survival",   year: 1987, uniprot: "P31749", gene: "AKT1",     organism: "Homo sapiens", seq_len: 480,  plddt_mean: Some(83.06) },
-    AfRecord { name: "MTOR",  func: "kinase, growth",     year: 1994, uniprot: "P42345", gene: "MTOR",     organism: "Homo sapiens", seq_len: 2549, plddt_mean: Some(78.00) },
-    AfRecord { name: "ULK1",  func: "kinase, autophagy",  year: 1998, uniprot: "O75385", gene: "ULK1",     organism: "Homo sapiens", seq_len: 1050, plddt_mean: Some(59.41) },
-    AfRecord { name: "BECN1", func: "autophagy regulator",year: 1998, uniprot: "Q14457", gene: "BECN1",    organism: "Homo sapiens", seq_len: 450,  plddt_mean: Some(76.56) },
-    AfRecord { name: "LC3",   func: "autophagy",          year: 2000, uniprot: "Q9GZQ8", gene: "MAP1LC3B", organism: "Homo sapiens", seq_len: 125,  plddt_mean: Some(91.44) },
-    AfRecord { name: "ATG7",  func: "E1-like enzyme",     year: 1999, uniprot: "O95352", gene: "ATG7",     organism: "Homo sapiens", seq_len: 703,  plddt_mean: Some(87.62) },
-    AfRecord { name: "PI3K",  func: "kinase, signaling",  year: 1988, uniprot: "P42336", gene: "PIK3CA",   organism: "Homo sapiens", seq_len: 1068, plddt_mean: Some(92.38) },
-    AfRecord { name: "PTEN",  func: "phosphatase",        year: 1997, uniprot: "P60484", gene: "PTEN",     organism: "Homo sapiens", seq_len: 403,  plddt_mean: Some(83.00) },
-    AfRecord { name: "KRAS",  func: "GTPase, signaling",  year: 1983, uniprot: "P01116", gene: "KRAS",     organism: "Homo sapiens", seq_len: 189,  plddt_mean: Some(91.50) },
+    AfRecord {
+        name: "P53",
+        func: "tumor suppressor",
+        year: 1979,
+        uniprot: "P04637",
+        gene: "TP53",
+        organism: "Homo sapiens",
+        seq_len: 393,
+        plddt_mean: Some(75.06),
+    },
+    AfRecord {
+        name: "MDM2",
+        func: "ubiquitin ligase",
+        year: 1991,
+        uniprot: "Q00987",
+        gene: "MDM2",
+        organism: "Homo sapiens",
+        seq_len: 491,
+        plddt_mean: Some(62.59),
+    },
+    AfRecord {
+        name: "ATM",
+        func: "kinase, DNA damage",
+        year: 1995,
+        uniprot: "Q13315",
+        gene: "ATM",
+        organism: "Homo sapiens",
+        seq_len: 3056,
+        plddt_mean: None,
+    },
+    AfRecord {
+        name: "CHK2",
+        func: "checkpoint kinase",
+        year: 1998,
+        uniprot: "O96017",
+        gene: "CHEK2",
+        organism: "Homo sapiens",
+        seq_len: 543,
+        plddt_mean: Some(76.19),
+    },
+    AfRecord {
+        name: "BRCA1",
+        func: "DNA repair",
+        year: 1994,
+        uniprot: "P38398",
+        gene: "BRCA1",
+        organism: "Homo sapiens",
+        seq_len: 1863,
+        plddt_mean: Some(41.59),
+    },
+    AfRecord {
+        name: "BRCA2",
+        func: "DNA repair",
+        year: 1995,
+        uniprot: "P51587",
+        gene: "BRCA2",
+        organism: "Homo sapiens",
+        seq_len: 3418,
+        plddt_mean: None,
+    },
+    AfRecord {
+        name: "AKT1",
+        func: "kinase, survival",
+        year: 1987,
+        uniprot: "P31749",
+        gene: "AKT1",
+        organism: "Homo sapiens",
+        seq_len: 480,
+        plddt_mean: Some(83.06),
+    },
+    AfRecord {
+        name: "MTOR",
+        func: "kinase, growth",
+        year: 1994,
+        uniprot: "P42345",
+        gene: "MTOR",
+        organism: "Homo sapiens",
+        seq_len: 2549,
+        plddt_mean: Some(78.00),
+    },
+    AfRecord {
+        name: "ULK1",
+        func: "kinase, autophagy",
+        year: 1998,
+        uniprot: "O75385",
+        gene: "ULK1",
+        organism: "Homo sapiens",
+        seq_len: 1050,
+        plddt_mean: Some(59.41),
+    },
+    AfRecord {
+        name: "BECN1",
+        func: "autophagy regulator",
+        year: 1998,
+        uniprot: "Q14457",
+        gene: "BECN1",
+        organism: "Homo sapiens",
+        seq_len: 450,
+        plddt_mean: Some(76.56),
+    },
+    AfRecord {
+        name: "LC3",
+        func: "autophagy",
+        year: 2000,
+        uniprot: "Q9GZQ8",
+        gene: "MAP1LC3B",
+        organism: "Homo sapiens",
+        seq_len: 125,
+        plddt_mean: Some(91.44),
+    },
+    AfRecord {
+        name: "ATG7",
+        func: "E1-like enzyme",
+        year: 1999,
+        uniprot: "O95352",
+        gene: "ATG7",
+        organism: "Homo sapiens",
+        seq_len: 703,
+        plddt_mean: Some(87.62),
+    },
+    AfRecord {
+        name: "PI3K",
+        func: "kinase, signaling",
+        year: 1988,
+        uniprot: "P42336",
+        gene: "PIK3CA",
+        organism: "Homo sapiens",
+        seq_len: 1068,
+        plddt_mean: Some(92.38),
+    },
+    AfRecord {
+        name: "PTEN",
+        func: "phosphatase",
+        year: 1997,
+        uniprot: "P60484",
+        gene: "PTEN",
+        organism: "Homo sapiens",
+        seq_len: 403,
+        plddt_mean: Some(83.00),
+    },
+    AfRecord {
+        name: "KRAS",
+        func: "GTPase, signaling",
+        year: 1983,
+        uniprot: "P01116",
+        gene: "KRAS",
+        organism: "Homo sapiens",
+        seq_len: 189,
+        plddt_mean: Some(91.50),
+    },
     // ─── Structural-biology showcase parents for the v2.2 §C residue
     // dataset. These are the five proteins whose residue-level data
     // lives in residues.rs, picked from across the structural-biology
     // canon (serine protease, zinc finger, disulfide bonds, helix
     // sandwich, β-barrel). pLDDT values fetched May 2026.
-    AfRecord { name: "Trypsin",   func: "serine protease",            year: 1876, uniprot: "P00760", gene: "PRSS1",  organism: "Bos taurus",            seq_len: 246, plddt_mean: Some(93.12) },
-    AfRecord { name: "TFIIIA",    func: "zinc-finger transcription",  year: 1980, uniprot: "P03001", gene: "gtf3a",  organism: "Xenopus laevis",        seq_len: 366, plddt_mean: Some(71.00) },
-    AfRecord { name: "Insulin",   func: "hormone, glucose regulation",year: 1921, uniprot: "P01308", gene: "INS",    organism: "Homo sapiens",          seq_len: 110, plddt_mean: Some(52.91) },
-    AfRecord { name: "Myoglobin", func: "oxygen storage",             year: 1958, uniprot: "P02185", gene: "MB",     organism: "Physeter macrocephalus",seq_len: 154, plddt_mean: Some(97.50) },
-    AfRecord { name: "GFP",       func: "fluorescent reporter",       year: 1962, uniprot: "P42212", gene: "GFP",    organism: "Aequorea victoria",     seq_len: 238, plddt_mean: Some(96.62) },
+    AfRecord {
+        name: "Trypsin",
+        func: "serine protease",
+        year: 1876,
+        uniprot: "P00760",
+        gene: "PRSS1",
+        organism: "Bos taurus",
+        seq_len: 246,
+        plddt_mean: Some(93.12),
+    },
+    AfRecord {
+        name: "TFIIIA",
+        func: "zinc-finger transcription",
+        year: 1980,
+        uniprot: "P03001",
+        gene: "gtf3a",
+        organism: "Xenopus laevis",
+        seq_len: 366,
+        plddt_mean: Some(71.00),
+    },
+    AfRecord {
+        name: "Insulin",
+        func: "hormone, glucose regulation",
+        year: 1921,
+        uniprot: "P01308",
+        gene: "INS",
+        organism: "Homo sapiens",
+        seq_len: 110,
+        plddt_mean: Some(52.91),
+    },
+    AfRecord {
+        name: "Myoglobin",
+        func: "oxygen storage",
+        year: 1958,
+        uniprot: "P02185",
+        gene: "MB",
+        organism: "Physeter macrocephalus",
+        seq_len: 154,
+        plddt_mean: Some(97.50),
+    },
+    AfRecord {
+        name: "GFP",
+        func: "fluorescent reporter",
+        year: 1962,
+        uniprot: "P42212",
+        gene: "GFP",
+        organism: "Aequorea victoria",
+        seq_len: 238,
+        plddt_mean: Some(96.62),
+    },
 ];
 
 fn seed(engine: &mut Engine) {
@@ -314,10 +495,10 @@ fn seed(engine: &mut Engine) {
 
     // ─── Hyperedges ───────────────────────────────────────────────
     let p_by_name = |n: &str| -> EntityId {
-        p_ids.iter().find(|(_, name, _)| *name == n).map_or_else(
-            || panic!("missing protein {n}"),
-            |(eid, _, _)| *eid,
-        )
+        p_ids
+            .iter()
+            .find(|(_, name, _)| *name == n)
+            .map_or_else(|| panic!("missing protein {n}"), |(eid, _, _)| *eid)
     };
     let p_plddt = |n: &str| -> Option<f64> {
         p_ids
@@ -328,12 +509,28 @@ fn seed(engine: &mut Engine) {
 
     // 6 protein complexes (arity 2-4).
     let complexes: Vec<(&str, &str, Vec<&str>)> = vec![
-        ("p53 surveillance", "DNA repair", vec!["P53", "MDM2", "ATM", "CHK2"]),
+        (
+            "p53 surveillance",
+            "DNA repair",
+            vec!["P53", "MDM2", "ATM", "CHK2"],
+        ),
         ("BRCA repair", "DNA repair", vec!["BRCA1", "BRCA2", "ATM"]),
-        ("mTOR growth", "mTOR signaling", vec!["AKT1", "MTOR", "PI3K", "PTEN"]),
+        (
+            "mTOR growth",
+            "mTOR signaling",
+            vec!["AKT1", "MTOR", "PI3K", "PTEN"],
+        ),
         ("autophagy init", "Autophagy", vec!["ULK1", "BECN1", "ATG7"]),
-        ("autophagy elongation", "Autophagy", vec!["LC3", "ATG7", "BECN1"]),
-        ("Ras signaling", "mTOR signaling", vec!["KRAS", "PI3K", "AKT1"]),
+        (
+            "autophagy elongation",
+            "Autophagy",
+            vec!["LC3", "ATG7", "BECN1"],
+        ),
+        (
+            "Ras signaling",
+            "mTOR signaling",
+            vec!["KRAS", "PI3K", "AKT1"],
+        ),
     ];
     for (cname, pathway, members) in &complexes {
         let path_eid = path_ids
@@ -353,8 +550,7 @@ fn seed(engine: &mut Engine) {
         // multi-subunit complex prediction. Skip the property entirely
         // when any member lacks an AF-DB record (no fabrication).
         let mut props: Vec<(u32, Value)> = vec![(PROP_NAME, Value::String((*cname).into()))];
-        let member_plddts: Option<Vec<f64>> =
-            members.iter().map(|n| p_plddt(n)).collect();
+        let member_plddts: Option<Vec<f64>> = members.iter().map(|n| p_plddt(n)).collect();
         if let Some(plddts) = member_plddts
             && !plddts.is_empty()
         {
@@ -402,17 +598,15 @@ fn seed(engine: &mut Engine) {
          (triad={}, disulfide={}, zinc_finger={}, alpha_helix={}, beta_sheet_pair={})",
         stats.residues,
         stats.motifs,
-        stats.by_type[0], stats.by_type[1], stats.by_type[2],
-        stats.by_type[3], stats.by_type[4],
+        stats.by_type[0],
+        stats.by_type[1],
+        stats.by_type[2],
+        stats.by_type[3],
+        stats.by_type[4],
     );
 }
 
-fn commit_entity(
-    engine: &mut Engine,
-    eid: EntityId,
-    type_id: u32,
-    properties: Vec<(u32, Value)>,
-) {
+fn commit_entity(engine: &mut Engine, eid: EntityId, type_id: u32, properties: Vec<(u32, Value)>) {
     let mut txn = engine.begin_write();
     let tx_id = txn.tx_id();
     txn.put_entity(EntityRecord {
@@ -557,10 +751,10 @@ mod tests {
         assert_eq!(plddt_bucket(90.0), "confident"); // boundary: not >90
         assert_eq!(plddt_bucket(80.0), "confident");
         assert_eq!(plddt_bucket(70.01), "confident");
-        assert_eq!(plddt_bucket(70.0), "low");       // boundary: not >70
+        assert_eq!(plddt_bucket(70.0), "low"); // boundary: not >70
         assert_eq!(plddt_bucket(60.0), "low");
         assert_eq!(plddt_bucket(50.01), "low");
-        assert_eq!(plddt_bucket(50.0), "very_low");  // boundary: not >50
+        assert_eq!(plddt_bucket(50.0), "very_low"); // boundary: not >50
         assert_eq!(plddt_bucket(20.0), "very_low");
         assert_eq!(plddt_bucket(0.0), "very_low");
     }
@@ -573,7 +767,11 @@ mod tests {
             assert!(!rec.uniprot.is_empty());
             assert!(rec.seq_len > 0);
             if let Some(mean) = rec.plddt_mean {
-                assert!((0.0..=100.0).contains(&mean), "pLDDT out of range for {}: {mean}", rec.name);
+                assert!(
+                    (0.0..=100.0).contains(&mean),
+                    "pLDDT out of range for {}: {mean}",
+                    rec.name
+                );
                 let b = plddt_bucket(mean);
                 assert!(
                     matches!(b, "very_high" | "confident" | "low" | "very_low"),
@@ -585,7 +783,10 @@ mod tests {
         // ATM + BRCA2 are the two known-None entries (AF-DB retired their
         // predictions for proteins >2700 aa as of v6).
         let none_count = AF_SEED.iter().filter(|r| r.plddt_mean.is_none()).count();
-        assert_eq!(none_count, 2, "expected exactly 2 proteins with no AF-DB record");
+        assert_eq!(
+            none_count, 2,
+            "expected exactly 2 proteins with no AF-DB record"
+        );
         let none_names: Vec<&str> = AF_SEED
             .iter()
             .filter(|r| r.plddt_mean.is_none())
@@ -697,11 +898,21 @@ mod tests {
                 }
                 Record::HyperEdge(h) => {
                     let t = h.type_id.get();
-                    if t == residues::T_CATALYTIC_TRIAD     { triad_count += 1; }
-                    if t == residues::T_DISULFIDE_BOND      { disulfide_count += 1; }
-                    if t == residues::T_ZINC_FINGER         { zinc_finger_count += 1; }
-                    if t == residues::T_ALPHA_HELIX         { alpha_helix_count += 1; }
-                    if t == residues::T_BETA_SHEET_PAIR     { beta_sheet_pair_count += 1; }
+                    if t == residues::T_CATALYTIC_TRIAD {
+                        triad_count += 1;
+                    }
+                    if t == residues::T_DISULFIDE_BOND {
+                        disulfide_count += 1;
+                    }
+                    if t == residues::T_ZINC_FINGER {
+                        zinc_finger_count += 1;
+                    }
+                    if t == residues::T_ALPHA_HELIX {
+                        alpha_helix_count += 1;
+                    }
+                    if t == residues::T_BETA_SHEET_PAIR {
+                        beta_sheet_pair_count += 1;
+                    }
                     if t == residues::T_PROTEIN_RESIDUES {
                         protein_residues_count += 1;
                         protein_residues_total_arity += h.roles.len();
@@ -736,12 +947,18 @@ mod tests {
         for r in &records {
             if let Record::HyperEdge(h) = r {
                 if h.type_id == TypeId::new(residues::T_CATALYTIC_TRIAD) {
-                    assert_eq!(h.roles.len(), 3,
-                        "catalytic_triad must be arity-3 (Ser-His-Asp)");
+                    assert_eq!(
+                        h.roles.len(),
+                        3,
+                        "catalytic_triad must be arity-3 (Ser-His-Asp)"
+                    );
                 }
                 if h.type_id == TypeId::new(residues::T_ZINC_FINGER) {
-                    assert_eq!(h.roles.len(), 4,
-                        "C2H2 zinc finger must be arity-4 (Cys-Cys-His-His)");
+                    assert_eq!(
+                        h.roles.len(),
+                        4,
+                        "C2H2 zinc finger must be arity-4 (Cys-Cys-His-His)"
+                    );
                 }
             }
         }

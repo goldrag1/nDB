@@ -281,7 +281,10 @@ fn hex_nybble(b: u8) -> Result<u8, EncryptionError> {
 
 /// Mode of operation for [`EncryptedFile`].
 enum Mode {
-    Writing { buffer: Vec<u8>, chunk_size: usize },
+    Writing {
+        buffer: Vec<u8>,
+        chunk_size: usize,
+    },
     Reading {
         remaining: Vec<u8>,
         /// Chunk size declared by the file header. Currently unused at
@@ -334,11 +337,7 @@ impl<F> std::fmt::Debug for EncryptedFile<F> {
 impl<F: Write> EncryptedFile<F> {
     /// Open a new encrypted file for writing. Writes the plaintext header
     /// (`magic + version + chunk_size + reserved`) immediately.
-    pub fn create(
-        mut inner: F,
-        cipher: Cipher,
-        chunk_size: u32,
-    ) -> Result<Self, EncryptionError> {
+    pub fn create(mut inner: F, cipher: Cipher, chunk_size: u32) -> Result<Self, EncryptionError> {
         let mut header = [0u8; HEADER_LEN];
         header[0..4].copy_from_slice(&ENCRYPTED_FILE_MAGIC.to_le_bytes());
         header[4..8].copy_from_slice(&ENCRYPTED_FILE_FORMAT_VERSION.to_le_bytes());
@@ -820,8 +819,16 @@ mod tests {
         let a = Cipher::from_raw_key(&[0x11u8; KEY_LEN]).unwrap();
         let b = Cipher::from_raw_key(&[0x11u8; KEY_LEN]).unwrap();
         let c = Cipher::from_raw_key(&[0x22u8; KEY_LEN]).unwrap();
-        assert_eq!(a.fingerprint(), b.fingerprint(), "same key → same fingerprint");
-        assert_ne!(a.fingerprint(), c.fingerprint(), "different key → different fingerprint");
+        assert_eq!(
+            a.fingerprint(),
+            b.fingerprint(),
+            "same key → same fingerprint"
+        );
+        assert_ne!(
+            a.fingerprint(),
+            c.fingerprint(),
+            "different key → different fingerprint"
+        );
     }
 
     #[test]
@@ -859,7 +866,10 @@ mod tests {
         bytes[4..8].copy_from_slice(&999u32.to_le_bytes());
         bytes[8..12].copy_from_slice(&ENCRYPTION_ALGO_AES_GCM_256.to_le_bytes());
         let err = EncryptionMarker::decode(&bytes).unwrap_err();
-        assert!(matches!(err, EncryptionError::MarkerUnsupportedVersion(999)));
+        assert!(matches!(
+            err,
+            EncryptionError::MarkerUnsupportedVersion(999)
+        ));
     }
 
     #[test]
@@ -869,6 +879,9 @@ mod tests {
         bytes[4..8].copy_from_slice(&ENCRYPTION_MARKER_FORMAT_VERSION.to_le_bytes());
         bytes[8..12].copy_from_slice(&42u32.to_le_bytes());
         let err = EncryptionMarker::decode(&bytes).unwrap_err();
-        assert!(matches!(err, EncryptionError::MarkerUnsupportedAlgorithm(42)));
+        assert!(matches!(
+            err,
+            EncryptionError::MarkerUnsupportedAlgorithm(42)
+        ));
     }
 }

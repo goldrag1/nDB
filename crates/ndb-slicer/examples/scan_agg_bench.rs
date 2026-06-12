@@ -137,9 +137,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             PropertyId::new(PROP_AMOUNT),
         ))
         .filter(|rec| match rec {
-            Record::Entity(e) => e.properties.iter().any(|(p, v)| {
-                p.get() == PROP_AMOUNT && matches!(v, Value::I64(n) if n % 10 == 0)
-            }),
+            Record::Entity(e) => e
+                .properties
+                .iter()
+                .any(|(p, v)| p.get() == PROP_AMOUNT && matches!(v, Value::I64(n) if n % 10 == 0)),
             _ => false,
         })
         .group_by([0])
@@ -227,7 +228,10 @@ fn seed(engine: &mut Engine, n: usize) -> Result<(), Box<dyn std::error::Error>>
             tx_id_supersede: TxId::ACTIVE,
             properties: vec![
                 (PropertyId::new(PROP_REGION), Value::String(region)),
-                (PropertyId::new(PROP_AMOUNT), Value::I64((i as i64 * 37) % 10_000)),
+                (
+                    PropertyId::new(PROP_AMOUNT),
+                    Value::I64((i as i64 * 37) % 10_000),
+                ),
                 (
                     PropertyId::new(PROP_NOTE),
                     Value::String(format!("order number {i} placed via web checkout")),

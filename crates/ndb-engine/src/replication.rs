@@ -165,7 +165,8 @@ pub enum BatchDecodeError {
 pub fn encode_records(records: &[Record]) -> Vec<u8> {
     let mut out = Vec::new();
     for r in records {
-        r.encode(&mut out).expect("record encode is infallible for valid records");
+        r.encode(&mut out)
+            .expect("record encode is infallible for valid records");
     }
     out
 }
@@ -274,7 +275,11 @@ mod tests {
 
     fn temp_dir(tag: &str) -> std::path::PathBuf {
         let mut p = std::env::temp_dir();
-        p.push(format!("ndb-repl-{}-{}", tag, uuid::Uuid::now_v7().simple()));
+        p.push(format!(
+            "ndb-repl-{}-{}",
+            tag,
+            uuid::Uuid::now_v7().simple()
+        ));
         std::fs::create_dir_all(&p).unwrap();
         p
     }
@@ -311,7 +316,9 @@ mod tests {
         //    the leader's, so its length is the streaming watermark.
         leader.backup_to(&follower_dir).unwrap();
         let seq = leader.manifest().active_wal_seq;
-        let watermark = std::fs::metadata(wal_path(&follower_dir, seq)).unwrap().len();
+        let watermark = std::fs::metadata(wal_path(&follower_dir, seq))
+            .unwrap()
+            .len();
 
         // 3. Leader keeps writing B and C (same WAL segment, no flush).
         _tb = put(&mut leader, b, "bob");
@@ -326,7 +333,10 @@ mod tests {
             let mut fwal = WriteAheadLog::open_append(wal_path(&follower_dir, seq)).unwrap();
             let new_wm = apply_batch(&mut fwal, &batch).unwrap();
             fwal.close().unwrap();
-            assert_eq!(new_wm, batch.next_offset, "follower WAL must align with leader");
+            assert_eq!(
+                new_wm, batch.next_offset,
+                "follower WAL must align with leader"
+            );
         }
         leader.close().unwrap();
 
@@ -471,7 +481,9 @@ mod tests {
                 })
                 .unwrap();
                 match outcome {
-                    PollOutcome::Rotated { .. } => panic!("archive window should prevent re-bootstrap"),
+                    PollOutcome::Rotated { .. } => {
+                        panic!("archive window should prevent re-bootstrap")
+                    }
                     // Stop when a poll made no progress (no records + no segment advance).
                     PollOutcome::Applied(0) if cursor == before => break,
                     _ => {}
@@ -491,7 +503,10 @@ mod tests {
             );
         }
         // The leader kept multiple sealed WAL segments (archiving on).
-        assert!(leader.wal_segments().len() >= 2, "archived segments retained");
+        assert!(
+            leader.wal_segments().len() >= 2,
+            "archived segments retained"
+        );
 
         leader.close().unwrap();
         follower.close().unwrap();
@@ -526,11 +541,10 @@ mod tests {
             polls += 1;
             assert!(polls < 10, "should catch up quickly");
             let leader_ref = &leader;
-            let outcome =
-                poll_once(&mut follower, &mut cursor, |c| {
-                    leader_ref.serve_replication(c.wal_seq, c.offset)
-                })
-                .unwrap();
+            let outcome = poll_once(&mut follower, &mut cursor, |c| {
+                leader_ref.serve_replication(c.wal_seq, c.offset)
+            })
+            .unwrap();
             match outcome {
                 PollOutcome::Applied(0) => break,
                 PollOutcome::Applied(_) => {}

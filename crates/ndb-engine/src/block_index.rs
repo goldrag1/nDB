@@ -81,7 +81,9 @@ pub enum BlockIndexError {
     },
 
     /// Format version is newer than this build supports.
-    #[error("unsupported block-index format_version {version} (this build supports up to {supported})")]
+    #[error(
+        "unsupported block-index format_version {version} (this build supports up to {supported})"
+    )]
     UnsupportedFormatVersion {
         /// Version read.
         version: u8,
@@ -281,8 +283,7 @@ pub fn load_sidecar(path: &Path) -> Result<Option<BlockIndex>, BlockIndexError> 
 // ---------------------------------------------------------------------------
 
 fn encode_block_index(block_size: u32, entries: &[BlockIndexEntry]) -> Vec<u8> {
-    let mut out =
-        Vec::with_capacity(BLOCK_INDEX_FIXED_OVERHEAD + entries.len() * (1 + 2 + 16 + 8));
+    let mut out = Vec::with_capacity(BLOCK_INDEX_FIXED_OVERHEAD + entries.len() * (1 + 2 + 16 + 8));
     // Header.
     out.extend_from_slice(BLOCK_INDEX_MAGIC);
     out.push(BLOCK_INDEX_FORMAT_VERSION);
@@ -574,7 +575,8 @@ mod tests {
 
     #[test]
     fn load_sidecar_returns_none_when_missing() {
-        let dir = std::env::temp_dir().join(format!("ndb-blockidx-missing-{}", uuid::Uuid::now_v7()));
+        let dir =
+            std::env::temp_dir().join(format!("ndb-blockidx-missing-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("nope.idx");
         assert!(load_sidecar(&p).unwrap().is_none());
@@ -583,10 +585,7 @@ mod tests {
 
     #[test]
     fn writer_finish_then_load_round_trips() {
-        let dir = std::env::temp_dir().join(format!(
-            "ndb-blockidx-rt-{}",
-            uuid::Uuid::now_v7()
-        ));
+        let dir = std::env::temp_dir().join(format!("ndb-blockidx-rt-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut w = BlockIndexWriter::with_block_size(1024);
         w.observe_record(&key(1, b"first"), 0);

@@ -41,7 +41,7 @@ use ndb_engine::value::Value;
 
 // ─── nDB model constants (must stay in lockstep with the SPA's TYPES) ─
 pub const T_RESIDUE: u32 = 6;
-pub const ROLE_PROTEIN: u32 = 12;  // the parent in protein_residues / protein_atoms
+pub const ROLE_PROTEIN: u32 = 12; // the parent in protein_residues / protein_atoms
 pub const ROLE_RESIDUE: u32 = 21;
 
 pub const T_CATALYTIC_TRIAD: u32 = 110;
@@ -77,11 +77,26 @@ struct ResidueDataset {
 
 #[derive(Clone, Copy)]
 enum Motif {
-    CatalyticTriad { name: &'static str, positions: &'static [i64] },
-    Disulfide      { name: &'static str, positions: [i64; 2] },
-    ZincFinger     { name: &'static str, positions: &'static [i64] },
-    AlphaHelix     { name: &'static str, positions: &'static [i64] },
-    BetaSheetPair  { name: &'static str, positions: &'static [i64] },
+    CatalyticTriad {
+        name: &'static str,
+        positions: &'static [i64],
+    },
+    Disulfide {
+        name: &'static str,
+        positions: [i64; 2],
+    },
+    ZincFinger {
+        name: &'static str,
+        positions: &'static [i64],
+    },
+    AlphaHelix {
+        name: &'static str,
+        positions: &'static [i64],
+    },
+    BetaSheetPair {
+        name: &'static str,
+        positions: &'static [i64],
+    },
 }
 
 /// Trypsin — chymotrypsin-numbering catalytic triad Ser195-His57-Asp102.
@@ -89,15 +104,15 @@ enum Motif {
 const TRYPSIN: ResidueDataset = ResidueDataset {
     parent_name: "Trypsin",
     residues: &[
-        (16,  "ILE", 89.0, "C"),
-        (57,  "HIS", 96.0, "C"),  // catalytic His
-        (102, "ASP", 94.0, "C"),  // catalytic Asp
-        (189, "ASP", 91.0, "E"),  // substrate-specificity pocket (S1)
+        (16, "ILE", 89.0, "C"),
+        (57, "HIS", 96.0, "C"),  // catalytic His
+        (102, "ASP", 94.0, "C"), // catalytic Asp
+        (189, "ASP", 91.0, "E"), // substrate-specificity pocket (S1)
         (190, "SER", 90.0, "E"),
         (191, "SER", 92.0, "E"),
-        (193, "GLY", 95.0, "C"),  // oxyanion hole
-        (195, "SER", 97.0, "C"),  // catalytic Ser
-        (220, "CYS", 88.0, "C"),  // anchor for one of the 6 disulfides
+        (193, "GLY", 95.0, "C"), // oxyanion hole
+        (195, "SER", 97.0, "C"), // catalytic Ser
+        (220, "CYS", 88.0, "C"), // anchor for one of the 6 disulfides
     ],
     motifs: &[Motif::CatalyticTriad {
         name: "trypsin catalytic triad (Ser195-His57-Asp102)",
@@ -110,7 +125,7 @@ const TRYPSIN: ResidueDataset = ResidueDataset {
 const TFIIIA: ResidueDataset = ResidueDataset {
     parent_name: "TFIIIA",
     residues: &[
-        (6,  "CYS", 88.0, "C"),
+        (6, "CYS", 88.0, "C"),
         (11, "CYS", 90.0, "C"),
         (24, "HIS", 92.0, "C"),
         (28, "HIS", 91.0, "C"),
@@ -132,17 +147,26 @@ const TFIIIA: ResidueDataset = ResidueDataset {
 const INSULIN: ResidueDataset = ResidueDataset {
     parent_name: "Insulin",
     residues: &[
-        (6,   "CYS", 95.0, "C"),  // A6
-        (7,   "CYS", 95.0, "C"),  // A7
-        (11,  "CYS", 94.0, "C"),  // A11
-        (20,  "CYS", 95.0, "C"),  // A20
-        (107, "CYS", 93.0, "C"),  // B7  (offset+100 marks B chain)
-        (119, "CYS", 94.0, "C"),  // B19
+        (6, "CYS", 95.0, "C"),   // A6
+        (7, "CYS", 95.0, "C"),   // A7
+        (11, "CYS", 94.0, "C"),  // A11
+        (20, "CYS", 95.0, "C"),  // A20
+        (107, "CYS", 93.0, "C"), // B7  (offset+100 marks B chain)
+        (119, "CYS", 94.0, "C"), // B19
     ],
     motifs: &[
-        Motif::Disulfide { name: "insulin S-S A6-A11",  positions: [6, 11] },
-        Motif::Disulfide { name: "insulin S-S A7-B7",   positions: [7, 107] },
-        Motif::Disulfide { name: "insulin S-S A20-B19", positions: [20, 119] },
+        Motif::Disulfide {
+            name: "insulin S-S A6-A11",
+            positions: [6, 11],
+        },
+        Motif::Disulfide {
+            name: "insulin S-S A7-B7",
+            positions: [7, 107],
+        },
+        Motif::Disulfide {
+            name: "insulin S-S A20-B19",
+            positions: [20, 119],
+        },
     ],
 };
 
@@ -151,14 +175,22 @@ const INSULIN: ResidueDataset = ResidueDataset {
 const MYOGLOBIN: ResidueDataset = ResidueDataset {
     parent_name: "Myoglobin",
     residues: &[
-        (80, "LEU", 92.0, "H"), (81, "LEU", 92.0, "H"),
-        (82, "SER", 91.0, "H"), (83, "ASP", 90.0, "H"),
-        (84, "LEU", 91.0, "H"), (85, "HIS", 93.0, "H"),
-        (86, "ALA", 91.0, "H"), (87, "HIS", 90.0, "H"),
-        (88, "LYS", 90.0, "H"), (89, "LEU", 92.0, "H"),
-        (90, "ARG", 91.0, "H"), (91, "VAL", 92.0, "H"),
-        (92, "ASP", 90.0, "H"), (93, "PRO", 89.0, "H"),
-        (94, "VAL", 91.0, "H"), (95, "ASN", 90.0, "H"),
+        (80, "LEU", 92.0, "H"),
+        (81, "LEU", 92.0, "H"),
+        (82, "SER", 91.0, "H"),
+        (83, "ASP", 90.0, "H"),
+        (84, "LEU", 91.0, "H"),
+        (85, "HIS", 93.0, "H"),
+        (86, "ALA", 91.0, "H"),
+        (87, "HIS", 90.0, "H"),
+        (88, "LYS", 90.0, "H"),
+        (89, "LEU", 92.0, "H"),
+        (90, "ARG", 91.0, "H"),
+        (91, "VAL", 92.0, "H"),
+        (92, "ASP", 90.0, "H"),
+        (93, "PRO", 89.0, "H"),
+        (94, "VAL", 91.0, "H"),
+        (95, "ASN", 90.0, "H"),
     ],
     motifs: &[Motif::AlphaHelix {
         // Helices are intrinsically N-ary — every residue in the helix
@@ -176,41 +208,66 @@ const GFP: ResidueDataset = ResidueDataset {
     parent_name: "GFP",
     residues: &[
         // β1 strand
-        (14, "VAL", 90.0, "E"), (15, "PRO", 90.0, "E"), (16, "ILE", 91.0, "E"),
-        (17, "LEU", 92.0, "E"), (18, "VAL", 92.0, "E"), (19, "GLU", 91.0, "E"),
-        (20, "LEU", 92.0, "E"), (21, "ASP", 91.0, "E"), (22, "GLY", 90.0, "E"),
+        (14, "VAL", 90.0, "E"),
+        (15, "PRO", 90.0, "E"),
+        (16, "ILE", 91.0, "E"),
+        (17, "LEU", 92.0, "E"),
+        (18, "VAL", 92.0, "E"),
+        (19, "GLU", 91.0, "E"),
+        (20, "LEU", 92.0, "E"),
+        (21, "ASP", 91.0, "E"),
+        (22, "GLY", 90.0, "E"),
         (23, "ASP", 90.0, "E"),
         // β2 strand
-        (26, "ASN", 90.0, "E"), (27, "GLY", 91.0, "E"), (28, "HIS", 91.0, "E"),
-        (29, "LYS", 92.0, "E"), (30, "PHE", 93.0, "E"), (31, "SER", 92.0, "E"),
-        (32, "VAL", 92.0, "E"), (33, "SER", 91.0, "E"), (34, "GLY", 90.0, "E"),
+        (26, "ASN", 90.0, "E"),
+        (27, "GLY", 91.0, "E"),
+        (28, "HIS", 91.0, "E"),
+        (29, "LYS", 92.0, "E"),
+        (30, "PHE", 93.0, "E"),
+        (31, "SER", 92.0, "E"),
+        (32, "VAL", 92.0, "E"),
+        (33, "SER", 91.0, "E"),
+        (34, "GLY", 90.0, "E"),
         (35, "GLU", 90.0, "E"),
         // β3 strand
-        (41, "THR", 90.0, "E"), (42, "THR", 91.0, "E"), (43, "GLY", 91.0, "E"),
-        (44, "LYS", 92.0, "E"), (45, "LEU", 92.0, "E"), (46, "THR", 91.0, "E"),
-        (47, "LEU", 90.0, "E"), (48, "LYS", 90.0, "E"), (49, "PHE", 91.0, "E"),
+        (41, "THR", 90.0, "E"),
+        (42, "THR", 91.0, "E"),
+        (43, "GLY", 91.0, "E"),
+        (44, "LYS", 92.0, "E"),
+        (45, "LEU", 92.0, "E"),
+        (46, "THR", 91.0, "E"),
+        (47, "LEU", 90.0, "E"),
+        (48, "LYS", 90.0, "E"),
+        (49, "PHE", 91.0, "E"),
         (50, "ILE", 91.0, "E"),
         // β6 strand
-        (116, "GLU", 90.0, "E"), (117, "ARG", 91.0, "E"), (118, "THR", 90.0, "E"),
-        (119, "ILE", 92.0, "E"), (120, "PHE", 92.0, "E"), (121, "PHE", 91.0, "E"),
-        (122, "LYS", 90.0, "E"), (123, "ASP", 90.0, "E"), (124, "ASP", 90.0, "E"),
+        (116, "GLU", 90.0, "E"),
+        (117, "ARG", 91.0, "E"),
+        (118, "THR", 90.0, "E"),
+        (119, "ILE", 92.0, "E"),
+        (120, "PHE", 92.0, "E"),
+        (121, "PHE", 91.0, "E"),
+        (122, "LYS", 90.0, "E"),
+        (123, "ASP", 90.0, "E"),
+        (124, "ASP", 90.0, "E"),
         (125, "GLY", 91.0, "E"),
         // Chromophore (Thr65-Tyr66-Gly67) — autocatalytically formed.
-        (65, "THR", 95.0, "C"), (66, "TYR", 96.0, "C"), (67, "GLY", 96.0, "C"),
+        (65, "THR", 95.0, "C"),
+        (66, "TYR", 96.0, "C"),
+        (67, "GLY", 96.0, "C"),
     ],
     motifs: &[
         Motif::BetaSheetPair {
             name: "GFP β-barrel pair β1↔β6",
             positions: &[
-                14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-                116, 117, 118, 119, 120, 121, 122, 123, 124, 125,
+                14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 116, 117, 118, 119, 120, 121, 122, 123,
+                124, 125,
             ],
         },
         Motif::BetaSheetPair {
             name: "GFP β-barrel pair β2↔β3",
             positions: &[
-                26, 27, 28, 29, 30, 31, 32, 33, 34, 35,
-                41, 42, 43, 44, 45, 46, 47, 48, 49, 50,
+                26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50,
             ],
         },
     ],
@@ -282,8 +339,7 @@ fn seed_one(
     // 1-to-N containment relationship, which is exactly the shape
     // nDB's hyperedges natively express.
     if !residue_by_pos.is_empty() {
-        let mut roles: Vec<(RoleId, EntityId)> =
-            vec![(RoleId::new(ROLE_PROTEIN), parent)];
+        let mut roles: Vec<(RoleId, EntityId)> = vec![(RoleId::new(ROLE_PROTEIN), parent)];
         // Stable order — sort by position so the wire shape is
         // deterministic across seed runs.
         let mut positions: Vec<&i64> = residue_by_pos.keys().collect();
@@ -306,21 +362,11 @@ fn seed_motif(
     stats: &mut ResidueSeedStats,
 ) {
     let (tid, name, positions, idx) = match motif {
-        Motif::CatalyticTriad { name, positions } => {
-            (T_CATALYTIC_TRIAD, *name, *positions, 0)
-        }
-        Motif::Disulfide { name, positions } => {
-            (T_DISULFIDE_BOND, *name, positions.as_slice(), 1)
-        }
-        Motif::ZincFinger { name, positions } => {
-            (T_ZINC_FINGER, *name, *positions, 2)
-        }
-        Motif::AlphaHelix { name, positions } => {
-            (T_ALPHA_HELIX, *name, *positions, 3)
-        }
-        Motif::BetaSheetPair { name, positions } => {
-            (T_BETA_SHEET_PAIR, *name, *positions, 4)
-        }
+        Motif::CatalyticTriad { name, positions } => (T_CATALYTIC_TRIAD, *name, *positions, 0),
+        Motif::Disulfide { name, positions } => (T_DISULFIDE_BOND, *name, positions.as_slice(), 1),
+        Motif::ZincFinger { name, positions } => (T_ZINC_FINGER, *name, *positions, 2),
+        Motif::AlphaHelix { name, positions } => (T_ALPHA_HELIX, *name, *positions, 3),
+        Motif::BetaSheetPair { name, positions } => (T_BETA_SHEET_PAIR, *name, *positions, 4),
     };
     let mut roles: Vec<(RoleId, EntityId)> = Vec::with_capacity(positions.len());
     for pos in positions {
@@ -347,12 +393,7 @@ fn seed_motif(
 // to read inline than to expose a `pub` API across the example's
 // internal module split).
 
-fn commit_entity(
-    engine: &mut Engine,
-    eid: EntityId,
-    type_id: u32,
-    properties: Vec<(u32, Value)>,
-) {
+fn commit_entity(engine: &mut Engine, eid: EntityId, type_id: u32, properties: Vec<(u32, Value)>) {
     let mut txn = engine.begin_write();
     let tx_id = txn.tx_id();
     txn.put_entity(EntityRecord {

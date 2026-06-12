@@ -1021,20 +1021,20 @@ mod tests {
         let eid = EntityId::now_v7();
         let mut payload = Vec::new();
         payload.extend_from_slice(hid.as_bytes());
-        write_u32(&mut payload, 42);      // type_id
-        write_u64(&mut payload, 1);       // tx_assert
+        write_u32(&mut payload, 42); // type_id
+        write_u64(&mut payload, 1); // tx_assert
         write_u64(&mut payload, TX_ACTIVE); // tx_supersede
-        write_u32(&mut payload, 1);       // arity
-        write_u32(&mut payload, 7);       // role_id
+        write_u32(&mut payload, 1); // arity
+        write_u32(&mut payload, 7); // role_id
         payload.extend_from_slice(eid.as_bytes());
         // No second arity trailer. Then property_list — zero properties.
-        write_u16(&mut payload, 0);       // property count = 0 (u16)
+        write_u16(&mut payload, 0); // property count = 0 (u16)
 
         // Envelope: size + kind + format_version + payload + crc
         let body_no_size = {
             let mut tmp = Vec::new();
             write_u8(&mut tmp, RecordKind::HyperEdge.as_byte());
-            write_u8(&mut tmp, 2);           // format_version = 2
+            write_u8(&mut tmp, 2); // format_version = 2
             tmp.extend_from_slice(&payload);
             tmp
         };
@@ -1049,8 +1049,11 @@ mod tests {
         let (decoded, _) = HyperEdgeRecord::decode(&buf).unwrap();
         assert_eq!(decoded.hyperedge_id, hid);
         assert_eq!(decoded.roles.len(), 1);
-        assert_eq!(decoded.hyperedge_roles.len(), 0,
-            "v2 record must decode with empty hyperedge_roles");
+        assert_eq!(
+            decoded.hyperedge_roles.len(),
+            0,
+            "v2 record must decode with empty hyperedge_roles"
+        );
     }
 
     #[test]

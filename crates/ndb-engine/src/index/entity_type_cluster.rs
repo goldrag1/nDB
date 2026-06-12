@@ -31,7 +31,9 @@ pub struct EntityTypeIndex {
 impl EntityTypeIndex {
     /// New, empty index.
     #[must_use]
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Rough estimate of resident heap bytes (diagnostic; walks the maps).
     #[must_use]
@@ -49,7 +51,10 @@ impl EntityTypeIndex {
 
     /// All entities of a given type, in ascending entity-id order.
     pub fn by_type(&self, type_id: TypeId) -> impl Iterator<Item = EntityId> + '_ {
-        self.forward.get(&type_id).into_iter().flat_map(|set| set.iter().copied())
+        self.forward
+            .get(&type_id)
+            .into_iter()
+            .flat_map(|set| set.iter().copied())
     }
 
     /// Convenience: collect [`by_type`](Self::by_type) into a `Vec`.
@@ -66,7 +71,9 @@ impl EntityTypeIndex {
 
     /// Number of distinct types currently observed.
     #[must_use]
-    pub fn type_count(&self) -> usize { self.forward.len() }
+    pub fn type_count(&self) -> usize {
+        self.forward.len()
+    }
 
     fn remove(&mut self, eid: &EntityId) {
         if let Some(old_type) = self.by_entity.remove(eid)
@@ -86,7 +93,10 @@ impl EntityTypeIndex {
             return;
         }
         self.remove(&e.entity_id);
-        self.forward.entry(e.type_id).or_default().insert(e.entity_id);
+        self.forward
+            .entry(e.type_id)
+            .or_default()
+            .insert(e.entity_id);
         self.by_entity.insert(e.entity_id, e.type_id);
         self.latest_tx.insert(e.entity_id, e.tx_id_assert);
     }
@@ -106,7 +116,7 @@ impl EntityTypeIndex {
 impl Index for EntityTypeIndex {
     fn apply(&mut self, record: &Record, _tx_id: TxId) {
         match record {
-            Record::Entity(e)   => self.apply_entity(e),
+            Record::Entity(e) => self.apply_entity(e),
             Record::Tombstone(t) => self.apply_tombstone(t),
             _ => {}
         }
@@ -116,16 +126,18 @@ impl Index for EntityTypeIndex {
         self.by_entity.clear();
         self.latest_tx.clear();
     }
-    fn name(&self) -> &'static str { "entity-type-cluster" }
+    fn name(&self) -> &'static str {
+        "entity-type-cluster"
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::id::PropertyId;
     use crate::id::TxId;
     use crate::record::EntityRecord;
     use crate::value::Value;
-    use crate::id::PropertyId;
 
     fn entity(eid: EntityId, type_id: u32, tx: u64) -> Record {
         Record::Entity(EntityRecord {
@@ -184,10 +196,13 @@ mod tests {
         let mut idx = EntityTypeIndex::new();
         let alice = EntityId::now_v7();
         idx.apply(&entity(alice, 1, 1), TxId::new(1));
-        idx.apply(&Record::Tombstone(crate::record::TombstoneRecord {
-            target_id: alice.into_uuid(),
-            tx_id_supersede: TxId::new(2),
-        }), TxId::new(2));
+        idx.apply(
+            &Record::Tombstone(crate::record::TombstoneRecord {
+                target_id: alice.into_uuid(),
+                tx_id_supersede: TxId::new(2),
+            }),
+            TxId::new(2),
+        );
         assert_eq!(idx.count(TypeId::new(1)), 0);
     }
 }

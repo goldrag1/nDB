@@ -33,8 +33,12 @@
 //! across the per-operation iterations and trust that 1k iterations are
 //! enough to make the medians stable. If they're not, the noise will
 //! show up in the spread.
-#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation,
-         clippy::cast_sign_loss, clippy::too_many_lines)]
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::too_many_lines
+)]
 
 use ndb_engine::query::execute;
 use ndb_engine::record::Record;
@@ -43,29 +47,29 @@ use ndb_engine::wire_query::{
     CmpOp, Pattern, PropertyFilter, QueryRequest, Recursion, ReturnItem, RoleBinding, Term,
 };
 use ndb_engine::{
-    Engine, EntityId, EntityRecord, HyperEdgeRecord, HyperedgeId, PropertyId, RoleId, TxId,
-    TypeId, Value,
+    Engine, EntityId, EntityRecord, HyperEdgeRecord, HyperedgeId, PropertyId, RoleId, TxId, TypeId,
+    Value,
 };
 use std::time::Instant;
 
 // ─── Schema (kept narrow + obvious) ────────────────────────────────────
 const TYPE_CUSTOMER: u32 = 100;
-const TYPE_REGION:   u32 = 101;
-const TYPE_SALES:    u32 = 200;        // hyperedge (buyer role)
-const TYPE_CONTAINS: u32 = 201;        // hyperedge (parent, child)
+const TYPE_REGION: u32 = 101;
+const TYPE_SALES: u32 = 200; // hyperedge (buyer role)
+const TYPE_CONTAINS: u32 = 201; // hyperedge (parent, child)
 
-const PROP_NAME:   u32 = 30;
-const PROP_REGION: u32 = 31;           // string, on Customer
-const PROP_CODE:   u32 = 32;           // string, on Region
+const PROP_NAME: u32 = 30;
+const PROP_REGION: u32 = 31; // string, on Customer
+const PROP_CODE: u32 = 32; // string, on Region
 
-const ROLE_BUYER:  u32 = 10;
+const ROLE_BUYER: u32 = 10;
 const ROLE_PARENT: u32 = 11;
-const ROLE_CHILD:  u32 = 12;
+const ROLE_CHILD: u32 = 12;
 
 // ─── Workload sizing ──────────────────────────────────────────────────
 const N_CUSTOMERS: usize = 49_000;
-const N_REGIONS: usize = 1_000;        // → ~50_000 entities total
-const N_SALES_ORDERS: usize = 45_000;  // hub-routed onto 1k regions
+const N_REGIONS: usize = 1_000; // → ~50_000 entities total
+const N_SALES_ORDERS: usize = 45_000; // hub-routed onto 1k regions
 const REGION_CONTAINS_DEPTH: usize = 4;
 const N_CONTAINS_EDGES: usize = 5_000; // → ~50_000 hyperedges total
 // Iter counts: reads happen against the warm memtable (no explicit
@@ -125,7 +129,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("→ {}", $label);
             let t = Instant::now();
             let r = $expr;
-            eprintln!("← {} done in {:.0} ms", $label, t.elapsed().as_secs_f64() * 1000.0);
+            eprintln!(
+                "← {} done in {:.0} ms",
+                $label,
+                t.elapsed().as_secs_f64() * 1000.0
+            );
             r
         }};
     }
@@ -133,19 +141,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     results.push(step!("iter_all", bench_iter_all(&mut engine)));
 
     let lookup_uuids: Vec<EntityId> = sample_n(&customer_ids, N_LOOKUPS, 0x9e3779b97f4a7c15);
-    results.push(step!("point_lookup", bench_point_lookup(&mut engine, &lookup_uuids)));
+    results.push(step!(
+        "point_lookup",
+        bench_point_lookup(&mut engine, &lookup_uuids)
+    ));
 
     let region_probes: Vec<String> = sample_string_n(&region_codes, N_LOOKUPS, 0x517cc1b727220a95);
-    results.push(step!("property_lookup", bench_property_lookup(&mut engine, &region_probes)));
+    results.push(step!(
+        "property_lookup",
+        bench_property_lookup(&mut engine, &region_probes)
+    ));
 
     // For "narrow" single-pattern: pick a region we know has few
     // customers (region 0 was assigned ~ N_CUSTOMERS / N_REGIONS = 49).
     let narrow_region = region_codes[0].clone();
-    results.push(step!("single_pattern_query", bench_single_pattern_query(&mut engine, &narrow_region)));
-    results.push(step!("two_pattern_join", bench_two_pattern_join(&mut engine, &narrow_region)));
+    results.push(step!(
+        "single_pattern_query",
+        bench_single_pattern_query(&mut engine, &narrow_region)
+    ));
+    results.push(step!(
+        "two_pattern_join",
+        bench_two_pattern_join(&mut engine, &narrow_region)
+    ));
 
     let root = chain_roots[0];
-    results.push(step!("recursive_contains_depth3", bench_recursive_contains(&mut engine, root)));
+    results.push(step!(
+        "recursive_contains_depth3",
+        bench_recursive_contains(&mut engine, root)
+    ));
 
     results.push(step!("count_aggregate", bench_count_aggregate(&mut engine)));
 
@@ -172,13 +195,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     eprintln!();
-    eprintln!("bytes_on_disk:   {bytes_on_disk:>12} ({:.1} MiB)", bytes_on_disk as f64 / 1024.0 / 1024.0);
-    eprintln!("bytes_resident:  {bytes_resident:>12} ({:.1} MiB)", bytes_resident as f64 / 1024.0 / 1024.0);
-    eprintln!("load_ms:         {load_ms:>9.1}  flush_ms: {flush_ms:>5.1}  total bench: {bench_ms:.0} ms");
+    eprintln!(
+        "bytes_on_disk:   {bytes_on_disk:>12} ({:.1} MiB)",
+        bytes_on_disk as f64 / 1024.0 / 1024.0
+    );
+    eprintln!(
+        "bytes_resident:  {bytes_resident:>12} ({:.1} MiB)",
+        bytes_resident as f64 / 1024.0 / 1024.0
+    );
+    eprintln!(
+        "load_ms:         {load_ms:>9.1}  flush_ms: {flush_ms:>5.1}  total bench: {bench_ms:.0} ms"
+    );
 
     let mut json = String::new();
     json.push_str("{\n");
-    json.push_str(&format!("  \"engine\": \"ndb {}\",\n", env!("CARGO_PKG_VERSION")));
+    json.push_str(&format!(
+        "  \"engine\": \"ndb {}\",\n",
+        env!("CARGO_PKG_VERSION")
+    ));
     json.push_str("  \"workload\": \"realworld_microbench\",\n");
     json.push_str(&format!("  \"n_entities\": {n_entity_records},\n"));
     json.push_str(&format!("  \"n_hyperedges\": {n_hyperedge_records},\n"));
@@ -205,16 +239,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn register_dictionaries(engine: &mut Engine) {
     let mut tx = engine.begin_write();
     use ndb_engine::record::{PropertyKeyRecord, RoleNameRecord, TypeNameRecord};
-    tx.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(TYPE_CUSTOMER), name: "customer".into() }));
-    tx.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(TYPE_REGION),   name: "region".into() }));
-    tx.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(TYPE_SALES),    name: "sales".into() }));
-    tx.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(TYPE_CONTAINS), name: "contains".into() }));
-    tx.put_raw(Record::RoleName(RoleNameRecord { id: RoleId::new(ROLE_BUYER),  name: "buyer".into() }));
-    tx.put_raw(Record::RoleName(RoleNameRecord { id: RoleId::new(ROLE_PARENT), name: "parent".into() }));
-    tx.put_raw(Record::RoleName(RoleNameRecord { id: RoleId::new(ROLE_CHILD),  name: "child".into() }));
-    tx.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(PROP_NAME),   name: "name".into() }));
-    tx.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(PROP_REGION), name: "region".into() }));
-    tx.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(PROP_CODE),   name: "code".into() }));
+    tx.put_raw(Record::TypeName(TypeNameRecord {
+        id: TypeId::new(TYPE_CUSTOMER),
+        name: "customer".into(),
+    }));
+    tx.put_raw(Record::TypeName(TypeNameRecord {
+        id: TypeId::new(TYPE_REGION),
+        name: "region".into(),
+    }));
+    tx.put_raw(Record::TypeName(TypeNameRecord {
+        id: TypeId::new(TYPE_SALES),
+        name: "sales".into(),
+    }));
+    tx.put_raw(Record::TypeName(TypeNameRecord {
+        id: TypeId::new(TYPE_CONTAINS),
+        name: "contains".into(),
+    }));
+    tx.put_raw(Record::RoleName(RoleNameRecord {
+        id: RoleId::new(ROLE_BUYER),
+        name: "buyer".into(),
+    }));
+    tx.put_raw(Record::RoleName(RoleNameRecord {
+        id: RoleId::new(ROLE_PARENT),
+        name: "parent".into(),
+    }));
+    tx.put_raw(Record::RoleName(RoleNameRecord {
+        id: RoleId::new(ROLE_CHILD),
+        name: "child".into(),
+    }));
+    tx.put_raw(Record::PropertyKey(PropertyKeyRecord {
+        id: PropertyId::new(PROP_NAME),
+        name: "name".into(),
+    }));
+    tx.put_raw(Record::PropertyKey(PropertyKeyRecord {
+        id: PropertyId::new(PROP_REGION),
+        name: "region".into(),
+    }));
+    tx.put_raw(Record::PropertyKey(PropertyKeyRecord {
+        id: PropertyId::new(PROP_CODE),
+        name: "code".into(),
+    }));
     tx.commit().unwrap();
 }
 
@@ -231,7 +295,10 @@ fn load_regions(engine: &mut Engine) -> Vec<String> {
             tx_id_assert: TxId::new(0),
             tx_id_supersede: TxId::ACTIVE,
             properties: vec![
-                (PropertyId::new(PROP_NAME), Value::String(format!("Region {i}"))),
+                (
+                    PropertyId::new(PROP_NAME),
+                    Value::String(format!("Region {i}")),
+                ),
                 (PropertyId::new(PROP_CODE), Value::String(code.clone())),
             ],
         });
@@ -243,7 +310,9 @@ fn load_regions(engine: &mut Engine) -> Vec<String> {
             in_tx = 0;
         }
     }
-    if in_tx > 0 { tx.commit().unwrap(); }
+    if in_tx > 0 {
+        tx.commit().unwrap();
+    }
     codes
 }
 
@@ -260,7 +329,10 @@ fn load_customers(engine: &mut Engine, region_codes: &[String]) -> Vec<EntityId>
             tx_id_assert: TxId::new(0),
             tx_id_supersede: TxId::ACTIVE,
             properties: vec![
-                (PropertyId::new(PROP_NAME),   Value::String(format!("Customer {i}"))),
+                (
+                    PropertyId::new(PROP_NAME),
+                    Value::String(format!("Customer {i}")),
+                ),
                 (PropertyId::new(PROP_REGION), Value::String(region.clone())),
             ],
         });
@@ -272,7 +344,9 @@ fn load_customers(engine: &mut Engine, region_codes: &[String]) -> Vec<EntityId>
             in_tx = 0;
         }
     }
-    if in_tx > 0 { tx.commit().unwrap(); }
+    if in_tx > 0 {
+        tx.commit().unwrap();
+    }
     ids
 }
 
@@ -307,7 +381,9 @@ fn load_sales(engine: &mut Engine, customers: &[EntityId]) -> Vec<HyperedgeId> {
             in_tx = 0;
         }
     }
-    if in_tx > 0 { tx.commit().unwrap(); }
+    if in_tx > 0 {
+        tx.commit().unwrap();
+    }
     ids
 }
 
@@ -320,7 +396,9 @@ fn lookup_regions_by_code(engine: &mut Engine, codes: &[String]) -> Vec<EntityId
         std::collections::HashMap::with_capacity(codes.len());
     for r in engine.snapshot_iter(TxId::ACTIVE).unwrap() {
         if let Record::Entity(e) = r {
-            if e.type_id.get() != TYPE_REGION { continue; }
+            if e.type_id.get() != TYPE_REGION {
+                continue;
+            }
             for (pid, val) in &e.properties {
                 if pid.get() == PROP_CODE {
                     if let Value::String(s) = val {
@@ -330,7 +408,10 @@ fn lookup_regions_by_code(engine: &mut Engine, codes: &[String]) -> Vec<EntityId
             }
         }
     }
-    codes.iter().filter_map(|c| id_by_code.get(c).copied()).collect()
+    codes
+        .iter()
+        .filter_map(|c| id_by_code.get(c).copied())
+        .collect()
 }
 
 /// Build a 4-level region-containment chain: pick `N_CONTAINS_EDGES`
@@ -350,9 +431,11 @@ fn load_contains_chain(
     for i in 0..N_CONTAINS_EDGES {
         let parent_idx = i % n;
         let child_idx = (parent_idx + n / 4 + (i / n) * (n / 8)) % n;
-        if parent_idx == child_idx { continue; }
+        if parent_idx == child_idx {
+            continue;
+        }
         let parent = region_ids[parent_idx];
-        let child  = region_ids[child_idx];
+        let child = region_ids[child_idx];
         tx.put_hyperedge(HyperEdgeRecord {
             hyperedge_id: HyperedgeId::now_v7(),
             type_id: TypeId::new(TYPE_CONTAINS),
@@ -360,13 +443,17 @@ fn load_contains_chain(
             tx_id_supersede: TxId::ACTIVE,
             roles: vec![
                 (RoleId::new(ROLE_PARENT), parent),
-                (RoleId::new(ROLE_CHILD),  child),
+                (RoleId::new(ROLE_CHILD), child),
             ],
             hyperedge_roles: Vec::new(),
             properties: vec![],
         });
-        if i < REGION_CONTAINS_DEPTH { roots.push(parent); }
-        if i % 7 == 0 { leaves.push(child); }
+        if i < REGION_CONTAINS_DEPTH {
+            roots.push(parent);
+        }
+        if i % 7 == 0 {
+            leaves.push(child);
+        }
         in_tx += 1;
         if in_tx >= 500 {
             tx.commit().unwrap();
@@ -374,7 +461,9 @@ fn load_contains_chain(
             in_tx = 0;
         }
     }
-    if in_tx > 0 { tx.commit().unwrap(); }
+    if in_tx > 0 {
+        tx.commit().unwrap();
+    }
     (roots, leaves)
 }
 
@@ -395,8 +484,19 @@ fn finalize(name: &'static str, samples_us: &mut [u64], total_dur_us: f64) -> Be
     let p50 = samples_us[n / 2] as f64;
     let p99 = samples_us[(n * 99 / 100).min(n - 1)] as f64;
     let min = samples_us[0] as f64;
-    let ops_per_sec = if total_dur_us > 0.0 { (n as f64) * 1_000_000.0 / total_dur_us } else { 0.0 };
-    BenchResult { name, iters: n, min_us: min, p50_us: p50, p99_us: p99, ops_per_sec }
+    let ops_per_sec = if total_dur_us > 0.0 {
+        (n as f64) * 1_000_000.0 / total_dur_us
+    } else {
+        0.0
+    };
+    BenchResult {
+        name,
+        iters: n,
+        min_us: min,
+        p50_us: p50,
+        p99_us: p99,
+        ops_per_sec,
+    }
 }
 
 fn bench_iter_all(engine: &mut Engine) -> BenchResult {
@@ -421,11 +521,17 @@ fn bench_point_lookup(engine: &mut Engine, lookups: &[EntityId]) -> BenchResult 
     let mut hits = 0_u64;
     for eid in lookups {
         let t = Instant::now();
-        if engine.snapshot_read(&eid.into_uuid(), TxId::ACTIVE).is_ok() { hits += 1; }
+        if engine.snapshot_read(&eid.into_uuid(), TxId::ACTIVE).is_ok() {
+            hits += 1;
+        }
         samples.push(t.elapsed().as_micros() as u64);
     }
     assert_eq!(hits as usize, lookups.len(), "all point lookups should hit");
-    finalize("point_lookup", &mut samples, outer.elapsed().as_micros() as f64)
+    finalize(
+        "point_lookup",
+        &mut samples,
+        outer.elapsed().as_micros() as f64,
+    )
 }
 
 fn bench_property_lookup(engine: &mut Engine, region_codes: &[String]) -> BenchResult {
@@ -443,7 +549,11 @@ fn bench_property_lookup(engine: &mut Engine, region_codes: &[String]) -> BenchR
         debug_assert!(!hits.is_empty());
         samples.push(t.elapsed().as_micros() as u64);
     }
-    finalize("property_lookup", &mut samples, outer.elapsed().as_micros() as f64)
+    finalize(
+        "property_lookup",
+        &mut samples,
+        outer.elapsed().as_micros() as f64,
+    )
 }
 
 fn bench_single_pattern_query(engine: &mut Engine, region: &str) -> BenchResult {
@@ -455,13 +565,21 @@ fn bench_single_pattern_query(engine: &mut Engine, region: &str) -> BenchResult 
             property_filters: vec![PropertyFilter {
                 property_id: PROP_REGION,
                 op: CmpOp::Eq,
-                term: Term::Literal { value: JsonValue::String { value: region.into() } },
+                term: Term::Literal {
+                    value: JsonValue::String {
+                        value: region.into(),
+                    },
+                },
             }],
         }],
         filter: None,
         returns: vec![ReturnItem::from("c")],
-        order_by: vec![], limit: None,
-        creates: vec![], deletes: vec![], sets: vec![], merges: vec![],
+        order_by: vec![],
+        limit: None,
+        creates: vec![],
+        deletes: vec![],
+        sets: vec![],
+        merges: vec![],
     };
     let mut samples = Vec::with_capacity(N_QUERY_ITERS);
     let outer = Instant::now();
@@ -471,7 +589,11 @@ fn bench_single_pattern_query(engine: &mut Engine, region: &str) -> BenchResult 
         debug_assert!(!resp.rows.is_empty());
         samples.push(t.elapsed().as_micros() as u64);
     }
-    finalize("single_pattern_query", &mut samples, outer.elapsed().as_micros() as f64)
+    finalize(
+        "single_pattern_query",
+        &mut samples,
+        outer.elapsed().as_micros() as f64,
+    )
 }
 
 fn bench_two_pattern_join(engine: &mut Engine, region: &str) -> BenchResult {
@@ -485,21 +607,32 @@ fn bench_two_pattern_join(engine: &mut Engine, region: &str) -> BenchResult {
                 property_filters: vec![PropertyFilter {
                     property_id: PROP_REGION,
                     op: CmpOp::Eq,
-                    term: Term::Literal { value: JsonValue::String { value: region.into() } },
+                    term: Term::Literal {
+                        value: JsonValue::String {
+                            value: region.into(),
+                        },
+                    },
                 }],
             },
             Pattern::Hyperedge {
                 type_id: TYPE_SALES,
                 self_var: None,
-                role_bindings: vec![RoleBinding { role_id: ROLE_BUYER, term: Term::Var { name: "c".into() } }],
+                role_bindings: vec![RoleBinding {
+                    role_id: ROLE_BUYER,
+                    term: Term::Var { name: "c".into() },
+                }],
                 property_filters: vec![],
                 recursion: None,
             },
         ],
         filter: None,
         returns: vec![ReturnItem::from("c")],
-        order_by: vec![], limit: None,
-        creates: vec![], deletes: vec![], sets: vec![], merges: vec![],
+        order_by: vec![],
+        limit: None,
+        creates: vec![],
+        deletes: vec![],
+        sets: vec![],
+        merges: vec![],
     };
     let mut samples = Vec::with_capacity(N_QUERY_ITERS);
     let outer = Instant::now();
@@ -509,7 +642,11 @@ fn bench_two_pattern_join(engine: &mut Engine, region: &str) -> BenchResult {
         debug_assert!(!resp.rows.is_empty());
         samples.push(t.elapsed().as_micros() as u64);
     }
-    finalize("two_pattern_join", &mut samples, outer.elapsed().as_micros() as f64)
+    finalize(
+        "two_pattern_join",
+        &mut samples,
+        outer.elapsed().as_micros() as f64,
+    )
 }
 
 fn bench_recursive_contains(engine: &mut Engine, root: EntityId) -> BenchResult {
@@ -521,17 +658,32 @@ fn bench_recursive_contains(engine: &mut Engine, root: EntityId) -> BenchResult 
             type_id: TYPE_CONTAINS,
             self_var: None,
             role_bindings: vec![
-                RoleBinding { role_id: ROLE_PARENT,
-                    term: Term::Literal { value: JsonValue::Uuid { value: root.into_uuid().to_string() } } },
-                RoleBinding { role_id: ROLE_CHILD,  term: Term::Var { name: "leaf".into() } },
+                RoleBinding {
+                    role_id: ROLE_PARENT,
+                    term: Term::Literal {
+                        value: JsonValue::Uuid {
+                            value: root.into_uuid().to_string(),
+                        },
+                    },
+                },
+                RoleBinding {
+                    role_id: ROLE_CHILD,
+                    term: Term::Var {
+                        name: "leaf".into(),
+                    },
+                },
             ],
             property_filters: vec![],
             recursion: Some(Recursion::Plus { max_depth: 3 }),
         }],
         filter: None,
         returns: vec![ReturnItem::from("leaf")],
-        order_by: vec![], limit: None,
-        creates: vec![], deletes: vec![], sets: vec![], merges: vec![],
+        order_by: vec![],
+        limit: None,
+        creates: vec![],
+        deletes: vec![],
+        sets: vec![],
+        merges: vec![],
     };
     let mut samples = Vec::with_capacity(N_RECURSIVE_ITERS);
     let outer = Instant::now();
@@ -540,14 +692,19 @@ fn bench_recursive_contains(engine: &mut Engine, root: EntityId) -> BenchResult 
         let _ = execute(engine, req.clone()).unwrap();
         samples.push(t.elapsed().as_micros() as u64);
     }
-    finalize("recursive_contains_depth3", &mut samples, outer.elapsed().as_micros() as f64)
+    finalize(
+        "recursive_contains_depth3",
+        &mut samples,
+        outer.elapsed().as_micros() as f64,
+    )
 }
 
 fn bench_count_aggregate(engine: &mut Engine) -> BenchResult {
     let req = QueryRequest {
         as_of: None,
         patterns: vec![Pattern::Entity {
-            type_id: TYPE_CUSTOMER, self_var: Some("c".into()),
+            type_id: TYPE_CUSTOMER,
+            self_var: Some("c".into()),
             property_filters: vec![],
         }],
         filter: None,
@@ -557,8 +714,12 @@ fn bench_count_aggregate(engine: &mut Engine) -> BenchResult {
             property: None,
             display: None,
         }],
-        order_by: vec![], limit: None,
-        creates: vec![], deletes: vec![], sets: vec![], merges: vec![],
+        order_by: vec![],
+        limit: None,
+        creates: vec![],
+        deletes: vec![],
+        sets: vec![],
+        merges: vec![],
     };
     let mut samples = Vec::with_capacity(N_RECURSIVE_ITERS);
     let outer = Instant::now();
@@ -568,7 +729,11 @@ fn bench_count_aggregate(engine: &mut Engine) -> BenchResult {
         debug_assert_eq!(resp.rows.len(), 1);
         samples.push(t.elapsed().as_micros() as u64);
     }
-    finalize("count_aggregate", &mut samples, outer.elapsed().as_micros() as f64)
+    finalize(
+        "count_aggregate",
+        &mut samples,
+        outer.elapsed().as_micros() as f64,
+    )
 }
 
 fn bench_commits_per_sec(engine: &mut Engine) -> BenchResult {
@@ -583,14 +748,24 @@ fn bench_commits_per_sec(engine: &mut Engine) -> BenchResult {
             tx_id_assert: TxId::new(0),
             tx_id_supersede: TxId::ACTIVE,
             properties: vec![
-                (PropertyId::new(PROP_NAME),   Value::String(format!("bench-{i}"))),
-                (PropertyId::new(PROP_REGION), Value::String("REG-00000".into())),
+                (
+                    PropertyId::new(PROP_NAME),
+                    Value::String(format!("bench-{i}")),
+                ),
+                (
+                    PropertyId::new(PROP_REGION),
+                    Value::String("REG-00000".into()),
+                ),
             ],
         });
         tx.commit().unwrap();
         samples.push(t.elapsed().as_micros() as u64);
     }
-    finalize("commits_per_sec", &mut samples, outer.elapsed().as_micros() as f64)
+    finalize(
+        "commits_per_sec",
+        &mut samples,
+        outer.elapsed().as_micros() as f64,
+    )
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────
@@ -599,7 +774,9 @@ fn sample_n<T: Copy>(pool: &[T], n: usize, seed: u64) -> Vec<T> {
     let mut out = Vec::with_capacity(n);
     let mut x = seed;
     for _ in 0..n {
-        x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
         out.push(pool[(x as usize) % pool.len()]);
     }
     out
@@ -609,7 +786,9 @@ fn sample_string_n(pool: &[String], n: usize, seed: u64) -> Vec<String> {
     let mut out = Vec::with_capacity(n);
     let mut x = seed;
     for _ in 0..n {
-        x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
         out.push(pool[(x as usize) % pool.len()].clone());
     }
     out

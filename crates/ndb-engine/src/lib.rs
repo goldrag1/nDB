@@ -30,8 +30,8 @@
 pub mod block_index;
 pub mod bloom;
 pub mod capability;
-pub mod compression;
 pub mod codec;
+pub mod compression;
 pub mod db;
 pub mod encryption;
 pub mod engine;
@@ -51,26 +51,35 @@ pub mod wal;
 pub mod wire;
 pub mod wire_query;
 
+pub use block_index::{
+    BLOCK_INDEX_EXTENSION, BLOCK_INDEX_FORMAT_VERSION, BLOCK_INDEX_FORMAT_VERSION_MAX_SUPPORTED,
+    BLOCK_INDEX_MAGIC, BlockIndex, BlockIndexEntry, BlockIndexError, BlockIndexWriter,
+    DEFAULT_BLOCK_SIZE, load_sidecar, sidecar_path_for,
+};
+pub use bloom::{
+    BLOOM_EXTENSION, BLOOM_FORMAT_VERSION, BLOOM_FORMAT_VERSION_MAX_SUPPORTED, BloomError,
+    BloomFilter, BloomWriter, DEFAULT_FALSE_POSITIVE_RATE,
+};
+pub use capability::{
+    PROP_ACTION, PROP_EXPIRES_AT, PROP_GRANTED_AT, PROP_PRINCIPAL_NAME, PROP_PRINCIPAL_TOKEN,
+    PROP_TARGET, ROLE_SUBJECT, TYPE_CAPABILITY, TYPE_PRINCIPAL, WILDCARD,
+};
+pub use compression::{Codec, CompressionError};
+pub use db::{
+    CURRENT_FILE, Database, DatabaseError, LOCK_FILE, MANIFEST_FORMAT_VERSION,
+    MANIFEST_FORMAT_VERSION_MAX_SUPPORTED, MANIFEST_MAGIC, MANIFEST_PREFIX, MAX_LSM_LEVEL,
+    Manifest, ManifestEntry, manifest_filename, parse_manifest_filename,
+};
 pub use encryption::{
     Cipher, DEFAULT_CHUNK_SIZE, ENCRYPTED_FILE_FORMAT_VERSION, ENCRYPTED_FILE_MAGIC,
     ENCRYPTION_ALGO_AES_GCM_256, ENCRYPTION_MARKER_FILENAME, ENCRYPTION_MARKER_FORMAT_VERSION,
     ENCRYPTION_MARKER_MAGIC, ENCRYPTION_MIGRATION_FILENAME, EncryptedFile, EncryptionError,
     EncryptionMarker, FINGERPRINT_LEN, KEY_LEN, NONCE_LEN, TAG_LEN,
 };
-pub use db::{
-    CURRENT_FILE, Database, DatabaseError, LOCK_FILE, MANIFEST_FORMAT_VERSION,
-    MANIFEST_FORMAT_VERSION_MAX_SUPPORTED, MANIFEST_MAGIC, MANIFEST_PREFIX, MAX_LSM_LEVEL,
-    Manifest, ManifestEntry, manifest_filename, parse_manifest_filename,
-};
 pub use engine::{
     BackupStats, CompactionPlan, CompactionStats, DEFAULT_MAX_CACHE_BYTES, Engine, EngineConfig,
     EngineError, IndexMemoryStats, IsolationLevel, MigrationStats, RetentionPolicy, WriteTxn,
     merge_planned,
-};
-pub use shared::{CompactionPolicy, CompactorHandle, SharedEngine, run_offlock_compaction};
-pub use replication::{
-    BatchDecodeError, FollowerCursor, PollOutcome, ReplicationBatch, StreamedBatch, apply_batch,
-    decode_records_b64, encode_records_b64, poll_once, read_wal_since,
 };
 pub use error::{DecodeError, EncodeError};
 pub use id::{EntityId, HyperedgeId, PropertyId, RoleId, TX_ACTIVE, TYPE_UNTYPED, TxId, TypeId};
@@ -78,32 +87,21 @@ pub use index::{
     AdjacencyIndex, Distance, HyperEdgeTypeIndex, Index, LookupKeyIndex, PropertyBTreeIndex,
     VectorIndex,
 };
-pub use capability::{
-    PROP_ACTION, PROP_EXPIRES_AT, PROP_GRANTED_AT, PROP_PRINCIPAL_NAME, PROP_PRINCIPAL_TOKEN,
-    PROP_TARGET, ROLE_SUBJECT, TYPE_CAPABILITY, TYPE_PRINCIPAL, WILDCARD,
-};
 pub use memtable::Memtable;
 pub use mvcc::{Resolved, effective_tx, resolve, resolve_owned, visible_at};
 pub use query::{
-    Bindings, QueryError,
-    execute as execute_query,
-    execute_read as execute_query_read,
+    Bindings, QueryError, execute as execute_query, execute_read as execute_query_read,
 };
 pub use record::{
     ENVELOPE_OVERHEAD, EntityRecord, FORMAT_VERSION, FORMAT_VERSION_MAX_SUPPORTED, HyperEdgeRecord,
     PropertyKeyRecord, Record, RecordKind, RoleNameRecord, TombstoneRecord, TypeNameRecord,
     peek_record_kind, peek_record_size,
 };
-pub use compression::{Codec, CompressionError};
-pub use bloom::{
-    BLOOM_EXTENSION, BLOOM_FORMAT_VERSION, BLOOM_FORMAT_VERSION_MAX_SUPPORTED,
-    BloomError, BloomFilter, BloomWriter, DEFAULT_FALSE_POSITIVE_RATE,
+pub use replication::{
+    BatchDecodeError, FollowerCursor, PollOutcome, ReplicationBatch, StreamedBatch, apply_batch,
+    decode_records_b64, encode_records_b64, poll_once, read_wal_since,
 };
-pub use block_index::{
-    BLOCK_INDEX_EXTENSION, BLOCK_INDEX_FORMAT_VERSION, BLOCK_INDEX_FORMAT_VERSION_MAX_SUPPORTED,
-    BLOCK_INDEX_MAGIC, BlockIndex, BlockIndexEntry, BlockIndexError, BlockIndexWriter,
-    DEFAULT_BLOCK_SIZE, load_sidecar, sidecar_path_for,
-};
+pub use shared::{CompactionPolicy, CompactorHandle, SharedEngine, run_offlock_compaction};
 pub use sstable::{
     SSTABLE_EXTENSION, SSTABLE_FOOTER_SIZE, SSTABLE_FORMAT_VERSION,
     SSTABLE_FORMAT_VERSION_MAX_SUPPORTED, SSTABLE_MAGIC, SSTableError, SSTableFooter, SSTableIter,

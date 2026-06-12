@@ -72,9 +72,15 @@ fn main() -> ExitCode {
     let store = Store::new(engine);
     bootstrap_admin(&store);
     let p = std::path::Path::new(&path);
-    let primary_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("primary").to_string();
+    let primary_name = p
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("primary")
+        .to_string();
     // New databases live in a sibling "<name>-dbs" directory.
-    let root = p.parent().unwrap_or_else(|| std::path::Path::new("."))
+    let root = p
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
         .join(format!("{primary_name}-dbs"));
     let state = Arc::new(http::AppState::new(Arc::new(store), primary_name, root));
     let listener = match http::bind(&bind) {
@@ -84,10 +90,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let port = listener
-        .local_addr()
-        .map(|a| a.port())
-        .unwrap_or_default();
+    let port = listener.local_addr().map(|a| a.port()).unwrap_or_default();
     let url = format!("http://127.0.0.1:{port}/");
 
     println!("nDB Studio — {path}");
@@ -117,16 +120,17 @@ fn bootstrap_admin(store: &Store) {
             println!("  bootstrap admin — username: admin  password: {password}");
             println!("  (shown once; add your own accounts in the Users panel)");
         }
-        Err(e) => eprintln!("  warning: could not create bootstrap admin: {}", e.message()),
+        Err(e) => eprintln!(
+            "  warning: could not create bootstrap admin: {}",
+            e.message()
+        ),
     }
 }
 
 fn open_engine(path: &str, new: bool, low_memory: bool) -> Result<SharedEngine, String> {
     let exists = std::path::Path::new(path).join("CURRENT").exists();
     if !new && !exists {
-        return Err(format!(
-            "no database at {path:?} (use --new to create one)"
-        ));
+        return Err(format!("no database at {path:?} (use --new to create one)"));
     }
     if low_memory {
         let cfg = EngineConfig::low_memory(DEFAULT_CACHE_BYTES);

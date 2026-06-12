@@ -75,7 +75,9 @@ pub fn from_json(j: &J) -> Result<Value, String> {
             if let Some(J::String(id)) = map.get("$ref") {
                 let uuid = uuid::Uuid::parse_str(id)
                     .map_err(|_| format!("invalid entity ref uuid: {id}"))?;
-                Ok(Value::EntityRef(ndb_engine::id::EntityId::from_bytes(*uuid.as_bytes())))
+                Ok(Value::EntityRef(ndb_engine::id::EntityId::from_bytes(
+                    *uuid.as_bytes(),
+                )))
             } else if let Some(J::Array(arr)) = map.get("$vec") {
                 let mut v = Vec::with_capacity(arr.len());
                 for x in arr {
@@ -87,7 +89,10 @@ pub fn from_json(j: &J) -> Result<Value, String> {
                 }
                 Ok(Value::Vector(v))
             } else {
-                Err("unsupported object value (only {\"$ref\":uuid} or {\"$vec\":[..]})".to_string())
+                Err(
+                    "unsupported object value (only {\"$ref\":uuid} or {\"$vec\":[..]})"
+                        .to_string(),
+                )
             }
         }
         J::Array(_) | J::Object(_) => {
