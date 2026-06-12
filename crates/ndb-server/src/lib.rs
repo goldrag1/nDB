@@ -106,6 +106,13 @@ pub const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 /// attempts so a shutdown request is noticed promptly without a busy spin.
 pub const DEFAULT_ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
+/// Default SSTable-count trigger for the background compactor. Chosen so a
+/// read never has to merge across more than a handful of layers.
+pub const DEFAULT_AUTO_COMPACTION_THRESHOLD: usize = 8;
+
+/// Default interval between background-compactor checks.
+pub const DEFAULT_AUTO_COMPACTION_INTERVAL: Duration = Duration::from_secs(30);
+
 // ---------------------------------------------------------------------------
 // Resource-limit / lifecycle configuration (P1/P2)
 // ---------------------------------------------------------------------------
@@ -135,6 +142,14 @@ pub struct ServerConfig {
     pub shutdown_drain_timeout: Duration,
     /// Poll interval for the shutdown-aware accept loop.
     pub accept_poll_interval: Duration,
+    /// Auto-compaction trigger: when the open SSTable count reaches this
+    /// many, the background compactor merges them. `0` disables the
+    /// background compactor (compaction then happens only via `POST
+    /// /compact`). Read amplification grows with SSTable count, so leaving
+    /// this unbounded is a production foot-gun — hence it is on by default.
+    pub auto_compaction_sstable_threshold: usize,
+    /// How often the background compactor checks the SSTable count.
+    pub auto_compaction_interval: Duration,
 }
 
 impl Default for ServerConfig {
@@ -147,6 +162,8 @@ impl Default for ServerConfig {
             max_body_bytes: DEFAULT_MAX_BODY_BYTES,
             shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             accept_poll_interval: DEFAULT_ACCEPT_POLL_INTERVAL,
+            auto_compaction_sstable_threshold: DEFAULT_AUTO_COMPACTION_THRESHOLD,
+            auto_compaction_interval: DEFAULT_AUTO_COMPACTION_INTERVAL,
         }
     }
 }
@@ -181,6 +198,8 @@ pub struct ServerMetrics {
     requests_by_route: Mutex<BTreeMap<&'static str, u64>>,
     /// `ndb_responses_total{status=...}` — keyed by status code.
     responses_by_status: Mutex<BTreeMap<u16, u64>>,
+    /// `ndb_auto_compactions_total` — background-compactor runs completed.
+    auto_compactions: AtomicU64,
 }
 
 impl ServerMetrics {
@@ -277,6 +296,11 @@ impl ServerMetrics {
         s.push_str("# HELP ndb_bytes_written_total Total response bytes written.\n");
         s.push_str("# TYPE ndb_bytes_written_total counter\n");
         let _ = writeln!(s, "ndb_bytes_written_total {bytes_written}");
+        // Counter: background-compactor runs.
+        let auto_compactions = self.auto_compactions.load(Ordering::Relaxed);
+        s.push_str("# HELP ndb_auto_compactions_total Background-compactor merges completed.\n");
+        s.push_str("# TYPE ndb_auto_compactions_total counter\n");
+        let _ = writeln!(s, "ndb_auto_compactions_total {auto_compactions}");
         s
     }
 }
@@ -884,6 +908,17 @@ impl Server {
         self
     }
 
+    /// Configure the background compactor (Tier 1). `threshold` is the open
+    /// SSTable count that triggers a merge; `0` disables the background
+    /// compactor entirely (compaction then happens only on `POST /compact`).
+    /// `interval` is how often the count is checked.
+    #[must_use]
+    pub fn with_auto_compaction(mut self, threshold: usize, interval: Duration) -> Self {
+        self.config.auto_compaction_sstable_threshold = threshold;
+        self.config.auto_compaction_interval = interval;
+        self
+    }
+
     /// Set the per-connection read + write timeouts (P1). A slow/stuck
     /// client can no longer hold a connection slot past these.
     #[must_use]
@@ -1206,6 +1241,13 @@ impl Server {
         listener
             .set_nonblocking(true)
             .unwrap_or_else(|e| eprintln!("set_nonblocking failed: {e}"));
+        // Background compactor (Tier 1): a scoped thread tied to the server
+        // lifetime that merges SSTables once their count crosses the
+        // threshold, so read amplification stays bounded without an operator
+        // having to POST /compact. Disabled when threshold == 0 or read-only.
+        if self.config.auto_compaction_sstable_threshold > 0 && !self.read_only {
+            scope.spawn(move || self.background_compaction_loop());
+        }
         let mut drain_deadline: Option<Instant> = None;
         loop {
             // Enter the drain window the first time shutdown is observed.
@@ -1226,6 +1268,54 @@ impl Server {
                     std::thread::sleep(self.config.accept_poll_interval);
                 }
                 Err(e) => eprintln!("accept error: {e}"),
+            }
+        }
+    }
+
+    /// Background-compactor loop (Tier 1). Wakes every
+    /// [`auto_compaction_interval`](ServerConfig::auto_compaction_interval),
+    /// and when the open SSTable count is at or above the configured
+    /// threshold runs one off-lock compaction. Exits promptly on shutdown.
+    ///
+    /// Sleeps are sliced into short polls so a shutdown is noticed without
+    /// waiting out a whole interval. Compaction errors are logged and
+    /// retried next tick — a transient failure must not kill the loop.
+    fn background_compaction_loop(&self) {
+        let threshold = self.config.auto_compaction_sstable_threshold;
+        let interval = self.config.auto_compaction_interval;
+        let poll = self.config.accept_poll_interval.min(interval);
+        loop {
+            // Sleep `interval`, but in `poll`-sized slices so shutdown is
+            // observed promptly.
+            let mut slept = Duration::ZERO;
+            while slept < interval {
+                if self.is_shutting_down() {
+                    return;
+                }
+                std::thread::sleep(poll);
+                slept += poll;
+            }
+            if self.is_shutting_down() {
+                return;
+            }
+            // Cheap read-locked check; only escalate to a merge when needed.
+            let count = self.engine.read().map(|e| e.sstable_count()).unwrap_or(0);
+            if count < threshold {
+                continue;
+            }
+            match run_offlock_compaction(&self.engine, &self.compaction_lock, TxId::ACTIVE, || {
+                TxId::ACTIVE
+            }) {
+                Ok(stats) => {
+                    self.metrics
+                        .auto_compactions
+                        .fetch_add(1, Ordering::Relaxed);
+                    eprintln!(
+                        "ndb-server: auto-compaction merged {} sstables ({} -> {} records)",
+                        stats.sstables_in, stats.records_in, stats.records_out
+                    );
+                }
+                Err(e) => eprintln!("ndb-server: auto-compaction failed (will retry): {e}"),
             }
         }
     }
@@ -3388,5 +3478,77 @@ impl<W: Write> Write for HeaderInjector<'_, W> {
             self.pending.clear();
         }
         self.inner.flush()
+    }
+}
+
+#[cfg(test)]
+mod background_compaction_tests {
+    use super::*;
+    use ndb_engine::{Engine, EntityId, EntityRecord, PropertyId, TxId, TypeId, Value};
+
+    fn unique_dir(tag: &str) -> std::path::PathBuf {
+        let n = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("ndb-server-{tag}-{n}"))
+    }
+
+    /// The background compactor must merge SSTables down once their count
+    /// crosses the threshold, with no operator action — and stop cleanly on
+    /// shutdown.
+    #[test]
+    fn background_compactor_reduces_sstable_count() {
+        let dir = unique_dir("autocompact");
+        let mut engine = Engine::create(&dir).unwrap();
+        // Produce several single-record SSTables by flushing after each commit.
+        for i in 0..5u32 {
+            let mut tx = engine.begin_write();
+            tx.put_entity(EntityRecord {
+                entity_id: EntityId::now_v7(),
+                type_id: TypeId::new(1),
+                tx_id_assert: TxId::new(0),
+                tx_id_supersede: TxId::ACTIVE,
+                properties: vec![(PropertyId::new(1), Value::I64(i64::from(i)))],
+            });
+            tx.commit().unwrap();
+            engine.flush().unwrap();
+        }
+        let before = engine.sstable_count();
+        assert!(before >= 4, "expected several sstables, got {before}");
+
+        let server = Server::from_engine(engine).with_auto_compaction(2, Duration::from_millis(40));
+        let engine_handle = server.engine();
+
+        std::thread::scope(|scope| {
+            scope.spawn(|| server.background_compaction_loop());
+            let mut reduced = false;
+            for _ in 0..100 {
+                std::thread::sleep(Duration::from_millis(40));
+                if engine_handle.read().unwrap().sstable_count() <= 1 {
+                    reduced = true;
+                    break;
+                }
+            }
+            // Stop the loop regardless of outcome so the scope can join.
+            server.request_shutdown();
+            assert!(
+                reduced,
+                "background compactor did not reduce sstable count below threshold"
+            );
+        });
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// threshold == 0 disables the compactor: the loop must exit immediately
+    /// at shutdown and never touch the engine.
+    #[test]
+    fn disabled_when_threshold_zero() {
+        let cfg = ServerConfig {
+            auto_compaction_sstable_threshold: 0,
+            ..ServerConfig::default()
+        };
+        assert_eq!(cfg.auto_compaction_sstable_threshold, 0);
     }
 }
