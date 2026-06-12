@@ -518,7 +518,10 @@ mod tests {
         idx.apply(&entity(a, 3, 10, vec![5.0, 5.0]), TxId::new(3));
         let hits = idx.search(prop, &[1.0, 0.0], 1, Distance::L2Squared);
         assert_eq!(hits.len(), 1);
-        assert!((hits[0].1).abs() < 1e-6, "first vector should still be the live one");
+        assert!(
+            (hits[0].1).abs() < 1e-6,
+            "first vector should still be the live one"
+        );
     }
 
     #[test]

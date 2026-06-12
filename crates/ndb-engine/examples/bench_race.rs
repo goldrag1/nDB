@@ -24,8 +24,12 @@
 //!
 //! Run with:
 //!     cargo run --release --example bench_race -- --bind 127.0.0.1:8771
-#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation,
-         clippy::cast_sign_loss, clippy::too_many_lines)]
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::too_many_lines
+)]
 
 // `ndb_engine::query::execute_read` referenced via fully-qualified path in
 // `do_one_op` / `bench_*` — no top-level import needed.
@@ -35,8 +39,8 @@ use ndb_engine::wire_query::{
     CmpOp, Pattern, PropertyFilter, QueryRequest, Recursion, ReturnItem, RoleBinding, Term,
 };
 use ndb_engine::{
-    Engine, EntityId, EntityRecord, HyperEdgeRecord, HyperedgeId, PropertyId, RoleId, TxId,
-    TypeId, Value,
+    Engine, EntityId, EntityRecord, HyperEdgeRecord, HyperedgeId, PropertyId, RoleId, TxId, TypeId,
+    Value,
 };
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -46,17 +50,17 @@ use std::time::{Duration, Instant};
 
 // ─── Schema (kept narrow + obvious) ────────────────────────────────────
 const TYPE_CUSTOMER: u32 = 100;
-const TYPE_REGION:   u32 = 101;
-const TYPE_SALES:    u32 = 200;
+const TYPE_REGION: u32 = 101;
+const TYPE_SALES: u32 = 200;
 const TYPE_CONTAINS: u32 = 201;
 
-const PROP_NAME:   u32 = 30;
+const PROP_NAME: u32 = 30;
 const PROP_REGION: u32 = 31;
-const PROP_CODE:   u32 = 32;
+const PROP_CODE: u32 = 32;
 
-const ROLE_BUYER:  u32 = 10;
+const ROLE_BUYER: u32 = 10;
 const ROLE_PARENT: u32 = 11;
-const ROLE_CHILD:  u32 = 12;
+const ROLE_CHILD: u32 = 12;
 
 // ─── Workload sizing (smaller than the realworld bench — live = must
 // stay under ~500 ms wall-clock per click). ──────────────────────────
@@ -67,7 +71,7 @@ const N_CONTAINS_EDGES: usize = 5_000;
 
 const N_ITER_LOOKUPS: usize = 500;
 const N_ITER_QUERY_SMALL: usize = 50;
-const N_ITER_QUERY_LARGE: usize = 10;  // two_pattern_join / count_aggregate
+const N_ITER_QUERY_LARGE: usize = 10; // two_pattern_join / count_aggregate
 const N_ITER_RECURSIVE: usize = 25;
 const N_ITER_ITERATE: usize = 3;
 
@@ -77,18 +81,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bind = std::env::args()
         .skip(1)
         .scan(false, |seen, a| {
-            if *seen { *seen = false; Some(Some(a)) }
-            else if a == "--bind" { *seen = true; Some(None) }
-            else { Some(None) }
+            if *seen {
+                *seen = false;
+                Some(Some(a))
+            } else if a == "--bind" {
+                *seen = true;
+                Some(None)
+            } else {
+                Some(None)
+            }
         })
         .flatten()
         .next()
         .unwrap_or_else(|| "127.0.0.1:8771".into());
 
-    let dir = std::env::temp_dir().join(format!(
-        "ndb-bench-race-{}",
-        uuid::Uuid::now_v7().simple()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("ndb-bench-race-{}", uuid::Uuid::now_v7().simple()));
     std::fs::create_dir_all(&dir)?;
     eprintln!("DB: {}", dir.display());
 
@@ -169,27 +177,56 @@ struct Workload {
 }
 
 const WORKLOADS: &[Workload] = &[
-    Workload { name: "iter_all", label: "Full snapshot scan",
-        blurb: "Streaming walk of every entity + hyperedge.", iters: N_ITER_ITERATE },
-    Workload { name: "point_lookup", label: "Random point lookup",
-        blurb: "Fetch one record by UUID, 500 times.", iters: N_ITER_LOOKUPS },
-    Workload { name: "property_lookup", label: "Indexed property lookup",
-        blurb: "Look up customers by region code via the B-tree, 500 times.", iters: N_ITER_LOOKUPS },
-    Workload { name: "single_pattern_query", label: "Single-pattern query",
-        blurb: "match customer(region: \"REG-00000\") as ?c return ?c", iters: N_ITER_QUERY_SMALL },
-    Workload { name: "two_pattern_join", label: "Two-pattern join",
-        blurb: "match customer(region: X) as ?c sales(buyer: ?c) return ?c", iters: N_ITER_QUERY_LARGE },
-    Workload { name: "recursive_contains_depth3", label: "Recursive walk, depth 3",
-        blurb: "match contains+(parent: <root>, child: ?leaf) {1,3}", iters: N_ITER_RECURSIVE },
-    Workload { name: "count_aggregate", label: "count() over a type",
-        blurb: "Aggregate over 49k customer entities.", iters: N_ITER_QUERY_LARGE },
+    Workload {
+        name: "iter_all",
+        label: "Full snapshot scan",
+        blurb: "Streaming walk of every entity + hyperedge.",
+        iters: N_ITER_ITERATE,
+    },
+    Workload {
+        name: "point_lookup",
+        label: "Random point lookup",
+        blurb: "Fetch one record by UUID, 500 times.",
+        iters: N_ITER_LOOKUPS,
+    },
+    Workload {
+        name: "property_lookup",
+        label: "Indexed property lookup",
+        blurb: "Look up customers by region code via the B-tree, 500 times.",
+        iters: N_ITER_LOOKUPS,
+    },
+    Workload {
+        name: "single_pattern_query",
+        label: "Single-pattern query",
+        blurb: "match customer(region: \"REG-00000\") as ?c return ?c",
+        iters: N_ITER_QUERY_SMALL,
+    },
+    Workload {
+        name: "two_pattern_join",
+        label: "Two-pattern join",
+        blurb: "match customer(region: X) as ?c sales(buyer: ?c) return ?c",
+        iters: N_ITER_QUERY_LARGE,
+    },
+    Workload {
+        name: "recursive_contains_depth3",
+        label: "Recursive walk, depth 3",
+        blurb: "match contains+(parent: <root>, child: ?leaf) {1,3}",
+        iters: N_ITER_RECURSIVE,
+    },
+    Workload {
+        name: "count_aggregate",
+        label: "count() over a type",
+        blurb: "Aggregate over 49k customer entities.",
+        iters: N_ITER_QUERY_LARGE,
+    },
 ];
 
 // ─── HTTP loop ─────────────────────────────────────────────────────────
 
 fn handle(state: Arc<State>, mut stream: TcpStream) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-    let peer_ip = stream.peer_addr()
+    let peer_ip = stream
+        .peer_addr()
         .map(|a| a.ip().to_string())
         .unwrap_or_else(|_| "?".into());
 
@@ -203,10 +240,17 @@ fn handle(state: Arc<State>, mut stream: TcpStream) -> std::io::Result<()> {
     let mut content_length = 0usize;
     loop {
         let mut header = String::new();
-        if reader.read_line(&mut header)? == 0 { break; }
+        if reader.read_line(&mut header)? == 0 {
+            break;
+        }
         let trimmed = header.trim_end();
-        if trimmed.is_empty() { break; }
-        if let Some(v) = trimmed.strip_prefix("Content-Length:").or_else(|| trimmed.strip_prefix("content-length:")) {
+        if trimmed.is_empty() {
+            break;
+        }
+        if let Some(v) = trimmed
+            .strip_prefix("Content-Length:")
+            .or_else(|| trimmed.strip_prefix("content-length:"))
+        {
             content_length = v.trim().parse().unwrap_or(0);
         }
     }
@@ -217,27 +261,40 @@ fn handle(state: Arc<State>, mut stream: TcpStream) -> std::io::Result<()> {
     }
 
     match (method.as_str(), path.as_str()) {
-        ("GET", "/health") => {
-            send_json(&mut stream, 200, &format!(
+        ("GET", "/health") => send_json(
+            &mut stream,
+            200,
+            &format!(
                 "{{\"status\":\"ok\",\"loaded\":true,\"engine\":\"ndb {}\",\
                  \"n_entities\":{},\"n_hyperedges\":{},\"load_ms\":{:.0}}}",
                 env!("CARGO_PKG_VERSION"),
-                state.n_entities, state.n_hyperedges, state.load_ms,
-            ))
-        }
+                state.n_entities,
+                state.n_hyperedges,
+                state.load_ms,
+            ),
+        ),
         ("GET", "/stats") => {
             let bytes_on_disk = dir_size_bytes(&state.dir);
             let (rss_kb, cpu_user_us, cpu_sys_us, _) = read_self_proc_stats();
-            send_json(&mut stream, 200, &format!(
-                "{{\"bytes_on_disk\":{},\"bytes_resident\":{},\
+            send_json(
+                &mut stream,
+                200,
+                &format!(
+                    "{{\"bytes_on_disk\":{},\"bytes_resident\":{},\
                  \"cpu_user_us\":{},\"cpu_sys_us\":{}}}",
-                bytes_on_disk, rss_kb * 1024, cpu_user_us, cpu_sys_us,
-            ))
+                    bytes_on_disk,
+                    rss_kb * 1024,
+                    cpu_user_us,
+                    cpu_sys_us,
+                ),
+            )
         }
         ("GET", "/workloads") => {
             let mut out = String::from("[");
             for (i, w) in WORKLOADS.iter().enumerate() {
-                if i > 0 { out.push(','); }
+                if i > 0 {
+                    out.push(',');
+                }
                 out.push_str(&format!(
                     "{{\"name\":\"{}\",\"label\":\"{}\",\"blurb\":\"{}\",\"iters\":{}}}",
                     w.name,
@@ -252,8 +309,7 @@ fn handle(state: Arc<State>, mut stream: TcpStream) -> std::io::Result<()> {
         ("POST", path) if path.starts_with("/run/") => {
             let name = &path["/run/".len()..];
             let Some(workload) = WORKLOADS.iter().find(|w| w.name == name) else {
-                return send_json(&mut stream, 404,
-                    "{\"error\":\"unknown_workload\"}");
+                return send_json(&mut stream, 404, "{\"error\":\"unknown_workload\"}");
             };
             // Rate limit
             {
@@ -264,8 +320,11 @@ fn handle(state: Arc<State>, mut stream: TcpStream) -> std::io::Result<()> {
                     let dt = now.duration_since(*prev);
                     if dt < Duration::from_secs(RATE_LIMIT_SECS) {
                         let wait = RATE_LIMIT_SECS - dt.as_secs();
-                        return send_json(&mut stream, 429,
-                            &format!("{{\"error\":\"rate_limit\",\"retry_after_s\":{wait}}}"));
+                        return send_json(
+                            &mut stream,
+                            429,
+                            &format!("{{\"error\":\"rate_limit\",\"retry_after_s\":{wait}}}"),
+                        );
                     }
                 }
                 rl.insert(key, now);
@@ -280,17 +339,26 @@ fn handle(state: Arc<State>, mut stream: TcpStream) -> std::io::Result<()> {
         ("POST", "/stress") => {
             let req: serde_json::Value = match serde_json::from_slice(&body) {
                 Ok(v) => v,
-                Err(e) => return send_json(&mut stream, 400,
-                    &format!("{{\"error\":\"bad_json\",\"detail\":\"{}\"}}",
-                             escape_json(&e.to_string()))),
+                Err(e) => {
+                    return send_json(
+                        &mut stream,
+                        400,
+                        &format!(
+                            "{{\"error\":\"bad_json\",\"detail\":\"{}\"}}",
+                            escape_json(&e.to_string())
+                        ),
+                    );
+                }
             };
             let workload_name = req.get("workload").and_then(|v| v.as_str()).unwrap_or("");
             let Some(workload) = WORKLOADS.iter().find(|w| w.name == workload_name) else {
-                return send_json(&mut stream, 404,
-                    "{\"error\":\"unknown_workload\"}");
+                return send_json(&mut stream, 404, "{\"error\":\"unknown_workload\"}");
             };
             let concurrency = req.get("concurrency").and_then(|v| v.as_u64()).unwrap_or(4) as usize;
-            let duration_ms = req.get("duration_ms").and_then(|v| v.as_u64()).unwrap_or(5000);
+            let duration_ms = req
+                .get("duration_ms")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(5000);
             let concurrency = concurrency.clamp(1, 128);
             let duration_ms = duration_ms.clamp(500, 30_000);
             // Stress rate limit: per-IP, regardless of workload — these
@@ -303,8 +371,11 @@ fn handle(state: Arc<State>, mut stream: TcpStream) -> std::io::Result<()> {
                     let dt = now.duration_since(*prev);
                     if dt < Duration::from_secs(RATE_LIMIT_SECS) {
                         let wait = RATE_LIMIT_SECS - dt.as_secs();
-                        return send_json(&mut stream, 429,
-                            &format!("{{\"error\":\"rate_limit\",\"retry_after_s\":{wait}}}"));
+                        return send_json(
+                            &mut stream,
+                            429,
+                            &format!("{{\"error\":\"rate_limit\",\"retry_after_s\":{wait}}}"),
+                        );
                     }
                 }
                 rl.insert(key, now);
@@ -318,7 +389,10 @@ fn handle(state: Arc<State>, mut stream: TcpStream) -> std::io::Result<()> {
 
 fn send_json(stream: &mut TcpStream, status: u16, body: &str) -> std::io::Result<()> {
     let status_text = match status {
-        200 => "OK", 404 => "Not Found", 429 => "Too Many Requests", 500 => "Internal Server Error",
+        200 => "OK",
+        404 => "Not Found",
+        429 => "Too Many Requests",
+        500 => "Internal Server Error",
         _ => "OK",
     };
     let resp = format!(
@@ -327,7 +401,8 @@ fn send_json(stream: &mut TcpStream, status: u16, body: &str) -> std::io::Result
          Access-Control-Allow-Origin: *\r\n\
          Connection: close\r\n\
          Content-Length: {}\r\n\r\n{}",
-        body.len(), body
+        body.len(),
+        body
     );
     stream.write_all(resp.as_bytes())?;
     stream.flush()
@@ -345,13 +420,17 @@ fn run_workload(state: &State, workload: &Workload) -> String {
     // take state.engine.write() instead.
     let engine = state.engine.read().unwrap();
     let r = match workload.name {
-        "iter_all"                  => bench_iter_all(&engine, workload.iters),
-        "point_lookup"              => bench_point_lookup(&engine, &state.lookup_uuids),
-        "property_lookup"           => bench_property_lookup(&engine, &state.region_probes),
-        "single_pattern_query"      => bench_single_pattern_query(&engine, &state.narrow_region, workload.iters),
-        "two_pattern_join"          => bench_two_pattern_join(&engine, &state.narrow_region, workload.iters),
-        "recursive_contains_depth3" => bench_recursive_contains(&engine, state.chain_root, workload.iters),
-        "count_aggregate"           => bench_count_aggregate(&engine, workload.iters),
+        "iter_all" => bench_iter_all(&engine, workload.iters),
+        "point_lookup" => bench_point_lookup(&engine, &state.lookup_uuids),
+        "property_lookup" => bench_property_lookup(&engine, &state.region_probes),
+        "single_pattern_query" => {
+            bench_single_pattern_query(&engine, &state.narrow_region, workload.iters)
+        }
+        "two_pattern_join" => bench_two_pattern_join(&engine, &state.narrow_region, workload.iters),
+        "recursive_contains_depth3" => {
+            bench_recursive_contains(&engine, state.chain_root, workload.iters)
+        }
+        "count_aggregate" => bench_count_aggregate(&engine, workload.iters),
         _ => unreachable!(),
     };
     format!(
@@ -373,7 +452,12 @@ fn run_workload(state: &State, workload: &Workload) -> String {
 // genuinely parallelise — point-lookup throughput scales linearly with
 // thread count up to the CPU's parallel-read limit.
 
-fn run_stress(state: &Arc<State>, workload: &Workload, concurrency: usize, duration_ms: u64) -> String {
+fn run_stress(
+    state: &Arc<State>,
+    workload: &Workload,
+    concurrency: usize,
+    duration_ms: u64,
+) -> String {
     let deadline = Instant::now() + Duration::from_millis(duration_ms);
     let started = Instant::now();
     let workload_name: &'static str = workload.name;
@@ -398,7 +482,11 @@ fn run_stress(state: &Arc<State>, workload: &Workload, concurrency: usize, durat
                     do_one_op(&engine, &st, workload_name, idx)
                 };
                 let us = t.elapsed().as_micros() as u64;
-                if ok { latencies.push(us); } else { errors += 1; }
+                if ok {
+                    latencies.push(us);
+                } else {
+                    errors += 1;
+                }
             }
             (latencies, errors)
         }));
@@ -415,15 +503,22 @@ fn run_stress(state: &Arc<State>, workload: &Workload, concurrency: usize, durat
     let total_ops = all.len() as u64;
     all.sort_unstable();
     let pct = |q: f64| -> u64 {
-        if all.is_empty() { 0 }
-        else { all[((all.len() as f64) * q).min(all.len() as f64 - 1.0) as usize] }
+        if all.is_empty() {
+            0
+        } else {
+            all[((all.len() as f64) * q).min(all.len() as f64 - 1.0) as usize]
+        }
     };
     let p50 = pct(0.50);
     let p95 = pct(0.95);
     let p99 = pct(0.99);
     let p999 = pct(0.999);
     let max = all.last().copied().unwrap_or(0);
-    let rps = if wall_ms > 0.0 { (total_ops as f64) * 1000.0 / wall_ms } else { 0.0 };
+    let rps = if wall_ms > 0.0 {
+        (total_ops as f64) * 1000.0 / wall_ms
+    } else {
+        0.0
+    };
 
     // Log10 histogram, 6 decades (1 μs … 1 s) × 10 bins/decade = 60.
     const N_BUCKETS: usize = 60;
@@ -437,8 +532,12 @@ fn run_stress(state: &Arc<State>, workload: &Workload, concurrency: usize, durat
 
     let mut hist_json = String::from("[");
     for (i, &count) in hist.iter().enumerate() {
-        if count == 0 { continue; }
-        if hist_json.len() > 1 { hist_json.push(','); }
+        if count == 0 {
+            continue;
+        }
+        if hist_json.len() > 1 {
+            hist_json.push(',');
+        }
         let edge = 10f64.powf(i as f64 / 10.0);
         hist_json.push_str(&format!("[{:.0},{}]", edge, count));
     }
@@ -449,8 +548,19 @@ fn run_stress(state: &Arc<State>, workload: &Workload, concurrency: usize, durat
          \"wall_ms\":{:.1},\"total_ops\":{},\"errors\":{},\"rps\":{:.1},\
          \"p50_us\":{},\"p95_us\":{},\"p99_us\":{},\"p999_us\":{},\
          \"max_us\":{},\"histogram_log10\":{}}}",
-        workload_name, concurrency, duration_ms, wall_ms,
-        total_ops, errors, rps, p50, p95, p99, p999, max, hist_json,
+        workload_name,
+        concurrency,
+        duration_ms,
+        wall_ms,
+        total_ops,
+        errors,
+        rps,
+        p50,
+        p95,
+        p99,
+        p999,
+        max,
+        hist_json,
     )
 }
 
@@ -462,7 +572,9 @@ fn do_one_op(engine: &Engine, state: &State, workload: &str, idx: usize) -> bool
         "iter_all" => {
             let mut n = 0_u64;
             for r in engine.snapshot_iter_streaming(TxId::ACTIVE) {
-                if r.is_err() { return false; }
+                if r.is_err() {
+                    return false;
+                }
                 n += 1;
             }
             n > 0
@@ -516,8 +628,20 @@ fn finalize(name: &'static str, samples_us: &mut [u64], total_dur_us: f64) -> Be
     let p50 = samples_us[n / 2] as f64;
     let p99 = samples_us[(n * 99 / 100).min(n - 1)] as f64;
     let min = samples_us[0] as f64;
-    let ops_per_sec = if total_dur_us > 0.0 { (n as f64) * 1_000_000.0 / total_dur_us } else { 0.0 };
-    BenchResult { name, iters: n, min_us: min, p50_us: p50, p99_us: p99, ops_per_sec, total_ms: total_dur_us / 1000.0 }
+    let ops_per_sec = if total_dur_us > 0.0 {
+        (n as f64) * 1_000_000.0 / total_dur_us
+    } else {
+        0.0
+    };
+    BenchResult {
+        name,
+        iters: n,
+        min_us: min,
+        p50_us: p50,
+        p99_us: p99,
+        ops_per_sec,
+        total_ms: total_dur_us / 1000.0,
+    }
 }
 
 fn bench_iter_all(engine: &Engine, iters: usize) -> BenchResult {
@@ -544,7 +668,11 @@ fn bench_point_lookup(engine: &Engine, lookups: &[EntityId]) -> BenchResult {
         let _ = engine.snapshot_read(&eid.into_uuid(), TxId::ACTIVE);
         samples.push(t.elapsed().as_micros() as u64);
     }
-    finalize("point_lookup", &mut samples, outer.elapsed().as_micros() as f64)
+    finalize(
+        "point_lookup",
+        &mut samples,
+        outer.elapsed().as_micros() as f64,
+    )
 }
 
 fn bench_property_lookup(engine: &Engine, region_codes: &[String]) -> BenchResult {
@@ -559,7 +687,11 @@ fn bench_property_lookup(engine: &Engine, region_codes: &[String]) -> BenchResul
         );
         samples.push(t.elapsed().as_micros() as u64);
     }
-    finalize("property_lookup", &mut samples, outer.elapsed().as_micros() as f64)
+    finalize(
+        "property_lookup",
+        &mut samples,
+        outer.elapsed().as_micros() as f64,
+    )
 }
 
 fn bench_single_pattern_query(engine: &Engine, region: &str, iters: usize) -> BenchResult {
@@ -571,7 +703,11 @@ fn bench_single_pattern_query(engine: &Engine, region: &str, iters: usize) -> Be
         let _ = ndb_engine::query::execute_read(engine, req.clone()).unwrap();
         samples.push(t.elapsed().as_micros() as u64);
     }
-    finalize("single_pattern_query", &mut samples, outer.elapsed().as_micros() as f64)
+    finalize(
+        "single_pattern_query",
+        &mut samples,
+        outer.elapsed().as_micros() as f64,
+    )
 }
 
 fn bench_two_pattern_join(engine: &Engine, region: &str, iters: usize) -> BenchResult {
@@ -583,7 +719,11 @@ fn bench_two_pattern_join(engine: &Engine, region: &str, iters: usize) -> BenchR
         let _ = ndb_engine::query::execute_read(engine, req.clone()).unwrap();
         samples.push(t.elapsed().as_micros() as u64);
     }
-    finalize("two_pattern_join", &mut samples, outer.elapsed().as_micros() as f64)
+    finalize(
+        "two_pattern_join",
+        &mut samples,
+        outer.elapsed().as_micros() as f64,
+    )
 }
 
 fn bench_recursive_contains(engine: &Engine, root: EntityId, iters: usize) -> BenchResult {
@@ -595,7 +735,11 @@ fn bench_recursive_contains(engine: &Engine, root: EntityId, iters: usize) -> Be
         let _ = ndb_engine::query::execute_read(engine, req.clone()).unwrap();
         samples.push(t.elapsed().as_micros() as u64);
     }
-    finalize("recursive_contains_depth3", &mut samples, outer.elapsed().as_micros() as f64)
+    finalize(
+        "recursive_contains_depth3",
+        &mut samples,
+        outer.elapsed().as_micros() as f64,
+    )
 }
 
 fn bench_count_aggregate(engine: &Engine, iters: usize) -> BenchResult {
@@ -607,7 +751,11 @@ fn bench_count_aggregate(engine: &Engine, iters: usize) -> BenchResult {
         let _ = ndb_engine::query::execute_read(engine, req.clone()).unwrap();
         samples.push(t.elapsed().as_micros() as u64);
     }
-    finalize("count_aggregate", &mut samples, outer.elapsed().as_micros() as f64)
+    finalize(
+        "count_aggregate",
+        &mut samples,
+        outer.elapsed().as_micros() as f64,
+    )
 }
 
 // ─── Pre-built QueryRequests ──────────────────────────────────────────
@@ -616,15 +764,26 @@ fn single_pattern_request(region: &str) -> QueryRequest {
     QueryRequest {
         as_of: None,
         patterns: vec![Pattern::Entity {
-            type_id: TYPE_CUSTOMER, self_var: Some("c".into()),
+            type_id: TYPE_CUSTOMER,
+            self_var: Some("c".into()),
             property_filters: vec![PropertyFilter {
-                property_id: PROP_REGION, op: CmpOp::Eq,
-                term: Term::Literal { value: JsonValue::String { value: region.into() } },
+                property_id: PROP_REGION,
+                op: CmpOp::Eq,
+                term: Term::Literal {
+                    value: JsonValue::String {
+                        value: region.into(),
+                    },
+                },
             }],
         }],
-        filter: None, returns: vec![ReturnItem::from("c")],
-        order_by: vec![], limit: None,
-        creates: vec![], deletes: vec![], sets: vec![], merges: vec![],
+        filter: None,
+        returns: vec![ReturnItem::from("c")],
+        order_by: vec![],
+        limit: None,
+        creates: vec![],
+        deletes: vec![],
+        sets: vec![],
+        merges: vec![],
     }
 }
 
@@ -633,21 +792,37 @@ fn two_pattern_request(region: &str) -> QueryRequest {
         as_of: None,
         patterns: vec![
             Pattern::Entity {
-                type_id: TYPE_CUSTOMER, self_var: Some("c".into()),
+                type_id: TYPE_CUSTOMER,
+                self_var: Some("c".into()),
                 property_filters: vec![PropertyFilter {
-                    property_id: PROP_REGION, op: CmpOp::Eq,
-                    term: Term::Literal { value: JsonValue::String { value: region.into() } },
+                    property_id: PROP_REGION,
+                    op: CmpOp::Eq,
+                    term: Term::Literal {
+                        value: JsonValue::String {
+                            value: region.into(),
+                        },
+                    },
                 }],
             },
             Pattern::Hyperedge {
-                type_id: TYPE_SALES, self_var: None,
-                role_bindings: vec![RoleBinding { role_id: ROLE_BUYER, term: Term::Var { name: "c".into() } }],
-                property_filters: vec![], recursion: None,
+                type_id: TYPE_SALES,
+                self_var: None,
+                role_bindings: vec![RoleBinding {
+                    role_id: ROLE_BUYER,
+                    term: Term::Var { name: "c".into() },
+                }],
+                property_filters: vec![],
+                recursion: None,
             },
         ],
-        filter: None, returns: vec![ReturnItem::from("c")],
-        order_by: vec![], limit: None,
-        creates: vec![], deletes: vec![], sets: vec![], merges: vec![],
+        filter: None,
+        returns: vec![ReturnItem::from("c")],
+        order_by: vec![],
+        limit: None,
+        creates: vec![],
+        deletes: vec![],
+        sets: vec![],
+        merges: vec![],
     }
 }
 
@@ -655,18 +830,35 @@ fn recursive_request(root: EntityId) -> QueryRequest {
     QueryRequest {
         as_of: None,
         patterns: vec![Pattern::Hyperedge {
-            type_id: TYPE_CONTAINS, self_var: None,
+            type_id: TYPE_CONTAINS,
+            self_var: None,
             role_bindings: vec![
-                RoleBinding { role_id: ROLE_PARENT,
-                    term: Term::Literal { value: JsonValue::Uuid { value: root.into_uuid().to_string() } } },
-                RoleBinding { role_id: ROLE_CHILD,  term: Term::Var { name: "leaf".into() } },
+                RoleBinding {
+                    role_id: ROLE_PARENT,
+                    term: Term::Literal {
+                        value: JsonValue::Uuid {
+                            value: root.into_uuid().to_string(),
+                        },
+                    },
+                },
+                RoleBinding {
+                    role_id: ROLE_CHILD,
+                    term: Term::Var {
+                        name: "leaf".into(),
+                    },
+                },
             ],
             property_filters: vec![],
             recursion: Some(Recursion::Plus { max_depth: 3 }),
         }],
-        filter: None, returns: vec![ReturnItem::from("leaf")],
-        order_by: vec![], limit: None,
-        creates: vec![], deletes: vec![], sets: vec![], merges: vec![],
+        filter: None,
+        returns: vec![ReturnItem::from("leaf")],
+        order_by: vec![],
+        limit: None,
+        creates: vec![],
+        deletes: vec![],
+        sets: vec![],
+        merges: vec![],
     }
 }
 
@@ -674,15 +866,23 @@ fn count_request() -> QueryRequest {
     QueryRequest {
         as_of: None,
         patterns: vec![Pattern::Entity {
-            type_id: TYPE_CUSTOMER, self_var: Some("c".into()),
+            type_id: TYPE_CUSTOMER,
+            self_var: Some("c".into()),
             property_filters: vec![],
         }],
         filter: None,
         returns: vec![ReturnItem::Aggregate {
-            func: "count".into(), variable: None, property: None, display: None,
+            func: "count".into(),
+            variable: None,
+            property: None,
+            display: None,
         }],
-        order_by: vec![], limit: None,
-        creates: vec![], deletes: vec![], sets: vec![], merges: vec![],
+        order_by: vec![],
+        limit: None,
+        creates: vec![],
+        deletes: vec![],
+        sets: vec![],
+        merges: vec![],
     }
 }
 
@@ -693,16 +893,46 @@ fn count_request() -> QueryRequest {
 fn register_dictionaries(engine: &mut Engine) {
     let mut tx = engine.begin_write();
     use ndb_engine::record::{PropertyKeyRecord, RoleNameRecord, TypeNameRecord};
-    tx.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(TYPE_CUSTOMER), name: "customer".into() }));
-    tx.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(TYPE_REGION),   name: "region".into() }));
-    tx.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(TYPE_SALES),    name: "sales".into() }));
-    tx.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(TYPE_CONTAINS), name: "contains".into() }));
-    tx.put_raw(Record::RoleName(RoleNameRecord { id: RoleId::new(ROLE_BUYER),  name: "buyer".into() }));
-    tx.put_raw(Record::RoleName(RoleNameRecord { id: RoleId::new(ROLE_PARENT), name: "parent".into() }));
-    tx.put_raw(Record::RoleName(RoleNameRecord { id: RoleId::new(ROLE_CHILD),  name: "child".into() }));
-    tx.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(PROP_NAME),   name: "name".into() }));
-    tx.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(PROP_REGION), name: "region".into() }));
-    tx.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(PROP_CODE),   name: "code".into() }));
+    tx.put_raw(Record::TypeName(TypeNameRecord {
+        id: TypeId::new(TYPE_CUSTOMER),
+        name: "customer".into(),
+    }));
+    tx.put_raw(Record::TypeName(TypeNameRecord {
+        id: TypeId::new(TYPE_REGION),
+        name: "region".into(),
+    }));
+    tx.put_raw(Record::TypeName(TypeNameRecord {
+        id: TypeId::new(TYPE_SALES),
+        name: "sales".into(),
+    }));
+    tx.put_raw(Record::TypeName(TypeNameRecord {
+        id: TypeId::new(TYPE_CONTAINS),
+        name: "contains".into(),
+    }));
+    tx.put_raw(Record::RoleName(RoleNameRecord {
+        id: RoleId::new(ROLE_BUYER),
+        name: "buyer".into(),
+    }));
+    tx.put_raw(Record::RoleName(RoleNameRecord {
+        id: RoleId::new(ROLE_PARENT),
+        name: "parent".into(),
+    }));
+    tx.put_raw(Record::RoleName(RoleNameRecord {
+        id: RoleId::new(ROLE_CHILD),
+        name: "child".into(),
+    }));
+    tx.put_raw(Record::PropertyKey(PropertyKeyRecord {
+        id: PropertyId::new(PROP_NAME),
+        name: "name".into(),
+    }));
+    tx.put_raw(Record::PropertyKey(PropertyKeyRecord {
+        id: PropertyId::new(PROP_REGION),
+        name: "region".into(),
+    }));
+    tx.put_raw(Record::PropertyKey(PropertyKeyRecord {
+        id: PropertyId::new(PROP_CODE),
+        name: "code".into(),
+    }));
     tx.commit().unwrap();
 }
 
@@ -714,18 +944,29 @@ fn load_regions(engine: &mut Engine) -> Vec<String> {
         let code = format!("REG-{i:05}");
         let eid = EntityId::now_v7();
         tx.put_entity(EntityRecord {
-            entity_id: eid, type_id: TypeId::new(TYPE_REGION),
-            tx_id_assert: TxId::new(0), tx_id_supersede: TxId::ACTIVE,
+            entity_id: eid,
+            type_id: TypeId::new(TYPE_REGION),
+            tx_id_assert: TxId::new(0),
+            tx_id_supersede: TxId::ACTIVE,
             properties: vec![
-                (PropertyId::new(PROP_NAME), Value::String(format!("Region {i}"))),
+                (
+                    PropertyId::new(PROP_NAME),
+                    Value::String(format!("Region {i}")),
+                ),
                 (PropertyId::new(PROP_CODE), Value::String(code.clone())),
             ],
         });
         codes.push(code);
         in_tx += 1;
-        if in_tx >= 500 { tx.commit().unwrap(); tx = engine.begin_write(); in_tx = 0; }
+        if in_tx >= 500 {
+            tx.commit().unwrap();
+            tx = engine.begin_write();
+            in_tx = 0;
+        }
     }
-    if in_tx > 0 { tx.commit().unwrap(); }
+    if in_tx > 0 {
+        tx.commit().unwrap();
+    }
     codes
 }
 
@@ -737,18 +978,29 @@ fn load_customers(engine: &mut Engine, region_codes: &[String]) -> Vec<EntityId>
         let eid = EntityId::now_v7();
         let region = &region_codes[i % region_codes.len()];
         tx.put_entity(EntityRecord {
-            entity_id: eid, type_id: TypeId::new(TYPE_CUSTOMER),
-            tx_id_assert: TxId::new(0), tx_id_supersede: TxId::ACTIVE,
+            entity_id: eid,
+            type_id: TypeId::new(TYPE_CUSTOMER),
+            tx_id_assert: TxId::new(0),
+            tx_id_supersede: TxId::ACTIVE,
             properties: vec![
-                (PropertyId::new(PROP_NAME),   Value::String(format!("Customer {i}"))),
+                (
+                    PropertyId::new(PROP_NAME),
+                    Value::String(format!("Customer {i}")),
+                ),
                 (PropertyId::new(PROP_REGION), Value::String(region.clone())),
             ],
         });
         ids.push(eid);
         in_tx += 1;
-        if in_tx >= 500 { tx.commit().unwrap(); tx = engine.begin_write(); in_tx = 0; }
+        if in_tx >= 500 {
+            tx.commit().unwrap();
+            tx = engine.begin_write();
+            in_tx = 0;
+        }
     }
-    if in_tx > 0 { tx.commit().unwrap(); }
+    if in_tx > 0 {
+        tx.commit().unwrap();
+    }
     ids
 }
 
@@ -764,17 +1016,25 @@ fn load_sales(engine: &mut Engine, customers: &[EntityId]) -> Vec<HyperedgeId> {
         };
         let hid = HyperedgeId::now_v7();
         tx.put_hyperedge(HyperEdgeRecord {
-            hyperedge_id: hid, type_id: TypeId::new(TYPE_SALES),
-            tx_id_assert: TxId::new(0), tx_id_supersede: TxId::ACTIVE,
+            hyperedge_id: hid,
+            type_id: TypeId::new(TYPE_SALES),
+            tx_id_assert: TxId::new(0),
+            tx_id_supersede: TxId::ACTIVE,
             roles: vec![(RoleId::new(ROLE_BUYER), customers[cust_idx])],
             hyperedge_roles: Vec::new(),
             properties: vec![],
         });
         ids.push(hid);
         in_tx += 1;
-        if in_tx >= 500 { tx.commit().unwrap(); tx = engine.begin_write(); in_tx = 0; }
+        if in_tx >= 500 {
+            tx.commit().unwrap();
+            tx = engine.begin_write();
+            in_tx = 0;
+        }
     }
-    if in_tx > 0 { tx.commit().unwrap(); }
+    if in_tx > 0 {
+        tx.commit().unwrap();
+    }
     ids
 }
 
@@ -782,7 +1042,9 @@ fn lookup_regions_by_code(engine: &mut Engine, codes: &[String]) -> Vec<EntityId
     let mut id_by_code: HashMap<String, EntityId> = HashMap::with_capacity(codes.len());
     for r in engine.snapshot_iter(TxId::ACTIVE).unwrap() {
         if let Record::Entity(e) = r {
-            if e.type_id.get() != TYPE_REGION { continue; }
+            if e.type_id.get() != TYPE_REGION {
+                continue;
+            }
             for (pid, val) in &e.properties {
                 if pid.get() == PROP_CODE {
                     if let Value::String(s) = val {
@@ -792,7 +1054,10 @@ fn lookup_regions_by_code(engine: &mut Engine, codes: &[String]) -> Vec<EntityId
             }
         }
     }
-    codes.iter().filter_map(|c| id_by_code.get(c).copied()).collect()
+    codes
+        .iter()
+        .filter_map(|c| id_by_code.get(c).copied())
+        .collect()
 }
 
 fn load_contains_chain(
@@ -807,26 +1072,39 @@ fn load_contains_chain(
     for i in 0..N_CONTAINS_EDGES {
         let parent_idx = i % n;
         let child_idx = (parent_idx + n / 4 + (i / n) * (n / 8)) % n;
-        if parent_idx == child_idx { continue; }
+        if parent_idx == child_idx {
+            continue;
+        }
         let parent = region_ids[parent_idx];
         let child = region_ids[child_idx];
         tx.put_hyperedge(HyperEdgeRecord {
             hyperedge_id: HyperedgeId::now_v7(),
             type_id: TypeId::new(TYPE_CONTAINS),
-            tx_id_assert: TxId::new(0), tx_id_supersede: TxId::ACTIVE,
+            tx_id_assert: TxId::new(0),
+            tx_id_supersede: TxId::ACTIVE,
             roles: vec![
                 (RoleId::new(ROLE_PARENT), parent),
-                (RoleId::new(ROLE_CHILD),  child),
+                (RoleId::new(ROLE_CHILD), child),
             ],
             hyperedge_roles: Vec::new(),
             properties: vec![],
         });
-        if i < 4 { roots.push(parent); }
-        if i % 7 == 0 { leaves.push(child); }
+        if i < 4 {
+            roots.push(parent);
+        }
+        if i % 7 == 0 {
+            leaves.push(child);
+        }
         in_tx += 1;
-        if in_tx >= 500 { tx.commit().unwrap(); tx = engine.begin_write(); in_tx = 0; }
+        if in_tx >= 500 {
+            tx.commit().unwrap();
+            tx = engine.begin_write();
+            in_tx = 0;
+        }
     }
-    if in_tx > 0 { tx.commit().unwrap(); }
+    if in_tx > 0 {
+        tx.commit().unwrap();
+    }
     (roots, leaves)
 }
 
@@ -834,7 +1112,9 @@ fn sample_n<T: Copy>(pool: &[T], n: usize, seed: u64) -> Vec<T> {
     let mut out = Vec::with_capacity(n);
     let mut x = seed;
     for _ in 0..n {
-        x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
         out.push(pool[(x as usize) % pool.len()]);
     }
     out
@@ -844,7 +1124,9 @@ fn sample_string_n(pool: &[String], n: usize, seed: u64) -> Vec<String> {
     let mut out = Vec::with_capacity(n);
     let mut x = seed;
     for _ in 0..n {
-        x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
         out.push(pool[(x as usize) % pool.len()].clone());
     }
     out
@@ -855,8 +1137,11 @@ fn dir_size_bytes(dir: &std::path::Path) -> u64 {
     if let Ok(read) = std::fs::read_dir(dir) {
         for entry in read.flatten() {
             let p = entry.path();
-            if p.is_dir() { total += dir_size_bytes(&p); }
-            else if let Ok(m) = std::fs::metadata(&p) { total += m.len(); }
+            if p.is_dir() {
+                total += dir_size_bytes(&p);
+            } else if let Ok(m) = std::fs::metadata(&p) {
+                total += m.len();
+            }
         }
     }
     total
@@ -869,8 +1154,11 @@ fn read_self_proc_stats() -> (u64, u64, u64, u64) {
     if let Ok(s) = std::fs::read_to_string("/proc/self/status") {
         for line in s.lines() {
             if let Some(rest) = line.strip_prefix("VmRSS:") {
-                rss_kb = rest.split_whitespace().next()
-                    .and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+                rss_kb = rest
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0);
                 break;
             }
         }
@@ -900,4 +1188,6 @@ fn read_self_proc_stats() -> (u64, u64, u64, u64) {
 /// Linux clock-ticks-per-second. Hardcoded to 100 Hz — the default for
 /// every distro kernel I've ever seen on x86_64 / aarch64. Avoids
 /// pulling in libc as a dep just for sysconf(_SC_CLK_TCK).
-fn clk_tck_hz() -> u64 { 100 }
+fn clk_tck_hz() -> u64 {
+    100
+}

@@ -20,7 +20,7 @@
 #![allow(
     clippy::too_many_lines,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
+    clippy::cast_sign_loss
 )]
 
 use std::collections::HashMap;
@@ -42,8 +42,8 @@ const T_FAULT: u32 = 2;
 const T_AGENCY: u32 = 3;
 
 const T_AFTERSHOCK_SEQUENCE: u32 = 100; // arity (N+1): [mainshock, aftershock_1..N]
-const T_ON_FAULT: u32 = 101;            // arity 2: [event, fault]
-const T_HISTORIC_EVENT: u32 = 102;      // arity 1: [event] — marker for curated historic mainshocks
+const T_ON_FAULT: u32 = 101; // arity 2: [event, fault]
+const T_HISTORIC_EVENT: u32 = 102; // arity 1: [event] — marker for curated historic mainshocks
 
 const ROLE_MAINSHOCK: u32 = 10;
 const ROLE_AFTERSHOCK: u32 = 11;
@@ -65,11 +65,11 @@ const PROP_FELT: u32 = 40;
 const PROP_SIG: u32 = 41;
 const PROP_NET: u32 = 42;
 const PROP_ALERT: u32 = 43;
-const PROP_SOURCE: u32 = 44;       // "live30d" or "historic:<slug>"
+const PROP_SOURCE: u32 = 44; // "live30d" or "historic:<slug>"
 // Fault props
 const PROP_FAULT_TYPE: u32 = 50;
 const PROP_FAULT_COUNTRY: u32 = 51;
-const PROP_FAULT_TRACE_JSON: u32 = 52;   // serialised lat/lon polyline
+const PROP_FAULT_TRACE_JSON: u32 = 52; // serialised lat/lon polyline
 // On-fault edge props
 const PROP_FAULT_DISTANCE_KM: u32 = 55;
 // Sequence edge props
@@ -90,62 +90,62 @@ const SEED_JSON: &str = include_str!("seed.json");
 
 #[derive(Deserialize)]
 struct SeedDoc {
-    events:             Vec<EventRow>,
-    agencies:           Vec<AgencyRow>,
-    faults:             Vec<FaultRow>,
-    live_sequences:     Vec<SeqRow>,
+    events: Vec<EventRow>,
+    agencies: Vec<AgencyRow>,
+    faults: Vec<FaultRow>,
+    live_sequences: Vec<SeqRow>,
     historic_sequences: Vec<SeqRow>,
-    on_fault:           Vec<OnFaultRow>,
+    on_fault: Vec<OnFaultRow>,
 }
 
 #[derive(Deserialize)]
 struct EventRow {
-    id:       String,
-    mag:      Option<f64>,
+    id: String,
+    mag: Option<f64>,
     mag_type: Option<String>,
-    place:    Option<String>,
-    time_ms:  Option<i64>,
-    tsunami:  Option<bool>,
-    felt:     Option<i64>,
-    sig:      Option<i64>,
-    net:      Option<String>,
-    alert:    Option<String>,
-    lat:      f64,
-    lon:      f64,
+    place: Option<String>,
+    time_ms: Option<i64>,
+    tsunami: Option<bool>,
+    felt: Option<i64>,
+    sig: Option<i64>,
+    net: Option<String>,
+    alert: Option<String>,
+    lat: f64,
+    lon: f64,
     depth_km: Option<f64>,
-    source:   String,
+    source: String,
 }
 
 #[derive(Deserialize)]
 struct AgencyRow {
     short: String,
-    code:  String,
+    code: String,
 }
 
 #[derive(Deserialize)]
 struct FaultRow {
-    name:    String,
+    name: String,
     #[serde(rename = "type")]
-    kind:    String,
+    kind: String,
     country: String,
-    trace:   Vec<(f64, f64)>,
+    trace: Vec<(f64, f64)>,
 }
 
 #[derive(Deserialize)]
 struct SeqRow {
-    mainshock_id:   String,
+    mainshock_id: String,
     aftershock_ids: Vec<String>,
-    name:           String,
-    window_days:    i64,
-    radius_km:      i64,
+    name: String,
+    window_days: i64,
+    radius_km: i64,
     #[serde(default)]
-    historic:       bool,
+    historic: bool,
 }
 
 #[derive(Deserialize)]
 struct OnFaultRow {
-    event_id:    String,
-    fault_name:  String,
+    event_id: String,
+    fault_name: String,
     distance_km: f64,
 }
 
@@ -234,7 +234,9 @@ fn main() {
         }
     });
 
-    loop { std::thread::park(); }
+    loop {
+        std::thread::park();
+    }
 }
 
 // ─── Seed ──────────────────────────────────────────────────────────
@@ -242,8 +244,8 @@ fn main() {
 fn seed(engine: &mut Engine) {
     let doc: SeedDoc = serde_json::from_str(SEED_JSON).expect("parse seed.json");
 
-    let mut event_ids:  HashMap<String, EntityId> = HashMap::with_capacity(doc.events.len());
-    let mut fault_ids:  HashMap<String, EntityId> = HashMap::with_capacity(doc.faults.len());
+    let mut event_ids: HashMap<String, EntityId> = HashMap::with_capacity(doc.events.len());
+    let mut fault_ids: HashMap<String, EntityId> = HashMap::with_capacity(doc.faults.len());
     let mut agency_ids: HashMap<String, EntityId> = HashMap::with_capacity(doc.agencies.len());
 
     // ── Earthquakes — batched commits (500 per txn) so we don't open
@@ -256,21 +258,45 @@ fn seed(engine: &mut Engine) {
         let eid = EntityId::now_v7();
         let mut props: Vec<(u32, Value)> = Vec::with_capacity(14);
         props.push((PROP_USGS_ID, Value::String(e.id.clone())));
-        props.push((PROP_NAME,    Value::String(
-            e.place.clone().unwrap_or_else(|| e.id.clone()))));
-        if let Some(v) = e.mag        { props.push((PROP_MAGNITUDE, Value::F64(v))); }
-        if let Some(v) = &e.mag_type  { props.push((PROP_MAG_TYPE,  Value::String(v.clone()))); }
-        if let Some(v) = &e.place     { props.push((PROP_PLACE,     Value::String(v.clone()))); }
-        if let Some(v) = e.time_ms    { props.push((PROP_TIME_MS,   Value::I64(v))); }
+        props.push((
+            PROP_NAME,
+            Value::String(e.place.clone().unwrap_or_else(|| e.id.clone())),
+        ));
+        if let Some(v) = e.mag {
+            props.push((PROP_MAGNITUDE, Value::F64(v)));
+        }
+        if let Some(v) = &e.mag_type {
+            props.push((PROP_MAG_TYPE, Value::String(v.clone())));
+        }
+        if let Some(v) = &e.place {
+            props.push((PROP_PLACE, Value::String(v.clone())));
+        }
+        if let Some(v) = e.time_ms {
+            props.push((PROP_TIME_MS, Value::I64(v)));
+        }
         props.push((PROP_LAT, Value::F64(e.lat)));
         props.push((PROP_LON, Value::F64(e.lon)));
-        if let Some(v) = e.depth_km   { props.push((PROP_DEPTH_KM,  Value::F64(v))); }
-        if let Some(v) = e.tsunami    { props.push((PROP_TSUNAMI,   Value::String(
-            if v { "yes".into() } else { "no".into() }))); }
-        if let Some(v) = e.felt       { props.push((PROP_FELT,      Value::I64(v))); }
-        if let Some(v) = e.sig        { props.push((PROP_SIG,       Value::I64(v))); }
-        if let Some(v) = &e.net       { props.push((PROP_NET,       Value::String(v.clone()))); }
-        if let Some(v) = &e.alert     { props.push((PROP_ALERT,     Value::String(v.clone()))); }
+        if let Some(v) = e.depth_km {
+            props.push((PROP_DEPTH_KM, Value::F64(v)));
+        }
+        if let Some(v) = e.tsunami {
+            props.push((
+                PROP_TSUNAMI,
+                Value::String(if v { "yes".into() } else { "no".into() }),
+            ));
+        }
+        if let Some(v) = e.felt {
+            props.push((PROP_FELT, Value::I64(v)));
+        }
+        if let Some(v) = e.sig {
+            props.push((PROP_SIG, Value::I64(v)));
+        }
+        if let Some(v) = &e.net {
+            props.push((PROP_NET, Value::String(v.clone())));
+        }
+        if let Some(v) = &e.alert {
+            props.push((PROP_ALERT, Value::String(v.clone())));
+        }
         props.push((PROP_SOURCE, Value::String(e.source.clone())));
         event_ids.insert(e.id.clone(), eid);
         chunk.push((eid, props));
@@ -292,10 +318,15 @@ fn seed(engine: &mut Engine) {
     // ── Agencies
     for a in &doc.agencies {
         let eid = EntityId::now_v7();
-        commit_entity(engine, eid, T_AGENCY, vec![
-            (PROP_NAME,        Value::String(a.short.clone())),
-            (PROP_AGENCY_CODE, Value::String(a.code.clone())),
-        ]);
+        commit_entity(
+            engine,
+            eid,
+            T_AGENCY,
+            vec![
+                (PROP_NAME, Value::String(a.short.clone())),
+                (PROP_AGENCY_CODE, Value::String(a.code.clone())),
+            ],
+        );
         agency_ids.insert(a.code.clone(), eid);
     }
 
@@ -305,19 +336,28 @@ fn seed(engine: &mut Engine) {
     for f in &doc.faults {
         let eid = EntityId::now_v7();
         let trace_json = serde_json::to_string(&f.trace).unwrap_or_else(|_| "[]".into());
-        commit_entity(engine, eid, T_FAULT, vec![
-            (PROP_NAME,             Value::String(f.name.clone())),
-            (PROP_FAULT_TYPE,       Value::String(f.kind.clone())),
-            (PROP_FAULT_COUNTRY,    Value::String(f.country.clone())),
-            (PROP_FAULT_TRACE_JSON, Value::String(trace_json)),
-        ]);
+        commit_entity(
+            engine,
+            eid,
+            T_FAULT,
+            vec![
+                (PROP_NAME, Value::String(f.name.clone())),
+                (PROP_FAULT_TYPE, Value::String(f.kind.clone())),
+                (PROP_FAULT_COUNTRY, Value::String(f.country.clone())),
+                (PROP_FAULT_TRACE_JSON, Value::String(trace_json)),
+            ],
+        );
         fault_ids.insert(f.name.clone(), eid);
     }
 
     // ── Aftershock sequences
     let total_seqs = doc.live_sequences.len() + doc.historic_sequences.len();
     let mut seq_skipped = 0;
-    for seq in doc.live_sequences.iter().chain(doc.historic_sequences.iter()) {
+    for seq in doc
+        .live_sequences
+        .iter()
+        .chain(doc.historic_sequences.iter())
+    {
         let Some(ms) = event_ids.get(&seq.mainshock_id) else {
             seq_skipped += 1;
             continue;
@@ -328,13 +368,21 @@ fn seed(engine: &mut Engine) {
                 roles.push((RoleId::new(ROLE_AFTERSHOCK), *after));
             }
         }
-        if roles.len() < 2 { continue; }
+        if roles.len() < 2 {
+            continue;
+        }
         let props = vec![
-            (PROP_NAME,             Value::String(seq.name.clone())),
-            (PROP_SEQ_WINDOW_DAYS,  Value::I64(seq.window_days)),
-            (PROP_SEQ_RADIUS_KM,    Value::I64(seq.radius_km)),
-            (PROP_SEQ_HISTORIC,     Value::String(
-                if seq.historic { "yes".into() } else { "no".into() })),
+            (PROP_NAME, Value::String(seq.name.clone())),
+            (PROP_SEQ_WINDOW_DAYS, Value::I64(seq.window_days)),
+            (PROP_SEQ_RADIUS_KM, Value::I64(seq.radius_km)),
+            (
+                PROP_SEQ_HISTORIC,
+                Value::String(if seq.historic {
+                    "yes".into()
+                } else {
+                    "no".into()
+                }),
+            ),
         ];
         commit_hyperedge(engine, T_AFTERSHOCK_SEQUENCE, roles, props);
     }
@@ -344,7 +392,8 @@ fn seed(engine: &mut Engine) {
     for seq in &doc.historic_sequences {
         if let Some(ms) = event_ids.get(&seq.mainshock_id) {
             commit_hyperedge(
-                engine, T_HISTORIC_EVENT,
+                engine,
+                T_HISTORIC_EVENT,
                 vec![(RoleId::new(ROLE_EVENT), *ms)],
                 vec![(PROP_NAME, Value::String(seq.name.clone()))],
             );
@@ -356,14 +405,22 @@ fn seed(engine: &mut Engine) {
     for of in &doc.on_fault {
         let event = match event_ids.get(&of.event_id) {
             Some(e) => *e,
-            None => { on_fault_skipped += 1; continue; }
+            None => {
+                on_fault_skipped += 1;
+                continue;
+            }
         };
         let fault = match fault_ids.get(&of.fault_name) {
             Some(f) => *f,
             None => continue,
         };
-        commit_hyperedge(engine, T_ON_FAULT,
-            vec![(RoleId::new(ROLE_EVENT), event), (RoleId::new(ROLE_FAULT), fault)],
+        commit_hyperedge(
+            engine,
+            T_ON_FAULT,
+            vec![
+                (RoleId::new(ROLE_EVENT), event),
+                (RoleId::new(ROLE_FAULT), fault),
+            ],
             vec![(PROP_FAULT_DISTANCE_KM, Value::F64(of.distance_km))],
         );
     }
@@ -377,7 +434,9 @@ fn seed(engine: &mut Engine) {
         doc.historic_sequences.len(),
         doc.on_fault.len() - on_fault_skipped,
     );
-    let max_arity = doc.live_sequences.iter()
+    let max_arity = doc
+        .live_sequences
+        .iter()
         .chain(doc.historic_sequences.iter())
         .map(|s| s.aftershock_ids.len() + 1)
         .max()
@@ -392,15 +451,14 @@ fn count_entities_of_type(engine: &Engine, type_id: u32) -> usize {
     for r in engine.snapshot_iter_streaming(TxId::ACTIVE).flatten() {
         if let Record::Entity(e) = r
             && e.type_id == TypeId::new(type_id)
-        { n += 1; }
+        {
+            n += 1;
+        }
     }
     n
 }
 
-fn commit_entity(
-    engine: &mut Engine, eid: EntityId, type_id: u32,
-    properties: Vec<(u32, Value)>,
-) {
+fn commit_entity(engine: &mut Engine, eid: EntityId, type_id: u32, properties: Vec<(u32, Value)>) {
     let mut txn = engine.begin_write();
     let tx_id = txn.tx_id();
     txn.put_entity(EntityRecord {
@@ -408,13 +466,17 @@ fn commit_entity(
         type_id: TypeId::new(type_id),
         tx_id_assert: tx_id,
         tx_id_supersede: TxId::ACTIVE,
-        properties: properties.into_iter().map(|(p, v)| (PropertyId::new(p), v)).collect(),
+        properties: properties
+            .into_iter()
+            .map(|(p, v)| (PropertyId::new(p), v))
+            .collect(),
     });
     txn.commit().expect("commit entity");
 }
 
 fn commit_entities_batch(
-    engine: &mut Engine, type_id: u32,
+    engine: &mut Engine,
+    type_id: u32,
     items: Vec<(EntityId, Vec<(u32, Value)>)>,
 ) {
     let mut txn = engine.begin_write();
@@ -425,14 +487,18 @@ fn commit_entities_batch(
             type_id: TypeId::new(type_id),
             tx_id_assert: tx_id,
             tx_id_supersede: TxId::ACTIVE,
-            properties: properties.into_iter().map(|(p, v)| (PropertyId::new(p), v)).collect(),
+            properties: properties
+                .into_iter()
+                .map(|(p, v)| (PropertyId::new(p), v))
+                .collect(),
         });
     }
     txn.commit().expect("commit entity batch");
 }
 
 fn commit_hyperedge(
-    engine: &mut Engine, type_id: u32,
+    engine: &mut Engine,
+    type_id: u32,
     roles: Vec<(RoleId, EntityId)>,
     properties: Vec<(u32, Value)>,
 ) {
@@ -445,7 +511,10 @@ fn commit_hyperedge(
         tx_id_supersede: TxId::ACTIVE,
         roles,
         hyperedge_roles: Vec::new(),
-        properties: properties.into_iter().map(|(p, v)| (PropertyId::new(p), v)).collect(),
+        properties: properties
+            .into_iter()
+            .map(|(p, v)| (PropertyId::new(p), v))
+            .collect(),
     });
     txn.commit().expect("commit hyperedge");
 }
@@ -460,10 +529,18 @@ fn serve_static(stream: TcpStream, root: &Path) -> std::io::Result<()> {
     loop {
         header.clear();
         let n = reader.read_line(&mut header)?;
-        if n <= 2 { break; }
+        if n <= 2 {
+            break;
+        }
     }
-    let path = request_line.split_whitespace().nth(1).unwrap_or("/")
-        .split('?').next().unwrap_or("/").to_string();
+    let path = request_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("/")
+        .split('?')
+        .next()
+        .unwrap_or("/")
+        .to_string();
     let mut writer = &stream;
     match resolve_path(root, &path) {
         Some(p) => {
@@ -474,33 +551,54 @@ fn serve_static(stream: TcpStream, root: &Path) -> std::io::Result<()> {
                 write_response(&mut writer, 404, "text/plain", b"not found")?;
             }
         }
-        None => { write_response(&mut writer, 404, "text/plain", b"not found")?; }
+        None => {
+            write_response(&mut writer, 404, "text/plain", b"not found")?;
+        }
     }
     Ok(())
 }
 
 fn resolve_path(root: &Path, req_path: &str) -> Option<PathBuf> {
-    if req_path.contains("..") { return None; }
+    if req_path.contains("..") {
+        return None;
+    }
     let trimmed = req_path.trim_start_matches('/');
-    let candidate = if trimmed.is_empty() { root.join("index.html") } else { root.join(trimmed) };
-    if candidate.is_file() { Some(candidate) } else { None }
+    let candidate = if trimmed.is_empty() {
+        root.join("index.html")
+    } else {
+        root.join(trimmed)
+    };
+    if candidate.is_file() {
+        Some(candidate)
+    } else {
+        None
+    }
 }
 
 fn content_type(p: &Path) -> &'static str {
     match p.extension().and_then(|e| e.to_str()) {
         Some("html") => "text/html; charset=utf-8",
-        Some("js")   => "application/javascript; charset=utf-8",
-        Some("css")  => "text/css; charset=utf-8",
+        Some("js") => "application/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
         Some("json") => "application/json; charset=utf-8",
-        Some("svg")  => "image/svg+xml",
-        Some("png")  => "image/png",
-        Some("ico")  => "image/x-icon",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("ico") => "image/x-icon",
         _ => "application/octet-stream",
     }
 }
 
-fn write_response<W: Write>(w: &mut W, status: u16, ctype: &str, body: &[u8]) -> std::io::Result<()> {
-    let reason = match status { 200 => "OK", 404 => "Not Found", _ => "Status" };
+fn write_response<W: Write>(
+    w: &mut W,
+    status: u16,
+    ctype: &str,
+    body: &[u8],
+) -> std::io::Result<()> {
+    let reason = match status {
+        200 => "OK",
+        404 => "Not Found",
+        _ => "Status",
+    };
     write!(w, "HTTP/1.1 {status} {reason}\r\n")?;
     write!(w, "Content-Type: {ctype}\r\n")?;
     write!(w, "Content-Length: {}\r\n", body.len())?;

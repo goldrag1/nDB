@@ -13,8 +13,12 @@
 //! Run with:
 //!     cargo run --release --example exec_microbench
 //!     cargo run --release --example exec_microbench -- 2000   # iters override
-#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation,
-         clippy::cast_sign_loss, clippy::too_many_lines)]
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::too_many_lines
+)]
 
 use ndb_engine::record::Record;
 use ndb_engine::wire::JsonValue;
@@ -22,8 +26,8 @@ use ndb_engine::wire_query::{
     CmpOp, Pattern, PropertyFilter, QueryRequest, ReturnItem, RoleBinding, Term,
 };
 use ndb_engine::{
-    Engine, EntityId, EntityRecord, HyperEdgeRecord, HyperedgeId, PropertyId, RoleId, TxId,
-    TypeId, Value,
+    Engine, EntityId, EntityRecord, HyperEdgeRecord, HyperedgeId, PropertyId, RoleId, TxId, TypeId,
+    Value,
 };
 use std::time::Instant;
 
@@ -124,7 +128,11 @@ fn single_pattern_request(region: &str) -> QueryRequest {
             property_filters: vec![PropertyFilter {
                 property_id: PROP_REGION,
                 op: CmpOp::Eq,
-                term: Term::Literal { value: JsonValue::String { value: region.into() } },
+                term: Term::Literal {
+                    value: JsonValue::String {
+                        value: region.into(),
+                    },
+                },
             }],
         }],
         filter: None,
@@ -148,7 +156,11 @@ fn two_pattern_request(region: &str) -> QueryRequest {
                 property_filters: vec![PropertyFilter {
                     property_id: PROP_REGION,
                     op: CmpOp::Eq,
-                    term: Term::Literal { value: JsonValue::String { value: region.into() } },
+                    term: Term::Literal {
+                        value: JsonValue::String {
+                            value: region.into(),
+                        },
+                    },
                 }],
             },
             Pattern::Hyperedge {
@@ -178,13 +190,34 @@ fn two_pattern_request(region: &str) -> QueryRequest {
 fn register_dictionaries(engine: &mut Engine) {
     use ndb_engine::record::{PropertyKeyRecord, RoleNameRecord, TypeNameRecord};
     let mut tx = engine.begin_write();
-    tx.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(TYPE_CUSTOMER), name: "customer".into() }));
-    tx.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(TYPE_REGION), name: "region".into() }));
-    tx.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(TYPE_SALES), name: "sales".into() }));
-    tx.put_raw(Record::RoleName(RoleNameRecord { id: RoleId::new(ROLE_BUYER), name: "buyer".into() }));
-    tx.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(PROP_NAME), name: "name".into() }));
-    tx.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(PROP_REGION), name: "region".into() }));
-    tx.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(PROP_CODE), name: "code".into() }));
+    tx.put_raw(Record::TypeName(TypeNameRecord {
+        id: TypeId::new(TYPE_CUSTOMER),
+        name: "customer".into(),
+    }));
+    tx.put_raw(Record::TypeName(TypeNameRecord {
+        id: TypeId::new(TYPE_REGION),
+        name: "region".into(),
+    }));
+    tx.put_raw(Record::TypeName(TypeNameRecord {
+        id: TypeId::new(TYPE_SALES),
+        name: "sales".into(),
+    }));
+    tx.put_raw(Record::RoleName(RoleNameRecord {
+        id: RoleId::new(ROLE_BUYER),
+        name: "buyer".into(),
+    }));
+    tx.put_raw(Record::PropertyKey(PropertyKeyRecord {
+        id: PropertyId::new(PROP_NAME),
+        name: "name".into(),
+    }));
+    tx.put_raw(Record::PropertyKey(PropertyKeyRecord {
+        id: PropertyId::new(PROP_REGION),
+        name: "region".into(),
+    }));
+    tx.put_raw(Record::PropertyKey(PropertyKeyRecord {
+        id: PropertyId::new(PROP_CODE),
+        name: "code".into(),
+    }));
     tx.commit().unwrap();
 }
 
@@ -200,15 +233,24 @@ fn load_regions(engine: &mut Engine) -> Vec<String> {
             tx_id_assert: TxId::new(0),
             tx_id_supersede: TxId::ACTIVE,
             properties: vec![
-                (PropertyId::new(PROP_NAME), Value::String(format!("Region {i}"))),
+                (
+                    PropertyId::new(PROP_NAME),
+                    Value::String(format!("Region {i}")),
+                ),
                 (PropertyId::new(PROP_CODE), Value::String(code.clone())),
             ],
         });
         codes.push(code);
         in_tx += 1;
-        if in_tx >= 500 { tx.commit().unwrap(); tx = engine.begin_write(); in_tx = 0; }
+        if in_tx >= 500 {
+            tx.commit().unwrap();
+            tx = engine.begin_write();
+            in_tx = 0;
+        }
     }
-    if in_tx > 0 { tx.commit().unwrap(); }
+    if in_tx > 0 {
+        tx.commit().unwrap();
+    }
     codes
 }
 
@@ -225,15 +267,24 @@ fn load_customers(engine: &mut Engine, region_codes: &[String]) -> Vec<EntityId>
             tx_id_assert: TxId::new(0),
             tx_id_supersede: TxId::ACTIVE,
             properties: vec![
-                (PropertyId::new(PROP_NAME), Value::String(format!("Customer {i}"))),
+                (
+                    PropertyId::new(PROP_NAME),
+                    Value::String(format!("Customer {i}")),
+                ),
                 (PropertyId::new(PROP_REGION), Value::String(region.clone())),
             ],
         });
         ids.push(eid);
         in_tx += 1;
-        if in_tx >= 500 { tx.commit().unwrap(); tx = engine.begin_write(); in_tx = 0; }
+        if in_tx >= 500 {
+            tx.commit().unwrap();
+            tx = engine.begin_write();
+            in_tx = 0;
+        }
     }
-    if in_tx > 0 { tx.commit().unwrap(); }
+    if in_tx > 0 {
+        tx.commit().unwrap();
+    }
     ids
 }
 
@@ -259,8 +310,14 @@ fn load_sales(engine: &mut Engine, customers: &[EntityId]) -> Vec<HyperedgeId> {
         });
         ids.push(hid);
         in_tx += 1;
-        if in_tx >= 500 { tx.commit().unwrap(); tx = engine.begin_write(); in_tx = 0; }
+        if in_tx >= 500 {
+            tx.commit().unwrap();
+            tx = engine.begin_write();
+            in_tx = 0;
+        }
     }
-    if in_tx > 0 { tx.commit().unwrap(); }
+    if in_tx > 0 {
+        tx.commit().unwrap();
+    }
     ids
 }

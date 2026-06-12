@@ -95,9 +95,7 @@ impl Dictionaries {
                 Record::HyperEdge(h) => {
                     out.observe(h.type_id.get(), TypeKindObserved::Hyperedge);
                 }
-                Record::Tombstone(_)
-                | Record::TxTimestamp(_)
-                | Record::RetentionPolicy(_) => {}
+                Record::Tombstone(_) | Record::TxTimestamp(_) | Record::RetentionPolicy(_) => {}
             }
         }
         out
@@ -223,7 +221,10 @@ pub fn resolve(query: NameQuery, dict: &Dictionaries) -> Result<QueryRequest, Re
         .into_iter()
         .map(|d| {
             if !bound.contains(&d.name) {
-                return Err(ResolveError::UnboundVariable { name: d.name, span: d.span });
+                return Err(ResolveError::UnboundVariable {
+                    name: d.name,
+                    span: d.span,
+                });
             }
             Ok(ndb_engine::DeleteClause { variable: d.name })
         })
@@ -236,14 +237,16 @@ pub fn resolve(query: NameQuery, dict: &Dictionaries) -> Result<QueryRequest, Re
         .map(|s| {
             if !bound.contains(&s.variable) {
                 return Err(ResolveError::UnboundVariable {
-                    name: s.variable, span: s.span,
+                    name: s.variable,
+                    span: s.span,
                 });
             }
-            let property = *dict.properties.get(&s.property).ok_or_else(||
+            let property = *dict.properties.get(&s.property).ok_or_else(|| {
                 ResolveError::UnknownRoleOrProperty {
-                    name: s.property.clone(), span: s.span,
+                    name: s.property.clone(),
+                    span: s.span,
                 }
-            )?;
+            })?;
             let term = resolve_term(s.term, &mut bound);
             Ok(ndb_engine::SetClause {
                 variable: s.variable,
@@ -280,7 +283,9 @@ pub fn resolve(query: NameQuery, dict: &Dictionaries) -> Result<QueryRequest, Re
                 if matches!(agg, Count) && r.name.is_empty() {
                     return Ok(ndb_engine::ReturnItem::Aggregate {
                         func: agg.as_str().into(),
-                        variable: None, property: None, display: None,
+                        variable: None,
+                        property: None,
+                        display: None,
                     });
                 }
                 if r.name.is_empty() {
@@ -291,24 +296,27 @@ pub fn resolve(query: NameQuery, dict: &Dictionaries) -> Result<QueryRequest, Re
                 }
                 if !bound.contains(&r.name) {
                     return Err(ResolveError::UnboundVariable {
-                        name: r.name, span: r.span,
+                        name: r.name,
+                        span: r.span,
                     });
                 }
                 let (property, display) = match r.property {
                     None => (None, None),
                     Some(p) => {
-                        let pid = *dict.properties.get(&p).ok_or_else(||
+                        let pid = *dict.properties.get(&p).ok_or_else(|| {
                             ResolveError::UnknownRoleOrProperty {
-                                name: p.clone(), span: r.span,
+                                name: p.clone(),
+                                span: r.span,
                             }
-                        )?;
+                        })?;
                         (Some(pid), Some(p))
                     }
                 };
                 return Ok(ndb_engine::ReturnItem::Aggregate {
                     func: agg.as_str().into(),
                     variable: Some(r.name),
-                    property, display,
+                    property,
+                    display,
                 });
             }
             // Regular projection.
@@ -321,12 +329,12 @@ pub fn resolve(query: NameQuery, dict: &Dictionaries) -> Result<QueryRequest, Re
             match r.property {
                 None => Ok(ndb_engine::ReturnItem::Variable(r.name)),
                 Some(prop_name) => {
-                    let property = *dict.properties.get(&prop_name).ok_or_else(||
+                    let property = *dict.properties.get(&prop_name).ok_or_else(|| {
                         ResolveError::UnknownRoleOrProperty {
                             name: prop_name.clone(),
                             span: r.span,
                         }
-                    )?;
+                    })?;
                     Ok(ndb_engine::ReturnItem::Path {
                         variable: r.name,
                         property,
@@ -343,17 +351,20 @@ pub fn resolve(query: NameQuery, dict: &Dictionaries) -> Result<QueryRequest, Re
         .into_iter()
         .map(|k| {
             if !bound.contains(&k.name) {
-                return Err(ResolveError::UnboundVariable { name: k.name, span: k.span });
+                return Err(ResolveError::UnboundVariable {
+                    name: k.name,
+                    span: k.span,
+                });
             }
             let (property, display) = match k.property {
                 None => (None, None),
                 Some(prop_name) => {
-                    let pid = *dict.properties.get(&prop_name).ok_or_else(||
+                    let pid = *dict.properties.get(&prop_name).ok_or_else(|| {
                         ResolveError::UnknownRoleOrProperty {
                             name: prop_name.clone(),
                             span: k.span,
                         }
-                    )?;
+                    })?;
                     (Some(pid), Some(prop_name))
                 }
             };
@@ -388,32 +399,46 @@ fn resolve_merge(
     bound: &mut HashSet<String>,
 ) -> Result<ndb_engine::MergeClause, ResolveError> {
     use crate::resolve::TypeKindObserved::*;
-    let type_id = *dict.types.get(&m.type_name).ok_or_else(||
-        ResolveError::UnknownType { name: m.type_name.clone(), span: m.type_span }
-    )?;
+    let type_id = *dict
+        .types
+        .get(&m.type_name)
+        .ok_or_else(|| ResolveError::UnknownType {
+            name: m.type_name.clone(),
+            span: m.type_span,
+        })?;
     let observed = dict.type_kinds.get(&type_id).copied();
     let is_hyperedge = matches!(observed, Some(Hyperedge))
         || (matches!(observed, Some(Both) | None)
             && m.bindings.iter().any(|b| dict.roles.contains_key(&b.name)));
 
     let mut roles: Vec<ndb_engine::CreateRoleBinding> = Vec::new();
-    let mut props: Vec<ndb_engine::CreateBinding>     = Vec::new();
+    let mut props: Vec<ndb_engine::CreateBinding> = Vec::new();
     for b in m.bindings {
         let is_role = dict.roles.contains_key(&b.name);
         let is_prop = dict.properties.contains_key(&b.name);
         if is_role && is_prop {
-            return Err(ResolveError::AmbiguousName { name: b.name, span: b.name_span });
+            return Err(ResolveError::AmbiguousName {
+                name: b.name,
+                span: b.name_span,
+            });
         }
         if !is_role && !is_prop {
             return Err(ResolveError::UnknownRoleOrProperty {
-                name: b.name.clone(), span: b.name_span,
+                name: b.name.clone(),
+                span: b.name_span,
             });
         }
         let term = resolve_term(b.term, &mut *bound);
         if is_role {
-            roles.push(ndb_engine::CreateRoleBinding { role_id: dict.roles[&b.name], term });
+            roles.push(ndb_engine::CreateRoleBinding {
+                role_id: dict.roles[&b.name],
+                term,
+            });
         } else {
-            props.push(ndb_engine::CreateBinding { property_id: dict.properties[&b.name], term });
+            props.push(ndb_engine::CreateBinding {
+                property_id: dict.properties[&b.name],
+                term,
+            });
         }
     }
     if let Some(ref v) = m.self_var {
@@ -434,13 +459,17 @@ fn resolve_create(
     bound: &mut HashSet<String>,
 ) -> Result<ndb_engine::CreateClause, ResolveError> {
     use crate::resolve::TypeKindObserved::*;
-    let type_id = *dict.types.get(&c.type_name).ok_or_else(||
-        ResolveError::UnknownType { name: c.type_name.clone(), span: c.type_span }
-    )?;
+    let type_id = *dict
+        .types
+        .get(&c.type_name)
+        .ok_or_else(|| ResolveError::UnknownType {
+            name: c.type_name.clone(),
+            span: c.type_span,
+        })?;
     let observed = dict.type_kinds.get(&type_id).copied();
     let is_hyperedge = match observed {
         Some(Hyperedge) => true,
-        Some(Entity)    => false,
+        Some(Entity) => false,
         // No observations yet — new type. Heuristic: if every binding
         // matches a registered ROLE name (and not a property), treat as
         // hyperedge; else entity. The user can pick a different type if
@@ -451,12 +480,15 @@ fn resolve_create(
     // Each binding inside parens is either a role binding or a property
     // binding. The same name can't be both (resolver enforces).
     let mut role_bindings: Vec<ndb_engine::CreateRoleBinding> = Vec::new();
-    let mut prop_bindings: Vec<ndb_engine::CreateBinding>     = Vec::new();
+    let mut prop_bindings: Vec<ndb_engine::CreateBinding> = Vec::new();
     for b in c.bindings {
         let is_role = dict.roles.contains_key(&b.name);
         let is_prop = dict.properties.contains_key(&b.name);
         if is_role && is_prop {
-            return Err(ResolveError::AmbiguousName { name: b.name, span: b.name_span });
+            return Err(ResolveError::AmbiguousName {
+                name: b.name,
+                span: b.name_span,
+            });
         }
         if !is_role && !is_prop {
             return Err(ResolveError::UnknownRoleOrProperty {
@@ -861,10 +893,7 @@ mod tests {
 
     #[test]
     fn hyperedge_pattern_with_role_binding() {
-        let q = resolve_str(
-            "match sales_order(customer: ?c, amount: ?a) return ?c, ?a",
-        )
-        .unwrap();
+        let q = resolve_str("match sales_order(customer: ?c, amount: ?a) return ?c, ?a").unwrap();
         match &q.patterns[0] {
             Pattern::Hyperedge {
                 role_bindings,
@@ -911,8 +940,8 @@ mod tests {
 
     #[test]
     fn unbound_variable_in_where() {
-        let err = resolve_str("match customer(name: ?n) as ?c where ?ghost = ?n return ?c")
-            .unwrap_err();
+        let err =
+            resolve_str("match customer(name: ?n) as ?c where ?ghost = ?n return ?c").unwrap_err();
         assert!(matches!(
             err,
             ResolveError::UnboundVariable { ref name, .. } if name == "ghost"
@@ -935,7 +964,9 @@ mod tests {
         // The _ should have become a fresh variable that's not in `returns`.
         match &q.patterns[0] {
             Pattern::Hyperedge { role_bindings, .. } => {
-                assert!(matches!(&role_bindings[0].term, Term::Var { name } if name.starts_with("__anon_")));
+                assert!(
+                    matches!(&role_bindings[0].term, Term::Var { name } if name.starts_with("__anon_"))
+                );
             }
             Pattern::Entity { .. } => panic!("expected hyperedge"),
         }
@@ -959,11 +990,8 @@ mod tests {
 
     #[test]
     fn dictionaries_total_count() {
-        let dict = Dictionaries::from_records(&[
-            type_rec(1, "a"),
-            role_rec(2, "b"),
-            prop_rec(3, "c"),
-        ]);
+        let dict =
+            Dictionaries::from_records(&[type_rec(1, "a"), role_rec(2, "b"), prop_rec(3, "c")]);
         assert_eq!(dict.total(), 3);
     }
 
@@ -988,11 +1016,15 @@ mod tests {
         assert!(matches!(q.patterns[0], Pattern::Hyperedge { .. }));
         assert!(matches!(q.patterns[1], Pattern::Entity { .. }));
         assert!(q.filter.is_some());
-        let names: Vec<String> = q.returns.iter().map(|r| match r {
-            ndb_engine::ReturnItem::Variable(n) => n.clone(),
-            ndb_engine::ReturnItem::Path { variable, .. } => variable.clone(),
-            ndb_engine::ReturnItem::Aggregate { .. } => "<agg>".into(),
-        }).collect();
+        let names: Vec<String> = q
+            .returns
+            .iter()
+            .map(|r| match r {
+                ndb_engine::ReturnItem::Variable(n) => n.clone(),
+                ndb_engine::ReturnItem::Path { variable, .. } => variable.clone(),
+                ndb_engine::ReturnItem::Aggregate { .. } => "<agg>".into(),
+            })
+            .collect();
         assert_eq!(names, vec!["c", "n", "a"]);
         assert_eq!(q.limit, Some(100));
     }

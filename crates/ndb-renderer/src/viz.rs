@@ -142,10 +142,7 @@ pub fn render_pivot(
 fn fold_aggregate(agg: Aggregate, rows: &[Vec<Value>]) -> Value {
     match agg {
         Aggregate::Count => {
-            let n = rows
-                .iter()
-                .filter(|r| !matches!(r[0], Value::Null))
-                .count();
+            let n = rows.iter().filter(|r| !matches!(r[0], Value::Null)).count();
             Value::I64(i64::try_from(n).unwrap_or(i64::MAX))
         }
         Aggregate::Sum => fold_sum(rows),
@@ -586,12 +583,14 @@ impl AxisScale {
 
 fn numeric_value(v: &Value) -> Option<f64> {
     match v {
-        Value::I64(n) => {
+        Value::I64(n) =>
+        {
             #[allow(clippy::cast_precision_loss)]
             Some(*n as f64)
         }
         Value::F64(f) if f.is_finite() => Some(*f),
-        Value::Timestamp(t) => {
+        Value::Timestamp(t) =>
+        {
             #[allow(clippy::cast_precision_loss)]
             Some(*t as f64)
         }
@@ -602,13 +601,12 @@ fn numeric_value(v: &Value) -> Option<f64> {
 fn compute_row_colors(t: &Table, color_by: Option<usize>) -> Vec<String> {
     // d3.schemeCategory10 (categorical) — 10 colours.
     const CATEGORICAL: &[&str] = &[
-        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
-        "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
+        "#bcbd22", "#17becf",
     ];
     // 8-stop viridis approximation.
     const VIRIDIS: &[&str] = &[
-        "#440154", "#482878", "#3e4989", "#31688e", "#26828e",
-        "#1f9e89", "#35b779", "#fde725",
+        "#440154", "#482878", "#3e4989", "#31688e", "#26828e", "#1f9e89", "#35b779", "#fde725",
     ];
 
     let Some(col) = color_by else {
@@ -716,11 +714,23 @@ pub fn render_hypergraph(records: &[Record], opts: &HypergraphOpts) -> String {
     // Collect entities + hyperedges.
     let mut entities: Vec<&ndb_engine::record::EntityRecord> = records
         .iter()
-        .filter_map(|r| if let Record::Entity(e) = r { Some(e) } else { None })
+        .filter_map(|r| {
+            if let Record::Entity(e) = r {
+                Some(e)
+            } else {
+                None
+            }
+        })
         .collect();
     let hyperedges: Vec<&ndb_engine::record::HyperEdgeRecord> = records
         .iter()
-        .filter_map(|r| if let Record::HyperEdge(h) = r { Some(h) } else { None })
+        .filter_map(|r| {
+            if let Record::HyperEdge(h) = r {
+                Some(h)
+            } else {
+                None
+            }
+        })
         .collect();
 
     // Build degree map from hyperedge role refs.
@@ -756,8 +766,7 @@ pub fn render_hypergraph(records: &[Record], opts: &HypergraphOpts) -> String {
     let filtered_edges: Vec<&ndb_engine::record::HyperEdgeRecord> = hyperedges
         .iter()
         .filter(|h| {
-            h.roles.iter().all(|(_, eid)| entity_idx.contains_key(eid))
-                && !h.roles.is_empty()
+            h.roles.iter().all(|(_, eid)| entity_idx.contains_key(eid)) && !h.roles.is_empty()
         })
         .copied()
         .collect();
@@ -840,10 +849,10 @@ pub fn render_hypergraph(records: &[Record], opts: &HypergraphOpts) -> String {
             }
             HyperedgeStyle::Starburst => {
                 // Centroid + radial spokes.
-                let cx: f64 =
-                    role_positions.iter().map(|(x, _)| x).sum::<f64>() / role_positions.len() as f64;
-                let cy: f64 =
-                    role_positions.iter().map(|(_, y)| y).sum::<f64>() / role_positions.len() as f64;
+                let cx: f64 = role_positions.iter().map(|(x, _)| x).sum::<f64>()
+                    / role_positions.len() as f64;
+                let cy: f64 = role_positions.iter().map(|(_, y)| y).sum::<f64>()
+                    / role_positions.len() as f64;
                 for (x, y) in &role_positions {
                     out.push_str(&format!(
                         "<line class=\"hg-spoke\" x1=\"{cx:.2}\" y1=\"{cy:.2}\" x2=\"{x:.2}\" y2=\"{y:.2}\"/>\n",
@@ -864,10 +873,7 @@ pub fn render_hypergraph(records: &[Record], opts: &HypergraphOpts) -> String {
     // Render entity nodes.
     for (i, e) in entities.iter().enumerate() {
         let (x, y) = positions[i];
-        let color = type_colors
-            .get(&e.type_id)
-            .copied()
-            .unwrap_or("#4a90e2");
+        let color = type_colors.get(&e.type_id).copied().unwrap_or("#4a90e2");
         let label = entity_label(e);
         let tooltip = build_entity_tooltip(e);
         let props_json = serialize_properties(&e.properties);
@@ -1012,7 +1018,10 @@ impl Lcg {
         Self(if seed == 0 { 1 } else { seed })
     }
     fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         self.0
     }
     fn next_f64(&mut self) -> f64 {
@@ -1028,8 +1037,8 @@ fn build_type_palette(
     entities: &[&ndb_engine::record::EntityRecord],
 ) -> BTreeMap<TypeId, &'static str> {
     const PALETTE: &[&str] = &[
-        "#4a90e2", "#e94e77", "#7ed321", "#f5a623", "#9013fe",
-        "#50e3c2", "#bd10e0", "#b8e986", "#417505", "#9b9b9b",
+        "#4a90e2", "#e94e77", "#7ed321", "#f5a623", "#9013fe", "#50e3c2", "#bd10e0", "#b8e986",
+        "#417505", "#9b9b9b",
     ];
     let mut types: Vec<TypeId> = entities.iter().map(|e| e.type_id).collect();
     types.sort_by_key(|t| t.get());
@@ -1148,7 +1157,12 @@ mod tests {
             }
         }
         Table {
-            headers: vec!["region".into(), "year".into(), "quarter".into(), "revenue".into()],
+            headers: vec![
+                "region".into(),
+                "year".into(),
+                "quarter".into(),
+                "revenue".into(),
+            ],
             rows,
         }
     }
@@ -1175,9 +1189,21 @@ mod tests {
         let t = Table {
             headers: vec!["color".into(), "size".into(), "n".into()],
             rows: vec![
-                vec![Value::String("red".into()), Value::String("S".into()), Value::I64(1)],
-                vec![Value::String("red".into()), Value::String("L".into()), Value::I64(2)],
-                vec![Value::String("blue".into()), Value::String("S".into()), Value::I64(3)],
+                vec![
+                    Value::String("red".into()),
+                    Value::String("S".into()),
+                    Value::I64(1),
+                ],
+                vec![
+                    Value::String("red".into()),
+                    Value::String("L".into()),
+                    Value::I64(2),
+                ],
+                vec![
+                    Value::String("blue".into()),
+                    Value::String("S".into()),
+                    Value::I64(3),
+                ],
             ],
         };
         let s = render_pivot(&t, &[0], &[1], 2, Aggregate::Sum);
@@ -1193,9 +1219,17 @@ mod tests {
         let t = Table {
             headers: vec!["r".into(), "c".into(), "v".into()],
             rows: vec![
-                vec![Value::String("a".into()), Value::String("x".into()), Value::I64(7)],
+                vec![
+                    Value::String("a".into()),
+                    Value::String("x".into()),
+                    Value::I64(7),
+                ],
                 // (a, y), (b, x), (b, y) all missing
-                vec![Value::String("b".into()), Value::String("y".into()), Value::I64(9)],
+                vec![
+                    Value::String("b".into()),
+                    Value::String("y".into()),
+                    Value::I64(9),
+                ],
             ],
         };
         let s = render_pivot(&t, &[0], &[1], 2, Aggregate::Sum);
@@ -1213,9 +1247,27 @@ mod tests {
         let t = Table {
             headers: vec!["a".into(), "b".into(), "c".into(), "k".into(), "v".into()],
             rows: vec![
-                vec![Value::String("a1".into()), Value::String("b1".into()), Value::String("c1".into()), Value::String("k1".into()), Value::I64(1)],
-                vec![Value::String("a1".into()), Value::String("b1".into()), Value::String("c2".into()), Value::String("k1".into()), Value::I64(1)],
-                vec![Value::String("a2".into()), Value::String("b1".into()), Value::String("c1".into()), Value::String("k1".into()), Value::I64(1)],
+                vec![
+                    Value::String("a1".into()),
+                    Value::String("b1".into()),
+                    Value::String("c1".into()),
+                    Value::String("k1".into()),
+                    Value::I64(1),
+                ],
+                vec![
+                    Value::String("a1".into()),
+                    Value::String("b1".into()),
+                    Value::String("c2".into()),
+                    Value::String("k1".into()),
+                    Value::I64(1),
+                ],
+                vec![
+                    Value::String("a2".into()),
+                    Value::String("b1".into()),
+                    Value::String("c1".into()),
+                    Value::String("k1".into()),
+                    Value::I64(1),
+                ],
             ],
         };
         let s = render_pivot(&t, &[0, 1, 2], &[3], 4, Aggregate::Count);
@@ -1243,10 +1295,34 @@ mod tests {
         Table {
             headers: vec!["a".into(), "b".into(), "c".into(), "d".into(), "cat".into()],
             rows: vec![
-                vec![Value::I64(1), Value::F64(10.0), Value::I64(100), Value::F64(0.1), Value::String("x".into())],
-                vec![Value::I64(2), Value::F64(20.0), Value::I64(200), Value::F64(0.2), Value::String("y".into())],
-                vec![Value::I64(3), Value::F64(30.0), Value::I64(300), Value::F64(0.3), Value::String("x".into())],
-                vec![Value::I64(4), Value::F64(40.0), Value::I64(400), Value::F64(0.4), Value::String("z".into())],
+                vec![
+                    Value::I64(1),
+                    Value::F64(10.0),
+                    Value::I64(100),
+                    Value::F64(0.1),
+                    Value::String("x".into()),
+                ],
+                vec![
+                    Value::I64(2),
+                    Value::F64(20.0),
+                    Value::I64(200),
+                    Value::F64(0.2),
+                    Value::String("y".into()),
+                ],
+                vec![
+                    Value::I64(3),
+                    Value::F64(30.0),
+                    Value::I64(300),
+                    Value::F64(0.3),
+                    Value::String("x".into()),
+                ],
+                vec![
+                    Value::I64(4),
+                    Value::F64(40.0),
+                    Value::I64(400),
+                    Value::F64(0.4),
+                    Value::String("z".into()),
+                ],
             ],
         }
     }
@@ -1271,7 +1347,10 @@ mod tests {
         assert!(s.contains("Parallel sample"));
         // 5 axis labels present.
         for header in &t.headers {
-            assert!(s.contains(&format!(">{header}<")), "missing axis label: {header}");
+            assert!(
+                s.contains(&format!(">{header}<")),
+                "missing axis label: {header}"
+            );
         }
     }
 
@@ -1399,7 +1478,10 @@ mod tests {
             .find(|l| l.contains("<polygon"))
             .expect("polygon line");
         let comma_count = poly_line.matches(',').count();
-        assert!(comma_count >= 3, "expected ≥3 commas in polygon points: {poly_line}");
+        assert!(
+            comma_count >= 3,
+            "expected ≥3 commas in polygon points: {poly_line}"
+        );
     }
 
     #[test]
@@ -1486,12 +1568,9 @@ mod tests {
         let records = vec![Record::Entity(a.clone())];
         let s = render_hypergraph(&records, &HypergraphOpts::default());
         // Tooltip data attributes present.
-        assert!(s.contains(&format!(
-            "data-entity-id=\"{}\"",
-            a.entity_id.into_uuid()
-        )));
+        assert!(s.contains(&format!("data-entity-id=\"{}\"", a.entity_id.into_uuid())));
         assert!(s.contains("data-type-id=\"7\""));
-        assert!(s.contains("data-properties=") );
+        assert!(s.contains("data-properties="));
         // Label appears.
         assert!(s.contains("Alice"));
     }
@@ -1509,9 +1588,21 @@ mod tests {
         let t = Table {
             headers: vec!["g".into(), "k".into(), "v".into()],
             rows: vec![
-                vec![Value::String("a".into()), Value::String("k1".into()), Value::I64(10)],
-                vec![Value::String("a".into()), Value::String("k1".into()), Value::I64(20)],
-                vec![Value::String("a".into()), Value::String("k1".into()), Value::I64(30)],
+                vec![
+                    Value::String("a".into()),
+                    Value::String("k1".into()),
+                    Value::I64(10),
+                ],
+                vec![
+                    Value::String("a".into()),
+                    Value::String("k1".into()),
+                    Value::I64(20),
+                ],
+                vec![
+                    Value::String("a".into()),
+                    Value::String("k1".into()),
+                    Value::I64(30),
+                ],
             ],
         };
         let s = render_pivot(&t, &[0], &[1], 2, Aggregate::Avg);

@@ -28,8 +28,12 @@
 //!     cargo run -p langgraph -- --fetch            # OpenAlex → cached JSON
 //!     cargo run -p langgraph                       # ingest cache → .demo-data/langgraph-ndb
 //!     cargo run -p langgraph -- /tmp/lg            # custom db dir
-#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation,
-         clippy::cast_sign_loss, clippy::too_many_lines)]
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::too_many_lines
+)]
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{BufRead as _, Write as _};
@@ -116,7 +120,11 @@ fn embed(text: &str) -> Vec<f32> {
 
 // ─── OpenAlex fetch (ureq; CC0 data) ────────────────────────────────────
 fn short_id(openalex_url: &str) -> String {
-    openalex_url.rsplit('/').next().unwrap_or(openalex_url).to_string()
+    openalex_url
+        .rsplit('/')
+        .next()
+        .unwrap_or(openalex_url)
+        .to_string()
 }
 
 /// Pull the top-cited connected slice of a topic into `Vec<Paper>`. Keeps
@@ -125,7 +133,8 @@ fn short_id(openalex_url: &str) -> String {
 fn fetch_openalex(query: &str, target: usize) -> Result<Vec<Paper>, Box<dyn std::error::Error>> {
     let ua = "langgraph-demo (mailto:demo@nDB.example)";
     let filter = format!("default.search:{query},from_publication_date:2012-01-01");
-    let select = "id,doi,display_name,publication_year,cited_by_count,referenced_works,concepts,authorships";
+    let select =
+        "id,doi,display_name,publication_year,cited_by_count,referenced_works,concepts,authorships";
 
     // OpenAlex caps a page at 200; cursor-paginate to reach `target`. (The
     // 200-per-page cap is the only reason the first cut of this demo had
@@ -162,11 +171,25 @@ fn fetch_openalex(query: &str, target: usize) -> Result<Vec<Paper>, Box<dyn std:
     let mut papers = Vec::new();
     for w in &results {
         let Some((id, title, year, citations, field, doi, authors, cites_all)) = work_fields(w)
-        else { continue };
+        else {
+            continue;
+        };
         // Keep only references whose target is also in this set (internally-
         // connected subgraph) and never a self-loop.
-        let cites = cites_all.into_iter().filter(|rid| id_set.contains(rid) && rid != &id).collect();
-        papers.push(Paper { id, title, year, citations, field, doi, authors, cites });
+        let cites = cites_all
+            .into_iter()
+            .filter(|rid| id_set.contains(rid) && rid != &id)
+            .collect();
+        papers.push(Paper {
+            id,
+            title,
+            year,
+            citations,
+            field,
+            doi,
+            authors,
+            cites,
+        });
     }
     Ok(papers)
 }
@@ -179,19 +202,33 @@ fn fetch_openalex(query: &str, target: usize) -> Result<Vec<Paper>, Box<dyn std:
 #[allow(clippy::type_complexity)]
 fn work_fields(
     w: &serde_json::Value,
-) -> Option<(String, String, i64, i64, String, String, Vec<String>, Vec<String>)> {
+) -> Option<(
+    String,
+    String,
+    i64,
+    i64,
+    String,
+    String,
+    Vec<String>,
+    Vec<String>,
+)> {
     let id = w["id"].as_str().map(short_id)?;
     let year = w["publication_year"].as_i64().unwrap_or(0);
     if year == 0 {
         return None;
     }
-    let title = w["display_name"].as_str().unwrap_or("(untitled)").to_string();
+    let title = w["display_name"]
+        .as_str()
+        .unwrap_or("(untitled)")
+        .to_string();
     let citations = w["cited_by_count"].as_i64().unwrap_or(0);
     // First concept whose level >= 1 reads as a usable field label.
     let field = w["concepts"]
         .as_array()
         .and_then(|cs| {
-            cs.iter().find(|c| c["level"].as_i64().unwrap_or(0) >= 1).or_else(|| cs.first())
+            cs.iter()
+                .find(|c| c["level"].as_i64().unwrap_or(0) >= 1)
+                .or_else(|| cs.first())
         })
         .and_then(|c| c["display_name"].as_str())
         .unwrap_or("Unknown")
@@ -251,7 +288,13 @@ struct SpoolState {
 }
 impl Default for SpoolState {
     fn default() -> Self {
-        Self { cursor: "*".into(), pages: 0, works: 0, part: 0, done: false }
+        Self {
+            cursor: "*".into(),
+            pages: 0,
+            works: 0,
+            part: 0,
+            done: false,
+        }
     }
 }
 
@@ -274,7 +317,8 @@ fn write_gz_part(dir: &str, part: u32, data: &str) -> std::io::Result<()> {
     let tmp = format!("{dir}/part_{part:05}.jsonl.gz.tmp");
     let fin = format!("{dir}/part_{part:05}.jsonl.gz");
     let f = std::fs::File::create(&tmp)?;
-    let mut enc = flate2::write::GzEncoder::new(std::io::BufWriter::new(f), flate2::Compression::default());
+    let mut enc =
+        flate2::write::GzEncoder::new(std::io::BufWriter::new(f), flate2::Compression::default());
     enc.write_all(data.as_bytes())?;
     enc.finish()?; // flush deflate + write gzip trailer
     std::fs::rename(tmp, fin)
@@ -288,7 +332,10 @@ struct V4Only;
 impl ureq::Resolver for V4Only {
     fn resolve(&self, netloc: &str) -> std::io::Result<Vec<std::net::SocketAddr>> {
         use std::net::ToSocketAddrs;
-        Ok(netloc.to_socket_addrs()?.filter(std::net::SocketAddr::is_ipv4).collect())
+        Ok(netloc
+            .to_socket_addrs()?
+            .filter(std::net::SocketAddr::is_ipv4)
+            .collect())
     }
 }
 
@@ -332,11 +379,18 @@ fn fetch_oa_page(
     Err("exhausted retries on a page".into())
 }
 
-fn spool_fetch(dir: &str, filter: &str, cap: Option<u64>) -> Result<(), Box<dyn std::error::Error>> {
+fn spool_fetch(
+    dir: &str,
+    filter: &str,
+    cap: Option<u64>,
+) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(dir)?;
     let mut st = load_spool_state(dir);
     if st.done {
-        println!("spool already complete: {} works in {} parts → {dir}", st.works, st.part);
+        println!(
+            "spool already complete: {} works in {} parts → {dir}",
+            st.works, st.part
+        );
         return Ok(());
     }
     if st.cursor.is_empty() {
@@ -344,7 +398,11 @@ fn spool_fetch(dir: &str, filter: &str, cap: Option<u64>) -> Result<(), Box<dyn 
     }
     eprintln!(
         "spool: filter={filter:?}  resume={}  works so far={}",
-        if st.cursor == "*" { "<start>".into() } else { format!("{}…", &st.cursor[..st.cursor.len().min(16)]) },
+        if st.cursor == "*" {
+            "<start>".into()
+        } else {
+            format!("{}…", &st.cursor[..st.cursor.len().min(16)])
+        },
         st.works
     );
 
@@ -392,7 +450,10 @@ fn spool_fetch(dir: &str, filter: &str, cap: Option<u64>) -> Result<(), Box<dyn 
         }
         if st.pages % 50 == 0 {
             let rate = st.works as f64 / t0.elapsed().as_secs_f64().max(1e-6);
-            eprintln!("  {} works ({} pages, {rate:.0}/s this run, part {})", st.works, st.pages, st.part);
+            eprintln!(
+                "  {} works ({} pages, {rate:.0}/s this run, part {})",
+                st.works, st.pages, st.part
+            );
         }
         // Per-shard inter-page delay. This is PER SHARD — with N parallel
         // shards the aggregate is N×(this rate). At 1000ms + ~1.2s RTT each
@@ -401,7 +462,10 @@ fn spool_fetch(dir: &str, filter: &str, cap: Option<u64>) -> Result<(), Box<dyn 
         // req/s burst is what tripped the 429 storm).
         std::thread::sleep(Duration::from_millis(1000));
     }
-    println!("spool DONE: {} works across {} parts → {dir}", st.works, st.part);
+    println!(
+        "spool DONE: {} works across {} parts → {dir}",
+        st.works, st.part
+    );
     Ok(())
 }
 
@@ -432,7 +496,10 @@ fn fetch_year_histogram(
                 break;
             }
             Err(e) => {
-                eprintln!("  histogram error ({e}); retry {}/7 in {delay}s", attempt + 1);
+                eprintln!(
+                    "  histogram error ({e}); retry {}/7 in {delay}s",
+                    attempt + 1
+                );
                 std::thread::sleep(Duration::from_secs(delay));
                 delay = (delay * 2).min(60);
             }
@@ -500,7 +567,10 @@ fn spool_sharded(
         .and_then(|b| serde_json::from_slice::<Vec<(i32, i32)>>(&b).ok())
     {
         Some(s) if !s.is_empty() => {
-            eprintln!("sharded spool: loaded {} cached shard ranges from shards.json", s.len());
+            eprintln!(
+                "sharded spool: loaded {} cached shard ranges from shards.json",
+                s.len()
+            );
             s
         }
         _ => {
@@ -508,7 +578,10 @@ fn spool_sharded(
             let hist = fetch_year_histogram(&agent, base_filter)?;
             let total: u64 = hist.iter().map(|(_, c)| c).sum();
             let s = partition_year_shards(&hist, n_shards);
-            eprintln!("sharded spool: {total} works over {} year-shards (computed + cached)", s.len());
+            eprintln!(
+                "sharded spool: {total} works over {} year-shards (computed + cached)",
+                s.len()
+            );
             let _ = std::fs::write(&shards_path, serde_json::to_vec(&s).unwrap_or_default());
             s
         }
@@ -544,7 +617,10 @@ fn spool_sharded(
         }
         works += st.works;
     }
-    println!("sharded spool: {done}/{} shards done, {works} works total → {dir}", shards.len());
+    println!(
+        "sharded spool: {done}/{} shards done, {works} works total → {dir}",
+        shards.len()
+    );
     if done < shards.len() {
         return Err("some shards incomplete — rerun to resume".into());
     }
@@ -577,7 +653,10 @@ fn register_schema(engine: &mut Engine) {
         (TYPE_CITES, "cites"),
         (TYPE_AUTHORED, "authored"),
     ] {
-        tx.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(id), name: name.into() }));
+        tx.put_raw(Record::TypeName(TypeNameRecord {
+            id: TypeId::new(id),
+            name: name.into(),
+        }));
     }
     for (id, name) in [
         (ROLE_CITING, "citing"),
@@ -585,7 +664,10 @@ fn register_schema(engine: &mut Engine) {
         (ROLE_PAPER, "paper"),
         (ROLE_AUTHOR, "author"),
     ] {
-        tx.put_raw(Record::RoleName(RoleNameRecord { id: RoleId::new(id), name: name.into() }));
+        tx.put_raw(Record::RoleName(RoleNameRecord {
+            id: RoleId::new(id),
+            name: name.into(),
+        }));
     }
     for (id, name) in [
         (PROP_NAME, "name"),
@@ -597,7 +679,10 @@ fn register_schema(engine: &mut Engine) {
         (PROP_OAID, "openalex_id"),
         (PROP_DOI, "doi"),
     ] {
-        tx.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(id), name: name.into() }));
+        tx.put_raw(Record::PropertyKey(PropertyKeyRecord {
+            id: PropertyId::new(id),
+            name: name.into(),
+        }));
     }
     tx.commit().unwrap();
 }
@@ -662,7 +747,9 @@ fn ingest_papers(engine: &mut Engine, papers: &[Paper]) -> Ingested {
         let cites0 = n_cites;
         for p in &group {
             // Paper entity (dedup by OpenAlex id).
-            let pid = *paper_ids.entry(p.id.clone()).or_insert_with(EntityId::now_v7);
+            let pid = *paper_ids
+                .entry(p.id.clone())
+                .or_insert_with(EntityId::now_v7);
             tx.put_entity(EntityRecord {
                 entity_id: pid,
                 type_id: TypeId::new(TYPE_PAPER),
@@ -676,7 +763,10 @@ fn ingest_papers(engine: &mut Engine, papers: &[Paper]) -> Ingested {
                     (PropertyId::new(PROP_FIELD), Value::String(p.field.clone())),
                     (PropertyId::new(PROP_OAID), Value::String(p.id.clone())),
                     (PropertyId::new(PROP_DOI), Value::String(p.doi.clone())),
-                    (PropertyId::new(PROP_EMBED), Value::Vector(embed(&format!("{} {}", p.title, p.field)))),
+                    (
+                        PropertyId::new(PROP_EMBED),
+                        Value::Vector(embed(&format!("{} {}", p.title, p.field))),
+                    ),
                 ],
             });
 
@@ -725,11 +815,11 @@ fn ingest_papers(engine: &mut Engine, papers: &[Paper]) -> Ingested {
         // ~5 records/paper (entity + authors + authored) + cites added.
         since_flush += group.len() * 5 + (n_cites - cites0);
         if since_flush >= 50_000 {
-            engine.flush().unwrap();   // promote memtable → SSTable, free RAM
+            engine.flush().unwrap(); // promote memtable → SSTable, free RAM
             since_flush = 0;
         }
     }
-    engine.flush().unwrap();           // final flush
+    engine.flush().unwrap(); // final flush
 
     Ingested {
         papers: paper_ids.len(),
@@ -751,7 +841,9 @@ fn spool_parts(dir: &str) -> std::io::Result<Vec<PathBuf>> {
             if p.is_dir() {
                 collect(&p, out)?;
             } else if p.extension().is_some_and(|x| x == "gz")
-                && p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("part_"))
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("part_"))
             {
                 out.push(p);
             }
@@ -767,10 +859,7 @@ fn spool_parts(dir: &str) -> std::io::Result<Vec<PathBuf>> {
 /// Stream the decoded works of one gzipped JSONL part, calling `f` per work.
 /// `MultiGzDecoder` handles a part written as several concatenated gz members
 /// (the spool flushes one member per part, but this is robust either way).
-fn for_each_work_in_part(
-    path: &Path,
-    mut f: impl FnMut(serde_json::Value),
-) -> std::io::Result<()> {
+fn for_each_work_in_part(path: &Path, mut f: impl FnMut(serde_json::Value)) -> std::io::Result<()> {
     let file = std::fs::File::open(path)?;
     let dec = flate2::read::MultiGzDecoder::new(std::io::BufReader::new(file));
     for line in std::io::BufReader::new(dec).lines() {
@@ -789,7 +878,9 @@ fn for_each_work_in_part(
 /// numeric id is stable + unique, so we DON'T store an id→EntityId map: the
 /// EntityId is DERIVED from it (`eid_for`). `None` if not a `W<digits>` id.
 fn work_num(short_id: &str) -> Option<u64> {
-    short_id.strip_prefix('W').and_then(|d| d.parse::<u64>().ok())
+    short_id
+        .strip_prefix('W')
+        .and_then(|d| d.parse::<u64>().ok())
 }
 
 /// Deterministic EntityId for a work number — collision-free across works
@@ -835,7 +926,8 @@ fn ingest_from_spool(
     }
     eprintln!(
         "  pass 1/2: {scanned} works scanned, {} kept papers ({:.0}s)",
-        kept.len(), t0.elapsed().as_secs_f64()
+        kept.len(),
+        t0.elapsed().as_secs_f64()
     );
 
     // Pass 2 — stream entities + CITES, flushing every ~50k records.
@@ -846,8 +938,11 @@ fn ingest_from_spool(
     let mut commit_and_flush = false;
     for path in &parts {
         for_each_work_in_part(path, |w| {
-            let Some((id, title, year, citations, field, doi, _authors, cites_all)) = work_fields(&w)
-            else { return };
+            let Some((id, title, year, citations, field, doi, _authors, cites_all)) =
+                work_fields(&w)
+            else {
+                return;
+            };
             let Some(num) = work_num(&id) else { return };
             let pid = eid_for(num);
             tx.put_entity(EntityRecord {
@@ -863,7 +958,10 @@ fn ingest_from_spool(
                     (PropertyId::new(PROP_FIELD), Value::String(field.clone())),
                     (PropertyId::new(PROP_OAID), Value::String(id.clone())),
                     (PropertyId::new(PROP_DOI), Value::String(doi.clone())),
-                    (PropertyId::new(PROP_EMBED), Value::Vector(embed(&format!("{title} {field}")))),
+                    (
+                        PropertyId::new(PROP_EMBED),
+                        Value::Vector(embed(&format!("{title} {field}"))),
+                    ),
                 ],
             });
             n_papers += 1;
@@ -937,11 +1035,26 @@ fn ingest_from_spool(
 /// `ingest_papers`, so `langgraph-server` reads it identically.
 fn synthetic_ingest(engine: &mut Engine, n: usize) {
     const FIELDS: [&str; 20] = [
-        "Artificial intelligence", "Machine translation", "Computer vision", "Reinforcement learning",
-        "Natural language processing", "Speech recognition", "Robotics", "Optimization",
-        "Graph theory", "Information retrieval", "Bioinformatics", "Cryptography",
-        "Distributed systems", "Databases", "Computer graphics", "Quantum computing",
-        "Statistics", "Signal processing", "Recommender systems", "Knowledge graphs",
+        "Artificial intelligence",
+        "Machine translation",
+        "Computer vision",
+        "Reinforcement learning",
+        "Natural language processing",
+        "Speech recognition",
+        "Robotics",
+        "Optimization",
+        "Graph theory",
+        "Information retrieval",
+        "Bioinformatics",
+        "Cryptography",
+        "Distributed systems",
+        "Databases",
+        "Computer graphics",
+        "Quantum computing",
+        "Statistics",
+        "Signal processing",
+        "Recommender systems",
+        "Knowledge graphs",
     ];
     const BATCH: usize = 5000;
     const FLUSH_EVERY: usize = 250_000;
@@ -963,8 +1076,14 @@ fn synthetic_ingest(engine: &mut Engine, n: usize) {
                 properties: vec![
                     (PropertyId::new(PROP_NAME), Value::String(title.clone())),
                     (PropertyId::new(PROP_KIND), Value::String("paper".into())),
-                    (PropertyId::new(PROP_YEAR), Value::I64(2012 + (j % 14) as i64)),
-                    (PropertyId::new(PROP_CITATIONS), Value::I64(((j.wrapping_mul(2_654_435_761)) % 100_000) as i64)),
+                    (
+                        PropertyId::new(PROP_YEAR),
+                        Value::I64(2012 + (j % 14) as i64),
+                    ),
+                    (
+                        PropertyId::new(PROP_CITATIONS),
+                        Value::I64(((j.wrapping_mul(2_654_435_761)) % 100_000) as i64),
+                    ),
                     (PropertyId::new(PROP_FIELD), Value::String(field.into())),
                     (PropertyId::new(PROP_OAID), Value::String(format!("W{j}"))),
                     (PropertyId::new(PROP_DOI), Value::String(String::new())),
@@ -977,7 +1096,10 @@ fn synthetic_ingest(engine: &mut Engine, n: usize) {
                     type_id: TypeId::new(TYPE_CITES),
                     tx_id_assert: TxId::new(0),
                     tx_id_supersede: TxId::ACTIVE,
-                    roles: vec![(RoleId::new(ROLE_CITING), eid), (RoleId::new(ROLE_CITED), p)],
+                    roles: vec![
+                        (RoleId::new(ROLE_CITING), eid),
+                        (RoleId::new(ROLE_CITED), p),
+                    ],
                     hyperedge_roles: vec![],
                     properties: vec![],
                 });
@@ -1004,13 +1126,24 @@ fn write_clusters_meta(engine: &Engine, db_dir: &str) -> Result<(), Box<dyn std:
     let mut max_year = i64::MIN;
     let mut total = 0usize;
     for item in engine.snapshot_iter_streaming(TxId::ACTIVE) {
-        let Ok(Record::Entity(e)) = item else { continue };
+        let Ok(Record::Entity(e)) = item else {
+            continue;
+        };
         if e.type_id != TypeId::new(TYPE_PAPER) {
             continue;
         }
         total += 1;
-        let f = e.properties.iter().find(|(p, _)| p.get() == PROP_FIELD)
-            .and_then(|(_, v)| if let Value::String(s) = v { Some(s.clone()) } else { None })
+        let f = e
+            .properties
+            .iter()
+            .find(|(p, _)| p.get() == PROP_FIELD)
+            .and_then(|(_, v)| {
+                if let Value::String(s) = v {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
             .unwrap_or_default();
         *field_count.entry(f).or_default() += 1;
         for (p, v) in &e.properties {
@@ -1026,18 +1159,31 @@ fn write_clusters_meta(engine: &Engine, db_dir: &str) -> Result<(), Box<dyn std:
     }
     let mut fc: Vec<(String, usize)> = field_count.into_iter().collect();
     fc.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    let top: std::collections::HashSet<String> = fc.iter().take(18).map(|(f, _)| f.clone()).collect();
+    let top: std::collections::HashSet<String> =
+        fc.iter().take(18).map(|(f, _)| f.clone()).collect();
     let mut coarse: BTreeMap<String, usize> = BTreeMap::new();
     for (f, c) in &fc {
-        *coarse.entry(if top.contains(f) { f.clone() } else { "Other".into() }).or_default() += c;
+        *coarse
+            .entry(if top.contains(f) {
+                f.clone()
+            } else {
+                "Other".into()
+            })
+            .or_default() += c;
     }
     let clusters: Vec<(String, usize)> = coarse.into_iter().collect();
-    if min_year == i64::MAX { min_year = 2020; max_year = 2020; }
+    if min_year == i64::MAX {
+        min_year = 2020;
+        max_year = 2020;
+    }
     let meta = serde_json::json!({
         "clusters": clusters, "max_cit": max_cit,
         "min_year": min_year, "max_year": max_year, "total": total,
     });
-    std::fs::write(format!("{db_dir}/clusters.json"), serde_json::to_vec(&meta)?)?;
+    std::fs::write(
+        format!("{db_dir}/clusters.json"),
+        serde_json::to_vec(&meta)?,
+    )?;
     Ok(())
 }
 
@@ -1047,35 +1193,55 @@ fn export_graph(engine: &Engine, path: &str) -> Result<(usize, usize), Box<dyn s
 
     let uuid = |e: EntityId| e.into_uuid().to_string();
     let str_prop = |props: &[(PropertyId, Value)], pid: u32| -> Option<String> {
-        props.iter().find(|(p, _)| p.get() == pid).and_then(|(_, v)| match v {
-            Value::String(s) => Some(s.clone()),
-            _ => None,
-        })
+        props
+            .iter()
+            .find(|(p, _)| p.get() == pid)
+            .and_then(|(_, v)| match v {
+                Value::String(s) => Some(s.clone()),
+                _ => None,
+            })
     };
     let i64_prop = |props: &[(PropertyId, Value)], pid: u32| -> i64 {
-        props.iter().find(|(p, _)| p.get() == pid).and_then(|(_, v)| match v {
-            Value::I64(n) => Some(*n),
-            _ => None,
-        }).unwrap_or(0)
+        props
+            .iter()
+            .find(|(p, _)| p.get() == pid)
+            .and_then(|(_, v)| match v {
+                Value::I64(n) => Some(*n),
+                _ => None,
+            })
+            .unwrap_or(0)
     };
     let vec_prop = |props: &[(PropertyId, Value)], pid: u32| -> Vec<f32> {
-        props.iter().find(|(p, _)| p.get() == pid).and_then(|(_, v)| match v {
-            Value::Vector(x) => Some(x.clone()),
-            _ => None,
-        }).unwrap_or_default()
+        props
+            .iter()
+            .find(|(p, _)| p.get() == pid)
+            .and_then(|(_, v)| match v {
+                Value::Vector(x) => Some(x.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
     };
 
     // author id → display name; paper id → year.
-    let author_name: HashMap<String, String> = records.iter().filter_map(|r| match r {
-        Record::Entity(e) if e.type_id == TypeId::new(TYPE_AUTHOR) =>
-            Some((uuid(e.entity_id), str_prop(&e.properties, PROP_NAME).unwrap_or_default())),
-        _ => None,
-    }).collect();
-    let paper_year: HashMap<String, i64> = records.iter().filter_map(|r| match r {
-        Record::Entity(e) if e.type_id == TypeId::new(TYPE_PAPER) =>
-            Some((uuid(e.entity_id), i64_prop(&e.properties, PROP_YEAR))),
-        _ => None,
-    }).collect();
+    let author_name: HashMap<String, String> = records
+        .iter()
+        .filter_map(|r| match r {
+            Record::Entity(e) if e.type_id == TypeId::new(TYPE_AUTHOR) => Some((
+                uuid(e.entity_id),
+                str_prop(&e.properties, PROP_NAME).unwrap_or_default(),
+            )),
+            _ => None,
+        })
+        .collect();
+    let paper_year: HashMap<String, i64> = records
+        .iter()
+        .filter_map(|r| match r {
+            Record::Entity(e) if e.type_id == TypeId::new(TYPE_PAPER) => {
+                Some((uuid(e.entity_id), i64_prop(&e.properties, PROP_YEAR)))
+            }
+            _ => None,
+        })
+        .collect();
 
     // Walk AUTHORED once: per-paper author ids, per-author paper count,
     // per-author debut year. nDB stores every author; the VIZ renders only
@@ -1088,17 +1254,30 @@ fn export_graph(engine: &Engine, path: &str) -> Result<(usize, usize), Box<dyn s
     let mut author_year: HashMap<String, i64> = HashMap::new();
     for r in &records {
         if let Record::HyperEdge(h) = r {
-            if h.type_id != TypeId::new(TYPE_AUTHORED) { continue; }
-            let paper = h.roles.iter().find(|(r, _)| r.get() == ROLE_PAPER).map(|(_, e)| uuid(*e));
+            if h.type_id != TypeId::new(TYPE_AUTHORED) {
+                continue;
+            }
+            let paper = h
+                .roles
+                .iter()
+                .find(|(r, _)| r.get() == ROLE_PAPER)
+                .map(|(_, e)| uuid(*e));
             let Some(paper) = paper else { continue };
             let py = paper_year.get(&paper).copied().unwrap_or(0);
             for (rid, aid) in &h.roles {
-                if rid.get() != ROLE_AUTHOR { continue; }
+                if rid.get() != ROLE_AUTHOR {
+                    continue;
+                }
                 let a = uuid(*aid);
-                paper_authors.entry(paper.clone()).or_default().push(a.clone());
+                paper_authors
+                    .entry(paper.clone())
+                    .or_default()
+                    .push(a.clone());
                 *author_count.entry(a.clone()).or_default() += 1;
                 let y = author_year.entry(a).or_insert(i64::MAX);
-                if py > 0 { *y = (*y).min(py); }
+                if py > 0 {
+                    *y = (*y).min(py);
+                }
             }
         }
     }
@@ -1113,8 +1292,14 @@ fn export_graph(engine: &Engine, path: &str) -> Result<(usize, usize), Box<dyn s
         if let Record::Entity(e) = r {
             let id = uuid(e.entity_id);
             if e.type_id == TypeId::new(TYPE_PAPER) {
-                let authors: Vec<String> = paper_authors.get(&id).map(|ids|
-                    ids.iter().filter_map(|a| author_name.get(a).cloned()).collect()).unwrap_or_default();
+                let authors: Vec<String> = paper_authors
+                    .get(&id)
+                    .map(|ids| {
+                        ids.iter()
+                            .filter_map(|a| author_name.get(a).cloned())
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 nodes.push(json!({
                     "id": id,
                     "label": str_prop(&e.properties, PROP_NAME).unwrap_or_default(),
@@ -1146,7 +1331,12 @@ fn export_graph(engine: &Engine, path: &str) -> Result<(usize, usize), Box<dyn s
     // with a node).
     for r in &records {
         if let Record::HyperEdge(h) = r {
-            let role = |rid: u32| h.roles.iter().find(|(r, _)| r.get() == rid).map(|(_, e)| uuid(*e));
+            let role = |rid: u32| {
+                h.roles
+                    .iter()
+                    .find(|(r, _)| r.get() == rid)
+                    .map(|(_, e)| uuid(*e))
+            };
             if h.type_id == TypeId::new(TYPE_CITES) {
                 if let (Some(s), Some(t)) = (role(ROLE_CITING), role(ROLE_CITED)) {
                     links.push(json!({"source": s, "target": t, "kind": "cites"}));
@@ -1177,18 +1367,29 @@ fn export_graph(engine: &Engine, path: &str) -> Result<(usize, usize), Box<dyn s
     let mut field_count: HashMap<String, usize> = HashMap::new();
     for n in &nodes {
         if n["kind"] == "paper" {
-            *field_count.entry(n["field"].as_str().unwrap_or("Unknown").to_string()).or_default() += 1;
+            *field_count
+                .entry(n["field"].as_str().unwrap_or("Unknown").to_string())
+                .or_default() += 1;
         }
     }
     let mut fc: Vec<(String, usize)> = field_count.into_iter().collect();
     fc.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    let top_fields: std::collections::HashSet<String> = fc.iter().take(18).map(|(f, _)| f.clone()).collect();
-    let coarse = |f: &str| if top_fields.contains(f) { f.to_string() } else { "Other".to_string() };
+    let top_fields: std::collections::HashSet<String> =
+        fc.iter().take(18).map(|(f, _)| f.clone()).collect();
+    let coarse = |f: &str| {
+        if top_fields.contains(f) {
+            f.to_string()
+        } else {
+            "Other".to_string()
+        }
+    };
 
     let mut cluster_count: BTreeMap<String, usize> = BTreeMap::new();
     for n in &nodes {
         if n["kind"] == "paper" {
-            *cluster_count.entry(coarse(n["field"].as_str().unwrap_or("Unknown"))).or_default() += 1;
+            *cluster_count
+                .entry(coarse(n["field"].as_str().unwrap_or("Unknown")))
+                .or_default() += 1;
         }
     }
     let k = cluster_count.len().max(1);
@@ -1223,7 +1424,10 @@ fn export_graph(engine: &Engine, path: &str) -> Result<(usize, usize), Box<dyn s
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(path, serde_json::to_vec(&doc)?)?;
-    Ok((doc["nodes"].as_array().map_or(0, Vec::len), doc["links"].as_array().map_or(0, Vec::len)))
+    Ok((
+        doc["nodes"].as_array().map_or(0, Vec::len),
+        doc["links"].as_array().map_or(0, Vec::len),
+    ))
 }
 
 /// Count `PAPER` entities visible at a snapshot — the time-travel probe.
@@ -1238,7 +1442,13 @@ fn count_papers_at(engine: &Engine, tx: TxId) -> usize {
 
 // ─── Tiny network-free corpus for tests + offline fallback ──────────────
 fn synthetic_papers() -> Vec<Paper> {
-    let mk = |id: &str, title: &str, year: i64, cites_n: i64, field: &str, authors: &[&str], cites: &[&str]| Paper {
+    let mk = |id: &str,
+              title: &str,
+              year: i64,
+              cites_n: i64,
+              field: &str,
+              authors: &[&str],
+              cites: &[&str]| Paper {
         id: id.into(),
         title: title.into(),
         year,
@@ -1249,19 +1459,71 @@ fn synthetic_papers() -> Vec<Paper> {
         cites: cites.iter().map(|s| (*s).to_string()).collect(),
     };
     vec![
-        mk("W1", "A Neural Probabilistic Language Model", 2012, 9000, "NLP", &["Bengio", "Ducharme"], &[]),
-        mk("W2", "ImageNet Classification with Deep CNNs", 2012, 90000, "Computer Vision", &["Krizhevsky", "Sutskever", "Hinton"], &["W1"]),
-        mk("W3", "Sequence to Sequence Learning", 2014, 30000, "NLP", &["Sutskever", "Vinyals", "Le"], &["W1", "W2"]),
-        mk("W4", "Deep Residual Learning", 2016, 220000, "Computer Vision", &["He", "Zhang", "Ren", "Sun"], &["W2"]),
-        mk("W5", "Attention Is All You Need", 2017, 130000, "NLP", &["Vaswani", "Shazeer", "Parmar"], &["W1", "W3", "W4"]),
-        mk("W6", "BERT", 2019, 80000, "NLP", &["Devlin", "Chang", "Lee", "Toutanova"], &["W3", "W5"]),
+        mk(
+            "W1",
+            "A Neural Probabilistic Language Model",
+            2012,
+            9000,
+            "NLP",
+            &["Bengio", "Ducharme"],
+            &[],
+        ),
+        mk(
+            "W2",
+            "ImageNet Classification with Deep CNNs",
+            2012,
+            90000,
+            "Computer Vision",
+            &["Krizhevsky", "Sutskever", "Hinton"],
+            &["W1"],
+        ),
+        mk(
+            "W3",
+            "Sequence to Sequence Learning",
+            2014,
+            30000,
+            "NLP",
+            &["Sutskever", "Vinyals", "Le"],
+            &["W1", "W2"],
+        ),
+        mk(
+            "W4",
+            "Deep Residual Learning",
+            2016,
+            220000,
+            "Computer Vision",
+            &["He", "Zhang", "Ren", "Sun"],
+            &["W2"],
+        ),
+        mk(
+            "W5",
+            "Attention Is All You Need",
+            2017,
+            130000,
+            "NLP",
+            &["Vaswani", "Shazeer", "Parmar"],
+            &["W1", "W3", "W4"],
+        ),
+        mk(
+            "W6",
+            "BERT",
+            2019,
+            80000,
+            "NLP",
+            &["Devlin", "Chang", "Lee", "Toutanova"],
+            &["W3", "W5"],
+        ),
     ]
 }
 
 fn demo_reads(engine: &Engine, ing: &Ingested) {
     println!(
         "ingested {} papers + {} authors, {} CITES + {} AUTHORED edges across {} years",
-        ing.papers, ing.authors, ing.cites, ing.authored, ing.timeline.len()
+        ing.papers,
+        ing.authors,
+        ing.cites,
+        ing.authored,
+        ing.timeline.len()
     );
 
     // (5) semantic kNN — the GraphRAG retrieval dimension.
@@ -1271,15 +1533,29 @@ fn demo_reads(engine: &Engine, ing: &Ingested) {
         .into_iter()
         .filter_map(|r| match r {
             Record::Entity(e) if e.type_id == TypeId::new(TYPE_PAPER) => {
-                let t = e.properties.iter().find(|(p, _)| p.get() == PROP_NAME)
-                    .and_then(|(_, v)| if let Value::String(s) = v { Some(s.clone()) } else { None })?;
+                let t = e
+                    .properties
+                    .iter()
+                    .find(|(p, _)| p.get() == PROP_NAME)
+                    .and_then(|(_, v)| {
+                        if let Value::String(s) = v {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    })?;
                 Some((e.entity_id, t))
             }
             _ => None,
         })
         .collect();
     let probe = "transformer attention language model";
-    let hits = engine.vector_search(PropertyId::new(PROP_EMBED), &embed(probe), 5, Distance::Cosine);
+    let hits = engine.vector_search(
+        PropertyId::new(PROP_EMBED),
+        &embed(probe),
+        5,
+        Distance::Cosine,
+    );
     println!("\nsemantic kNN nearest to \"{probe}\":");
     for (eid, dist) in hits {
         if let Some(t) = id_to_title.get(&eid) {
@@ -1291,8 +1567,10 @@ fn demo_reads(engine: &Engine, ing: &Ingested) {
     if let (Some(first), Some(last)) = (ing.timeline.first(), ing.timeline.last()) {
         println!(
             "\ntime travel: {} papers as_of {} → {} papers as_of {}",
-            count_papers_at(engine, first.1), first.0,
-            count_papers_at(engine, last.1), last.0
+            count_papers_at(engine, first.1),
+            first.0,
+            count_papers_at(engine, last.1),
+            last.0
         );
     }
 }
@@ -1306,7 +1584,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `--from-spool` later ingests it into nDB at bounded RAM.
     if args.first().map(String::as_str) == Some("--spool") {
         let flag_val = |name: &str| {
-            args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
+            args.iter()
+                .position(|a| a == name)
+                .and_then(|i| args.get(i + 1))
+                .cloned()
         };
         let dir = args
             .iter()
@@ -1324,7 +1605,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // cursor walks (the fast path — beats the single-stream RTT wall).
     if args.first().map(String::as_str) == Some("--spool-sharded") {
         let flag_val = |name: &str| {
-            args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
+            args.iter()
+                .position(|a| a == name)
+                .and_then(|i| args.get(i + 1))
+                .cloned()
         };
         let dir = args
             .iter()
@@ -1333,7 +1617,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .cloned()
             .unwrap_or_else(|| ".demo-data/oa-spool".to_string());
         let filter = flag_val("--filter").unwrap_or_else(|| "cited_by_count:>50".to_string());
-        let shards = flag_val("--shards").and_then(|s| s.parse::<usize>().ok()).unwrap_or(10);
+        let shards = flag_val("--shards")
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(10);
         spool_sharded(&dir, &filter, shards)?;
         return Ok(());
     }
@@ -1346,7 +1632,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::fs::write(CACHE_PATH, serde_json::to_vec_pretty(&papers)?)?;
         println!(
             "fetched {} papers ({} with internal citations) → {CACHE_PATH}",
-            papers.len(), connected
+            papers.len(),
+            connected
         );
         return Ok(());
     }
@@ -1361,13 +1648,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // bounded serving path — run it after ingest, before serving, NOT on a
     // live low-RAM server. Must precede the db-dir wipe below.
     if args.first().map(String::as_str) == Some("--compact") {
-        let db_dir = args.iter().skip(1).find(|a| !a.starts_with("--")).cloned()
+        let db_dir = args
+            .iter()
+            .skip(1)
+            .find(|a| !a.starts_with("--"))
+            .cloned()
             .unwrap_or_else(|| ".demo-data/langgraph-ndb".to_string());
-        let cache_mb: usize = args.iter().position(|a| a == "--cache-mb")
-            .and_then(|i| args.get(i + 1)).and_then(|s| s.parse().ok()).unwrap_or(2048);
+        let cache_mb: usize = args
+            .iter()
+            .position(|a| a == "--cache-mb")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(2048);
         eprintln!("opening {db_dir} (low-memory) for compaction…");
-        let mut engine = Engine::open_with_config(
-            &db_dir, EngineConfig::low_memory(cache_mb * 1024 * 1024))?;
+        let mut engine =
+            Engine::open_with_config(&db_dir, EngineConfig::low_memory(cache_mb * 1024 * 1024))?;
         // Re-declare the indexed (type, prop) pairs so the post-compaction
         // SSTable's .pidx/.vidx/.lkp sidecars are rewritten — without this,
         // compaction deletes the old sidecars and emits none (reader then
@@ -1381,7 +1676,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = std::fs::remove_file(format!("{db_dir}/top.json"));
         println!(
             "compacted {db_dir}: {before} → {} SSTable(s) ({} → {} records) in {:.0}s",
-            engine.sstable_count(), stats.records_in, stats.records_out, t.elapsed().as_secs_f64()
+            engine.sstable_count(),
+            stats.records_in,
+            stats.records_out,
+            t.elapsed().as_secs_f64()
         );
         return Ok(());
     }
@@ -1392,9 +1690,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // recreated; the SPOOL dir is only read. Run `--compact` after, then
     // serve with `langgraph-server --low-memory`.
     if args.first().map(String::as_str) == Some("--from-spool") {
-        let positional: Vec<&String> = args.iter().skip(1).filter(|a| !a.starts_with("--")).collect();
-        let spool_dir = positional.first().map(|s| s.as_str()).unwrap_or(".demo-data/oa-spool");
-        let db_dir = positional.get(1).map(|s| s.as_str()).unwrap_or(".demo-data/langgraph-oa-ndb");
+        let positional: Vec<&String> = args
+            .iter()
+            .skip(1)
+            .filter(|a| !a.starts_with("--"))
+            .collect();
+        let spool_dir = positional
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or(".demo-data/oa-spool");
+        let db_dir = positional
+            .get(1)
+            .map(|s| s.as_str())
+            .unwrap_or(".demo-data/langgraph-oa-ndb");
         if !Path::new(spool_dir).exists() {
             return Err(format!("spool dir not found: {spool_dir}").into());
         }
@@ -1408,12 +1716,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         register_schema(&mut engine);
         let ing = ingest_from_spool(&mut engine, spool_dir)?;
         write_clusters_meta(&engine, db_dir)?;
-        let sz: u64 = std::fs::read_dir(db_dir).map(|rd| rd.flatten()
-            .filter_map(|e| e.metadata().ok().map(|m| m.len())).sum()).unwrap_or(0);
+        let sz: u64 = std::fs::read_dir(db_dir)
+            .map(|rd| {
+                rd.flatten()
+                    .filter_map(|e| e.metadata().ok().map(|m| m.len()))
+                    .sum()
+            })
+            .unwrap_or(0);
         println!(
             "from-spool DONE: {} papers, {} authors, {} cites, {} authored — {:.2} GB → {db_dir}\n\
              next: langgraph-ingest --compact {db_dir}  then  langgraph-server --low-memory --db {db_dir}",
-            ing.papers, ing.authors, ing.cites, ing.authored, sz as f64 / 1.073_741_824e9
+            ing.papers,
+            ing.authors,
+            ing.cites,
+            ing.authored,
+            sz as f64 / 1.073_741_824e9
         );
         return Ok(());
     }
@@ -1424,16 +1741,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Reports latency (cold+warm), snapshot build time, COMMITTED RAM (RssAnon,
     // not VmRSS which counts reclaimable mmap), and result-set equality.
     if args.first().map(String::as_str) == Some("--bench-knn") {
-        let db = args.iter().skip(1).find(|a| !a.starts_with("--")).cloned()
+        let db = args
+            .iter()
+            .skip(1)
+            .find(|a| !a.starts_with("--"))
+            .cloned()
             .unwrap_or_else(|| ".demo-data/langgraph-ndb".to_string());
         let rss_anon_mb = || -> u64 {
-            std::fs::read_to_string("/proc/self/status").ok()
-                .and_then(|s| s.lines().find(|l| l.starts_with("RssAnon:"))
-                    .and_then(|l| l.split_whitespace().nth(1)).and_then(|kb| kb.parse::<u64>().ok()))
+            std::fs::read_to_string("/proc/self/status")
+                .ok()
+                .and_then(|s| {
+                    s.lines()
+                        .find(|l| l.starts_with("RssAnon:"))
+                        .and_then(|l| l.split_whitespace().nth(1))
+                        .and_then(|kb| kb.parse::<u64>().ok())
+                })
                 .map_or(0, |kb| kb / 1024)
         };
         eprintln!("opening {db} (low-memory)…");
-        let mut engine = Engine::open_with_config(&db, EngineConfig::low_memory(768 * 1024 * 1024))?;
+        let mut engine =
+            Engine::open_with_config(&db, EngineConfig::low_memory(768 * 1024 * 1024))?;
         register_index_props(&mut engine);
         engine.rebuild_indexes()?;
         let pid = PropertyId::new(PROP_EMBED);
@@ -1446,28 +1773,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let t = Instant::now();
         let _ = engine.vector_search(pid, &q, 20, Distance::Cosine);
         let ex_warm = t.elapsed().as_secs_f64();
-        println!("EXACT (multi-sidecar+verify): {} hits, cold {ex_cold:.3}s, warm {ex_warm:.3}s, RssAnon {} MB",
-            ex.len(), rss_anon_mb());
+        println!(
+            "EXACT (multi-sidecar+verify): {} hits, cold {ex_cold:.3}s, warm {ex_warm:.3}s, RssAnon {} MB",
+            ex.len(),
+            rss_anon_mb()
+        );
 
         let t = Instant::now();
         let n = engine.build_vector_snapshot(pid)?;
-        println!("SNAPSHOT build: {n} vectors in {:.1}s, RssAnon {} MB (peak during build)",
-            t.elapsed().as_secs_f64(), rss_anon_mb());
+        println!(
+            "SNAPSHOT build: {n} vectors in {:.1}s, RssAnon {} MB (peak during build)",
+            t.elapsed().as_secs_f64(),
+            rss_anon_mb()
+        );
         let t = Instant::now();
-        let sn = engine.vector_search_snapshot(pid, &q, 20, Distance::Cosine).unwrap_or_default();
+        let sn = engine
+            .vector_search_snapshot(pid, &q, 20, Distance::Cosine)
+            .unwrap_or_default();
         let sn_cold = t.elapsed().as_secs_f64();
         let t = Instant::now();
         let _ = engine.vector_search_snapshot(pid, &q, 20, Distance::Cosine);
         let sn_warm = t.elapsed().as_secs_f64();
-        println!("SNAPSHOT (.vsnap, no fan-out): {} hits, cold {sn_cold:.3}s, warm {sn_warm:.3}s, RssAnon {} MB",
-            sn.len(), rss_anon_mb());
+        println!(
+            "SNAPSHOT (.vsnap, no fan-out): {} hits, cold {sn_cold:.3}s, warm {sn_warm:.3}s, RssAnon {} MB",
+            sn.len(),
+            rss_anon_mb()
+        );
 
         let exs: HashSet<_> = ex.iter().map(|(e, _)| *e).collect();
         let sns: HashSet<_> = sn.iter().map(|(e, _)| *e).collect();
-        println!("RESULT same_set={} overlap={}/{}  |  speedup cold {:.1}x warm {:.1}x",
-            exs == sns, exs.intersection(&sns).count(), exs.union(&sns).count(),
-            if sn_cold > 0.0 { ex_cold / sn_cold } else { 0.0 },
-            if sn_warm > 0.0 { ex_warm / sn_warm } else { 0.0 });
+        println!(
+            "RESULT same_set={} overlap={}/{}  |  speedup cold {:.1}x warm {:.1}x",
+            exs == sns,
+            exs.intersection(&sns).count(),
+            exs.union(&sns).count(),
+            if sn_cold > 0.0 {
+                ex_cold / sn_cold
+            } else {
+                0.0
+            },
+            if sn_warm > 0.0 {
+                ex_warm / sn_warm
+            } else {
+                0.0
+            }
+        );
         return Ok(());
     }
 
@@ -1490,8 +1840,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --synthetic N: stream-ingest N synthetic papers for the scale/RSS
     // test (no cache, no graph.json export — doesn't touch the committed
     // demo). Implies low-memory so the on-disk sidecars are written.
-    if let Some(n) = args.iter().position(|a| a == "--synthetic")
-        .and_then(|i| args.get(i + 1)).and_then(|s| s.parse::<usize>().ok())
+    if let Some(n) = args
+        .iter()
+        .position(|a| a == "--synthetic")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse::<usize>().ok())
     {
         let mut engine =
             Engine::create_with_config(&db_dir, EngineConfig::low_memory(2 * 1024 * 1024 * 1024))?;
@@ -1499,10 +1852,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let t = std::time::Instant::now();
         synthetic_ingest(&mut engine, n);
         write_clusters_meta(&engine, &db_dir)?;
-        let sz: u64 = std::fs::read_dir(&db_dir).map(|rd| rd.flatten()
-            .filter_map(|e| e.metadata().ok().map(|m| m.len())).sum()).unwrap_or(0);
-        println!("synthetic ingest: {n} papers, {:.2} GB on disk, {:.0}s → {db_dir}",
-            sz as f64 / 1.073_741_824e9, t.elapsed().as_secs_f64());
+        let sz: u64 = std::fs::read_dir(&db_dir)
+            .map(|rd| {
+                rd.flatten()
+                    .filter_map(|e| e.metadata().ok().map(|m| m.len()))
+                    .sum()
+            })
+            .unwrap_or(0);
+        println!(
+            "synthetic ingest: {n} papers, {:.2} GB on disk, {:.0}s → {db_dir}",
+            sz as f64 / 1.073_741_824e9,
+            t.elapsed().as_secs_f64()
+        );
         return Ok(());
     }
 
@@ -1570,7 +1931,12 @@ mod tests {
         let _ = ingest_papers(&mut engine, &papers);
         // Query with the exact embed text used at ingest for W5.
         let probe = format!("{} {}", "Attention Is All You Need", "NLP");
-        let hits = engine.vector_search(PropertyId::new(PROP_EMBED), &embed(&probe), 3, Distance::Cosine);
+        let hits = engine.vector_search(
+            PropertyId::new(PROP_EMBED),
+            &embed(&probe),
+            3,
+            Distance::Cosine,
+        );
         assert!(!hits.is_empty());
         assert!(hits[0].1 < 1e-4, "self distance ~0, got {}", hits[0].1);
         let _ = std::fs::remove_dir_all(dir);
@@ -1582,7 +1948,10 @@ mod tests {
         let ing = ingest_papers(&mut engine, &synthetic_papers());
         let early = count_papers_at(&engine, ing.timeline.first().unwrap().1);
         let late = count_papers_at(&engine, ing.timeline.last().unwrap().1);
-        assert!(early < late, "as_of earliest year ({early}) sees fewer papers than latest ({late})");
+        assert!(
+            early < late,
+            "as_of earliest year ({early}) sees fewer papers than latest ({late})"
+        );
         assert_eq!(late, ing.papers, "latest snapshot sees every paper");
         let _ = std::fs::remove_dir_all(dir);
     }

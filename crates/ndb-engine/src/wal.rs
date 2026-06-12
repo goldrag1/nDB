@@ -129,10 +129,7 @@ impl WriteAheadLog {
     /// Create a fresh `.ndblog` file. When `cipher` is `Some`, the file
     /// is wrapped with [`EncryptedFile`] using the default chunk size;
     /// every append is AEAD-encrypted before hitting disk.
-    pub fn create_with_cipher<P: AsRef<Path>>(
-        path: P,
-        cipher: Option<Cipher>,
-    ) -> io::Result<Self> {
+    pub fn create_with_cipher<P: AsRef<Path>>(path: P, cipher: Option<Cipher>) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
         let file = OpenOptions::new()
             .write(true)
@@ -378,10 +375,7 @@ impl WalReader {
     /// the file is read through [`EncryptedFile`] and the decrypted
     /// plaintext is buffered in memory; subsequent `next_record` calls
     /// read from the buffer.
-    pub fn open_with_cipher<P: AsRef<Path>>(
-        path: P,
-        cipher: Option<Cipher>,
-    ) -> io::Result<Self> {
+    pub fn open_with_cipher<P: AsRef<Path>>(path: P, cipher: Option<Cipher>) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
         let file = File::open(&path)?;
         match cipher {

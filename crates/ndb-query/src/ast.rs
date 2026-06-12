@@ -119,9 +119,7 @@ impl NameTerm {
     #[must_use]
     pub const fn span(&self) -> Span {
         match self {
-            Self::Var { span, .. } | Self::Anonymous { span } | Self::Literal { span, .. } => {
-                *span
-            }
+            Self::Var { span, .. } | Self::Anonymous { span } | Self::Literal { span, .. } => *span,
         }
     }
 }
@@ -327,10 +325,10 @@ impl AggregateFn {
     pub fn from_ident(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "count" => Some(Self::Count),
-            "sum"   => Some(Self::Sum),
-            "avg"   => Some(Self::Avg),
-            "min"   => Some(Self::Min),
-            "max"   => Some(Self::Max),
+            "sum" => Some(Self::Sum),
+            "avg" => Some(Self::Avg),
+            "min" => Some(Self::Min),
+            "max" => Some(Self::Max),
             _ => None,
         }
     }
@@ -340,10 +338,10 @@ impl AggregateFn {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Count => "count",
-            Self::Sum   => "sum",
-            Self::Avg   => "avg",
-            Self::Min   => "min",
-            Self::Max   => "max",
+            Self::Sum => "sum",
+            Self::Avg => "avg",
+            Self::Min => "min",
+            Self::Max => "max",
         }
     }
 }

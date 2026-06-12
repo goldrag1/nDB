@@ -87,7 +87,11 @@ impl AppState {
     #[must_use]
     pub fn active_store(&self) -> Arc<Store> {
         let a = self.lock_active();
-        self.databases.read().expect("db lock poisoned").get(&a).cloned()
+        self.databases
+            .read()
+            .expect("db lock poisoned")
+            .get(&a)
+            .cloned()
             .unwrap_or_else(|| Arc::clone(&self.primary))
     }
 
@@ -95,8 +99,13 @@ impl AppState {
     #[must_use]
     pub fn list_databases(&self) -> Vec<(String, bool)> {
         let active = self.lock_active();
-        let mut v: Vec<(String, bool)> = self.databases.read().expect("db lock poisoned")
-            .keys().map(|n| (n.clone(), *n == active)).collect();
+        let mut v: Vec<(String, bool)> = self
+            .databases
+            .read()
+            .expect("db lock poisoned")
+            .keys()
+            .map(|n| (n.clone(), *n == active))
+            .collect();
         v.sort();
         v
     }
@@ -121,8 +130,11 @@ impl AppState {
     }
 
     fn valid_name(name: &str) -> bool {
-        !name.is_empty() && name.len() <= 64
-            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        !name.is_empty()
+            && name.len() <= 64
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     }
 
     /// Switch the active data database.
@@ -130,7 +142,12 @@ impl AppState {
     /// # Errors
     /// If no database with that name is open.
     pub fn use_db(&self, name: &str) -> Result<(), String> {
-        if self.databases.read().expect("db lock poisoned").contains_key(name) {
+        if self
+            .databases
+            .read()
+            .expect("db lock poisoned")
+            .contains_key(name)
+        {
             *self.active.write().expect("active lock poisoned") = name.to_string();
             Ok(())
         } else {
@@ -146,7 +163,12 @@ impl AppState {
         if !Self::valid_name(name) {
             return Err("name must be ASCII letters, digits, - or _".to_string());
         }
-        if self.databases.read().expect("db lock poisoned").contains_key(name) {
+        if self
+            .databases
+            .read()
+            .expect("db lock poisoned")
+            .contains_key(name)
+        {
             return Err(format!("{name} is already open"));
         }
         let path = self.root.join(name);
@@ -155,7 +177,9 @@ impl AppState {
         }
         std::fs::create_dir_all(&self.root).map_err(|e| e.to_string())?;
         let engine = SharedEngine::create(&path).map_err(|e| format!("{e}"))?;
-        self.databases.write().expect("db lock poisoned")
+        self.databases
+            .write()
+            .expect("db lock poisoned")
             .insert(name.to_string(), Arc::new(Store::new(engine)));
         Ok(())
     }
@@ -168,7 +192,12 @@ impl AppState {
         if !Self::valid_name(name) {
             return Err("invalid name".to_string());
         }
-        if self.databases.read().expect("db lock poisoned").contains_key(name) {
+        if self
+            .databases
+            .read()
+            .expect("db lock poisoned")
+            .contains_key(name)
+        {
             return Ok(());
         }
         let path = self.root.join(name);
@@ -176,7 +205,9 @@ impl AppState {
             return Err(format!("no database at {name}"));
         }
         let engine = SharedEngine::open(&path).map_err(|e| format!("{e}"))?;
-        self.databases.write().expect("db lock poisoned")
+        self.databases
+            .write()
+            .expect("db lock poisoned")
             .insert(name.to_string(), Arc::new(Store::new(engine)));
         Ok(())
     }
@@ -249,8 +280,9 @@ fn handle(state: &AppState, mut stream: TcpStream) -> std::io::Result<()> {
         return write_html(&mut stream, INDEX_HTML);
     }
     if method == "GET" && path == "/favicon.ico" {
-        return stream
-            .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        return stream.write_all(
+            b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        );
     }
 
     let resp = dispatch(state, &method, path, &qp, &body, token.as_deref());
@@ -266,13 +298,25 @@ struct Resp {
 
 impl Resp {
     fn ok(body: J) -> Self {
-        Self { status: 200, body, set_cookie: None }
+        Self {
+            status: 200,
+            body,
+            set_cookie: None,
+        }
     }
     fn code(status: u16, body: J) -> Self {
-        Self { status, body, set_cookie: None }
+        Self {
+            status,
+            body,
+            set_cookie: None,
+        }
     }
     fn fail(status: u16, code: &str, message: &str) -> Self {
-        Self { status, body: err(code, message), set_cookie: None }
+        Self {
+            status,
+            body: err(code, message),
+            set_cookie: None,
+        }
     }
 }
 
@@ -294,7 +338,9 @@ fn dispatch(
         // ---- public ----
         ("GET", "/api/health") => Resp::ok(json!({ "status": "ok", "head": store.head() })),
         ("GET", "/api/me") => match &session {
-            Some(s) => Resp::ok(json!({ "authed": true, "user": s.username, "role": s.role.as_str(), "db": state.lock_active() })),
+            Some(s) => Resp::ok(
+                json!({ "authed": true, "user": s.username, "role": s.role.as_str(), "db": state.lock_active() }),
+            ),
             None => Resp::ok(json!({ "authed": false })),
         },
         ("POST", "/api/login") => login(state, body),
@@ -302,11 +348,17 @@ fn dispatch(
             if let Some(t) = token {
                 state.sessions.revoke(t);
             }
-            Resp { status: 200, body: json!({ "ok": true }), set_cookie: Some(clear_cookie()) }
+            Resp {
+                status: 200,
+                body: json!({ "ok": true }),
+                set_cookie: Some(clear_cookie()),
+            }
         }
 
         // ---- reads (any authenticated role) ----
-        ("GET", "/api/catalog") => guard_read(session.as_ref(), || Resp::ok(store.catalog(qp.u64("as_of")))),
+        ("GET", "/api/catalog") => guard_read(session.as_ref(), || {
+            Resp::ok(store.catalog(qp.u64("as_of")))
+        }),
         ("GET", "/api/table") => guard_read(session.as_ref(), || {
             let Some(kind) = qp.u64("kind") else {
                 return Resp::fail(400, "bad_request", "missing kind");
@@ -387,8 +439,11 @@ fn dispatch(
         // ---- user administration (admin; always the primary database) ----
         ("GET", "/api/users") => match admin(session.as_ref()) {
             Ok(()) => {
-                let users: Vec<J> = primary.list_users().into_iter()
-                    .map(|(u, r)| json!({ "username": u, "role": r })).collect();
+                let users: Vec<J> = primary
+                    .list_users()
+                    .into_iter()
+                    .map(|(u, r)| json!({ "username": u, "role": r }))
+                    .collect();
                 Resp::ok(json!({ "users": users }))
             }
             Err(r) => r,
@@ -414,7 +469,10 @@ fn dispatch(
             Err(r) => r,
         },
         ("POST", "/api/databases") => match admin(session.as_ref()) {
-            Ok(()) => db_action(body, |name| { state.create_db(name)?; state.use_db(name) }),
+            Ok(()) => db_action(body, |name| {
+                state.create_db(name)?;
+                state.use_db(name)
+            }),
             Err(r) => r,
         },
         ("POST", "/api/databases/open") => match admin(session.as_ref()) {
@@ -467,7 +525,11 @@ fn writer(session: Option<&Session>) -> Result<String, Resp> {
     match session {
         None => Err(Resp::fail(401, "unauthorized", "login required")),
         Some(s) if s.role.can_write() => Ok(s.username.clone()),
-        Some(_) => Err(Resp::fail(403, "forbidden", "editor role required to write")),
+        Some(_) => Err(Resp::fail(
+            403,
+            "forbidden",
+            "editor role required to write",
+        )),
     }
 }
 
@@ -486,7 +548,10 @@ fn apply_batch(store: &Store, body: &[u8]) -> Resp {
     let b64 = req.get("records_b64").and_then(J::as_str).unwrap_or("");
     match store.ingest_replicated_b64(b64) {
         Ok(head) => Resp::ok(json!({ "ok": true, "head": head })),
-        Err(e) => Resp::code(e.status(), json!({ "error": { "code": e.code(), "message": e.message() } })),
+        Err(e) => Resp::code(
+            e.status(),
+            json!({ "error": { "code": e.code(), "message": e.message() } }),
+        ),
     }
 }
 
@@ -497,10 +562,18 @@ fn replication_pull(store: &Store, body: &[u8]) -> Resp {
     let Ok(req) = serde_json::from_slice::<J>(body) else {
         return Resp::fail(400, "bad_request", "invalid JSON body");
     };
-    let peer = req.get("peer").and_then(J::as_str).unwrap_or("").trim_end_matches('/');
+    let peer = req
+        .get("peer")
+        .and_then(J::as_str)
+        .unwrap_or("")
+        .trim_end_matches('/');
     let token = req.get("token").and_then(J::as_str).unwrap_or("");
     if peer.is_empty() || token.is_empty() {
-        return Resp::fail(400, "bad_request", "peer URL and peer session token required");
+        return Resp::fail(
+            400,
+            "bad_request",
+            "peer URL and peer session token required",
+        );
     }
 
     // Start from the leader's active WAL segment, offset 0.
@@ -519,15 +592,25 @@ fn replication_pull(store: &Store, body: &[u8]) -> Resp {
             Err(e) => return Resp::fail(502, "peer_unreachable", &e),
         };
         if b.get("error").is_some() {
-            return Resp::code(502, json!({ "error": { "code": "peer_error", "message": b["error"].clone() } }));
+            return Resp::code(
+                502,
+                json!({ "error": { "code": "peer_error", "message": b["error"].clone() } }),
+            );
         }
         if !b["available"].as_bool().unwrap_or(false) {
-            return Resp::fail(409, "rotated", "leader rotated past our position — re-bootstrap from a base backup");
+            return Resp::fail(
+                409,
+                "rotated",
+                "leader rotated past our position — re-bootstrap from a base backup",
+            );
         }
         let n = b["count"].as_u64().unwrap_or(0);
         if n > 0 {
             if let Err(e) = store.ingest_replicated_b64(b["records_b64"].as_str().unwrap_or("")) {
-                return Resp::code(e.status(), json!({ "error": { "code": e.code(), "message": e.message() } }));
+                return Resp::code(
+                    e.status(),
+                    json!({ "error": { "code": e.code(), "message": e.message() } }),
+                );
             }
             applied += n;
         }
@@ -554,21 +637,27 @@ fn http_get_json(peer: &str, path_and_query: &str, token: &str) -> Result<J, Str
         .trim_start_matches("http://")
         .trim_start_matches("https://")
         .trim_end_matches('/');
-    let mut stream = TcpStream::connect(hostport).map_err(|e| format!("connect {hostport}: {e}"))?;
+    let mut stream =
+        TcpStream::connect(hostport).map_err(|e| format!("connect {hostport}: {e}"))?;
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(15)));
     let req = format!(
         "GET {path_and_query} HTTP/1.1\r\nHost: {hostport}\r\nCookie: {COOKIE}={token}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
     );
-    stream.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
     stream.read_to_end(&mut buf).map_err(|e| e.to_string())?;
 
-    let sep = buf.windows(4).position(|w| w == b"\r\n\r\n")
+    let sep = buf
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
         .ok_or_else(|| "malformed peer response (no header terminator)".to_string())?;
     let head = &buf[..sep];
     let bodytext = &buf[sep + 4..];
     let status_line = head.split(|&b| b == b'\n').next().unwrap_or(b"");
-    let status: u16 = std::str::from_utf8(status_line).ok()
+    let status: u16 = std::str::from_utf8(status_line)
+        .ok()
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|c| c.parse().ok())
         .unwrap_or(0);
@@ -642,7 +731,10 @@ fn create_user(store: &Store, body: &[u8]) -> Resp {
     let hash = identity::hash_password(password);
     match store.create_user(username, &hash, role_str) {
         Ok(tx) => Resp::ok(json!({ "ok": true, "tx": tx, "username": username, "role": role_str })),
-        Err(e) => Resp::code(e.status(), json!({ "error": { "code": e.code(), "message": e.message() } })),
+        Err(e) => Resp::code(
+            e.status(),
+            json!({ "error": { "code": e.code(), "message": e.message() } }),
+        ),
     }
 }
 
@@ -656,7 +748,10 @@ fn delete_user(store: &Store, body: &[u8], session: Option<&Session>) -> Resp {
     }
     match store.delete_user(username) {
         Ok(tx) => Resp::ok(json!({ "ok": true, "tx": tx })),
-        Err(e) => Resp::code(e.status(), json!({ "error": { "code": e.code(), "message": e.message() } })),
+        Err(e) => Resp::code(
+            e.status(),
+            json!({ "error": { "code": e.code(), "message": e.message() } }),
+        ),
     }
 }
 
@@ -687,7 +782,10 @@ fn commit(store: &Store, body: &[u8], author: &str) -> Resp {
             finish(store.create(kind, &props, Some(author)))
         }
         "set" => {
-            let Some(id) = req.get("id").and_then(J::as_str).and_then(|s| Uuid::parse_str(s).ok())
+            let Some(id) = req
+                .get("id")
+                .and_then(J::as_str)
+                .and_then(|s| Uuid::parse_str(s).ok())
             else {
                 return Resp::fail(400, "bad_request", "missing or invalid id");
             };
@@ -701,7 +799,10 @@ fn commit(store: &Store, body: &[u8], author: &str) -> Resp {
             finish(store.set(id, property, &value, Some(author)))
         }
         "delete" => {
-            let Some(id) = req.get("id").and_then(J::as_str).and_then(|s| Uuid::parse_str(s).ok())
+            let Some(id) = req
+                .get("id")
+                .and_then(J::as_str)
+                .and_then(|s| Uuid::parse_str(s).ok())
             else {
                 return Resp::fail(400, "bad_request", "missing or invalid id");
             };
@@ -716,9 +817,16 @@ fn commit(store: &Store, body: &[u8], author: &str) -> Resp {
             if let Some(arr) = req.get("roles").and_then(J::as_array) {
                 for r in arr {
                     let role = r.get("role").and_then(J::as_str).unwrap_or("");
-                    let Some(target) = r.get("ref").and_then(J::as_str).and_then(|s| Uuid::parse_str(s).ok())
+                    let Some(target) = r
+                        .get("ref")
+                        .and_then(J::as_str)
+                        .and_then(|s| Uuid::parse_str(s).ok())
                     else {
-                        return Resp::fail(400, "bad_request", "role missing valid 'ref' entity id");
+                        return Resp::fail(
+                            400,
+                            "bad_request",
+                            "role missing valid 'ref' entity id",
+                        );
                     };
                     if role.is_empty() {
                         return Resp::fail(400, "bad_request", "role missing name");
@@ -735,7 +843,10 @@ fn commit(store: &Store, body: &[u8], author: &str) -> Resp {
             }
             match store.register_vector(prop) {
                 Ok(()) => Resp::ok(json!({ "ok": true })),
-                Err(e) => Resp::code(e.status(), json!({ "error": { "code": e.code(), "message": e.message() } })),
+                Err(e) => Resp::code(
+                    e.status(),
+                    json!({ "error": { "code": e.code(), "message": e.message() } }),
+                ),
             }
         }
         _ => Resp::fail(400, "bad_request", "unknown op"),
@@ -745,7 +856,10 @@ fn commit(store: &Store, body: &[u8], author: &str) -> Resp {
 fn finish(result: Result<u64, StoreError>) -> Resp {
     match result {
         Ok(tx) => Resp::ok(json!({ "ok": true, "tx": tx })),
-        Err(e) => Resp::code(e.status(), json!({ "error": { "code": e.code(), "message": e.message() } })),
+        Err(e) => Resp::code(
+            e.status(),
+            json!({ "error": { "code": e.code(), "message": e.message() } }),
+        ),
     }
 }
 
@@ -796,7 +910,9 @@ fn decode_uri(s: &str) -> String {
     while i < b.len() {
         match b[i] {
             b'%' if i + 2 < b.len() => {
-                if let Ok(h) = u8::from_str_radix(std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or(""), 16) {
+                if let Ok(h) =
+                    u8::from_str_radix(std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or(""), 16)
+                {
                     out.push(h);
                     i += 3;
                 } else {
@@ -804,8 +920,14 @@ fn decode_uri(s: &str) -> String {
                     i += 1;
                 }
             }
-            b'+' => { out.push(b' '); i += 1; }
-            c => { out.push(c); i += 1; }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
         }
     }
     String::from_utf8_lossy(&out).into_owned()

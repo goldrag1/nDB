@@ -184,7 +184,10 @@ impl Sessions {
             role,
             expires: now() + SESSION_TTL_SECS,
         };
-        self.inner.lock().expect("sessions poisoned").insert(token.clone(), s);
+        self.inner
+            .lock()
+            .expect("sessions poisoned")
+            .insert(token.clone(), s);
         token
     }
 

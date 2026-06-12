@@ -164,7 +164,11 @@ impl IdListIndexBuilder {
         out.extend_from_slice(&self.block_size.to_le_bytes());
         out.extend_from_slice(&entry_count.to_le_bytes());
         out.extend_from_slice(&(entries.len() as u64).to_le_bytes());
-        out.extend_from_slice(&u32::try_from(block_index.len()).unwrap_or(u32::MAX).to_le_bytes());
+        out.extend_from_slice(
+            &u32::try_from(block_index.len())
+                .unwrap_or(u32::MAX)
+                .to_le_bytes(),
+        );
         out.extend_from_slice(&[0u8; 4]);
         debug_assert_eq!(out.len(), HEADER_LEN);
         let bi_start = HEADER_LEN + entries.len();
@@ -273,15 +277,18 @@ impl IdListIndexFile {
         if bytes[0..4] != magic {
             let mut got = [0u8; 4];
             got.copy_from_slice(&bytes[0..4]);
-            return Err(IdListIndexError::InvalidMagic { got, expected: magic });
+            return Err(IdListIndexError::InvalidMagic {
+                got,
+                expected: magic,
+            });
         }
         let version = bytes[4];
         if version > ID_LIST_FORMAT_VERSION {
             return Err(IdListIndexError::UnsupportedFormatVersion { version });
         }
         let entry_count = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
-        let entries_len =
-            usize::try_from(u64::from_le_bytes(bytes[16..24].try_into().unwrap())).unwrap_or(usize::MAX);
+        let entries_len = usize::try_from(u64::from_le_bytes(bytes[16..24].try_into().unwrap()))
+            .unwrap_or(usize::MAX);
         let bi_count = u32::from_le_bytes(bytes[24..28].try_into().unwrap()) as usize;
 
         let entries_off = HEADER_LEN;
@@ -338,7 +345,11 @@ impl IdListIndexFile {
     #[must_use]
     pub fn heap_bytes(&self) -> usize {
         std::mem::size_of::<Self>()
-            + self.block_index.iter().map(|(k, _)| k.len() + 8 + 24).sum::<usize>()
+            + self
+                .block_index
+                .iter()
+                .map(|(k, _)| k.len() + 8 + 24)
+                .sum::<usize>()
     }
 
     /// Decode the entry at `rel`. Returns `(key, ids_slice, next_rel)`.
@@ -369,7 +380,9 @@ impl IdListIndexFile {
         if self.block_index.is_empty() {
             return 0;
         }
-        let idx = self.block_index.partition_point(|(k, _)| k.as_slice() <= target);
+        let idx = self
+            .block_index
+            .partition_point(|(k, _)| k.as_slice() <= target);
         if idx == 0 {
             0
         } else {
@@ -480,7 +493,8 @@ mod tests {
 
     #[test]
     fn empty_round_trips() {
-        let f = IdListIndexFile::from_bytes(IdListIndexBuilder::new(MAGIC).encode(), MAGIC).unwrap();
+        let f =
+            IdListIndexFile::from_bytes(IdListIndexBuilder::new(MAGIC).encode(), MAGIC).unwrap();
         assert_eq!(f.entry_count(), 0);
         assert!(f.find(b"x").is_empty());
     }
@@ -532,7 +546,11 @@ mod tests {
         b.finish(&p).unwrap();
         let f = IdListIndexFile::open(&p, MAGIC).unwrap().unwrap();
         assert_eq!(f.find(b"entity-uuid"), vec![id(7)]);
-        assert!(IdListIndexFile::open(&dir.join("missing.adjx"), MAGIC).unwrap().is_none());
+        assert!(
+            IdListIndexFile::open(&dir.join("missing.adjx"), MAGIC)
+                .unwrap()
+                .is_none()
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -26,12 +26,12 @@
 
 use std::path::Path;
 
+use ndb_engine::Engine;
 use ndb_engine::id::{EntityId, HyperedgeId, PropertyId, RoleId, TxId, TypeId};
 use ndb_engine::record::{EntityRecord, HyperEdgeRecord, Record};
 use ndb_engine::value::Value;
-use ndb_engine::Engine;
 use ndb_renderer::viz::{
-    HypergraphOpts, HyperedgeStyle, ParallelCoordsOpts, render_hypergraph, render_parallel_coords,
+    HyperedgeStyle, HypergraphOpts, ParallelCoordsOpts, render_hypergraph, render_parallel_coords,
     render_pivot,
 };
 use ndb_slicer::{AggSpec, Aggregate, Column, Pipeline, Table};
@@ -102,19 +102,28 @@ fn main() {
         protein_ids
             .iter()
             .find(|(_, name)| *name == n)
-            .map_or_else(
-                || panic!("missing protein {n}"),
-                |(eid, _)| *eid,
-            )
+            .map_or_else(|| panic!("missing protein {n}"), |(eid, _)| *eid)
     };
 
     // ---- Seed protein-complex hyperedges ----
     let complexes: Vec<(&str, &str, Vec<&str>)> = vec![
-        ("p53 surveillance", "dna_repair", vec!["P53", "MDM2", "ATM", "CHK2"]),
+        (
+            "p53 surveillance",
+            "dna_repair",
+            vec!["P53", "MDM2", "ATM", "CHK2"],
+        ),
         ("BRCA repair", "dna_repair", vec!["BRCA1", "BRCA2", "ATM"]),
-        ("mTOR growth", "signaling", vec!["AKT1", "MTOR", "PI3K", "PTEN"]),
+        (
+            "mTOR growth",
+            "signaling",
+            vec!["AKT1", "MTOR", "PI3K", "PTEN"],
+        ),
         ("autophagy init", "autophagy", vec!["ULK1", "BECN1", "ATG7"]),
-        ("autophagy elongation", "autophagy", vec!["LC3", "ATG7", "BECN1"]),
+        (
+            "autophagy elongation",
+            "autophagy",
+            vec!["LC3", "ATG7", "BECN1"],
+        ),
         ("late autophagy", "autophagy", vec!["LC3", "RAB7"]),
     ];
     for (cname, pathway, members) in &complexes {
@@ -131,9 +140,18 @@ fn main() {
                 .collect(),
             hyperedge_roles: Vec::new(),
             properties: vec![
-                (PropertyId::new(PROP_COMPLEX_NAME), Value::String((*cname).into())),
-                (PropertyId::new(PROP_PATHWAY), Value::String((*pathway).into())),
-                (PropertyId::new(PROP_ORGANISM), Value::String("H. sapiens".into())),
+                (
+                    PropertyId::new(PROP_COMPLEX_NAME),
+                    Value::String((*cname).into()),
+                ),
+                (
+                    PropertyId::new(PROP_PATHWAY),
+                    Value::String((*pathway).into()),
+                ),
+                (
+                    PropertyId::new(PROP_ORGANISM),
+                    Value::String("H. sapiens".into()),
+                ),
             ],
         });
         txn.commit().expect("commit complex");
@@ -153,8 +171,14 @@ fn main() {
 
     println!(
         "Seeded {} entities + {} hyperedges. Database at {}",
-        records.iter().filter(|r| matches!(r, Record::Entity(_))).count(),
-        records.iter().filter(|r| matches!(r, Record::HyperEdge(_))).count(),
+        records
+            .iter()
+            .filter(|r| matches!(r, Record::Entity(_)))
+            .count(),
+        records
+            .iter()
+            .filter(|r| matches!(r, Record::HyperEdge(_)))
+            .count(),
         db_dir.display(),
     );
 
@@ -199,7 +223,7 @@ fn main() {
             width: 1100,
             height: 360,
             axis_cols: vec![2, 0, 1], // year, name, function
-            color_by: Some(1),         // colour by function
+            color_by: Some(1),        // colour by function
             title: Some("Proteins — year discovered × function".into()),
         },
     );
@@ -360,7 +384,9 @@ fn stitch_demo_html(
     out.push_str("</div>\n");
 
     // 2. Parallel coordinates
-    out.push_str("<h2>2 · Parallel coordinates (§2.11) — proteins across discovery year × function</h2>\n");
+    out.push_str(
+        "<h2>2 · Parallel coordinates (§2.11) — proteins across discovery year × function</h2>\n",
+    );
     out.push_str("<p>One axis per dimension; each protein becomes a polyline crossing every axis. Useful for spotting clusters + outliers in N-dim numeric/categorical data. Colour = function class.</p>\n");
     out.push_str("<div class=\"card\">");
     out.push_str(&extract_body(parallel));

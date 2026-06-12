@@ -34,21 +34,36 @@ struct Args {
 
 enum Command {
     Health,
-    Read { uuid: String },
+    Read {
+        uuid: String,
+    },
     Commit,
     Iter,
     Flush,
     Compact,
-    Lookup { property_id: u32, value_json: String },
-    VectorSearch { property_id: u32, k: usize, metric: VectorMetric },
-    PropertyLookup { type_id: u32, property_id: u32, value_json: String },
+    Lookup {
+        property_id: u32,
+        value_json: String,
+    },
+    VectorSearch {
+        property_id: u32,
+        k: usize,
+        metric: VectorMetric,
+    },
+    PropertyLookup {
+        type_id: u32,
+        property_id: u32,
+        value_json: String,
+    },
     PropertyRange {
         type_id: u32,
         property_id: u32,
         low_json: Option<String>,
         high_json: Option<String>,
     },
-    Query { text: Option<String> },
+    Query {
+        text: Option<String>,
+    },
 }
 
 fn usage(out: &mut impl Write) {
@@ -105,7 +120,10 @@ fn parse_args() -> Option<Args> {
         "lookup" => {
             let property_id: u32 = argv.next()?.parse().ok()?;
             let value_json = argv.next()?;
-            Command::Lookup { property_id, value_json }
+            Command::Lookup {
+                property_id,
+                value_json,
+            }
         }
         "vector-search" => {
             let property_id: u32 = argv.next()?.parse().ok()?;
@@ -118,20 +136,33 @@ fn parse_args() -> Option<Args> {
                     return None;
                 }
             };
-            Command::VectorSearch { property_id, k, metric }
+            Command::VectorSearch {
+                property_id,
+                k,
+                metric,
+            }
         }
         "property-lookup" => {
             let type_id: u32 = argv.next()?.parse().ok()?;
             let property_id: u32 = argv.next()?.parse().ok()?;
             let value_json = argv.next()?;
-            Command::PropertyLookup { type_id, property_id, value_json }
+            Command::PropertyLookup {
+                type_id,
+                property_id,
+                value_json,
+            }
         }
         "property-range" => {
             let type_id: u32 = argv.next()?.parse().ok()?;
             let property_id: u32 = argv.next()?.parse().ok()?;
             let low_json = argv.next();
             let high_json = argv.next();
-            Command::PropertyRange { type_id, property_id, low_json, high_json }
+            Command::PropertyRange {
+                type_id,
+                property_id,
+                low_json,
+                high_json,
+            }
         }
         "query" => Command::Query { text: argv.next() },
         other => {
@@ -165,16 +196,32 @@ fn main() -> ExitCode {
         Command::Iter => run_iter(&client),
         Command::Flush => emit_json(&client.flush()),
         Command::Compact => emit_json(&client.compact()),
-        Command::Lookup { property_id, value_json } => match parse_value_json(&value_json) {
+        Command::Lookup {
+            property_id,
+            value_json,
+        } => match parse_value_json(&value_json) {
             Ok(v) => emit_json(&client.lookup_by_key(property_id, v)),
             Err(e) => Err(e),
         },
-        Command::VectorSearch { property_id, k, metric } => run_vector_search(&client, property_id, k, metric),
-        Command::PropertyLookup { type_id, property_id, value_json } => match parse_value_json(&value_json) {
+        Command::VectorSearch {
+            property_id,
+            k,
+            metric,
+        } => run_vector_search(&client, property_id, k, metric),
+        Command::PropertyLookup {
+            type_id,
+            property_id,
+            value_json,
+        } => match parse_value_json(&value_json) {
             Ok(v) => emit_json(&client.property_lookup(type_id, property_id, v)),
             Err(e) => Err(e),
         },
-        Command::PropertyRange { type_id, property_id, low_json, high_json } => {
+        Command::PropertyRange {
+            type_id,
+            property_id,
+            low_json,
+            high_json,
+        } => {
             let low = match low_json {
                 Some(s) if s != "-" => Some(match parse_value_json(&s) {
                     Ok(v) => v,
@@ -207,8 +254,8 @@ fn run_commit(client: &Client) -> Result<(), String> {
     std::io::stdin()
         .read_to_string(&mut body)
         .map_err(|e| format!("read stdin: {e}"))?;
-    let req: CommitRequest =
-        serde_json::from_str(&body).map_err(|e| format!("stdin is not a valid CommitRequest: {e}"))?;
+    let req: CommitRequest = serde_json::from_str(&body)
+        .map_err(|e| format!("stdin is not a valid CommitRequest: {e}"))?;
     let resp = client.commit(&req).map_err(format_err)?;
     let pretty = serde_json::to_string_pretty(&resp).map_err(|e| e.to_string())?;
     println!("{pretty}");
@@ -235,8 +282,8 @@ fn run_query(client: &Client, text: Option<String>) -> Result<(), String> {
         std::io::stdin()
             .read_to_string(&mut body)
             .map_err(|e| format!("read stdin: {e}"))?;
-        let req: QueryRequest =
-            serde_json::from_str(&body).map_err(|e| format!("stdin is not a valid QueryRequest: {e}"))?;
+        let req: QueryRequest = serde_json::from_str(&body)
+            .map_err(|e| format!("stdin is not a valid QueryRequest: {e}"))?;
         client.query(&req).map_err(format_err)?
     };
     let pretty = serde_json::to_string_pretty(&resp).map_err(|e| e.to_string())?;

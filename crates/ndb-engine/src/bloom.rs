@@ -458,9 +458,7 @@ mod tests {
 
     #[test]
     fn no_false_negatives_for_inserted_keys() {
-        let keys: Vec<_> = (0u32..1000)
-            .map(|i| key(1, &i.to_be_bytes()))
-            .collect();
+        let keys: Vec<_> = (0u32..1000).map(|i| key(1, &i.to_be_bytes())).collect();
         let f = build(&keys, 0.01);
         for k in &keys {
             assert!(f.may_contain(k), "inserted key {k:?} reported absent");
@@ -532,14 +530,20 @@ mod tests {
         let mut bytes = encode(3, 64, &[0xdead_beefu64]);
         let last = bytes.len() - 1;
         bytes[last] ^= 0xff;
-        assert!(matches!(decode(&bytes), Err(BloomError::CrcMismatch { .. })));
+        assert!(matches!(
+            decode(&bytes),
+            Err(BloomError::CrcMismatch { .. })
+        ));
     }
 
     #[test]
     fn corrupted_magic_rejected() {
         let mut bytes = encode(3, 64, &[0u64]);
         bytes[0] = b'X';
-        assert!(matches!(decode(&bytes), Err(BloomError::InvalidMagic { .. })));
+        assert!(matches!(
+            decode(&bytes),
+            Err(BloomError::InvalidMagic { .. })
+        ));
     }
 
     #[test]

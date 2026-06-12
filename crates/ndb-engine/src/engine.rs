@@ -42,18 +42,18 @@ use crate::encryption::{
 };
 use crate::error::EncodeError;
 use crate::id::{EntityId, HyperedgeId, PropertyId, TX_ACTIVE, TxId, TypeId};
-use crate::index::property_btree::value_to_index_bytes;
+use crate::index::id_list_index_file::{
+    IdListIndexBuilder, IdListIndexFile, sidecar_path_for as idl_sidecar_path_for,
+};
 use crate::index::lookup_key::value_to_index_bytes as lookup_value_to_index_bytes;
-use crate::index::vector::distance as vector_distance;
+use crate::index::property_btree::value_to_index_bytes;
 use crate::index::property_index_file::{
     PropertyIndexBuilder, PropertyIndexFile, sidecar_path_for as pidx_sidecar_path_for,
 };
+use crate::index::vector::distance as vector_distance;
 use crate::index::vector_index_file::{
     VectorIndexBuilder, VectorIndexFile, sidecar_path_for as vidx_sidecar_path_for,
     write_streaming_single as write_vsnap_streaming,
-};
-use crate::index::id_list_index_file::{
-    IdListIndexBuilder, IdListIndexFile, sidecar_path_for as idl_sidecar_path_for,
 };
 use crate::index::{
     AdjacencyIndex, Distance, EntityTypeIndex, HyperEdgeTypeIndex, Index, LookupKeyIndex,
@@ -282,7 +282,9 @@ pub enum EngineError {
     /// compactor will reduce the count. Rejection (not blocking) is
     /// deliberate: a blocking write would dead-lock the off-lock compactor's
     /// install phase on the engine write lock.
-    #[error("write_stalled: {sstable_count} SSTables ≥ stall threshold {threshold}; retry after compaction")]
+    #[error(
+        "write_stalled: {sstable_count} SSTables ≥ stall threshold {threshold}; retry after compaction"
+    )]
     WriteStalled {
         /// Live SSTable count at the time of rejection.
         sstable_count: usize,
@@ -1098,7 +1100,11 @@ impl Engine {
         }
         let mut cand: HashSet<HyperedgeId> = HashSet::new();
         for f in self.adjacency_files.values() {
-            cand.extend(f.find(entity.as_bytes()).into_iter().map(HyperedgeId::from_bytes));
+            cand.extend(
+                f.find(entity.as_bytes())
+                    .into_iter()
+                    .map(HyperedgeId::from_bytes),
+            );
         }
         cand.extend(self.adjacency.neighbors_vec(entity));
         // Verify: hyperedge live AND still references `entity`.
@@ -1180,7 +1186,10 @@ impl Engine {
         cand.extend(self.type_cluster.by_type_vec(type_id));
         let mut out: Vec<HyperedgeId> = cand
             .into_iter()
-            .filter(|h| self.current_hyperedge(*h).is_some_and(|hr| hr.type_id == type_id))
+            .filter(|h| {
+                self.current_hyperedge(*h)
+                    .is_some_and(|hr| hr.type_id == type_id)
+            })
             .collect();
         out.sort();
         out
@@ -1195,7 +1204,9 @@ impl Engine {
         if self.type_cluster_served_from_disk() {
             // The hyperedge's type lives on the record itself — verify
             // directly (a point read), no sidecar scan needed.
-            return self.current_hyperedge(hid).is_some_and(|h| h.type_id == type_id);
+            return self
+                .current_hyperedge(hid)
+                .is_some_and(|h| h.type_id == type_id);
         }
         self.type_cluster.is_type(type_id, hid)
     }
@@ -1309,7 +1320,8 @@ impl Engine {
         let mut out: Vec<EntityId> = cand
             .into_iter()
             .filter(|e| {
-                self.current_indexed_value(*e, type_id, property_id).as_deref()
+                self.current_indexed_value(*e, type_id, property_id)
+                    .as_deref()
                     == Some(target.as_slice())
             })
             .collect();
@@ -1341,13 +1353,15 @@ impl Engine {
         cand.extend(self.property_btree.range(type_id, property_id, low, high));
         let mut out: Vec<EntityId> = cand
             .into_iter()
-            .filter(|e| match self.current_indexed_value(*e, type_id, property_id) {
-                Some(v) => {
-                    lo_b.as_ref().is_none_or(|l| &v >= l)
-                        && hi_b.as_ref().is_none_or(|h| &v <= h)
-                }
-                None => false,
-            })
+            .filter(
+                |e| match self.current_indexed_value(*e, type_id, property_id) {
+                    Some(v) => {
+                        lo_b.as_ref().is_none_or(|l| &v >= l)
+                            && hi_b.as_ref().is_none_or(|h| &v <= h)
+                    }
+                    None => false,
+                },
+            )
             .collect();
         out.sort();
         out
@@ -1383,7 +1397,8 @@ impl Engine {
         let mut scored: Vec<(Vec<u8>, EntityId)> = cand
             .into_iter()
             .filter_map(|e| {
-                self.current_indexed_value(e, type_id, property_id).map(|v| (v, e))
+                self.current_indexed_value(e, type_id, property_id)
+                    .map(|v| (v, e))
             })
             .collect();
         scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
@@ -1415,7 +1430,11 @@ impl Engine {
         // k-per-source is enough.
         let mut cand: HashSet<EntityId> = HashSet::new();
         for f in self.vector_index_files.values() {
-            cand.extend(f.search(property_id, query, k, metric).into_iter().map(|(e, _)| e));
+            cand.extend(
+                f.search(property_id, query, k, metric)
+                    .into_iter()
+                    .map(|(e, _)| e),
+            );
         }
         cand.extend(
             self.vector
@@ -1445,7 +1464,9 @@ impl Engine {
     /// Path of the `.vsnap` for `property` (one merged current-vector file,
     /// distinct from the per-SSTable `<seq>.vidx` sidecars).
     fn vsnap_path(&self, property: PropertyId) -> PathBuf {
-        self.db.path().join(format!("vsnap-{}.vsnap", property.get()))
+        self.db
+            .path()
+            .join(format!("vsnap-{}.vsnap", property.get()))
     }
 
     /// Build (or rebuild) the global current-vector snapshot for `property`:
@@ -1465,7 +1486,9 @@ impl Engine {
         let mut dim = 0usize;
         let mut count = 0usize;
         for item in self.snapshot_iter_streaming(TxId::ACTIVE) {
-            let Ok(Record::Entity(e)) = item else { continue };
+            let Ok(Record::Entity(e)) = item else {
+                continue;
+            };
             for (pid, val) in &e.properties {
                 if *pid == property
                     && let Value::Vector(v) = val
@@ -1489,21 +1512,32 @@ impl Engine {
         // Pass 2 (streaming write): emit each current vector directly to the
         // .vsnap as it streams — one vector resident at a time, NOT 2×N like
         // the in-RAM builder (keeps the snapshot build under the app RAM cap).
-        let entries = self.snapshot_iter_streaming(TxId::ACTIVE).filter_map(move |item| {
-            let Ok(Record::Entity(e)) = item else { return None };
-            e.properties.iter().find_map(|(pid, val)| match val {
-                Value::Vector(v) if *pid == property && v.len() == dim => {
-                    Some((e.entity_id, v.clone()))
-                }
-                _ => None,
-            })
-        });
-        write_vsnap_streaming(&path, property, dim, count, entries)
-            .map_err(|e| EngineError::Io(std::io::Error::other(format!("vsnap write {}: {e}", path.display()))))?;
+        let entries = self
+            .snapshot_iter_streaming(TxId::ACTIVE)
+            .filter_map(move |item| {
+                let Ok(Record::Entity(e)) = item else {
+                    return None;
+                };
+                e.properties.iter().find_map(|(pid, val)| match val {
+                    Value::Vector(v) if *pid == property && v.len() == dim => {
+                        Some((e.entity_id, v.clone()))
+                    }
+                    _ => None,
+                })
+            });
+        write_vsnap_streaming(&path, property, dim, count, entries).map_err(|e| {
+            EngineError::Io(std::io::Error::other(format!(
+                "vsnap write {}: {e}",
+                path.display()
+            )))
+        })?;
 
-        if let Some(f) = VectorIndexFile::open(&path)
-            .map_err(|e| EngineError::Io(std::io::Error::other(format!("vsnap open {}: {e}", path.display()))))?
-        {
+        if let Some(f) = VectorIndexFile::open(&path).map_err(|e| {
+            EngineError::Io(std::io::Error::other(format!(
+                "vsnap open {}: {e}",
+                path.display()
+            )))
+        })? {
             self.vector_snapshots.insert(property.get(), f);
         }
         Ok(count)
@@ -1514,9 +1548,12 @@ impl Engine {
     /// file; the vectors stay OS-paged.
     pub fn load_vector_snapshot(&mut self, property: PropertyId) -> Result<bool, EngineError> {
         let path = self.vsnap_path(property);
-        match VectorIndexFile::open(&path)
-            .map_err(|e| EngineError::Io(std::io::Error::other(format!("vsnap open {}: {e}", path.display()))))?
-        {
+        match VectorIndexFile::open(&path).map_err(|e| {
+            EngineError::Io(std::io::Error::other(format!(
+                "vsnap open {}: {e}",
+                path.display()
+            )))
+        })? {
             Some(f) => {
                 self.vector_snapshots.insert(property.get(), f);
                 Ok(true)
@@ -1640,11 +1677,12 @@ impl Engine {
         after: u64,
     ) -> Result<crate::replication::ReplicationBatch, EngineError> {
         let seq = self.db.manifest().active_wal_seq;
-        self.wal_delta_for(seq, after)
-            .map(|o| o.unwrap_or_else(|| crate::replication::ReplicationBatch {
+        self.wal_delta_for(seq, after).map(|o| {
+            o.unwrap_or_else(|| crate::replication::ReplicationBatch {
                 records: Vec::new(),
                 next_offset: after,
-            }))
+            })
+        })
     }
 
     /// Read a SPECIFIC WAL segment (`seq`) from byte offset `after`. Returns
@@ -1748,7 +1786,11 @@ impl Engine {
                 segment_sealed: sealed,
                 // Only resolve the next segment for a sealed one (an active
                 // segment is the newest — nothing to advance to yet).
-                next_wal_seq: if sealed { self.next_wal_seq_after(seq) } else { None },
+                next_wal_seq: if sealed {
+                    self.next_wal_seq_after(seq)
+                } else {
+                    None
+                },
                 records: b.records,
                 next_offset: b.next_offset,
             }),
@@ -2014,10 +2056,16 @@ impl Engine {
         if !self.config.mmap_indexes {
             return;
         }
-        let paths: Vec<PathBuf> = self.sstables.iter().map(|s| s.path().to_path_buf()).collect();
+        let paths: Vec<PathBuf> = self
+            .sstables
+            .iter()
+            .map(|s| s.path().to_path_buf())
+            .collect();
         for p in paths {
             let mp = idl_sidecar_path_for(&p, META_EXT);
-            let Ok(bytes) = std::fs::read(&mp) else { continue };
+            let Ok(bytes) = std::fs::read(&mp) else {
+                continue;
+            };
             if let Some((ts, ret)) = decode_meta(&bytes) {
                 for (tx, t) in ts {
                     self.commit_timestamps.insert(TxId::new(tx), t);
@@ -2043,7 +2091,8 @@ impl Engine {
             let pidx = pidx_sidecar_path_for(sst.path());
             match PropertyIndexFile::open(&pidx) {
                 Ok(Some(f)) => {
-                    self.property_index_files.insert(sst.path().to_path_buf(), f);
+                    self.property_index_files
+                        .insert(sst.path().to_path_buf(), f);
                 }
                 Ok(None) => {}
                 Err(e) => {
@@ -2152,17 +2201,17 @@ impl Engine {
     fn current_vector(&self, entity: EntityId, property_id: PropertyId) -> Option<Vec<f32>> {
         let snap = TxId::new(self.db.manifest().last_tx_id);
         match self.snapshot_read(&entity.into_uuid(), snap) {
-            Ok(Resolved::Live(Record::Entity(e))) => {
-                e.properties.iter().find(|(p, _)| *p == property_id).and_then(
-                    |(_, v)| {
-                        if let Value::Vector(vec) = v {
-                            Some(vec.clone())
-                        } else {
-                            None
-                        }
-                    },
-                )
-            }
+            Ok(Resolved::Live(Record::Entity(e))) => e
+                .properties
+                .iter()
+                .find(|(p, _)| *p == property_id)
+                .and_then(|(_, v)| {
+                    if let Value::Vector(vec) = v {
+                        Some(vec.clone())
+                    } else {
+                        None
+                    }
+                }),
             _ => None,
         }
     }
@@ -2198,7 +2247,11 @@ impl Engine {
         if !self.config.mmap_indexes {
             return;
         }
-        let paths: Vec<PathBuf> = self.sstables.iter().map(|s| s.path().to_path_buf()).collect();
+        let paths: Vec<PathBuf> = self
+            .sstables
+            .iter()
+            .map(|s| s.path().to_path_buf())
+            .collect();
         for p in paths {
             self.insert_id_list_sidecars(&p);
         }
@@ -2206,16 +2259,24 @@ impl Engine {
 
     /// Open + register the four id-list sidecars for one SSTable path.
     fn insert_id_list_sidecars(&mut self, sst_path: &Path) {
-        if let Ok(Some(f)) = IdListIndexFile::open(&idl_sidecar_path_for(sst_path, ADJ_EXT), ADJ_MAGIC) {
+        if let Ok(Some(f)) =
+            IdListIndexFile::open(&idl_sidecar_path_for(sst_path, ADJ_EXT), ADJ_MAGIC)
+        {
             self.adjacency_files.insert(sst_path.to_path_buf(), f);
         }
-        if let Ok(Some(f)) = IdListIndexFile::open(&idl_sidecar_path_for(sst_path, TYC_EXT), TYC_MAGIC) {
+        if let Ok(Some(f)) =
+            IdListIndexFile::open(&idl_sidecar_path_for(sst_path, TYC_EXT), TYC_MAGIC)
+        {
             self.type_cluster_files.insert(sst_path.to_path_buf(), f);
         }
-        if let Ok(Some(f)) = IdListIndexFile::open(&idl_sidecar_path_for(sst_path, ETC_EXT), ETC_MAGIC) {
+        if let Ok(Some(f)) =
+            IdListIndexFile::open(&idl_sidecar_path_for(sst_path, ETC_EXT), ETC_MAGIC)
+        {
             self.entity_type_files.insert(sst_path.to_path_buf(), f);
         }
-        if let Ok(Some(f)) = IdListIndexFile::open(&idl_sidecar_path_for(sst_path, LKP_EXT), LKP_MAGIC) {
+        if let Ok(Some(f)) =
+            IdListIndexFile::open(&idl_sidecar_path_for(sst_path, LKP_EXT), LKP_MAGIC)
+        {
             self.lookup_key_files.insert(sst_path.to_path_buf(), f);
         }
     }
@@ -2430,12 +2491,17 @@ impl Engine {
             for kind in kinds {
                 key.kind = kind.as_byte();
                 for r in sst.find_all(&key)? {
-                    by_tx.entry(crate::mvcc::effective_tx(&r).get()).or_insert(r);
+                    by_tx
+                        .entry(crate::mvcc::effective_tx(&r).get())
+                        .or_insert(r);
                 }
             }
         }
 
-        Ok(by_tx.into_iter().map(|(tx, r)| (TxId::new(tx), r)).collect())
+        Ok(by_tx
+            .into_iter()
+            .map(|(tx, r)| (TxId::new(tx), r))
+            .collect())
     }
 
     /// Number of open SSTables.
@@ -2521,10 +2587,7 @@ impl Engine {
     /// query executor) where the caller doesn't need random access.
     /// For backward compatibility, [`Self::snapshot_iter`] still
     /// materialises a `Vec` internally by collecting from this iterator.
-    pub fn snapshot_iter_streaming(
-        &self,
-        snapshot: TxId,
-    ) -> SnapshotStream<'_> {
+    pub fn snapshot_iter_streaming(&self, snapshot: TxId) -> SnapshotStream<'_> {
         // Materialise memtable into an owned, sorted Vec. Memtable
         // is small relative to SSTables and already in memory; this
         // copy is the right cost-vs-complexity tradeoff for v2.0.
@@ -2620,7 +2683,10 @@ impl Engine {
     ///
     /// Side-effect-free; doesn't execute the query.
     #[must_use]
-    pub fn explain_query(&self, req: &crate::wire_query::QueryRequest) -> Vec<crate::query::ExplainEntry> {
+    pub fn explain_query(
+        &self,
+        req: &crate::wire_query::QueryRequest,
+    ) -> Vec<crate::query::ExplainEntry> {
         crate::query::plan::explain(self, &req.patterns)
     }
 
@@ -2644,7 +2710,11 @@ impl Engine {
         // Step 1 + 2: write memtable to new SSTable.
         let sst_seq = self.db.allocate_file_seq();
         let sst_path = sstable_path(self.db.path(), sst_seq);
-        let mut writer = SSTableWriter::create_with_cipher_codec(&sst_path, self.cipher.clone(), self.config.compression)?;
+        let mut writer = SSTableWriter::create_with_cipher_codec(
+            &sst_path,
+            self.cipher.clone(),
+            self.config.compression,
+        )?;
         self.memtable.flush_into(&mut writer)?;
         writer.finish()?;
 
@@ -2813,7 +2883,11 @@ impl Engine {
         // survivors.
         let new_seq = self.db.allocate_file_seq();
         let new_path = sstable_path(self.db.path(), new_seq);
-        let mut writer = SSTableWriter::create_with_cipher_codec(&new_path, self.cipher.clone(), self.config.compression)?;
+        let mut writer = SSTableWriter::create_with_cipher_codec(
+            &new_path,
+            self.cipher.clone(),
+            self.config.compression,
+        )?;
         let mut records_out: u64 = 0;
         for (_k, versions) in by_key {
             // Per-type retention policy decides how many versions to
@@ -3101,7 +3175,10 @@ impl Engine {
     /// No concurrent reads or writes are possible during the migration.
     /// `SharedEngine` callers are responsible for releasing any active
     /// snapshots before invoking this method.
-    pub fn reencrypt(&mut self, new_cipher: Option<&Cipher>) -> Result<MigrationStats, EngineError> {
+    pub fn reencrypt(
+        &mut self,
+        new_cipher: Option<&Cipher>,
+    ) -> Result<MigrationStats, EngineError> {
         // Idempotent: same fingerprint = no-op.
         let cur_fp = self.cipher.as_ref().map(Cipher::fingerprint);
         let new_fp = new_cipher.map(Cipher::fingerprint);
@@ -3123,7 +3200,11 @@ impl Engine {
         // Step 2: write the transient marker. Contains the target
         // marker bytes (or empty for plaintext target).
         let next_bytes: Vec<u8> = new_cipher
-            .map(|c| EncryptionMarker::new(c, DEFAULT_CHUNK_SIZE).encode().to_vec())
+            .map(|c| {
+                EncryptionMarker::new(c, DEFAULT_CHUNK_SIZE)
+                    .encode()
+                    .to_vec()
+            })
             .unwrap_or_default();
         std::fs::write(&next_marker_path, &next_bytes)?;
 
@@ -3156,8 +3237,11 @@ impl Engine {
 
             // Write under the NEW cipher. SSTableWriter's
             // write-temp-then-rename handles the atomic replace.
-            let mut writer =
-                SSTableWriter::create_with_cipher_codec(&path, new_cipher_owned.clone(), self.config.compression)?;
+            let mut writer = SSTableWriter::create_with_cipher_codec(
+                &path,
+                new_cipher_owned.clone(),
+                self.config.compression,
+            )?;
             for r in &records {
                 writer.append(r)?;
             }
@@ -3182,8 +3266,7 @@ impl Engine {
         }
         let new_wal_seq = self.db.allocate_file_seq();
         let new_wal_path = wal_path(self.db.path(), new_wal_seq);
-        let new_wal =
-            WriteAheadLog::create_with_cipher(&new_wal_path, new_cipher_owned.clone())?;
+        let new_wal = WriteAheadLog::create_with_cipher(&new_wal_path, new_cipher_owned.clone())?;
         let mut manifest = self.db.manifest().clone();
         manifest.active_wal_seq = new_wal_seq;
         self.db.write_manifest(manifest)?;
@@ -3391,7 +3474,9 @@ impl WriteTxn<'_> {
             // sync with what was just durably written.
             match &r {
                 Record::TxTimestamp(t) => {
-                    self.engine.commit_timestamps.insert(t.tx_id, t.timestamp_us);
+                    self.engine
+                        .commit_timestamps
+                        .insert(t.tx_id, t.timestamp_us);
                 }
                 Record::RetentionPolicy(rp) => {
                     if let Some(p) = decode_retention_policy(rp.policy_kind, rp.keep_last_n) {
@@ -3453,8 +3538,11 @@ pub fn merge_planned(plan: &CompactionPlan) -> Result<(u64, u64), EngineError> {
         }
     }
 
-    let mut writer =
-        SSTableWriter::create_with_cipher_codec(&plan.output_path, plan.cipher.clone(), plan.codec)?;
+    let mut writer = SSTableWriter::create_with_cipher_codec(
+        &plan.output_path,
+        plan.cipher.clone(),
+        plan.codec,
+    )?;
     let mut records_out: u64 = 0;
     for (_k, versions) in by_key {
         let type_id = versions.iter().find_map(|r| match r {
@@ -3564,8 +3652,8 @@ fn emit_latest_only_with_floor(
             _ => u64::MAX,
         });
         let keep = match next_tx {
-            None => true,                    // last version — live at ACTIVE
-            Some(n) => n > floor,            // a reader at floor still sees this
+            None => true,         // last version — live at ACTIVE
+            Some(n) => n > floor, // a reader at floor still sees this
         };
         if !keep {
             continue;
@@ -3677,10 +3765,7 @@ impl<'a> SnapshotStream<'a> {
     /// primary id matches a tombstone whose `tx_id_supersede` is ≤
     /// the snapshot — that's the MVCC "deleted" condition that
     /// `snapshot_read` already enforces across kinds.
-    fn with_tombstones(
-        mut self,
-        tombstones: std::collections::HashMap<uuid::Uuid, TxId>,
-    ) -> Self {
+    fn with_tombstones(mut self, tombstones: std::collections::HashMap<uuid::Uuid, TxId>) -> Self {
         self.tombstones = tombstones;
         self
     }
@@ -3733,7 +3818,7 @@ impl<'a> SnapshotStream<'a> {
                 // the tombstone. Drop the record if a tombstone for the
                 // same primary id is visible at this snapshot.
                 let target = match r {
-                    Record::Entity(e)    => Some(e.entity_id.into_uuid()),
+                    Record::Entity(e) => Some(e.entity_id.into_uuid()),
                     Record::HyperEdge(h) => Some(h.hyperedge_id.into_uuid()),
                     _ => None,
                 };
@@ -4010,7 +4095,12 @@ mod tests {
         assert_eq!(versions[3].0, del_tx, "tombstone tagged with its delete tx");
 
         // Empty for an unknown key.
-        assert!(engine.versions_of(&EntityId::now_v7().into_uuid()).unwrap().is_empty());
+        assert!(
+            engine
+                .versions_of(&EntityId::now_v7().into_uuid())
+                .unwrap()
+                .is_empty()
+        );
 
         engine.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
@@ -4094,7 +4184,8 @@ mod tests {
         let age = PropertyId::new(1);
         let a = EntityId::now_v7();
         let b = EntityId::now_v7();
-        let mut engine = Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
+        let mut engine =
+            Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
         engine.register_property_btree(cust, age);
         for (eid, v) in [(a, 30i64), (b, 40)] {
             let mut txn = engine.begin_write();
@@ -4127,7 +4218,8 @@ mod tests {
     fn no_sidecar_when_no_registration() {
         use crate::index::property_index_file::sidecar_path_for;
         let dir = temp_dir("pidx_none");
-        let mut engine = Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
+        let mut engine =
+            Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
         let mut txn = engine.begin_write();
         txn.put_entity(make_entity(EntityId::now_v7(), "x"));
         txn.commit().unwrap();
@@ -4167,7 +4259,9 @@ mod tests {
         let ty = TypeId::new(1);
         let prop = PropertyId::new(2);
         {
-            let mut e = Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
+            let mut e =
+                Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024))
+                    .unwrap();
             e.register_property_btree(ty, prop);
             for v in [10i64, 250, 30, 999, 7, 250, 88] {
                 put_cites(&mut e, EntityId::now_v7(), ty, prop, v);
@@ -4194,7 +4288,8 @@ mod tests {
         l_find.sort();
         assert_eq!(d_find, l_find);
         assert_eq!(l_find.len(), 2);
-        let mut l_range = lm.property_range(ty, prop, Some(&Value::I64(30)), Some(&Value::I64(300)));
+        let mut l_range =
+            lm.property_range(ty, prop, Some(&Value::I64(30)), Some(&Value::I64(300)));
         l_range.sort();
         assert_eq!(d_range, l_range);
         assert_eq!(d_top, lm.property_top_k(ty, prop, 3));
@@ -4211,7 +4306,9 @@ mod tests {
         let deleted = EntityId::now_v7();
         let stable = EntityId::now_v7();
         {
-            let mut e = Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
+            let mut e =
+                Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024))
+                    .unwrap();
             e.register_property_btree(ty, prop);
             put_cites(&mut e, updated, ty, prop, 10);
             put_cites(&mut e, deleted, ty, prop, 20);
@@ -4228,7 +4325,10 @@ mod tests {
         let lm = reopen_registered(&dir, ty, prop, EngineConfig::low_memory(64 * 1024 * 1024));
         // Stale value gone, current value present.
         assert!(lm.property_lookup(ty, prop, &Value::I64(10)).is_empty());
-        assert_eq!(lm.property_lookup(ty, prop, &Value::I64(999)), vec![updated]);
+        assert_eq!(
+            lm.property_lookup(ty, prop, &Value::I64(999)),
+            vec![updated]
+        );
         // Tombstoned entity excluded everywhere.
         assert!(lm.property_lookup(ty, prop, &Value::I64(20)).is_empty());
         assert_eq!(lm.property_lookup(ty, prop, &Value::I64(30)), vec![stable]);
@@ -4249,7 +4349,9 @@ mod tests {
         let ty = TypeId::new(1);
         let prop = PropertyId::new(2);
         {
-            let mut e = Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
+            let mut e =
+                Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024))
+                    .unwrap();
             e.register_property_btree(ty, prop);
             for i in 0..2000i64 {
                 put_cites(&mut e, EntityId::now_v7(), ty, prop, i);
@@ -4291,7 +4393,9 @@ mod tests {
         let prop = PropertyId::new(2);
         let top = EntityId::now_v7();
         {
-            let mut e = Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
+            let mut e =
+                Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024))
+                    .unwrap();
             e.register_property_btree(ty, prop);
             put_cites(&mut e, top, ty, prop, 5000);
             e.flush().unwrap();
@@ -4336,7 +4440,9 @@ mod tests {
         let prop = PropertyId::new(3);
         let mut ids = Vec::new();
         {
-            let mut e = Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
+            let mut e =
+                Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024))
+                    .unwrap();
             e.register_vector_property(prop);
             for i in 0..8u32 {
                 let id = EntityId::now_v7();
@@ -4377,7 +4483,8 @@ mod tests {
         let mut ids = Vec::new();
         {
             let mut e =
-                Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
+                Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024))
+                    .unwrap();
             e.register_vector_property(prop);
             for i in 0..8u32 {
                 let id = EntityId::now_v7();
@@ -4404,7 +4511,10 @@ mod tests {
             .into_iter()
             .map(|(x, _)| x)
             .collect();
-        assert_eq!(snap, exact, "snapshot kNN must match exact multi-sidecar kNN");
+        assert_eq!(
+            snap, exact,
+            "snapshot kNN must match exact multi-sidecar kNN"
+        );
         assert_eq!(snap[0], ids[3]); // 3.0 closest to 3.2
         e.close().unwrap();
         // Persists: a fresh open does NOT auto-load, but load_vector_snapshot
@@ -4435,7 +4545,8 @@ mod tests {
         let stable = EntityId::now_v7();
         {
             let mut e =
-                Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
+                Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024))
+                    .unwrap();
             e.register_vector_property(prop);
             put_vec(&mut e, moved, prop, vec![9.0, 9.0]); // initially far
             put_vec(&mut e, deleted, prop, vec![0.0, 0.0]); // initially nearest
@@ -4458,7 +4569,10 @@ mod tests {
             .map(|(x, _)| x)
             .collect();
         assert_eq!(hits.len(), 2, "deleted entity must be absent");
-        assert_eq!(hits[0], moved, "moved entity ranks by its CURRENT (near) vector");
+        assert_eq!(
+            hits[0], moved,
+            "moved entity ranks by its CURRENT (near) vector"
+        );
         assert!(!hits.contains(&deleted));
         e.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
@@ -4472,7 +4586,9 @@ mod tests {
         let deleted = EntityId::now_v7();
         let stable = EntityId::now_v7();
         {
-            let mut e = Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
+            let mut e =
+                Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024))
+                    .unwrap();
             e.register_vector_property(prop);
             put_vec(&mut e, moved, prop, vec![9.0, 9.0]); // initially far
             put_vec(&mut e, deleted, prop, vec![0.0, 0.0]); // initially nearest
@@ -4493,7 +4609,10 @@ mod tests {
             .into_iter()
             .map(|(x, _)| x)
             .collect();
-        assert!(!ids.contains(&deleted), "tombstoned entity must be excluded");
+        assert!(
+            !ids.contains(&deleted),
+            "tombstoned entity must be excluded"
+        );
         assert_eq!(ids[0], moved, "updated embedding should now rank first");
         assert!(ids.contains(&stable));
         lm.close().unwrap();
@@ -4505,7 +4624,9 @@ mod tests {
         let dir = temp_dir("lm_vec_bounded");
         let prop = PropertyId::new(3);
         {
-            let mut e = Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
+            let mut e =
+                Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024))
+                    .unwrap();
             e.register_vector_property(prop);
             for i in 0..2000u32 {
                 put_vec(
@@ -4683,7 +4804,8 @@ mod tests {
         let drop_edge = HyperedgeId::now_v7();
         {
             let mut e =
-                Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
+                Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024))
+                    .unwrap();
             e.register_lookup_key(name);
             put_named(&mut e, p0, T_PAPER, "p0");
             put_named(&mut e, p1, T_PAPER, "p1");
@@ -4712,8 +4834,14 @@ mod tests {
         want.sort();
         assert_eq!(papers, want);
         assert_eq!(lm.entity_type_count(paper), 2);
-        assert!(lm.lookup_by_external_key(name, &Value::String("p2".into())).is_none());
-        assert_eq!(lm.lookup_by_external_key(name, &Value::String("p0".into())), Some(p0));
+        assert!(
+            lm.lookup_by_external_key(name, &Value::String("p2".into()))
+                .is_none()
+        );
+        assert_eq!(
+            lm.lookup_by_external_key(name, &Value::String("p0".into())),
+            Some(p0)
+        );
         lm.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -4728,7 +4856,8 @@ mod tests {
         let mut tx_ids = Vec::new();
         {
             let mut e =
-                Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
+                Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024))
+                    .unwrap();
             e.set_retention_policy(ty, RetentionPolicy::Audited);
             for i in 0..3 {
                 let mut tx = e.begin_write();
@@ -4759,7 +4888,8 @@ mod tests {
         let dir = temp_dir("lm_idlist_bounded");
         {
             let mut e =
-                Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024)).unwrap();
+                Engine::create_with_config(&dir, EngineConfig::low_memory(64 * 1024 * 1024))
+                    .unwrap();
             let mut prev: Option<EntityId> = None;
             for i in 0..2000u32 {
                 let id = EntityId::now_v7();
@@ -4944,7 +5074,10 @@ mod tests {
             // Hot backup while the engine is still open + serving.
             let stats = engine.backup_to(&dst).unwrap();
             assert!(stats.sstables >= 1, "backup must copy the SSTable");
-            assert!(stats.files_copied >= 3, "CURRENT + MANIFEST + data at least");
+            assert!(
+                stats.files_copied >= 3,
+                "CURRENT + MANIFEST + data at least"
+            );
             engine.close().unwrap();
         }
 
@@ -5624,7 +5757,10 @@ mod tests {
         assert_eq!(engine.sstable_count(), 2);
         // At threshold → WriteStalled with the right numbers.
         match engine.check_write_admission() {
-            Err(EngineError::WriteStalled { sstable_count, threshold }) => {
+            Err(EngineError::WriteStalled {
+                sstable_count,
+                threshold,
+            }) => {
                 assert_eq!(sstable_count, 2);
                 assert_eq!(threshold, 2);
             }
@@ -5668,7 +5804,10 @@ mod tests {
             t.commit().unwrap();
             engine.flush().unwrap();
         }
-        assert!(engine.check_write_admission().is_ok(), "stall off by default");
+        assert!(
+            engine.check_write_admission().is_ok(),
+            "stall off by default"
+        );
         let mut t = engine.begin_write();
         t.put_entity(make_entity(EntityId::now_v7(), "y"));
         t.commit().unwrap();
@@ -5736,9 +5875,15 @@ mod tests {
 
         // Sanity: stale "old" gone, A under "new", tombstoned B gone, C kept.
         assert_eq!(after_skip.0, vec![a], "A indexed under its latest value");
-        assert!(after_skip.1.is_empty(), "stale superseded value must be gone");
+        assert!(
+            after_skip.1.is_empty(),
+            "stale superseded value must be gone"
+        );
         assert_eq!(after_skip.2, vec![c]);
-        assert!(after_skip.3.is_empty(), "tombstoned B must be absent from the index");
+        assert!(
+            after_skip.3.is_empty(),
+            "tombstoned B must be absent from the index"
+        );
         assert_eq!(after_skip.4, Some(a));
         assert_eq!(after_skip.5, None);
 
@@ -5843,7 +5988,9 @@ mod tests {
         assert_eq!(engine.sstable_count(), 2);
 
         // Phase 1: plan to compact the two current SSTables {A, B}.
-        let plan = engine.plan_compaction(TxId::ACTIVE).expect("2 SSTables → a plan");
+        let plan = engine
+            .plan_compaction(TxId::ACTIVE)
+            .expect("2 SSTables → a plan");
         assert_eq!(plan.input_seqs().len(), 2);
 
         // Simulate a flush concurrent with the off-lock merge: C lands as a
@@ -5918,7 +6065,10 @@ mod tests {
         }
         engine.compact_with_floor(TxId::ACTIVE).unwrap();
         let entities = count_records_of_kind(&dir, crate::record::RecordKind::Entity);
-        assert_eq!(entities, 1, "floor=ACTIVE = aggressive drop = v1.3 baseline");
+        assert_eq!(
+            entities, 1,
+            "floor=ACTIVE = aggressive drop = v1.3 baseline"
+        );
         engine.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -6008,7 +6158,11 @@ mod tests {
             "retention policy survives restart"
         );
         let restored = engine.commit_timestamp_us(saved_tx);
-        assert_eq!(restored, Some(saved_ms), "commit timestamp survives restart");
+        assert_eq!(
+            restored,
+            Some(saved_ms),
+            "commit timestamp survives restart"
+        );
         // tx_at_or_before still works at the same time.
         assert_eq!(engine.tx_at_or_before(saved_ms + 1), Some(saved_tx));
         engine.close().unwrap();
@@ -6205,7 +6359,10 @@ mod tests {
         // + 1 RetentionPolicy group — LatestOnly
         // = 8 records out. Entity count alone is the meaningful assert.
         let entities_out = count_records_of_kind(&dir, crate::record::RecordKind::Entity);
-        assert_eq!(entities_out, 3, "Audited must preserve every entity version");
+        assert_eq!(
+            entities_out, 3,
+            "Audited must preserve every entity version"
+        );
 
         engine.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
@@ -6451,7 +6608,10 @@ mod tests {
                 type_id: TypeId::new(42),
                 tx_id_assert: TxId::new(0),
                 tx_id_supersede: TxId::ACTIVE,
-                properties: vec![(PropertyId::new(1), Value::I64(i64::try_from(i).unwrap_or(0)))],
+                properties: vec![(
+                    PropertyId::new(1),
+                    Value::I64(i64::try_from(i).unwrap_or(0)),
+                )],
             });
             txn.commit().unwrap();
             ids.push(eid);
@@ -6483,9 +6643,15 @@ mod tests {
         assert!(stats.bytes_rewritten > 0);
 
         // Marker now present.
-        assert!(dir.join(crate::encryption::ENCRYPTION_MARKER_FILENAME).exists());
+        assert!(
+            dir.join(crate::encryption::ENCRYPTION_MARKER_FILENAME)
+                .exists()
+        );
         // Transient marker gone.
-        assert!(!dir.join(crate::encryption::ENCRYPTION_MIGRATION_FILENAME).exists());
+        assert!(
+            !dir.join(crate::encryption::ENCRYPTION_MIGRATION_FILENAME)
+                .exists()
+        );
 
         // Records still visible from the still-open Engine.
         assert_visible(&mut engine, &ids);
@@ -6534,7 +6700,10 @@ mod tests {
         let stats = engine.reencrypt(None).unwrap();
         assert!(stats.sstables_rewritten >= 1);
         // Marker is gone after migration to plaintext.
-        assert!(!dir.join(crate::encryption::ENCRYPTION_MARKER_FILENAME).exists());
+        assert!(
+            !dir.join(crate::encryption::ENCRYPTION_MARKER_FILENAME)
+                .exists()
+        );
         assert_visible(&mut engine, &ids);
         engine.close().unwrap();
 
@@ -6554,9 +6723,16 @@ mod tests {
         engine.flush().unwrap();
 
         let stats = engine.reencrypt(Some(&cipher_a())).unwrap();
-        assert_eq!(stats, MigrationStats::default(), "no-op for matching cipher");
+        assert_eq!(
+            stats,
+            MigrationStats::default(),
+            "no-op for matching cipher"
+        );
         // Transient marker NOT created on a no-op.
-        assert!(!dir.join(crate::encryption::ENCRYPTION_MIGRATION_FILENAME).exists());
+        assert!(
+            !dir.join(crate::encryption::ENCRYPTION_MIGRATION_FILENAME)
+                .exists()
+        );
         engine.close().unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -6617,7 +6793,10 @@ mod tests {
         .unwrap();
 
         let err = engine.reencrypt(Some(&cipher_b())).unwrap_err();
-        assert!(matches!(err, EngineError::EncryptionMigrationIncomplete { .. }));
+        assert!(matches!(
+            err,
+            EngineError::EncryptionMigrationIncomplete { .. }
+        ));
         engine.close().unwrap();
 
         std::fs::remove_dir_all(&dir).unwrap();
@@ -6683,7 +6862,10 @@ mod tests {
             .collect();
         // Tombstoned entity must NOT appear in the streaming iterator.
         assert!(visible.contains(&eids[0].into_uuid()));
-        assert!(!visible.contains(&eids[1].into_uuid()), "tombstoned entity leaked through snapshot_iter_streaming");
+        assert!(
+            !visible.contains(&eids[1].into_uuid()),
+            "tombstoned entity leaked through snapshot_iter_streaming"
+        );
         assert!(visible.contains(&eids[2].into_uuid()));
 
         // Same invariant after a flush — the tombstone lives in an
@@ -6698,7 +6880,10 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(!visible.contains(&eids[1].into_uuid()), "tombstoned entity leaked after flush");
+        assert!(
+            !visible.contains(&eids[1].into_uuid()),
+            "tombstoned entity leaked after flush"
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

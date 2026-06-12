@@ -118,11 +118,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             column: 1,
             agg: Aggregate::Avg,
         });
-    bench("group_sum", iters, n_entities, || {
-        run_pipeline(&engine, snap, &group_sum)
+    bench("group_sum_row", iters, n_entities, || {
+        run_pipeline_row(&engine, snap, &group_sum)
     });
-    bench("group_sum_col", iters, n_entities, || {
-        run_pipeline_columnar(&engine, snap, &group_sum)
+    bench("group_sum(run)", iters, n_entities, || {
+        run_pipeline(&engine, snap, &group_sum)
     });
 
     let filter_agg = Pipeline::new()
@@ -137,9 +137,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             PropertyId::new(PROP_AMOUNT),
         ))
         .filter(|rec| match rec {
-            Record::Entity(e) => e.properties.iter().any(|(p, v)| {
-                p.get() == PROP_AMOUNT && matches!(v, Value::I64(n) if n % 10 == 0)
-            }),
+            Record::Entity(e) => e
+                .properties
+                .iter()
+                .any(|(p, v)| p.get() == PROP_AMOUNT && matches!(v, Value::I64(n) if n % 10 == 0)),
             _ => false,
         })
         .group_by([0])
@@ -187,13 +188,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+// `run` now auto-dispatches aggregate pipelines to the columnar engine,
+// so this is the production default path.
 fn run_pipeline(engine: &Engine, snap: TxId, p: &Pipeline) -> usize {
     let table = p.run(engine.snapshot_iter_streaming(snap).filter_map(Result::ok));
     table.len()
 }
 
-fn run_pipeline_columnar(engine: &Engine, snap: TxId, p: &Pipeline) -> usize {
-    let table = p.run_columnar(engine.snapshot_iter_streaming(snap).filter_map(Result::ok));
+// The legacy row-materialising engine, kept for the A/B comparison.
+fn run_pipeline_row(engine: &Engine, snap: TxId, p: &Pipeline) -> usize {
+    let table = p.run_row(engine.snapshot_iter_streaming(snap).filter_map(Result::ok));
     table.len()
 }
 
@@ -227,7 +231,10 @@ fn seed(engine: &mut Engine, n: usize) -> Result<(), Box<dyn std::error::Error>>
             tx_id_supersede: TxId::ACTIVE,
             properties: vec![
                 (PropertyId::new(PROP_REGION), Value::String(region)),
-                (PropertyId::new(PROP_AMOUNT), Value::I64((i as i64 * 37) % 10_000)),
+                (
+                    PropertyId::new(PROP_AMOUNT),
+                    Value::I64((i as i64 * 37) % 10_000),
+                ),
                 (
                     PropertyId::new(PROP_NOTE),
                     Value::String(format!("order number {i} placed via web checkout")),

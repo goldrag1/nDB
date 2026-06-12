@@ -26,7 +26,7 @@
 #![allow(
     clippy::too_many_lines,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
+    clippy::cast_sign_loss
 )]
 
 use std::collections::HashMap;
@@ -37,57 +37,59 @@ use std::sync::Arc;
 
 use ndb_engine::Engine;
 use ndb_engine::id::{EntityId, HyperedgeId, PropertyId, RoleId, TxId, TypeId};
-use ndb_engine::record::{EntityRecord, HyperEdgeRecord, PropertyKeyRecord, Record, RoleNameRecord, TypeNameRecord};
+use ndb_engine::record::{
+    EntityRecord, HyperEdgeRecord, PropertyKeyRecord, Record, RoleNameRecord, TypeNameRecord,
+};
 use ndb_engine::value::Value;
 use ndb_server::Server;
 use serde::Deserialize;
 
 // ─── Schema (kept in lockstep with docs/biodiv/index.html) ─────────────
-const T_SPECIES:     u32 = 1;
-const T_REGION:      u32 = 2;
+const T_SPECIES: u32 = 1;
+const T_REGION: u32 = 2;
 
 const T_POLLINATION: u32 = 100;
-const T_MUTUALISM:   u32 = 101;
-const T_PARASITISM:  u32 = 102;
-const T_PREDATION:   u32 = 103;
-const T_FOOD_WEB:    u32 = 104;
+const T_MUTUALISM: u32 = 101;
+const T_PARASITISM: u32 = 102;
+const T_PREDATION: u32 = 103;
+const T_FOOD_WEB: u32 = 104;
 
-const ROLE_PLANT:        u32 = 10;
-const ROLE_POLLINATOR:   u32 = 11;
-const ROLE_MUTUALIST_A:  u32 = 12;
-const ROLE_MUTUALIST_B:  u32 = 13;
-const ROLE_HOST:         u32 = 14;
-const ROLE_PARASITE:     u32 = 15;
-const ROLE_PREDATOR:     u32 = 16;
-const ROLE_PREY:         u32 = 17;
-const ROLE_REGION:       u32 = 18;
-const ROLE_ECOSYSTEM:    u32 = 19;
-const ROLE_MEMBER:       u32 = 20;
+const ROLE_PLANT: u32 = 10;
+const ROLE_POLLINATOR: u32 = 11;
+const ROLE_MUTUALIST_A: u32 = 12;
+const ROLE_MUTUALIST_B: u32 = 13;
+const ROLE_HOST: u32 = 14;
+const ROLE_PARASITE: u32 = 15;
+const ROLE_PREDATOR: u32 = 16;
+const ROLE_PREY: u32 = 17;
+const ROLE_REGION: u32 = 18;
+const ROLE_ECOSYSTEM: u32 = 19;
+const ROLE_MEMBER: u32 = 20;
 
-const PROP_NAME:                u32 = 30;
-const PROP_SCIENTIFIC_NAME:     u32 = 31;
-const PROP_COMMON_NAME:         u32 = 32;
-const PROP_KINGDOM:             u32 = 33;
-const PROP_FAMILY:              u32 = 34;
-const PROP_LIFE_FORM:           u32 = 35;
-const PROP_PHOTO_URL:           u32 = 36;
-const PROP_WIKI_URL:            u32 = 37;
-const PROP_REGION_KIND:         u32 = 38;
-const PROP_LATITUDE:            u32 = 39;
-const PROP_LONGITUDE:           u32 = 40;
-const PROP_REGION_KEY:          u32 = 41;
+const PROP_NAME: u32 = 30;
+const PROP_SCIENTIFIC_NAME: u32 = 31;
+const PROP_COMMON_NAME: u32 = 32;
+const PROP_KINGDOM: u32 = 33;
+const PROP_FAMILY: u32 = 34;
+const PROP_LIFE_FORM: u32 = 35;
+const PROP_PHOTO_URL: u32 = 36;
+const PROP_WIKI_URL: u32 = 37;
+const PROP_REGION_KIND: u32 = 38;
+const PROP_LATITUDE: u32 = 39;
+const PROP_LONGITUDE: u32 = 40;
+const PROP_REGION_KEY: u32 = 41;
 
-const PROP_SEASON_FROM:         u32 = 50;
-const PROP_SEASON_TO:           u32 = 51;
-const PROP_OBLIGATE:            u32 = 52;
+const PROP_SEASON_FROM: u32 = 50;
+const PROP_SEASON_TO: u32 = 51;
+const PROP_OBLIGATE: u32 = 52;
 const PROP_INTERACTION_SUBTYPE: u32 = 53;
-const PROP_TRANSMISSION:        u32 = 54;
-const PROP_NOTE:                u32 = 55;
-const PROP_FOOD_WEB_NAME:       u32 = 56;
-const PROP_INTERACTION_KIND:    u32 = 57;
-const PROP_TROPHIC_EDGES_JSON:  u32 = 58;  // JSON: [[predator_sci, prey_sci], ...]
+const PROP_TRANSMISSION: u32 = 54;
+const PROP_NOTE: u32 = 55;
+const PROP_FOOD_WEB_NAME: u32 = 56;
+const PROP_INTERACTION_KIND: u32 = 57;
+const PROP_TROPHIC_EDGES_JSON: u32 = 58; // JSON: [[predator_sci, prey_sci], ...]
 
-const API_PORT:    u16 = 8748;
+const API_PORT: u16 = 8748;
 const STATIC_PORT: u16 = 9881;
 
 // Seed JSON baked at build time (~80 KB).
@@ -97,90 +99,92 @@ const SEED_JSON: &str = include_str!("seed.json");
 
 #[derive(Deserialize)]
 struct SeedDoc {
-    regions:     Vec<RegionRow>,
-    species:     Vec<SpeciesRow>,
+    regions: Vec<RegionRow>,
+    species: Vec<SpeciesRow>,
     pollination: Vec<PollinationRow>,
-    mutualism:   Vec<MutualismRow>,
-    parasitism:  Vec<ParasitismRow>,
-    predation:   Vec<PredationRow>,
-    food_webs:   Vec<FoodWebRow>,
+    mutualism: Vec<MutualismRow>,
+    parasitism: Vec<ParasitismRow>,
+    predation: Vec<PredationRow>,
+    food_webs: Vec<FoodWebRow>,
 }
 
 #[derive(Deserialize)]
 struct RegionRow {
-    key:  String,
+    key: String,
     name: String,
     kind: String,
-    lat:  f64,
-    lon:  f64,
+    lat: f64,
+    lon: f64,
 }
 
 #[derive(Deserialize)]
 struct SpeciesRow {
-    sci:        String,
-    common:     String,
-    kingdom:    String,
-    family:     String,
-    life_form:  String,
-    photo_url:  String,
-    wiki_url:   String,
+    sci: String,
+    common: String,
+    kingdom: String,
+    family: String,
+    life_form: String,
+    photo_url: String,
+    wiki_url: String,
 }
 
 #[derive(Deserialize)]
 struct PollinationRow {
-    plant:       String,
-    pollinator:  String,
-    region:      String,
+    plant: String,
+    pollinator: String,
+    region: String,
     season_from: i64,
-    season_to:   i64,
-    obligate:    bool,
-    note:        String,
+    season_to: i64,
+    obligate: bool,
+    note: String,
 }
 
 #[derive(Deserialize)]
 struct MutualismRow {
     species_a: String,
     species_b: String,
-    region:    String,
-    subtype:   String,
-    obligate:  bool,
-    note:      String,
+    region: String,
+    subtype: String,
+    obligate: bool,
+    note: String,
 }
 
 #[derive(Deserialize)]
 struct ParasitismRow {
-    host:         String,
-    parasite:     String,
-    region:       String,
+    host: String,
+    parasite: String,
+    region: String,
     transmission: String,
-    note:         String,
+    note: String,
 }
 
 #[derive(Deserialize)]
 struct PredationRow {
-    predator:    String,
-    prey:        String,
-    region:      String,
+    predator: String,
+    prey: String,
+    region: String,
     season_from: i64,
-    season_to:   i64,
-    note:        String,
+    season_to: i64,
+    note: String,
 }
 
 #[derive(Deserialize)]
 struct FoodWebRow {
-    name:           String,
-    ecosystem:      String,
-    members:        Vec<String>,
+    name: String,
+    ecosystem: String,
+    members: Vec<String>,
     #[serde(default)]
-    trophic_edges:  Vec<(String, String)>,
-    note:           String,
+    trophic_edges: Vec<(String, String)>,
+    note: String,
 }
 
 // ─── Main ──────────────────────────────────────────────────────────────
 
 fn main() {
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().and_then(Path::parent).expect("workspace root");
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root");
     let db_dir_owned = workspace_root.join(".demo-data/biodiv-ndb");
     let db_dir = db_dir_owned.as_path();
     if !db_dir.exists() {
@@ -200,7 +204,8 @@ fn main() {
     } else {
         eprintln!(
             "reusing existing nDB at {} ({} species entities present)",
-            db_dir.display(), existing,
+            db_dir.display(),
+            existing,
         );
     }
     drop(engine);
@@ -209,7 +214,8 @@ fn main() {
     // Visitors must not be able to mutate the demo data via the wire.
     // In-process seeding above is unaffected.
     let server = Arc::new(
-        Server::open(db_dir).expect("server open")
+        Server::open(db_dir)
+            .expect("server open")
             .with_cors_origin("*")
             .with_read_only(true),
     );
@@ -232,7 +238,9 @@ fn main() {
     });
 
     let static_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().and_then(Path::parent).expect("workspace root")
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root")
         .join("docs/biodiv");
     let static_addr = format!("127.0.0.1:{STATIC_PORT}");
     let static_listener = TcpListener::bind(&static_addr).expect("bind static");
@@ -247,12 +255,16 @@ fn main() {
             let Ok(stream) = stream else { continue };
             let root = root.clone();
             std::thread::spawn(move || {
-                if let Err(e) = serve_static(stream, &root) { eprintln!("static connection: {e}"); }
+                if let Err(e) = serve_static(stream, &root) {
+                    eprintln!("static connection: {e}");
+                }
             });
         }
     });
 
-    loop { std::thread::park(); }
+    loop {
+        std::thread::park();
+    }
 }
 
 // ─── Seed ──────────────────────────────────────────────────────────────
@@ -265,17 +277,17 @@ fn seed(engine: &mut Engine) {
     // client having to send raw ids.
     seed_name_dictionaries(engine);
 
-    let mut region_ids:  HashMap<String, EntityId> = HashMap::with_capacity(doc.regions.len());
+    let mut region_ids: HashMap<String, EntityId> = HashMap::with_capacity(doc.regions.len());
     let mut species_ids: HashMap<String, EntityId> = HashMap::with_capacity(doc.species.len());
 
     for r in &doc.regions {
         let eid = EntityId::now_v7();
         let props = vec![
-            (PROP_NAME,         Value::String(r.name.clone())),
-            (PROP_REGION_KEY,   Value::String(r.key.clone())),
-            (PROP_REGION_KIND,  Value::String(r.kind.clone())),
-            (PROP_LATITUDE,     Value::F64(r.lat)),
-            (PROP_LONGITUDE,    Value::F64(r.lon)),
+            (PROP_NAME, Value::String(r.name.clone())),
+            (PROP_REGION_KEY, Value::String(r.key.clone())),
+            (PROP_REGION_KIND, Value::String(r.kind.clone())),
+            (PROP_LATITUDE, Value::F64(r.lat)),
+            (PROP_LONGITUDE, Value::F64(r.lon)),
         ];
         commit_entity(engine, eid, T_REGION, props);
         region_ids.insert(r.key.clone(), eid);
@@ -283,15 +295,19 @@ fn seed(engine: &mut Engine) {
     for s in &doc.species {
         let eid = EntityId::now_v7();
         let mut props = vec![
-            (PROP_NAME,             Value::String(s.common.clone())),
-            (PROP_SCIENTIFIC_NAME,  Value::String(s.sci.clone())),
-            (PROP_COMMON_NAME,      Value::String(s.common.clone())),
-            (PROP_KINGDOM,          Value::String(s.kingdom.clone())),
-            (PROP_FAMILY,           Value::String(s.family.clone())),
-            (PROP_LIFE_FORM,        Value::String(s.life_form.clone())),
+            (PROP_NAME, Value::String(s.common.clone())),
+            (PROP_SCIENTIFIC_NAME, Value::String(s.sci.clone())),
+            (PROP_COMMON_NAME, Value::String(s.common.clone())),
+            (PROP_KINGDOM, Value::String(s.kingdom.clone())),
+            (PROP_FAMILY, Value::String(s.family.clone())),
+            (PROP_LIFE_FORM, Value::String(s.life_form.clone())),
         ];
-        if !s.photo_url.is_empty() { props.push((PROP_PHOTO_URL, Value::String(s.photo_url.clone()))); }
-        if !s.wiki_url.is_empty()  { props.push((PROP_WIKI_URL,  Value::String(s.wiki_url.clone()))); }
+        if !s.photo_url.is_empty() {
+            props.push((PROP_PHOTO_URL, Value::String(s.photo_url.clone())));
+        }
+        if !s.wiki_url.is_empty() {
+            props.push((PROP_WIKI_URL, Value::String(s.wiki_url.clone())));
+        }
         commit_entity(engine, eid, T_SPECIES, props);
         species_ids.insert(s.sci.clone(), eid);
     }
@@ -306,21 +322,27 @@ fn seed(engine: &mut Engine) {
             species_ids.get(&p.pollinator),
             region_ids.get(&p.region),
         ) else {
-            eprintln!("  warn: pollination row references unknown taxon/region: {} ↔ {}", p.plant, p.pollinator);
+            eprintln!(
+                "  warn: pollination row references unknown taxon/region: {} ↔ {}",
+                p.plant, p.pollinator
+            );
             continue;
         };
         let roles = vec![
-            (RoleId::new(ROLE_PLANT),      plant),
+            (RoleId::new(ROLE_PLANT), plant),
             (RoleId::new(ROLE_POLLINATOR), pollinator),
-            (RoleId::new(ROLE_REGION),     region),
+            (RoleId::new(ROLE_REGION), region),
         ];
         max_arity = max_arity.max(roles.len());
         let props = vec![
-            (PROP_INTERACTION_KIND, Value::String("pollination".to_string())),
-            (PROP_SEASON_FROM,      Value::I64(p.season_from)),
-            (PROP_SEASON_TO,        Value::I64(p.season_to)),
-            (PROP_OBLIGATE,         Value::Bool(p.obligate)),
-            (PROP_NOTE,             Value::String(p.note.clone())),
+            (
+                PROP_INTERACTION_KIND,
+                Value::String("pollination".to_string()),
+            ),
+            (PROP_SEASON_FROM, Value::I64(p.season_from)),
+            (PROP_SEASON_TO, Value::I64(p.season_to)),
+            (PROP_OBLIGATE, Value::Bool(p.obligate)),
+            (PROP_NOTE, Value::String(p.note.clone())),
         ];
         commit_hyperedge(engine, T_POLLINATION, roles, props);
         n_poll += 1;
@@ -334,20 +356,26 @@ fn seed(engine: &mut Engine) {
             species_ids.get(&m.species_b),
             region_ids.get(&m.region),
         ) else {
-            eprintln!("  warn: mutualism row references unknown taxon/region: {} ↔ {}", m.species_a, m.species_b);
+            eprintln!(
+                "  warn: mutualism row references unknown taxon/region: {} ↔ {}",
+                m.species_a, m.species_b
+            );
             continue;
         };
         let roles = vec![
             (RoleId::new(ROLE_MUTUALIST_A), a),
             (RoleId::new(ROLE_MUTUALIST_B), b),
-            (RoleId::new(ROLE_REGION),      region),
+            (RoleId::new(ROLE_REGION), region),
         ];
         max_arity = max_arity.max(roles.len());
         let props = vec![
-            (PROP_INTERACTION_KIND,     Value::String("mutualism".to_string())),
-            (PROP_INTERACTION_SUBTYPE,  Value::String(m.subtype.clone())),
-            (PROP_OBLIGATE,             Value::Bool(m.obligate)),
-            (PROP_NOTE,                 Value::String(m.note.clone())),
+            (
+                PROP_INTERACTION_KIND,
+                Value::String("mutualism".to_string()),
+            ),
+            (PROP_INTERACTION_SUBTYPE, Value::String(m.subtype.clone())),
+            (PROP_OBLIGATE, Value::Bool(m.obligate)),
+            (PROP_NOTE, Value::String(m.note.clone())),
         ];
         commit_hyperedge(engine, T_MUTUALISM, roles, props);
         n_mut += 1;
@@ -361,19 +389,25 @@ fn seed(engine: &mut Engine) {
             species_ids.get(&p.parasite),
             region_ids.get(&p.region),
         ) else {
-            eprintln!("  warn: parasitism row references unknown taxon/region: {} ↔ {}", p.host, p.parasite);
+            eprintln!(
+                "  warn: parasitism row references unknown taxon/region: {} ↔ {}",
+                p.host, p.parasite
+            );
             continue;
         };
         let roles = vec![
-            (RoleId::new(ROLE_HOST),     host),
+            (RoleId::new(ROLE_HOST), host),
             (RoleId::new(ROLE_PARASITE), parasite),
-            (RoleId::new(ROLE_REGION),   region),
+            (RoleId::new(ROLE_REGION), region),
         ];
         max_arity = max_arity.max(roles.len());
         let props = vec![
-            (PROP_INTERACTION_KIND, Value::String("parasitism".to_string())),
-            (PROP_TRANSMISSION,     Value::String(p.transmission.clone())),
-            (PROP_NOTE,             Value::String(p.note.clone())),
+            (
+                PROP_INTERACTION_KIND,
+                Value::String("parasitism".to_string()),
+            ),
+            (PROP_TRANSMISSION, Value::String(p.transmission.clone())),
+            (PROP_NOTE, Value::String(p.note.clone())),
         ];
         commit_hyperedge(engine, T_PARASITISM, roles, props);
         n_par += 1;
@@ -387,20 +421,26 @@ fn seed(engine: &mut Engine) {
             species_ids.get(&p.prey),
             region_ids.get(&p.region),
         ) else {
-            eprintln!("  warn: predation row references unknown taxon/region: {} ↔ {}", p.predator, p.prey);
+            eprintln!(
+                "  warn: predation row references unknown taxon/region: {} ↔ {}",
+                p.predator, p.prey
+            );
             continue;
         };
         let roles = vec![
             (RoleId::new(ROLE_PREDATOR), predator),
-            (RoleId::new(ROLE_PREY),     prey),
-            (RoleId::new(ROLE_REGION),   region),
+            (RoleId::new(ROLE_PREY), prey),
+            (RoleId::new(ROLE_REGION), region),
         ];
         max_arity = max_arity.max(roles.len());
         let props = vec![
-            (PROP_INTERACTION_KIND, Value::String("predation".to_string())),
-            (PROP_SEASON_FROM,      Value::I64(p.season_from)),
-            (PROP_SEASON_TO,        Value::I64(p.season_to)),
-            (PROP_NOTE,             Value::String(p.note.clone())),
+            (
+                PROP_INTERACTION_KIND,
+                Value::String("predation".to_string()),
+            ),
+            (PROP_SEASON_FROM, Value::I64(p.season_from)),
+            (PROP_SEASON_TO, Value::I64(p.season_to)),
+            (PROP_NOTE, Value::String(p.note.clone())),
         ];
         commit_hyperedge(engine, T_PREDATION, roles, props);
         n_pred += 1;
@@ -424,11 +464,11 @@ fn seed(engine: &mut Engine) {
         max_arity = max_arity.max(roles.len());
         let trophic_json = serde_json::to_string(&fw.trophic_edges).unwrap_or_else(|_| "[]".into());
         let props = vec![
-            (PROP_INTERACTION_KIND,    Value::String("food_web".to_string())),
-            (PROP_FOOD_WEB_NAME,       Value::String(fw.name.clone())),
-            (PROP_NAME,                Value::String(fw.name.clone())),
-            (PROP_NOTE,                Value::String(fw.note.clone())),
-            (PROP_TROPHIC_EDGES_JSON,  Value::String(trophic_json)),
+            (PROP_INTERACTION_KIND, Value::String("food_web".to_string())),
+            (PROP_FOOD_WEB_NAME, Value::String(fw.name.clone())),
+            (PROP_NAME, Value::String(fw.name.clone())),
+            (PROP_NOTE, Value::String(fw.note.clone())),
+            (PROP_TROPHIC_EDGES_JSON, Value::String(trophic_json)),
         ];
         commit_hyperedge(engine, T_FOOD_WEB, roles, props);
         n_fw += 1;
@@ -436,51 +476,81 @@ fn seed(engine: &mut Engine) {
 
     eprintln!(
         "seeded {} regions, {} species; interactions: {} pollination, {} mutualism, {} parasitism, {} predation, {} food_webs",
-        doc.regions.len(), doc.species.len(), n_poll, n_mut, n_par, n_pred, n_fw,
+        doc.regions.len(),
+        doc.species.len(),
+        n_poll,
+        n_mut,
+        n_par,
+        n_pred,
+        n_fw,
     );
     eprintln!("max hyperedge arity: {max_arity}");
 }
 
 fn seed_name_dictionaries(engine: &mut Engine) {
     let types: &[(u32, &str)] = &[
-        (T_SPECIES,     "species"),
-        (T_REGION,      "region"),
+        (T_SPECIES, "species"),
+        (T_REGION, "region"),
         (T_POLLINATION, "pollination"),
-        (T_MUTUALISM,   "mutualism"),
-        (T_PARASITISM,  "parasitism"),
-        (T_PREDATION,   "predation"),
-        (T_FOOD_WEB,    "food_web"),
+        (T_MUTUALISM, "mutualism"),
+        (T_PARASITISM, "parasitism"),
+        (T_PREDATION, "predation"),
+        (T_FOOD_WEB, "food_web"),
     ];
     let roles: &[(u32, &str)] = &[
-        (ROLE_PLANT, "plant"), (ROLE_POLLINATOR, "pollinator"),
-        (ROLE_MUTUALIST_A, "mutualist_a"), (ROLE_MUTUALIST_B, "mutualist_b"),
-        (ROLE_HOST, "host"), (ROLE_PARASITE, "parasite"),
-        (ROLE_PREDATOR, "predator"), (ROLE_PREY, "prey"),
-        (ROLE_REGION, "region"), (ROLE_ECOSYSTEM, "ecosystem"),
+        (ROLE_PLANT, "plant"),
+        (ROLE_POLLINATOR, "pollinator"),
+        (ROLE_MUTUALIST_A, "mutualist_a"),
+        (ROLE_MUTUALIST_B, "mutualist_b"),
+        (ROLE_HOST, "host"),
+        (ROLE_PARASITE, "parasite"),
+        (ROLE_PREDATOR, "predator"),
+        (ROLE_PREY, "prey"),
+        (ROLE_REGION, "region"),
+        (ROLE_ECOSYSTEM, "ecosystem"),
         (ROLE_MEMBER, "member"),
     ];
     let props: &[(u32, &str)] = &[
-        (PROP_NAME, "name"), (PROP_SCIENTIFIC_NAME, "scientific_name"),
-        (PROP_COMMON_NAME, "common_name"), (PROP_KINGDOM, "kingdom"),
-        (PROP_FAMILY, "family"), (PROP_LIFE_FORM, "life_form"),
-        (PROP_PHOTO_URL, "photo_url"), (PROP_WIKI_URL, "wiki_url"),
-        (PROP_REGION_KIND, "region_kind"), (PROP_LATITUDE, "latitude"),
-        (PROP_LONGITUDE, "longitude"), (PROP_REGION_KEY, "region_key"),
-        (PROP_SEASON_FROM, "season_from"), (PROP_SEASON_TO, "season_to"),
-        (PROP_OBLIGATE, "obligate"), (PROP_INTERACTION_SUBTYPE, "interaction_subtype"),
-        (PROP_TRANSMISSION, "transmission"), (PROP_NOTE, "note"),
-        (PROP_FOOD_WEB_NAME, "food_web_name"), (PROP_INTERACTION_KIND, "interaction_kind"),
+        (PROP_NAME, "name"),
+        (PROP_SCIENTIFIC_NAME, "scientific_name"),
+        (PROP_COMMON_NAME, "common_name"),
+        (PROP_KINGDOM, "kingdom"),
+        (PROP_FAMILY, "family"),
+        (PROP_LIFE_FORM, "life_form"),
+        (PROP_PHOTO_URL, "photo_url"),
+        (PROP_WIKI_URL, "wiki_url"),
+        (PROP_REGION_KIND, "region_kind"),
+        (PROP_LATITUDE, "latitude"),
+        (PROP_LONGITUDE, "longitude"),
+        (PROP_REGION_KEY, "region_key"),
+        (PROP_SEASON_FROM, "season_from"),
+        (PROP_SEASON_TO, "season_to"),
+        (PROP_OBLIGATE, "obligate"),
+        (PROP_INTERACTION_SUBTYPE, "interaction_subtype"),
+        (PROP_TRANSMISSION, "transmission"),
+        (PROP_NOTE, "note"),
+        (PROP_FOOD_WEB_NAME, "food_web_name"),
+        (PROP_INTERACTION_KIND, "interaction_kind"),
         (PROP_TROPHIC_EDGES_JSON, "trophic_edges_json"),
     ];
     let mut txn = engine.begin_write();
     for (id, n) in types {
-        txn.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(*id), name: (*n).into() }));
+        txn.put_raw(Record::TypeName(TypeNameRecord {
+            id: TypeId::new(*id),
+            name: (*n).into(),
+        }));
     }
     for (id, n) in roles {
-        txn.put_raw(Record::RoleName(RoleNameRecord { id: RoleId::new(*id), name: (*n).into() }));
+        txn.put_raw(Record::RoleName(RoleNameRecord {
+            id: RoleId::new(*id),
+            name: (*n).into(),
+        }));
     }
     for (id, n) in props {
-        txn.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(*id), name: (*n).into() }));
+        txn.put_raw(Record::PropertyKey(PropertyKeyRecord {
+            id: PropertyId::new(*id),
+            name: (*n).into(),
+        }));
     }
     txn.commit().expect("commit dictionaries");
 }
@@ -492,15 +562,14 @@ fn count_entities_of_type(engine: &Engine, type_id: u32) -> usize {
     for r in engine.snapshot_iter_streaming(TxId::ACTIVE).flatten() {
         if let Record::Entity(e) = r
             && e.type_id == TypeId::new(type_id)
-        { n += 1; }
+        {
+            n += 1;
+        }
     }
     n
 }
 
-fn commit_entity(
-    engine: &mut Engine, eid: EntityId, type_id: u32,
-    properties: Vec<(u32, Value)>,
-) {
+fn commit_entity(engine: &mut Engine, eid: EntityId, type_id: u32, properties: Vec<(u32, Value)>) {
     let mut txn = engine.begin_write();
     let tx_id = txn.tx_id();
     txn.put_entity(EntityRecord {
@@ -508,13 +577,17 @@ fn commit_entity(
         type_id: TypeId::new(type_id),
         tx_id_assert: tx_id,
         tx_id_supersede: TxId::ACTIVE,
-        properties: properties.into_iter().map(|(p, v)| (PropertyId::new(p), v)).collect(),
+        properties: properties
+            .into_iter()
+            .map(|(p, v)| (PropertyId::new(p), v))
+            .collect(),
     });
     txn.commit().expect("commit entity");
 }
 
 fn commit_hyperedge(
-    engine: &mut Engine, type_id: u32,
+    engine: &mut Engine,
+    type_id: u32,
     roles: Vec<(RoleId, EntityId)>,
     properties: Vec<(u32, Value)>,
 ) {
@@ -527,7 +600,10 @@ fn commit_hyperedge(
         tx_id_supersede: TxId::ACTIVE,
         roles,
         hyperedge_roles: Vec::new(),
-        properties: properties.into_iter().map(|(p, v)| (PropertyId::new(p), v)).collect(),
+        properties: properties
+            .into_iter()
+            .map(|(p, v)| (PropertyId::new(p), v))
+            .collect(),
     });
     txn.commit().expect("commit hyperedge");
 }
@@ -542,10 +618,18 @@ fn serve_static(stream: TcpStream, root: &Path) -> std::io::Result<()> {
     loop {
         header.clear();
         let n = reader.read_line(&mut header)?;
-        if n <= 2 { break; }
+        if n <= 2 {
+            break;
+        }
     }
-    let path = request_line.split_whitespace().nth(1).unwrap_or("/")
-        .split('?').next().unwrap_or("/").to_string();
+    let path = request_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("/")
+        .split('?')
+        .next()
+        .unwrap_or("/")
+        .to_string();
     let mut writer = &stream;
     match resolve_path(root, &path) {
         Some(p) => {
@@ -556,34 +640,55 @@ fn serve_static(stream: TcpStream, root: &Path) -> std::io::Result<()> {
                 write_response(&mut writer, 404, "text/plain", b"not found")?;
             }
         }
-        None => { write_response(&mut writer, 404, "text/plain", b"not found")?; }
+        None => {
+            write_response(&mut writer, 404, "text/plain", b"not found")?;
+        }
     }
     Ok(())
 }
 
 fn resolve_path(root: &Path, req_path: &str) -> Option<PathBuf> {
-    if req_path.contains("..") { return None; }
+    if req_path.contains("..") {
+        return None;
+    }
     let trimmed = req_path.trim_start_matches('/');
-    let candidate = if trimmed.is_empty() { root.join("index.html") } else { root.join(trimmed) };
-    if candidate.is_file() { Some(candidate) } else { None }
+    let candidate = if trimmed.is_empty() {
+        root.join("index.html")
+    } else {
+        root.join(trimmed)
+    };
+    if candidate.is_file() {
+        Some(candidate)
+    } else {
+        None
+    }
 }
 
 fn content_type(p: &Path) -> &'static str {
     match p.extension().and_then(|e| e.to_str()) {
         Some("html") => "text/html; charset=utf-8",
-        Some("js")   => "application/javascript; charset=utf-8",
-        Some("css")  => "text/css; charset=utf-8",
+        Some("js") => "application/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
         Some("json") => "application/json; charset=utf-8",
-        Some("svg")  => "image/svg+xml",
-        Some("png")  => "image/png",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
         Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("ico")  => "image/x-icon",
+        Some("ico") => "image/x-icon",
         _ => "application/octet-stream",
     }
 }
 
-fn write_response<W: Write>(w: &mut W, status: u16, ctype: &str, body: &[u8]) -> std::io::Result<()> {
-    let reason = match status { 200 => "OK", 404 => "Not Found", _ => "Status" };
+fn write_response<W: Write>(
+    w: &mut W,
+    status: u16,
+    ctype: &str,
+    body: &[u8],
+) -> std::io::Result<()> {
+    let reason = match status {
+        200 => "OK",
+        404 => "Not Found",
+        _ => "Status",
+    };
     write!(w, "HTTP/1.1 {status} {reason}\r\n")?;
     write!(w, "Content-Type: {ctype}\r\n")?;
     write!(w, "Content-Length: {}\r\n", body.len())?;

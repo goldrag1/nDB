@@ -236,10 +236,8 @@ pub fn render_markdown(t: &Table) -> String {
 /// `-` / leading `+` are backtick-wrapped; embedded backticks get
 /// doubled inside the wrap (per CommonMark).
 fn md_escape(s: &str) -> String {
-    let needs_wrap = s.contains('|')
-        || s.contains('\n')
-        || s.starts_with('-')
-        || s.starts_with('+');
+    let needs_wrap =
+        s.contains('|') || s.contains('\n') || s.starts_with('-') || s.starts_with('+');
     if needs_wrap {
         // CommonMark code spans: more backticks outside than inside.
         // Find the longest run of backticks in `s` and use one more.
@@ -526,7 +524,10 @@ mod tests {
         };
         let s = render_markdown(&t);
         // The pipe-bearing cell must be backtick-wrapped.
-        assert!(s.contains("`a|b`"), "expected backtick-wrapped pipe; got: {s}");
+        assert!(
+            s.contains("`a|b`"),
+            "expected backtick-wrapped pipe; got: {s}"
+        );
     }
 
     #[test]
@@ -598,8 +599,14 @@ mod tests {
         // Each problematic byte must be backslash-escaped per JSON spec.
         let trimmed = s.trim();
         assert!(trimmed.contains("\\\""), "missing escaped quote: {trimmed}");
-        assert!(trimmed.contains("\\\\"), "missing escaped backslash: {trimmed}");
-        assert!(trimmed.contains("\\n"), "missing escaped newline: {trimmed}");
+        assert!(
+            trimmed.contains("\\\\"),
+            "missing escaped backslash: {trimmed}"
+        );
+        assert!(
+            trimmed.contains("\\n"),
+            "missing escaped newline: {trimmed}"
+        );
         assert!(trimmed.contains("\\t"), "missing escaped tab: {trimmed}");
         // No raw control chars survived.
         assert!(!trimmed.contains('\n') || trimmed.ends_with('\n'));

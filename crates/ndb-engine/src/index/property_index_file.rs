@@ -227,7 +227,11 @@ impl PropertyIndexBuilder {
         out.extend_from_slice(&self.block_size.to_le_bytes());
         out.extend_from_slice(&entry_count.to_le_bytes());
         out.extend_from_slice(&(entries.len() as u64).to_le_bytes());
-        out.extend_from_slice(&u32::try_from(block_index.len()).unwrap_or(u32::MAX).to_le_bytes());
+        out.extend_from_slice(
+            &u32::try_from(block_index.len())
+                .unwrap_or(u32::MAX)
+                .to_le_bytes(),
+        );
         out.extend_from_slice(&[0u8; 4]); // reserved2
         debug_assert_eq!(out.len(), HEADER_LEN);
 
@@ -368,8 +372,8 @@ impl PropertyIndexFile {
         }
         let block_size = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
         let entry_count = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
-        let entries_len =
-            usize::try_from(u64::from_le_bytes(bytes[16..24].try_into().unwrap())).unwrap_or(usize::MAX);
+        let entries_len = usize::try_from(u64::from_le_bytes(bytes[16..24].try_into().unwrap()))
+            .unwrap_or(usize::MAX);
         let bi_count = u32::from_le_bytes(bytes[24..28].try_into().unwrap()) as usize;
 
         let entries_off = HEADER_LEN;
@@ -380,7 +384,9 @@ impl PropertyIndexFile {
             .checked_sub(4)
             .ok_or(PropertyIndexError::TooShort { len: total as u64 })?;
         if bi_off > trailer_off {
-            return Err(PropertyIndexError::Malformed("entries region overruns file"));
+            return Err(PropertyIndexError::Malformed(
+                "entries region overruns file",
+            ));
         }
 
         // CRC over header + block-index region only (matches the writer) —
@@ -480,7 +486,9 @@ impl PropertyIndexFile {
         if self.block_index.is_empty() {
             return 0;
         }
-        let idx = self.block_index.partition_point(|(k, _)| k.as_slice() <= target);
+        let idx = self
+            .block_index
+            .partition_point(|(k, _)| k.as_slice() <= target);
         if idx == 0 {
             0
         } else {
@@ -548,12 +556,7 @@ impl PropertyIndexFile {
     /// across sidecars. Bounded memory: scans the bucket forward keeping a
     /// trailing window of at most `k` (+ one entry) entities.
     #[must_use]
-    pub fn top_k(
-        &self,
-        type_id: TypeId,
-        prop: PropertyId,
-        k: usize,
-    ) -> Vec<(Vec<u8>, EntityId)> {
+    pub fn top_k(&self, type_id: TypeId, prop: PropertyId, k: usize) -> Vec<(Vec<u8>, EntityId)> {
         if k == 0 {
             return Vec::new();
         }
@@ -647,8 +650,14 @@ mod tests {
         let a = eid();
         let b = eid();
         let f = build(&[(1, 10, 30, a), (1, 10, 40, b)], 64);
-        assert_eq!(f.find(TypeId::new(1), PropertyId::new(10), &ib(30)), vec![a]);
-        assert!(f.find(TypeId::new(1), PropertyId::new(10), &ib(99)).is_empty());
+        assert_eq!(
+            f.find(TypeId::new(1), PropertyId::new(10), &ib(30)),
+            vec![a]
+        );
+        assert!(
+            f.find(TypeId::new(1), PropertyId::new(10), &ib(99))
+                .is_empty()
+        );
     }
 
     #[test]
@@ -672,9 +681,18 @@ mod tests {
     fn range_inclusive() {
         let ids: Vec<_> = (0..5).map(|_| eid()).collect();
         let vals = [10i64, 20, 30, 40, 50];
-        let pairs: Vec<_> = vals.iter().zip(&ids).map(|(v, e)| (1u32, 10u32, *v, *e)).collect();
+        let pairs: Vec<_> = vals
+            .iter()
+            .zip(&ids)
+            .map(|(v, e)| (1u32, 10u32, *v, *e))
+            .collect();
         let f = build(&pairs, 64);
-        let mut got = f.range(TypeId::new(1), PropertyId::new(10), Some(&ib(20)), Some(&ib(40)));
+        let mut got = f.range(
+            TypeId::new(1),
+            PropertyId::new(10),
+            Some(&ib(20)),
+            Some(&ib(40)),
+        );
         got.sort();
         let mut want = vec![ids[1], ids[2], ids[3]];
         want.sort();
@@ -734,7 +752,12 @@ mod tests {
         let c = eid();
         let d = eid();
         let f = build(
-            &[(1, 10, 100, a), (1, 10, 50, b), (1, 10, 50, c), (1, 10, 50, d)],
+            &[
+                (1, 10, 100, a),
+                (1, 10, 50, b),
+                (1, 10, 50, c),
+                (1, 10, 50, d),
+            ],
             64,
         );
         let top = f.top_k(TypeId::new(1), PropertyId::new(10), 2);
@@ -747,9 +770,7 @@ mod tests {
     fn many_blocks_seek_correct() {
         // Force many block-index markers with a tiny block size.
         let ids: Vec<_> = (0..200).map(|_| eid()).collect();
-        let pairs: Vec<_> = (0..200)
-            .map(|i| (1u32, 10u32, i as i64, ids[i]))
-            .collect();
+        let pairs: Vec<_> = (0..200).map(|i| (1u32, 10u32, i as i64, ids[i])).collect();
         let f = build(&pairs, 64); // tiny blocks → dense sparse index
         assert!(f.block_index.len() > 1, "expected multiple block markers");
         // Spot-check exact lookups across the file.
@@ -760,21 +781,32 @@ mod tests {
             );
         }
         // Range in the middle.
-        let mut got = f.range(TypeId::new(1), PropertyId::new(10), Some(&ib(100)), Some(&ib(102)));
+        let mut got = f.range(
+            TypeId::new(1),
+            PropertyId::new(10),
+            Some(&ib(100)),
+            Some(&ib(102)),
+        );
         got.sort();
         let mut want = vec![ids[100], ids[101], ids[102]];
         want.sort();
         assert_eq!(got, want);
         // Global top-3.
         let top = f.top_k(TypeId::new(1), PropertyId::new(10), 3);
-        assert_eq!(top.iter().map(|(_, e)| *e).collect::<Vec<_>>(), vec![ids[199], ids[198], ids[197]]);
+        assert_eq!(
+            top.iter().map(|(_, e)| *e).collect::<Vec<_>>(),
+            vec![ids[199], ids[198], ids[197]]
+        );
     }
 
     #[test]
     fn empty_builder_round_trips() {
         let f = PropertyIndexFile::from_bytes(PropertyIndexBuilder::new().encode()).unwrap();
         assert_eq!(f.entry_count(), 0);
-        assert!(f.find(TypeId::new(1), PropertyId::new(1), &ib(0)).is_empty());
+        assert!(
+            f.find(TypeId::new(1), PropertyId::new(1), &ib(0))
+                .is_empty()
+        );
         assert!(f.top_k(TypeId::new(1), PropertyId::new(1), 5).is_empty());
     }
 
@@ -827,14 +859,20 @@ mod tests {
         let p = dir.join("000001.pidx");
         bld.finish(&p).unwrap();
         let f = PropertyIndexFile::open(&p).unwrap().unwrap();
-        assert_eq!(f.find(TypeId::new(1), PropertyId::new(10), &ib(40)), vec![b]);
+        assert_eq!(
+            f.find(TypeId::new(1), PropertyId::new(10), &ib(40)),
+            vec![b]
+        );
         assert_eq!(f.entry_count(), 2);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn open_missing_returns_none() {
-        let p = std::env::temp_dir().join(format!("ndb-pidx-missing-{}.pidx", uuid::Uuid::now_v7().simple()));
+        let p = std::env::temp_dir().join(format!(
+            "ndb-pidx-missing-{}.pidx",
+            uuid::Uuid::now_v7().simple()
+        ));
         assert!(PropertyIndexFile::open(&p).unwrap().is_none());
     }
 

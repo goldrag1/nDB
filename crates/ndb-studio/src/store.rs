@@ -96,12 +96,19 @@ fn is_reserved(name: &str) -> bool {
 
 /// The value of property `pid` on an entity, if present.
 fn prop_val(e: &EntityRecord, pid: u32) -> Option<&Value> {
-    e.properties.iter().find(|(p, _)| p.get() == pid).map(|(_, v)| v)
+    e.properties
+        .iter()
+        .find(|(p, _)| p.get() == pid)
+        .map(|(_, v)| v)
 }
 
 /// The owned string of a `Value::String`, else `None`.
 fn str_of(v: &Value) -> Option<String> {
-    if let Value::String(s) = v { Some(s.clone()) } else { None }
+    if let Value::String(s) = v {
+        Some(s.clone())
+    } else {
+        None
+    }
 }
 
 /// A display-string grouping key for a pivot axis. Missing/null share `∅`,
@@ -139,24 +146,36 @@ fn entity_label(e: &EntityRecord, names: &Names) -> String {
 
 /// Project a snapshot's entities to `id → (kind, label, name→value)`, skipping
 /// reserved kinds/props. The basis for a temporal diff between two snapshots.
-fn snapshot_entities(recs: &[Record], names: &Names) -> BTreeMap<Uuid, (String, String, BTreeMap<String, J>)> {
+fn snapshot_entities(
+    recs: &[Record],
+    names: &Names,
+) -> BTreeMap<Uuid, (String, String, BTreeMap<String, J>)> {
     let mut m = BTreeMap::new();
     for r in recs {
         let Record::Entity(e) = r else { continue };
-        let kind = names.type_name.get(&e.type_id.get()).cloned()
+        let kind = names
+            .type_name
+            .get(&e.type_id.get())
+            .cloned()
             .unwrap_or_else(|| format!("kind:{}", e.type_id.get()));
         if is_reserved(&kind) {
             continue;
         }
         let mut props = BTreeMap::new();
         for (pid, v) in &e.properties {
-            let n = names.prop_name.get(&pid.get()).cloned()
+            let n = names
+                .prop_name
+                .get(&pid.get())
+                .cloned()
                 .unwrap_or_else(|| format!("prop:{}", pid.get()));
             if !is_reserved(&n) {
                 props.insert(n, to_json(v));
             }
         }
-        m.insert(e.entity_id.into_uuid(), (kind, entity_label(e, names), props));
+        m.insert(
+            e.entity_id.into_uuid(),
+            (kind, entity_label(e, names), props),
+        );
     }
     m
 }
@@ -195,7 +214,11 @@ impl TableQuery {
     /// A plain page request (no sort/filter).
     #[must_use]
     pub fn new(as_of: Option<u64>, limit: usize) -> Self {
-        Self { as_of, limit, ..Default::default() }
+        Self {
+            as_of,
+            limit,
+            ..Default::default()
+        }
     }
 }
 
@@ -296,7 +319,10 @@ impl Store {
         let kinds_json: Vec<J> = kinds
             .iter()
             .filter_map(|(tid, (count, props))| {
-                let name = names.type_name.get(tid).cloned()
+                let name = names
+                    .type_name
+                    .get(tid)
+                    .cloned()
                     .unwrap_or_else(|| format!("kind:{tid}"));
                 if is_reserved(&name) {
                     return None; // hide $User and friends
@@ -304,7 +330,10 @@ impl Store {
                 let props_json: Vec<J> = props
                     .iter()
                     .filter_map(|(pid, hint)| {
-                        let pname = names.prop_name.get(pid).cloned()
+                        let pname = names
+                            .prop_name
+                            .get(pid)
+                            .cloned()
                             .unwrap_or_else(|| format!("prop:{pid}"));
                         if is_reserved(&pname) {
                             return None; // hide $author
@@ -331,7 +360,10 @@ impl Store {
         let edges_json: Vec<J> = edge_kinds
             .iter()
             .filter_map(|(tid, count)| {
-                let name = names.type_name.get(tid).cloned()
+                let name = names
+                    .type_name
+                    .get(tid)
+                    .cloned()
                     .unwrap_or_else(|| format!("edge:{tid}"));
                 if is_reserved(&name) {
                     return None;
@@ -356,7 +388,11 @@ impl Store {
 
         // Reserved kinds ($User, …) are never exposed as a table — even by a
         // hand-crafted type_id — so account records stay hidden.
-        if names.type_name.get(&type_id).is_some_and(|n| is_reserved(n)) {
+        if names
+            .type_name
+            .get(&type_id)
+            .is_some_and(|n| is_reserved(n))
+        {
             return json!({
                 "type_id": type_id, "as_of": snap.get(), "headers": [], "rows": [],
                 "total": 0, "shown": 0, "offset": 0, "limit": q.limit,
@@ -370,7 +406,10 @@ impl Store {
                 && e.type_id == tid
             {
                 for (pid, _) in &e.properties {
-                    let reserved = names.prop_name.get(&pid.get()).is_some_and(|n| is_reserved(n));
+                    let reserved = names
+                        .prop_name
+                        .get(&pid.get())
+                        .is_some_and(|n| is_reserved(n));
                     if !reserved {
                         cols.insert(pid.get());
                     }
@@ -385,16 +424,22 @@ impl Store {
 
         // Filter: global substring across columns + per-column substrings.
         let ql = q.q.as_ref().map(|s| s.to_lowercase());
-        let col_filters: Vec<(u32, String)> = q.filters.iter()
+        let col_filters: Vec<(u32, String)> = q
+            .filters
+            .iter()
             .filter_map(|(name, val)| names.prop_id.get(name).map(|p| (*p, val.to_lowercase())))
             .collect();
         entities.retain(|e| {
             if let Some(ql) = &ql
-                && !cols.iter().any(|&pid| disp(e, pid).to_lowercase().contains(ql))
+                && !cols
+                    .iter()
+                    .any(|&pid| disp(e, pid).to_lowercase().contains(ql))
             {
                 return false;
             }
-            col_filters.iter().all(|(pid, val)| disp(e, *pid).to_lowercase().contains(val))
+            col_filters
+                .iter()
+                .all(|(pid, val)| disp(e, *pid).to_lowercase().contains(val))
         });
 
         // Sort by a property's display string (stable; case-insensitive).
@@ -456,10 +501,20 @@ impl Store {
         let Ok(Resolved::Live(Record::Entity(e))) = self.engine.snapshot_read(&id, snap) else {
             return J::Null;
         };
-        if names.type_name.get(&e.type_id.get()).is_some_and(|n| is_reserved(n)) {
+        if names
+            .type_name
+            .get(&e.type_id.get())
+            .is_some_and(|n| is_reserved(n))
+        {
             return J::Null;
         }
-        let kind_of = |tid: u32| names.type_name.get(&tid).cloned().unwrap_or_else(|| format!("kind:{tid}"));
+        let kind_of = |tid: u32| {
+            names
+                .type_name
+                .get(&tid)
+                .cloned()
+                .unwrap_or_else(|| format!("kind:{tid}"))
+        };
         let label_map = |er: &EntityRecord| (entity_label(er, &names), kind_of(er.type_id.get()));
 
         // Properties (non-reserved) + vector dims if present.
@@ -485,10 +540,15 @@ impl Store {
         for (pid, v) in &e.properties {
             if let Value::EntityRef(t) = v {
                 let tid = t.into_uuid();
-                let label_kind = recs.iter().find_map(|r| match r {
-                    Record::Entity(te) if te.entity_id.into_uuid() == tid => Some(label_map(te)),
-                    _ => None,
-                }).unwrap_or_default();
+                let label_kind = recs
+                    .iter()
+                    .find_map(|r| match r {
+                        Record::Entity(te) if te.entity_id.into_uuid() == tid => {
+                            Some(label_map(te))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_default();
                 out_refs.push(json!({
                     "property": names.prop_name.get(&pid.get()).cloned().unwrap_or_default(),
                     "id": tid.to_string(), "label": label_kind.0, "kind": label_kind.1,
@@ -572,9 +632,13 @@ impl Store {
         let versions = self.engine.versions_of(&id).unwrap_or_default();
         let author_pid = names.prop_id.get(AUTHOR_PROP).copied();
         let author_of = |e: &EntityRecord| -> Option<String> {
-            author_pid
-                .and_then(|ap| prop_val(e, ap))
-                .and_then(|v| if let Value::String(s) = v { Some(s.clone()) } else { None })
+            author_pid.and_then(|ap| prop_val(e, ap)).and_then(|v| {
+                if let Value::String(s) = v {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
         };
 
         if let Some(prop) = property {
@@ -585,9 +649,7 @@ impl Store {
                 match rec {
                     Record::Entity(e) => {
                         let v = pid
-                            .and_then(|pid| {
-                                e.properties.iter().find(|(p, _)| p.get() == pid)
-                            })
+                            .and_then(|pid| e.properties.iter().find(|(p, _)| p.get() == pid))
                             .map_or(J::Null, |(_, v)| to_json(v));
                         if last.as_ref() != Some(&v) {
                             out.push(json!({ "tx": tx.get(), "value": v, "author": author_of(e) }));
@@ -617,7 +679,10 @@ impl Store {
                         .properties
                         .iter()
                         .filter_map(|(pid, v)| {
-                            let name = names.prop_name.get(&pid.get()).cloned()
+                            let name = names
+                                .prop_name
+                                .get(&pid.get())
+                                .cloned()
                                 .unwrap_or_else(|| format!("prop:{}", pid.get()));
                             if is_reserved(&name) {
                                 return None;
@@ -652,7 +717,10 @@ impl Store {
         let recs = self.records(snap);
         let names = Self::names(&recs);
         let tid = TypeId::new(type_id);
-        let reserved_kind = names.type_name.get(&type_id).is_some_and(|n| is_reserved(n));
+        let reserved_kind = names
+            .type_name
+            .get(&type_id)
+            .is_some_and(|n| is_reserved(n));
         let row_pid = names.prop_id.get(row_prop).copied();
         let col_pid = names.prop_id.get(col_prop).copied();
         let val_pid = value_prop.and_then(|p| names.prop_id.get(p).copied());
@@ -732,7 +800,10 @@ impl Store {
         let mut total_entities = 0usize;
         for r in &recs {
             let Record::Entity(e) = r else { continue };
-            let kind = names.type_name.get(&e.type_id.get()).cloned()
+            let kind = names
+                .type_name
+                .get(&e.type_id.get())
+                .cloned()
                 .unwrap_or_else(|| format!("kind:{}", e.type_id.get()));
             if is_reserved(&kind) {
                 continue; // user/account records are not graph data
@@ -786,7 +857,10 @@ impl Store {
                     if members.len() < 2 {
                         continue;
                     }
-                    let label = names.type_name.get(&h.type_id.get()).cloned()
+                    let label = names
+                        .type_name
+                        .get(&h.type_id.get())
+                        .cloned()
                         .unwrap_or_else(|| format!("edge:{}", h.type_id.get()));
                     if members.len() == 2 {
                         links.push(json!({
@@ -836,9 +910,9 @@ impl Store {
                 "rows": resp.rows,
                 "truncated": resp.truncated,
             })),
-            Err(e) => Err(serde_json::to_value(e.envelope()).unwrap_or_else(|_| {
-                json!({ "error": "query", "code": e.code(), "detail": e.to_string() })
-            })),
+            Err(e) => Err(serde_json::to_value(e.envelope()).unwrap_or_else(
+                |_| json!({ "error": "query", "code": e.code(), "detail": e.to_string() }),
+            )),
         }
     }
 
@@ -857,7 +931,9 @@ impl Store {
         let qvec = match self.engine.snapshot_read(&id, snap) {
             Ok(Resolved::Live(Record::Entity(e))) => match prop_val(&e, pid) {
                 Some(Value::Vector(xs)) => xs.clone(),
-                _ => return json!({ "error": { "code": "bad_value", "message": "entity has no vector on that property" } }),
+                _ => {
+                    return json!({ "error": { "code": "bad_value", "message": "entity has no vector on that property" } });
+                }
             },
             _ => return json!({ "error": { "code": "not_found", "message": "record not found" } }),
         };
@@ -865,12 +941,17 @@ impl Store {
         let mut labels: HashMap<Uuid, (String, String)> = HashMap::new();
         for r in &recs {
             if let Record::Entity(e) = r {
-                let kind = names.type_name.get(&e.type_id.get()).cloned()
+                let kind = names
+                    .type_name
+                    .get(&e.type_id.get())
+                    .cloned()
                     .unwrap_or_else(|| format!("kind:{}", e.type_id.get()));
                 labels.insert(e.entity_id.into_uuid(), (entity_label(e, &names), kind));
             }
         }
-        let hits = self.engine.vector_search(PropertyId::new(pid), &qvec, k + 1, Distance::Cosine);
+        let hits = self
+            .engine
+            .vector_search(PropertyId::new(pid), &qvec, k + 1, Distance::Cosine);
         let results: Vec<J> = hits
             .iter()
             .filter(|(eid, _)| eid.into_uuid() != id)
@@ -892,7 +973,13 @@ impl Store {
     pub fn schema(&self) -> J {
         let recs = self.records(self.snapshot(None));
         let names = Self::names(&recs);
-        let kind_of = |tid: u32| names.type_name.get(&tid).cloned().unwrap_or_else(|| format!("kind:{tid}"));
+        let kind_of = |tid: u32| {
+            names
+                .type_name
+                .get(&tid)
+                .cloned()
+                .unwrap_or_else(|| format!("kind:{tid}"))
+        };
 
         let mut id_kind: HashMap<Uuid, String> = HashMap::new();
         for r in &recs {
@@ -920,7 +1007,10 @@ impl Store {
                         }
                         entry.1.insert(pid.get());
                         if let Value::EntityRef(t) = v {
-                            let tk = id_kind.get(&t.into_uuid()).cloned().unwrap_or_else(|| "?".to_string());
+                            let tk = id_kind
+                                .get(&t.into_uuid())
+                                .cloned()
+                                .unwrap_or_else(|| "?".to_string());
                             *relmap.entry((sk.clone(), pn, tk)).or_default() += 1;
                         }
                     }
@@ -948,7 +1038,8 @@ impl Store {
                 "roles": roles.iter().map(|r| names.role_name.get(r).cloned().unwrap_or_default()).collect::<Vec<_>>(),
             }))
             .collect();
-        let rels_json: Vec<J> = relmap.iter()
+        let rels_json: Vec<J> = relmap
+            .iter()
             .map(|((s, p, t), c)| json!({ "source": s, "property": p, "target": t, "count": c }))
             .collect();
 
@@ -979,19 +1070,25 @@ impl Store {
             }
         }
         for (id, (kind, label, pt)) in &mt {
-            let Some((_, _, pf)) = mf.get(id) else { continue };
+            let Some((_, _, pf)) = mf.get(id) else {
+                continue;
+            };
             let keys: BTreeSet<&String> = pt.keys().chain(pf.keys()).collect();
             let fields: Vec<J> = keys
                 .into_iter()
                 .filter(|k| pf.get(*k) != pt.get(*k))
-                .map(|k| json!({
-                    "name": k,
-                    "old": pf.get(k).cloned().unwrap_or(J::Null),
-                    "new": pt.get(k).cloned().unwrap_or(J::Null),
-                }))
+                .map(|k| {
+                    json!({
+                        "name": k,
+                        "old": pf.get(k).cloned().unwrap_or(J::Null),
+                        "new": pt.get(k).cloned().unwrap_or(J::Null),
+                    })
+                })
                 .collect();
             if !fields.is_empty() {
-                changed.push(json!({ "id": id.to_string(), "kind": kind, "label": label, "fields": fields }));
+                changed.push(
+                    json!({ "id": id.to_string(), "kind": kind, "label": label, "fields": fields }),
+                );
             }
         }
 
@@ -1012,7 +1109,11 @@ impl Store {
         let recs = self.records(snap);
         let names = Self::names(&recs);
         let tid = TypeId::new(type_id);
-        let kind = names.type_name.get(&type_id).cloned().unwrap_or_else(|| format!("edge:{type_id}"));
+        let kind = names
+            .type_name
+            .get(&type_id)
+            .cloned()
+            .unwrap_or_else(|| format!("edge:{type_id}"));
         if is_reserved(&kind) {
             return json!({ "type_id": type_id, "as_of": snap.get(), "kind": kind, "roles": [], "edges": [], "total": 0, "shown": 0 });
         }
@@ -1021,7 +1122,10 @@ impl Store {
         let mut ent: HashMap<Uuid, (String, String)> = HashMap::new();
         for r in &recs {
             if let Record::Entity(e) = r {
-                let k = names.type_name.get(&e.type_id.get()).cloned()
+                let k = names
+                    .type_name
+                    .get(&e.type_id.get())
+                    .cloned()
                     .unwrap_or_else(|| format!("kind:{}", e.type_id.get()));
                 ent.insert(e.entity_id.into_uuid(), (entity_label(e, &names), k));
             }
@@ -1041,18 +1145,32 @@ impl Store {
                 let mut fillers = serde_json::Map::new();
                 for (rid, eid) in &h.roles {
                     role_ids.insert(rid.get());
-                    let rn = names.role_name.get(&rid.get()).cloned()
+                    let rn = names
+                        .role_name
+                        .get(&rid.get())
+                        .cloned()
                         .unwrap_or_else(|| format!("role:{}", rid.get()));
                     let id = eid.into_uuid();
                     let (label, k) = ent.get(&id).cloned().unwrap_or_default();
-                    fillers.insert(rn, json!({ "id": id.to_string(), "label": label, "kind": k }));
+                    fillers.insert(
+                        rn,
+                        json!({ "id": id.to_string(), "label": label, "kind": k }),
+                    );
                 }
-                edges.push(json!({ "id": h.hyperedge_id.into_uuid().to_string(), "fillers": fillers }));
+                edges.push(
+                    json!({ "id": h.hyperedge_id.into_uuid().to_string(), "fillers": fillers }),
+                );
             }
         }
         let roles: Vec<String> = role_ids
             .iter()
-            .map(|rid| names.role_name.get(rid).cloned().unwrap_or_else(|| format!("role:{rid}")))
+            .map(|rid| {
+                names
+                    .role_name
+                    .get(rid)
+                    .cloned()
+                    .unwrap_or_else(|| format!("role:{rid}"))
+            })
             .collect();
 
         json!({
@@ -1110,9 +1228,15 @@ impl Store {
     ///
     /// # Errors
     /// `BadValue` if no roles are given; engine errors otherwise.
-    pub fn create_hyperedge(&self, kind: &str, roles: &[(String, Uuid)]) -> Result<u64, StoreError> {
+    pub fn create_hyperedge(
+        &self,
+        kind: &str,
+        roles: &[(String, Uuid)],
+    ) -> Result<u64, StoreError> {
         if roles.is_empty() {
-            return Err(StoreError::BadValue("an edge needs at least one role".to_string()));
+            return Err(StoreError::BadValue(
+                "an edge needs at least one role".to_string(),
+            ));
         }
         let recs = self.records(self.snapshot(None));
         let names = Self::names(&recs);
@@ -1185,7 +1309,9 @@ impl Store {
         let Resolved::Live(Record::Entity(current)) = self.engine.snapshot_read(&id, snap)? else {
             return Err(StoreError::NotFound);
         };
-        let kind_reserved = names.type_name.get(&current.type_id.get())
+        let kind_reserved = names
+            .type_name
+            .get(&current.type_id.get())
             .is_some_and(|n| is_reserved(n));
 
         let tx = self.engine.with_write_txn(|mut txn| {
@@ -1239,7 +1365,8 @@ impl Store {
         let Some(uid) = names.type_id.get(USER_KIND).copied() else {
             return false;
         };
-        recs.iter().any(|r| matches!(r, Record::Entity(e) if e.type_id.get() == uid))
+        recs.iter()
+            .any(|r| matches!(r, Record::Entity(e) if e.type_id.get() == uid))
     }
 
     /// Look up a user by name → `(entity id, password hash, role string)`.
@@ -1257,8 +1384,13 @@ impl Store {
                 continue;
             }
             if prop_val(e, un_pid).and_then(str_of).as_deref() == Some(username) {
-                let pw = pw_pid.and_then(|p| prop_val(e, p)).and_then(str_of).unwrap_or_default();
-                let role = role_pid.and_then(|p| prop_val(e, p)).and_then(str_of)
+                let pw = pw_pid
+                    .and_then(|p| prop_val(e, p))
+                    .and_then(str_of)
+                    .unwrap_or_default();
+                let role = role_pid
+                    .and_then(|p| prop_val(e, p))
+                    .and_then(str_of)
                     .unwrap_or_else(|| "viewer".to_string());
                 return Some((e.entity_id.into_uuid(), pw, role));
             }
@@ -1284,7 +1416,9 @@ impl Store {
                     return None;
                 }
                 let name = un_pid.and_then(|p| prop_val(e, p)).and_then(str_of)?;
-                let role = role_pid.and_then(|p| prop_val(e, p)).and_then(str_of)
+                let role = role_pid
+                    .and_then(|p| prop_val(e, p))
+                    .and_then(str_of)
                     .unwrap_or_else(|| "viewer".to_string());
                 Some((name, role))
             })
@@ -1302,7 +1436,9 @@ impl Store {
             return Err(StoreError::BadValue("username required".to_string()));
         }
         if self.find_user(username).is_some() {
-            return Err(StoreError::BadValue(format!("user {username} already exists")));
+            return Err(StoreError::BadValue(format!(
+                "user {username} already exists"
+            )));
         }
         self.create(
             USER_KIND,
@@ -1329,7 +1465,12 @@ impl Store {
     /// This node's replication status: head tx, `SSTable` count, active WAL seq.
     #[must_use]
     pub fn replication_status(&self) -> J {
-        let wal_seq = self.engine.raw_lock().read().expect("engine lock poisoned").active_wal_seq();
+        let wal_seq = self
+            .engine
+            .raw_lock()
+            .read()
+            .expect("engine lock poisoned")
+            .active_wal_seq();
         json!({ "head": self.head(), "sstables": self.engine.sstable_count(), "wal_seq": wal_seq })
     }
 
@@ -1362,7 +1503,11 @@ impl Store {
         let records = ndb_engine::replication::decode_records_b64(records_b64)
             .map_err(|e| StoreError::BadValue(format!("decode batch: {e}")))?;
         {
-            let mut guard = self.engine.raw_lock().write().expect("engine lock poisoned");
+            let mut guard = self
+                .engine
+                .raw_lock()
+                .write()
+                .expect("engine lock poisoned");
             guard.ingest_replicated(records)?;
         }
         Ok(self.head())
@@ -1457,10 +1602,18 @@ mod tests {
     fn create_then_catalog_and_table() {
         let store = fresh();
         store
-            .create("Person", &[("name".into(), s("Alice")), ("age".into(), Value::I64(30))], None)
+            .create(
+                "Person",
+                &[("name".into(), s("Alice")), ("age".into(), Value::I64(30))],
+                None,
+            )
             .expect("create alice");
         store
-            .create("Person", &[("name".into(), s("Bob")), ("age".into(), Value::I64(25))], None)
+            .create(
+                "Person",
+                &[("name".into(), s("Bob")), ("age".into(), Value::I64(25))],
+                None,
+            )
             .expect("create bob");
 
         let cat = store.catalog(None);
@@ -1490,7 +1643,8 @@ mod tests {
         let tx1 = store
             .create("Person", &[("age".into(), Value::I64(30))], None)
             .expect("create");
-        let tid = u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
+        let tid =
+            u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
         let id_str = store.table(tid, &TableQuery::new(None, 10))["rows"][0]["id"]
             .as_str()
             .unwrap()
@@ -1517,20 +1671,32 @@ mod tests {
         let tx_create = store
             .create("Note", &[("body".into(), s("hi"))], None)
             .expect("create");
-        let tid = u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
-        let id = Uuid::parse_str(store.table(tid, &TableQuery::new(None, 10))["rows"][0]["id"].as_str().unwrap())
-            .unwrap();
+        let tid =
+            u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
+        let id = Uuid::parse_str(
+            store.table(tid, &TableQuery::new(None, 10))["rows"][0]["id"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
 
         store.delete(id).expect("delete");
 
-        assert_eq!(store.table(tid, &TableQuery::new(None, 10))["total"], 0, "gone at head");
+        assert_eq!(
+            store.table(tid, &TableQuery::new(None, 10))["total"],
+            0,
+            "gone at head"
+        );
         assert_eq!(
             store.table(tid, &TableQuery::new(Some(tx_create), 10))["total"],
             1,
             "still in history"
         );
         assert!(store.record(id, None).is_null(), "no live record at head");
-        assert!(!store.record(id, Some(tx_create)).is_null(), "live in history");
+        assert!(
+            !store.record(id, Some(tx_create)).is_null(),
+            "live in history"
+        );
     }
 
     /// The per-cell history is the property's change timeline (deduped) ending
@@ -1539,15 +1705,25 @@ mod tests {
     fn history_is_property_change_timeline() {
         let store = fresh();
         store
-            .create("Person", &[("name".into(), s("Alice")), ("age".into(), Value::I64(30))], None)
+            .create(
+                "Person",
+                &[("name".into(), s("Alice")), ("age".into(), Value::I64(30))],
+                None,
+            )
             .expect("create");
-        let tid = u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap())
-            .unwrap();
-        let id = Uuid::parse_str(store.table(tid, &TableQuery::new(None, 10))["rows"][0]["id"].as_str().unwrap())
-            .unwrap();
+        let tid =
+            u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
+        let id = Uuid::parse_str(
+            store.table(tid, &TableQuery::new(None, 10))["rows"][0]["id"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
 
         store.set(id, "age", &Value::I64(31), None).expect("set 31");
-        store.set(id, "name", &s("Alicia"), None).expect("set unrelated"); // must not appear in age history
+        store
+            .set(id, "name", &s("Alicia"), None)
+            .expect("set unrelated"); // must not appear in age history
         store.set(id, "age", &Value::I64(32), None).expect("set 32");
         store.delete(id).expect("delete");
 
@@ -1587,8 +1763,8 @@ mod tests {
                 )
                 .expect("create");
         }
-        let tid = u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap())
-            .unwrap();
+        let tid =
+            u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
 
         let p = store.pivot(tid, "city", "status", "count", None, None);
         // rows sorted: HCMC, Hanoi ; cols sorted: active, inactive
@@ -1623,12 +1799,32 @@ mod tests {
         store
             .engine
             .with_write_txn(|mut txn| {
-                txn.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(1), name: "Person".into() }));
-                txn.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(2), name: "Knows".into() }));
-                txn.put_raw(Record::TypeName(TypeNameRecord { id: TypeId::new(3), name: "Trio".into() }));
-                txn.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(1), name: "name".into() }));
-                txn.put_raw(Record::PropertyKey(PropertyKeyRecord { id: PropertyId::new(2), name: "friend".into() }));
-                for (eid, nm, friend) in [(a, "A", Some(b)), (b, "B", None), (c, "C", None), (d, "D", None)] {
+                txn.put_raw(Record::TypeName(TypeNameRecord {
+                    id: TypeId::new(1),
+                    name: "Person".into(),
+                }));
+                txn.put_raw(Record::TypeName(TypeNameRecord {
+                    id: TypeId::new(2),
+                    name: "Knows".into(),
+                }));
+                txn.put_raw(Record::TypeName(TypeNameRecord {
+                    id: TypeId::new(3),
+                    name: "Trio".into(),
+                }));
+                txn.put_raw(Record::PropertyKey(PropertyKeyRecord {
+                    id: PropertyId::new(1),
+                    name: "name".into(),
+                }));
+                txn.put_raw(Record::PropertyKey(PropertyKeyRecord {
+                    id: PropertyId::new(2),
+                    name: "friend".into(),
+                }));
+                for (eid, nm, friend) in [
+                    (a, "A", Some(b)),
+                    (b, "B", None),
+                    (c, "C", None),
+                    (d, "D", None),
+                ] {
                     let mut props = vec![(PropertyId::new(1), Value::String(nm.into()))];
                     if let Some(f) = friend {
                         props.push((PropertyId::new(2), Value::EntityRef(f)));
@@ -1656,7 +1852,11 @@ mod tests {
                     type_id: TypeId::new(3),
                     tx_id_assert: TxId::ACTIVE,
                     tx_id_supersede: TxId::ACTIVE,
-                    roles: vec![(RoleId::new(1), b), (RoleId::new(2), c), (RoleId::new(3), d)],
+                    roles: vec![
+                        (RoleId::new(1), b),
+                        (RoleId::new(2), c),
+                        (RoleId::new(3), d),
+                    ],
                     hyperedge_roles: vec![],
                     properties: vec![],
                 });
@@ -1670,7 +1870,11 @@ mod tests {
         // 4 entity nodes + 1 hub node for the N-ary edge.
         assert_eq!(proj["total_entities"], 4);
         assert_eq!(nodes.len(), 5);
-        assert_eq!(nodes.iter().filter(|n| n["hyper"] == true).count(), 1, "one N-ary hub");
+        assert_eq!(
+            nodes.iter().filter(|n| n["hyper"] == true).count(),
+            1,
+            "one N-ary hub"
+        );
         // 1 ref + 1 binary hyperedge + 3 star links from the hub.
         assert_eq!(links.len(), 5);
         assert_eq!(links.iter().filter(|l| l["kind"] == "ref").count(), 1);
@@ -1690,14 +1894,22 @@ mod tests {
     fn users_and_author_are_hidden_from_data_views() {
         let store = fresh();
         assert!(!store.has_any_user());
-        store.create_user("alice", "HASH", "editor").expect("create user");
+        store
+            .create_user("alice", "HASH", "editor")
+            .expect("create user");
         assert!(store.has_any_user());
-        assert!(store.create_user("alice", "X", "viewer").is_err(), "duplicate rejected");
+        assert!(
+            store.create_user("alice", "X", "viewer").is_err(),
+            "duplicate rejected"
+        );
 
         let (_, hash, role) = store.find_user("alice").expect("found");
         assert_eq!(hash, "HASH");
         assert_eq!(role, "editor");
-        assert_eq!(store.list_users(), vec![("alice".to_string(), "editor".to_string())]);
+        assert_eq!(
+            store.list_users(),
+            vec![("alice".to_string(), "editor".to_string())]
+        );
 
         // A record authored by alice.
         store
@@ -1709,15 +1921,23 @@ mod tests {
         let kinds = cat["kinds"].as_array().unwrap();
         assert_eq!(kinds.len(), 1, "$User kind hidden");
         assert_eq!(kinds[0]["name"], "Person");
-        let props: Vec<&str> = kinds[0]["properties"].as_array().unwrap()
-            .iter().map(|p| p["name"].as_str().unwrap()).collect();
+        let props: Vec<&str> = kinds[0]["properties"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["name"].as_str().unwrap())
+            .collect();
         assert_eq!(props, vec!["name"], "$author property hidden");
 
         // Table for Person has no $author column.
         let tid = u32::try_from(kinds[0]["type_id"].as_u64().unwrap()).unwrap();
         let table = store.table(tid, &TableQuery::new(None, 10));
-        let headers: Vec<&str> = table["headers"].as_array().unwrap()
-            .iter().map(|h| h["name"].as_str().unwrap()).collect();
+        let headers: Vec<&str> = table["headers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["name"].as_str().unwrap())
+            .collect();
         assert_eq!(headers, vec!["name"]);
 
         // But history attributes the version to alice.
@@ -1729,7 +1949,11 @@ mod tests {
         // even by its raw id / interned type_id (no pwhash leak).
         let (uid, _, _) = store.find_user("alice").unwrap();
         assert!(store.record(uid, None).is_null(), "user record hidden");
-        assert_eq!(store.table(1, &TableQuery::new(None, 10))["total"], 0, "$User not tabled (type 1)");
+        assert_eq!(
+            store.table(1, &TableQuery::new(None, 10))["total"],
+            0,
+            "$User not tabled (type 1)"
+        );
 
         // Deleting a user removes it.
         store.delete_user("alice").expect("delete user");
@@ -1741,14 +1965,22 @@ mod tests {
     #[test]
     fn query_returns_rows_and_error_envelope() {
         let store = fresh();
-        store.create("Person", &[("name".into(), s("Alice"))], None).expect("a");
-        store.create("Person", &[("name".into(), s("Bob"))], None).expect("b");
+        store
+            .create("Person", &[("name".into(), s("Alice"))], None)
+            .expect("a");
+        store
+            .create("Person", &[("name".into(), s("Bob"))], None)
+            .expect("b");
 
-        let ok = store.query("match Person(name: ?n) return ?n").expect("query ok");
+        let ok = store
+            .query("match Person(name: ?n) return ?n")
+            .expect("query ok");
         assert_eq!(ok["columns"], json!(["n"]));
         assert_eq!(ok["rows"].as_array().unwrap().len(), 2);
 
-        let err = store.query("match Person(name: ?n return ?n").expect_err("parse error");
+        let err = store
+            .query("match Person(name: ?n return ?n")
+            .expect_err("parse error");
         assert_eq!(err["error"], "parse");
         assert!(err["span"].is_object(), "parse error carries a span");
     }
@@ -1759,18 +1991,27 @@ mod tests {
     fn replication_leader_to_follower_round_trip() {
         let leader = fresh();
         let follower = fresh();
-        leader.create("Person", &[("name".into(), s("Alice"))], None).expect("a");
-        leader.create("Person", &[("name".into(), s("Bob"))], None).expect("b");
+        leader
+            .create("Person", &[("name".into(), s("Alice"))], None)
+            .expect("a");
+        leader
+            .create("Person", &[("name".into(), s("Bob"))], None)
+            .expect("b");
 
         // Follower streams from the leader's active WAL segment, offset 0.
         let mut seq = leader.replication_status()["wal_seq"].as_u64().unwrap();
         let mut off = 0u64;
         for _ in 0..100 {
             let b = leader.serve_replication(seq, off);
-            assert!(b["available"].as_bool().unwrap_or(false), "segment available");
+            assert!(
+                b["available"].as_bool().unwrap_or(false),
+                "segment available"
+            );
             let n = b["count"].as_u64().unwrap();
             if n > 0 {
-                follower.ingest_replicated_b64(b["records_b64"].as_str().unwrap()).expect("ingest");
+                follower
+                    .ingest_replicated_b64(b["records_b64"].as_str().unwrap())
+                    .expect("ingest");
             }
             off = b["next_offset"].as_u64().unwrap();
             if n == 0 {
@@ -1796,25 +2037,52 @@ mod tests {
     #[test]
     fn table_filter_sort_paginate() {
         let store = fresh();
-        for (n, c) in [("Alice", "Hanoi"), ("Bob", "Hanoi"), ("Cara", "HCMC"), ("Dan", "HCMC"), ("Eve", "Hue")] {
-            store.create("Person", &[("name".into(), s(n)), ("city".into(), s(c))], None).expect("c");
+        for (n, c) in [
+            ("Alice", "Hanoi"),
+            ("Bob", "Hanoi"),
+            ("Cara", "HCMC"),
+            ("Dan", "HCMC"),
+            ("Eve", "Hue"),
+        ] {
+            store
+                .create(
+                    "Person",
+                    &[("name".into(), s(n)), ("city".into(), s(c))],
+                    None,
+                )
+                .expect("c");
         }
-        let tid = u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
+        let tid =
+            u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
 
         // Per-column filter: city contains "Ha" → the two Hanoi rows.
-        let q = TableQuery { filters: vec![("city".into(), "Ha".into())], ..TableQuery::new(None, 50) };
+        let q = TableQuery {
+            filters: vec![("city".into(), "Ha".into())],
+            ..TableQuery::new(None, 50)
+        };
         assert_eq!(store.table(tid, &q)["total"], 2);
 
         // Global search "ar" → Cara only.
-        let q = TableQuery { q: Some("ar".into()), ..TableQuery::new(None, 50) };
+        let q = TableQuery {
+            q: Some("ar".into()),
+            ..TableQuery::new(None, 50)
+        };
         assert_eq!(store.table(tid, &q)["total"], 1);
 
         // Sort by name desc → Eve first.
-        let q = TableQuery { sort: Some("name".into()), desc: true, ..TableQuery::new(None, 50) };
+        let q = TableQuery {
+            sort: Some("name".into()),
+            desc: true,
+            ..TableQuery::new(None, 50)
+        };
         assert_eq!(store.table(tid, &q)["rows"][0]["cells"][0], "Eve");
 
         // Page 2 of name-asc (limit 2, offset 2) → Cara, Dan.
-        let q = TableQuery { sort: Some("name".into()), offset: 2, ..TableQuery::new(None, 2) };
+        let q = TableQuery {
+            sort: Some("name".into()),
+            offset: 2,
+            ..TableQuery::new(None, 2)
+        };
         let p = store.table(tid, &q);
         assert_eq!(p["total"], 5);
         assert_eq!(p["shown"], 2);
@@ -1826,15 +2094,34 @@ mod tests {
     #[test]
     fn hyperedge_create_list_and_resolve() {
         let store = fresh();
-        store.create("Person", &[("name".into(), s("Alice"))], None).expect("p");
-        store.create("Paper", &[("title".into(), s("nDB"))], None).expect("paper");
+        store
+            .create("Person", &[("name".into(), s("Alice"))], None)
+            .expect("p");
+        store
+            .create("Paper", &[("title".into(), s("nDB"))], None)
+            .expect("paper");
         let cat = store.catalog(None);
         let person_tid = u32::try_from(cat["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
         let paper_tid = u32::try_from(cat["kinds"][1]["type_id"].as_u64().unwrap()).unwrap();
-        let alice = Uuid::parse_str(store.table(person_tid, &TableQuery::new(None, 5))["rows"][0]["id"].as_str().unwrap()).unwrap();
-        let paper = Uuid::parse_str(store.table(paper_tid, &TableQuery::new(None, 5))["rows"][0]["id"].as_str().unwrap()).unwrap();
+        let alice = Uuid::parse_str(
+            store.table(person_tid, &TableQuery::new(None, 5))["rows"][0]["id"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        let paper = Uuid::parse_str(
+            store.table(paper_tid, &TableQuery::new(None, 5))["rows"][0]["id"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
 
-        store.create_hyperedge("Authorship", &[("author".into(), alice), ("paper".into(), paper)]).expect("edge");
+        store
+            .create_hyperedge(
+                "Authorship",
+                &[("author".into(), alice), ("paper".into(), paper)],
+            )
+            .expect("edge");
 
         // Catalog lists the edge kind.
         let cat = store.catalog(None);
@@ -1847,7 +2134,12 @@ mod tests {
         let etid = u32::try_from(edges[0]["type_id"].as_u64().unwrap()).unwrap();
         let he = store.hyperedges(etid, None, 50);
         assert_eq!(he["total"], 1);
-        let roles: Vec<&str> = he["roles"].as_array().unwrap().iter().map(|r| r.as_str().unwrap()).collect();
+        let roles: Vec<&str> = he["roles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r.as_str().unwrap())
+            .collect();
         assert!(roles.contains(&"author") && roles.contains(&"paper"));
         assert_eq!(he["edges"][0]["fillers"]["author"]["label"], "Alice");
         assert_eq!(he["edges"][0]["fillers"]["paper"]["kind"], "Paper");
@@ -1860,15 +2152,29 @@ mod tests {
     #[test]
     fn record_360_relationships_and_roles() {
         let store = fresh();
-        store.create("Person", &[("name".into(), s("Alice"))], None).expect("a");
-        store.create("Person", &[("name".into(), s("Bob"))], None).expect("b");
-        let tid = u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
+        store
+            .create("Person", &[("name".into(), s("Alice"))], None)
+            .expect("a");
+        store
+            .create("Person", &[("name".into(), s("Bob"))], None)
+            .expect("b");
+        let tid =
+            u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
         let rows = store.table(tid, &TableQuery::new(None, 5));
         let alice = Uuid::parse_str(rows["rows"][0]["id"].as_str().unwrap()).unwrap();
         let bob = Uuid::parse_str(rows["rows"][1]["id"].as_str().unwrap()).unwrap();
 
-        store.set(alice, "friend", &Value::EntityRef(EntityId::from_bytes(*bob.as_bytes())), None).expect("ref");
-        store.create_hyperedge("Knows", &[("a".into(), alice), ("b".into(), bob)]).expect("edge");
+        store
+            .set(
+                alice,
+                "friend",
+                &Value::EntityRef(EntityId::from_bytes(*bob.as_bytes())),
+                None,
+            )
+            .expect("ref");
+        store
+            .create_hyperedge("Knows", &[("a".into(), alice), ("b".into(), bob)])
+            .expect("edge");
 
         let ra = store.record(alice, None);
         assert_eq!(ra["out_refs"][0]["label"], "Bob");
@@ -1885,11 +2191,27 @@ mod tests {
     #[test]
     fn diff_between_two_snapshots() {
         let store = fresh();
-        let t1 = store.create("Person", &[("name".into(), s("Alice")), ("age".into(), Value::I64(30))], None).expect("a");
-        let t2 = store.create("Person", &[("name".into(), s("Bob"))], None).expect("b");
-        let tid = u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
-        let alice = Uuid::parse_str(store.table(tid, &TableQuery::new(None, 5))["rows"][0]["id"].as_str().unwrap()).unwrap();
-        store.set(alice, "age", &Value::I64(31), None).expect("edit");
+        let t1 = store
+            .create(
+                "Person",
+                &[("name".into(), s("Alice")), ("age".into(), Value::I64(30))],
+                None,
+            )
+            .expect("a");
+        let t2 = store
+            .create("Person", &[("name".into(), s("Bob"))], None)
+            .expect("b");
+        let tid =
+            u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
+        let alice = Uuid::parse_str(
+            store.table(tid, &TableQuery::new(None, 5))["rows"][0]["id"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        store
+            .set(alice, "age", &Value::I64(31), None)
+            .expect("edit");
 
         // From just-after-Alice (t1) to head: Bob added, Alice age changed.
         let d = store.diff(t1, store.head());
@@ -1913,12 +2235,24 @@ mod tests {
     fn vector_find_similar() {
         let store = fresh();
         store.register_vector("embedding").expect("register");
-        let mk = |name: &str, v: Vec<f32>| vec![("name".into(), s(name)), ("embedding".into(), Value::Vector(v))];
-        store.create("Person", &mk("A", vec![1.0, 0.0, 0.0]), None).expect("a");
-        store.create("Person", &mk("B", vec![0.9, 0.1, 0.0]), None).expect("b");
-        store.create("Person", &mk("C", vec![0.0, 0.0, 1.0]), None).expect("c");
+        let mk = |name: &str, v: Vec<f32>| {
+            vec![
+                ("name".into(), s(name)),
+                ("embedding".into(), Value::Vector(v)),
+            ]
+        };
+        store
+            .create("Person", &mk("A", vec![1.0, 0.0, 0.0]), None)
+            .expect("a");
+        store
+            .create("Person", &mk("B", vec![0.9, 0.1, 0.0]), None)
+            .expect("b");
+        store
+            .create("Person", &mk("C", vec![0.0, 0.0, 1.0]), None)
+            .expect("c");
 
-        let tid = u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
+        let tid =
+            u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
         let rows = store.table(tid, &TableQuery::new(None, 10));
         let a = Uuid::parse_str(rows["rows"][0]["id"].as_str().unwrap()).unwrap();
 
@@ -1934,14 +2268,28 @@ mod tests {
     #[test]
     fn schema_overview() {
         let store = fresh();
-        store.create("Person", &[("name".into(), s("Alice"))], None).expect("a");
-        store.create("Person", &[("name".into(), s("Bob"))], None).expect("b");
-        let tid = u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
+        store
+            .create("Person", &[("name".into(), s("Alice"))], None)
+            .expect("a");
+        store
+            .create("Person", &[("name".into(), s("Bob"))], None)
+            .expect("b");
+        let tid =
+            u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
         let rows = store.table(tid, &TableQuery::new(None, 5));
         let alice = Uuid::parse_str(rows["rows"][0]["id"].as_str().unwrap()).unwrap();
         let bob = Uuid::parse_str(rows["rows"][1]["id"].as_str().unwrap()).unwrap();
-        store.set(alice, "friend", &Value::EntityRef(EntityId::from_bytes(*bob.as_bytes())), None).expect("ref");
-        store.create_hyperedge("Knows", &[("a".into(), alice), ("b".into(), bob)]).expect("edge");
+        store
+            .set(
+                alice,
+                "friend",
+                &Value::EntityRef(EntityId::from_bytes(*bob.as_bytes())),
+                None,
+            )
+            .expect("ref");
+        store
+            .create_hyperedge("Knows", &[("a".into(), alice), ("b".into(), bob)])
+            .expect("edge");
 
         let sc = store.schema();
         assert_eq!(sc["kinds"][0]["name"], "Person");

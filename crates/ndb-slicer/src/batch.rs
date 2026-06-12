@@ -19,7 +19,7 @@
 use ndb_engine::record::Record;
 use ndb_engine::value::Value;
 
-use crate::{extract, ColumnSource};
+use crate::{ColumnSource, extract};
 
 /// A single numeric column materialised as a contiguous `f64` buffer.
 ///
@@ -146,12 +146,18 @@ mod tests {
             type_id: TypeId::new(1),
             tx_id_assert: TxId::new(1),
             tx_id_supersede: TxId::ACTIVE,
-            properties: props.into_iter().map(|(p, v)| (PropertyId::new(p), v)).collect(),
+            properties: props
+                .into_iter()
+                .map(|(p, v)| (PropertyId::new(p), v))
+                .collect(),
         })
     }
 
     fn src() -> ColumnSource {
-        ColumnSource::EntityProperty { type_id: None, property: PropertyId::new(7) }
+        ColumnSource::EntityProperty {
+            type_id: None,
+            property: PropertyId::new(7),
+        }
     }
 
     #[test]

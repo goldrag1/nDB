@@ -362,7 +362,10 @@ mod tests {
         for v in [5_i64, 100, 30, 999, 7, 250] {
             let id = EntityId::now_v7();
             by_val.insert(id, v);
-            idx.apply(&entity(id, 1, v as u64, vec![(10, Value::I64(v))]), TxId::new(v as u64));
+            idx.apply(
+                &entity(id, 1, v as u64, vec![(10, Value::I64(v))]),
+                TxId::new(v as u64),
+            );
         }
         // top 3 by citations → 999, 250, 100 (descending)
         let top = idx.top_k(cust, cit, 3);

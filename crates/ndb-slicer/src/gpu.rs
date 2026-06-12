@@ -104,7 +104,12 @@ fn run_reduction(device: &wgpu::Device, queue: &wgpu::Queue, data: &[f64]) -> f6
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    let params = Params { n, n_threads, _pad0: 0, _pad1: 0 };
+    let params = Params {
+        n,
+        n_threads,
+        _pad0: 0,
+        _pad1: 0,
+    };
     let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("params"),
         contents: bytemuck::bytes_of(&params),
@@ -128,14 +133,24 @@ fn run_reduction(device: &wgpu::Device, queue: &wgpu::Queue, data: &[f64]) -> f6
         label: Some("sum_reduce"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: input_buf.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: partials_buf.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 2, resource: params_buf.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: input_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: partials_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: params_buf.as_entire_binding(),
+            },
         ],
     });
 
-    let mut encoder =
-        device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("sum_reduce") });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("sum_reduce"),
+    });
     {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("sum_reduce"),

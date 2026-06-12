@@ -97,7 +97,10 @@ pub mod money {
     impl<C: Currency> Money<C> {
         /// Construct from a raw mantissa (units of `10^-SCALE`).
         pub const fn new(mantissa: i128) -> Self {
-            Self { mantissa, _c: PhantomData }
+            Self {
+                mantissa,
+                _c: PhantomData,
+            }
         }
 
         /// The raw mantissa.
@@ -107,7 +110,10 @@ pub mod money {
 
         /// Project into an nDB `Value::Decimal` carrying the currency's scale.
         pub fn to_value(self) -> Value {
-            Value::Decimal { scale: C::SCALE, mantissa: self.mantissa }
+            Value::Decimal {
+                scale: C::SCALE,
+                mantissa: self.mantissa,
+            }
         }
 
         /// Recover from an nDB `Value::Decimal` — only if the scale matches `C`.
@@ -178,7 +184,8 @@ pub mod store {
             let id = EntityId::now_v7();
             let mut txn = self.engine.begin_write();
             txn.put_entity(e.to_record(id));
-            txn.commit().map_err(|err| KernelError::Engine(err.to_string()))?;
+            txn.commit()
+                .map_err(|err| KernelError::Engine(err.to_string()))?;
             Ok(id)
         }
 
@@ -241,7 +248,10 @@ pub mod customer {
                     _ => {}
                 }
             }
-            Some(Customer { name: name?, email: email? })
+            Some(Customer {
+                name: name?,
+                email: email?,
+            })
         }
     }
 }
@@ -249,9 +259,9 @@ pub mod customer {
 /// A sales order whose lifecycle is encoded in the type system (typestate), with
 /// a commit-time balance invariant.
 pub mod sales {
+    use crate::EntityId;
     use crate::error::KernelError;
     use crate::money::{Money, VND};
-    use crate::EntityId;
     use core::marker::PhantomData;
 
     /// Lifecycle state markers.
@@ -305,7 +315,12 @@ pub mod sales {
     impl SalesOrder<state::Draft> {
         /// Start a new draft order with a declared total.
         pub fn draft(customer: EntityId, total: Money<VND>) -> Self {
-            Self { customer, total, lines: Vec::new(), _state: PhantomData }
+            Self {
+                customer,
+                total,
+                lines: Vec::new(),
+                _state: PhantomData,
+            }
         }
 
         /// Append a line.
@@ -372,10 +387,13 @@ pub mod testkit {
     impl TestDb {
         /// Create a fresh ephemeral engine under the system temp dir.
         pub fn new() -> Self {
-            let dir = std::env::temp_dir()
-                .join(format!("nstack-test-{}", uuid::Uuid::now_v7().simple()));
+            let dir =
+                std::env::temp_dir().join(format!("nstack-test-{}", uuid::Uuid::now_v7().simple()));
             let engine = Engine::create(&dir).expect("create ephemeral engine");
-            Self { store: Store::new(engine), dir }
+            Self {
+                store: Store::new(engine),
+                dir,
+            }
         }
     }
 
@@ -394,16 +412,19 @@ pub mod testkit {
 
 #[cfg(test)]
 mod tests {
+    use crate::EntityId;
     use crate::customer::Customer;
     use crate::money::{Money, VND};
     use crate::sales::{SalesOrder, SalesOrderLine};
     use crate::testkit::TestDb;
-    use crate::EntityId;
 
     #[test]
     fn customer_round_trips_through_ndb() {
         let mut db = TestDb::new();
-        let c = Customer { name: "Phú Quý".into(), email: "pq@example.com".into() };
+        let c = Customer {
+            name: "Phú Quý".into(),
+            email: "pq@example.com".into(),
+        };
         let id = db.store.insert(&c).unwrap();
         let got: Option<Customer> = db.store.get(id).unwrap();
         assert_eq!(got, Some(c));
@@ -426,8 +447,14 @@ mod tests {
     #[test]
     fn lifecycle_legal_path_works() {
         let mut so = SalesOrder::draft(EntityId::now_v7(), Money::<VND>::new(1_000));
-        so.add_line(SalesOrderLine { item: EntityId::now_v7(), amount: Money::new(600) });
-        so.add_line(SalesOrderLine { item: EntityId::now_v7(), amount: Money::new(400) });
+        so.add_line(SalesOrderLine {
+            item: EntityId::now_v7(),
+            amount: Money::new(600),
+        });
+        so.add_line(SalesOrderLine {
+            item: EntityId::now_v7(),
+            amount: Money::new(400),
+        });
         let confirmed = so.confirm().expect("balanced order confirms");
         let _delivered = confirmed.deliver();
     }
@@ -435,8 +462,14 @@ mod tests {
     #[test]
     fn invariant_rejects_unbalanced_order() {
         let mut so = SalesOrder::draft(EntityId::now_v7(), Money::<VND>::new(999));
-        so.add_line(SalesOrderLine { item: EntityId::now_v7(), amount: Money::new(600) });
-        so.add_line(SalesOrderLine { item: EntityId::now_v7(), amount: Money::new(400) });
+        so.add_line(SalesOrderLine {
+            item: EntityId::now_v7(),
+            amount: Money::new(600),
+        });
+        so.add_line(SalesOrderLine {
+            item: EntityId::now_v7(),
+            amount: Money::new(400),
+        });
         assert!(so.confirm().is_err());
     }
 }

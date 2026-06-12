@@ -524,9 +524,9 @@ impl SSTableWriter {
         // (out of space, permission), the SSTable is still valid and the
         // reader falls back to linear scan.
         let sidecar = crate::block_index::sidecar_path_for(&self.final_path);
-        self.block_index.finish(&sidecar).map_err(|e| {
-            io::Error::other(format!("block-index sidecar write failed: {e}"))
-        })?;
+        self.block_index
+            .finish(&sidecar)
+            .map_err(|e| io::Error::other(format!("block-index sidecar write failed: {e}")))?;
         // Bloom sidecar — only emit it when it provably covers EVERY record.
         // `append` observes each key; `append_raw` (raw escape hatch) does
         // not. Writing a partial bloom would produce false negatives, so if
@@ -534,9 +534,9 @@ impl SSTableWriter {
         // the sidecar entirely and the reader falls back to scanning.
         if self.bloom.key_count() as u64 == self.record_count {
             let bloom_path = crate::bloom::sidecar_path_for(&self.final_path);
-            self.bloom.finish(&bloom_path).map_err(|e| {
-                io::Error::other(format!("bloom sidecar write failed: {e}"))
-            })?;
+            self.bloom
+                .finish(&bloom_path)
+                .map_err(|e| io::Error::other(format!("bloom sidecar write failed: {e}")))?;
         }
         // fsync the parent directory so the renames are durable.
         if let Some(parent) = self.final_path.parent() {
@@ -757,10 +757,7 @@ impl SSTableReader {
                         needed: file_len,
                     });
                 }
-                (
-                    SSTableBacking::Mmap { mmap, _file: file },
-                    file_len,
-                )
+                (SSTableBacking::Mmap { mmap, _file: file }, file_len)
             }
             Some(c) => {
                 let file = File::open(&path)?;
@@ -770,17 +767,17 @@ impl SSTableReader {
                 enc.read_to_end(&mut buf)?;
                 let len = buf.len() as u64;
                 if len < needed {
-                    return Err(SSTableError::TooShort {
-                        len,
-                        needed,
-                    });
+                    return Err(SSTableError::TooShort { len, needed });
                 }
                 (SSTableBacking::Decrypted(buf.into_boxed_slice()), len)
             }
         };
         let bytes = backing.as_bytes();
-        let footer_off = usize::try_from(file_len - needed)
-            .map_err(|_| SSTableError::TooShort { len: file_len, needed: usize::MAX as u64 })?;
+        let footer_off =
+            usize::try_from(file_len - needed).map_err(|_| SSTableError::TooShort {
+                len: file_len,
+                needed: usize::MAX as u64,
+            })?;
         let mut footer_bytes = [0u8; SSTABLE_FOOTER_SIZE];
         footer_bytes.copy_from_slice(&bytes[footer_off..footer_off + SSTABLE_FOOTER_SIZE]);
         let footer = decode_footer(&footer_bytes)?;
@@ -980,8 +977,7 @@ impl SSTableReader {
     /// section. Used by `find` / `find_all` after the block index
     /// resolves the seek point.
     fn iter_from(&self, start_offset: usize) -> SSTableIter<'_> {
-        let data_end =
-            usize::try_from(self.data_len).unwrap_or(usize::MAX);
+        let data_end = usize::try_from(self.data_len).unwrap_or(usize::MAX);
         let bytes = self.backing.as_bytes();
         SSTableIter {
             data: &bytes[..data_end],
@@ -1289,7 +1285,10 @@ mod tests {
             for rec in &records {
                 let k = SSTableKey::for_record(rec);
                 let hit = r.find(&k).unwrap();
-                assert!(hit.is_some(), "key {k:?} should still be found via linear scan");
+                assert!(
+                    hit.is_some(),
+                    "key {k:?} should still be found via linear scan"
+                );
             }
         }
 
@@ -1315,14 +1314,16 @@ mod tests {
             tx_id_assert: TxId::new(5),
             tx_id_supersede: TxId::ACTIVE,
             properties: vec![(PropertyId::new(1), crate::value::Value::I64(5))],
-        })).unwrap();
+        }))
+        .unwrap();
         w.append(&Record::Entity(EntityRecord {
             entity_id: EntityId::from_uuid(eid),
             type_id: TypeId::new(1),
             tx_id_assert: TxId::new(10),
             tx_id_supersede: TxId::ACTIVE,
             properties: vec![(PropertyId::new(1), crate::value::Value::I64(10))],
-        })).unwrap();
+        }))
+        .unwrap();
         w.finish().unwrap();
 
         let r = SSTableReader::open(&path).unwrap();
@@ -1352,14 +1353,20 @@ mod tests {
         w.finish().unwrap();
 
         let bloom_path = crate::bloom::sidecar_path_for(&path);
-        assert!(bloom_path.exists(), "bloom sidecar at {bloom_path:?} must exist");
+        assert!(
+            bloom_path.exists(),
+            "bloom sidecar at {bloom_path:?} must exist"
+        );
 
         let r = SSTableReader::open(&path).unwrap();
         assert!(r.has_bloom(), "reader must pick up the bloom sidecar");
         // Every real key must survive the bloom (no false negatives).
         for rec in &records {
             let k = SSTableKey::for_record(rec);
-            assert!(r.find(&k).unwrap().is_some(), "real key {k:?} skipped by bloom");
+            assert!(
+                r.find(&k).unwrap().is_some(),
+                "real key {k:?} skipped by bloom"
+            );
         }
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -1662,7 +1669,10 @@ mod tests {
         w.finish().unwrap();
         let v2_size = std::fs::metadata(&p2).unwrap().len();
 
-        assert!(v2_size < v1_size, "compressed {v2_size} should be < plain {v1_size}");
+        assert!(
+            v2_size < v1_size,
+            "compressed {v2_size} should be < plain {v1_size}"
+        );
         let rd = SSTableReader::open(&p2).unwrap();
         let back: Vec<_> = rd.iter().map(|r| r.unwrap().0).collect();
         assert_eq!(back, records);
@@ -1691,7 +1701,10 @@ mod tests {
         let back: Vec<_> = rd.iter().map(|r| r.unwrap().0).collect();
         assert_eq!(back, records);
         let mid = SSTableKey::for_record(&records[records.len() / 2]);
-        assert!(rd.find(&mid).unwrap().is_some(), "find through enc+compress");
+        assert!(
+            rd.find(&mid).unwrap().is_some(),
+            "find through enc+compress"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1749,7 +1762,10 @@ mod tests {
         w.finish().unwrap();
 
         let reader = SSTableReader::open_with_cipher(&path, Some(test_cipher())).unwrap();
-        assert!(reader.has_block_index(), "sidecar should still be written for encrypted SSTables");
+        assert!(
+            reader.has_block_index(),
+            "sidecar should still be written for encrypted SSTables"
+        );
         // Spot-check find — encryption should be invisible at the API.
         let mid_key = SSTableKey::for_record(&records[records.len() / 2]);
         let found = reader.find(&mid_key).unwrap().unwrap();

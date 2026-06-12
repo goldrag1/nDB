@@ -28,8 +28,8 @@
 use ndb_engine::JsonValue;
 
 use crate::ast::{
-    NameAsOf, NameBinding, NameCmpOp, NameCreate, NameDelete, NameExpr, NameMerge, NameOrderKey, NamePattern, NameQuery, NameRecursion, NameReturn, NameSet,
-    NameTerm,
+    NameAsOf, NameBinding, NameCmpOp, NameCreate, NameDelete, NameExpr, NameMerge, NameOrderKey,
+    NamePattern, NameQuery, NameRecursion, NameReturn, NameSet, NameTerm,
 };
 use crate::error::{ParseError, Span};
 use crate::lex::{Tok, TokKind, lex};
@@ -182,8 +182,12 @@ impl Parser {
         }
 
         // A query must have at least one of match / create / merge / delete / set.
-        if patterns.is_empty() && creates.is_empty() && merges.is_empty()
-           && deletes.is_empty() && sets.is_empty() {
+        if patterns.is_empty()
+            && creates.is_empty()
+            && merges.is_empty()
+            && deletes.is_empty()
+            && sets.is_empty()
+        {
             return Err(self.unexpected("`match`, `create`, `merge`, `delete`, or `set`"));
         }
 
@@ -195,8 +199,12 @@ impl Parser {
         };
 
         // A query must do SOMETHING — either project, write, or tombstone.
-        if returns.is_empty() && creates.is_empty() && merges.is_empty()
-           && deletes.is_empty() && sets.is_empty() {
+        if returns.is_empty()
+            && creates.is_empty()
+            && merges.is_empty()
+            && deletes.is_empty()
+            && sets.is_empty()
+        {
             return Err(self.unexpected("`return`, `create`, `merge`, `delete`, or `set`"));
         }
 
@@ -250,27 +258,33 @@ impl Parser {
         let var_tok = self.advance();
         let variable = match var_tok.kind {
             TokKind::Var(s) => s,
-            other => return Err(ParseError::Unexpected {
-                expected: "variable in `set` clause".into(),
-                found: other.describe(),
-                span: var_tok.span,
-            }),
+            other => {
+                return Err(ParseError::Unexpected {
+                    expected: "variable in `set` clause".into(),
+                    found: other.describe(),
+                    span: var_tok.span,
+                });
+            }
         };
         self.expect(&TokKind::Dot, "`.`")?;
         let prop_tok = self.advance();
         let property = match prop_tok.kind {
             TokKind::Ident(s) => s,
-            other => return Err(ParseError::Unexpected {
-                expected: "property name after `.`".into(),
-                found: other.describe(),
-                span: prop_tok.span,
-            }),
+            other => {
+                return Err(ParseError::Unexpected {
+                    expected: "property name after `.`".into(),
+                    found: other.describe(),
+                    span: prop_tok.span,
+                });
+            }
         };
         self.expect(&TokKind::Eq, "`=`")?;
         let term = self.parse_term()?;
         let end = term.span().end();
         Ok(NameSet {
-            variable, property, term,
+            variable,
+            property,
+            term,
             span: crate::error::Span::range(var_tok.span.start, end),
         })
     }
@@ -280,11 +294,13 @@ impl Parser {
         let type_tok = self.advance();
         let (type_name, type_span) = match type_tok.kind {
             TokKind::Ident(s) => (s, type_tok.span),
-            other => return Err(ParseError::Unexpected {
-                expected: "type identifier after `merge`".into(),
-                found: other.describe(),
-                span: type_tok.span,
-            }),
+            other => {
+                return Err(ParseError::Unexpected {
+                    expected: "type identifier after `merge`".into(),
+                    found: other.describe(),
+                    span: type_tok.span,
+                });
+            }
         };
         let start = type_span.start;
         self.expect(&TokKind::LParen, "`(`")?;
@@ -311,7 +327,10 @@ impl Parser {
             None
         };
         Ok(NameMerge {
-            type_name, type_span, bindings, self_var,
+            type_name,
+            type_span,
+            bindings,
+            self_var,
             span: crate::error::Span::range(start, end),
         })
     }
@@ -334,11 +353,13 @@ impl Parser {
         let type_tok = self.advance();
         let (type_name, type_span) = match type_tok.kind {
             TokKind::Ident(s) => (s, type_tok.span),
-            other => return Err(ParseError::Unexpected {
-                expected: "type identifier after `create`".into(),
-                found: other.describe(),
-                span: type_tok.span,
-            }),
+            other => {
+                return Err(ParseError::Unexpected {
+                    expected: "type identifier after `create`".into(),
+                    found: other.describe(),
+                    span: type_tok.span,
+                });
+            }
         };
         let start = type_span.start;
         self.expect(&TokKind::LParen, "`(`")?;
@@ -494,13 +515,11 @@ impl Parser {
     fn expect_unsigned_int(&mut self, expected: &str) -> Result<u32, ParseError> {
         let t = self.advance();
         match t.kind {
-            TokKind::IntLit(n) if n >= 0 => {
-                u32::try_from(n).map_err(|_| ParseError::Unexpected {
-                    expected: expected.into(),
-                    found: format!("{n}"),
-                    span: t.span,
-                })
-            }
+            TokKind::IntLit(n) if n >= 0 => u32::try_from(n).map_err(|_| ParseError::Unexpected {
+                expected: expected.into(),
+                found: format!("{n}"),
+                span: t.span,
+            }),
             other => Err(ParseError::Unexpected {
                 expected: expected.into(),
                 found: other.describe(),
@@ -545,10 +564,7 @@ impl Parser {
     fn parse_term(&mut self) -> Result<NameTerm, ParseError> {
         let t = self.advance();
         match t.kind {
-            TokKind::Var(name) => Ok(NameTerm::Var {
-                name,
-                span: t.span,
-            }),
+            TokKind::Var(name) => Ok(NameTerm::Var { name, span: t.span }),
             TokKind::Underscore => Ok(NameTerm::Anonymous { span: t.span }),
             TokKind::StrLit(s) => Ok(NameTerm::Literal {
                 value: JsonValue::String { value: s },
@@ -674,12 +690,7 @@ impl Parser {
     fn is_cmp_op(&self) -> bool {
         matches!(
             self.peek_kind(),
-            TokKind::Eq
-                | TokKind::Ne
-                | TokKind::Lt
-                | TokKind::Le
-                | TokKind::Gt
-                | TokKind::Ge
+            TokKind::Eq | TokKind::Ne | TokKind::Lt | TokKind::Le | TokKind::Gt | TokKind::Ge
         )
     }
 
@@ -691,7 +702,10 @@ impl Parser {
         let mut out = vec![self.parse_return_one()?];
         while self.eat(&TokKind::Comma).is_some() {
             // Allow trailing comma: stop if we're at order/limit/eof.
-            if matches!(self.peek_kind(), TokKind::Order | TokKind::Limit | TokKind::Eof) {
+            if matches!(
+                self.peek_kind(),
+                TokKind::Order | TokKind::Limit | TokKind::Eof
+            ) {
                 break;
             }
             out.push(self.parse_return_one()?);
@@ -702,7 +716,9 @@ impl Parser {
     fn parse_order_keys(&mut self) -> Result<Vec<NameOrderKey>, ParseError> {
         let mut out = vec![self.parse_order_one()?];
         while self.eat(&TokKind::Comma).is_some() {
-            if matches!(self.peek_kind(), TokKind::Limit | TokKind::Eof) { break; }
+            if matches!(self.peek_kind(), TokKind::Limit | TokKind::Eof) {
+                break;
+            }
             out.push(self.parse_order_one()?);
         }
         Ok(out)
@@ -712,21 +728,25 @@ impl Parser {
         let t = self.advance();
         let name = match t.kind {
             TokKind::Var(name) => name,
-            other => return Err(ParseError::Unexpected {
-                expected: "variable in order-by list".into(),
-                found: other.describe(),
-                span: t.span,
-            }),
+            other => {
+                return Err(ParseError::Unexpected {
+                    expected: "variable in order-by list".into(),
+                    found: other.describe(),
+                    span: t.span,
+                });
+            }
         };
         let (property, end_span) = if self.eat(&TokKind::Dot).is_some() {
             let prop_tok = self.advance();
             match prop_tok.kind {
                 TokKind::Ident(s) => (Some(s), prop_tok.span),
-                other => return Err(ParseError::Unexpected {
-                    expected: "property name after `.` in order-by".into(),
-                    found: other.describe(),
-                    span: prop_tok.span,
-                }),
+                other => {
+                    return Err(ParseError::Unexpected {
+                        expected: "property name after `.` in order-by".into(),
+                        found: other.describe(),
+                        span: prop_tok.span,
+                    });
+                }
             }
         } else {
             (None, t.span)
@@ -735,11 +755,16 @@ impl Parser {
         let descending = if self.eat(&TokKind::Desc).is_some() {
             true
         } else {
-            self.eat(&TokKind::Asc);  // ascending is the default; consume but ignore
+            self.eat(&TokKind::Asc); // ascending is the default; consume but ignore
             false
         };
         let combined_span = crate::error::Span::range(t.span.start, end_span.end());
-        Ok(NameOrderKey { name, property, descending, span: combined_span })
+        Ok(NameOrderKey {
+            name,
+            property,
+            descending,
+            span: combined_span,
+        })
     }
 
     fn parse_return_one(&mut self) -> Result<NameReturn, ParseError> {
@@ -758,23 +783,29 @@ impl Parser {
                 let v_tok = self.advance();
                 let v = match v_tok.kind {
                     TokKind::Var(s) => s,
-                    other => return Err(ParseError::Unexpected {
-                        expected: "variable inside aggregate call".into(),
-                        found: other.describe(),
-                        span: v_tok.span,
-                    }),
+                    other => {
+                        return Err(ParseError::Unexpected {
+                            expected: "variable inside aggregate call".into(),
+                            found: other.describe(),
+                            span: v_tok.span,
+                        });
+                    }
                 };
                 let p = if self.eat(&TokKind::Dot).is_some() {
                     let pt = self.advance();
                     match pt.kind {
                         TokKind::Ident(s) => Some(s),
-                        other => return Err(ParseError::Unexpected {
-                            expected: "property name after `.`".into(),
-                            found: other.describe(),
-                            span: pt.span,
-                        }),
+                        other => {
+                            return Err(ParseError::Unexpected {
+                                expected: "property name after `.`".into(),
+                                found: other.describe(),
+                                span: pt.span,
+                            });
+                        }
                     }
-                } else { None };
+                } else {
+                    None
+                };
                 (v, p)
             };
             let rparen = self.expect(&TokKind::RParen, "`)`")?;
@@ -789,27 +820,36 @@ impl Parser {
         let t = self.advance();
         let name = match t.kind {
             TokKind::Var(name) => name,
-            other => return Err(ParseError::Unexpected {
-                expected: "variable in return list".into(),
-                found: other.describe(),
-                span: t.span,
-            }),
+            other => {
+                return Err(ParseError::Unexpected {
+                    expected: "variable in return list".into(),
+                    found: other.describe(),
+                    span: t.span,
+                });
+            }
         };
         let (property, end_span) = if self.eat(&TokKind::Dot).is_some() {
             let prop_tok = self.advance();
             match prop_tok.kind {
                 TokKind::Ident(s) => (Some(s), prop_tok.span),
-                other => return Err(ParseError::Unexpected {
-                    expected: "property name after `.` in return projection".into(),
-                    found: other.describe(),
-                    span: prop_tok.span,
-                }),
+                other => {
+                    return Err(ParseError::Unexpected {
+                        expected: "property name after `.` in return projection".into(),
+                        found: other.describe(),
+                        span: prop_tok.span,
+                    });
+                }
             }
         } else {
             (None, t.span)
         };
         let combined_span = crate::error::Span::range(t.span.start, end_span.end());
-        Ok(NameReturn { name, property, aggregate: None, span: combined_span })
+        Ok(NameReturn {
+            name,
+            property,
+            aggregate: None,
+            span: combined_span,
+        })
     }
 
     /// Peek the SECOND token from `self.pos` without consuming.
@@ -1028,9 +1068,7 @@ mod tests {
     #[test]
     fn parenthesised_filter_inverts_precedence() {
         // (?a or ?b) and ?c — without parens, `and` would bind tighter.
-        let q = parse_ok(
-            r#"match a(x: ?p) where (?p = "x" or ?p = "y") and ?p != "z" return ?p"#,
-        );
+        let q = parse_ok(r#"match a(x: ?p) where (?p = "x" or ?p = "y") and ?p != "z" return ?p"#);
         let expr = q.filter.expect("filter");
         // After parens, top should be And.
         assert!(matches!(expr, NameExpr::And { .. }));

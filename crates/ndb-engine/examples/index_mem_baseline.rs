@@ -12,9 +12,7 @@ use std::path::PathBuf;
 
 use ndb_engine::record::{EntityRecord, HyperEdgeRecord};
 use ndb_engine::value::Value;
-use ndb_engine::{
-    Engine, EngineConfig, EntityId, HyperedgeId, PropertyId, RoleId, TxId, TypeId,
-};
+use ndb_engine::{Engine, EngineConfig, EntityId, HyperedgeId, PropertyId, RoleId, TxId, TypeId};
 
 const TYPE_PAPER: u32 = 1;
 const PROP_NAME: u32 = 1; // lookup key
@@ -85,8 +83,14 @@ fn build_and_measure(n: usize) {
                     tx_id_assert: TxId::new(0),
                     tx_id_supersede: TxId::ACTIVE,
                     properties: vec![
-                        (PropertyId::new(PROP_NAME), Value::String(format!("paper-{j}"))),
-                        (PropertyId::new(PROP_CITES), Value::I64((j as i64 * 7) % 100_000)),
+                        (
+                            PropertyId::new(PROP_NAME),
+                            Value::String(format!("paper-{j}")),
+                        ),
+                        (
+                            PropertyId::new(PROP_CITES),
+                            Value::I64((j as i64 * 7) % 100_000),
+                        ),
                         (PropertyId::new(PROP_EMBED), Value::Vector(embed(j as u64))),
                     ],
                 });
@@ -139,7 +143,8 @@ fn build_and_measure(n: usize) {
     //     (Phase 1c). Register + rebuild like the langgraph server does.
     {
         let mut engine =
-            Engine::open_with_config(&dir, EngineConfig::low_memory(2 * 1024 * 1024 * 1024)).unwrap();
+            Engine::open_with_config(&dir, EngineConfig::low_memory(2 * 1024 * 1024 * 1024))
+                .unwrap();
         engine.register_property_btree(TypeId::new(TYPE_PAPER), PropertyId::new(PROP_CITES));
         engine.register_vector_property(PropertyId::new(PROP_EMBED));
         engine.register_lookup_key(PropertyId::new(PROP_NAME));
