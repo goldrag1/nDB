@@ -211,3 +211,45 @@ fn opening_a_garbage_file_as_an_sstable_errs_cleanly() {
     }
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn hostile_length_prefixes_error_without_giant_allocations() {
+    // Regression: a decoder must not pre-allocate based on an unchecked
+    // length/arity prefix. Each of these inputs claims a near-u32::MAX
+    // element count but carries only a handful of payload bytes — the old
+    // code called Vec::with_capacity(count) first and OOM-aborted (~16 GB
+    // for the f32 vector, ~84 GB for the roles array). The fix caps the
+    // speculative allocation by the remaining input, so these must return
+    // a clean Err in well under a second and a few KB of memory.
+    const HUGE: [u8; 4] = u32::MAX.to_le_bytes();
+
+    // Value::Vector with a bogus 4.29e9 element count.
+    let mut vector_value = vec![0x0A]; // TAG_VECTOR (see value.rs)
+    vector_value.extend_from_slice(&HUGE);
+    vector_value.extend_from_slice(&[0u8; 8]); // only 2 f32s of payload
+    // Any tag byte is allowed to be wrong; we only require no OOM/panic.
+    let _ = Value::decode(&vector_value);
+
+    // Brute force: for every value tag, a huge u32 length prefix must not
+    // blow up. Covers String/Bytes/Vector/Extension uniformly.
+    for tag in 0u8..=20 {
+        let mut buf = vec![tag];
+        buf.extend_from_slice(&HUGE);
+        buf.extend_from_slice(&[1u8; 16]);
+        let _ = Value::decode(&buf);
+    }
+
+    // A truncated record whose decoded arity/count fields are maximal must
+    // also stay bounded — drive the full record decoder with such inputs.
+    let mut rng = Rng::new(0x5A1A_D);
+    for _ in 0..2_000 {
+        let n = rng.range(48);
+        let mut buf = rng.bytes(n);
+        // Splice a u32::MAX into a plausible arity position if long enough.
+        if buf.len() >= 8 {
+            let at = buf.len() - 4;
+            buf[at..].copy_from_slice(&HUGE);
+        }
+        let _ = Record::decode(&buf);
+    }
+}

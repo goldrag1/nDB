@@ -477,7 +477,10 @@ fn encode_property_list(
 
 fn decode_property_list(c: &mut Cursor<'_>) -> Result<Vec<(PropertyId, Value)>, DecodeError> {
     let count = c.read_u16()? as usize;
-    let mut out = Vec::with_capacity(count);
+    // Each entry is ≥ 5 bytes (u32 property id + ≥1-byte value tag); cap
+    // the speculative allocation so a hostile count can't pre-allocate
+    // beyond what the remaining input could possibly contain.
+    let mut out = Vec::with_capacity(count.min(c.remaining() / 5));
     for _ in 0..count {
         let pid = c.read_u32()?;
         if pid == 0 {
@@ -611,7 +614,12 @@ impl HyperEdgeRecord {
         // v2 used the (then-only) arity field. v3 separates entity vs
         // hyperedge counts. If a v3 record's entity_arity is 0 AND
         // hyperedge_arity is 0, we'll catch that below.
-        let mut roles = Vec::with_capacity(entity_arity);
+        //
+        // Each role is 20 bytes (u32 role id + 16-byte uuid); cap the
+        // speculative allocation by `remaining / 20` so a hostile u32
+        // arity can't pre-allocate tens of GB before the read loop (which
+        // still errors cleanly) ever runs.
+        let mut roles = Vec::with_capacity(entity_arity.min(c.remaining() / 20));
         for _ in 0..entity_arity {
             let rid = c.read_u32()?;
             if rid == 0 {
@@ -623,7 +631,8 @@ impl HyperEdgeRecord {
         let mut hyperedge_roles: Vec<(RoleId, HyperedgeId)> = Vec::new();
         if format_version >= 3 {
             let h_arity = c.read_u32()? as usize;
-            hyperedge_roles.reserve(h_arity);
+            // Same 20-bytes-per-role cap as the entity roles above.
+            hyperedge_roles.reserve(h_arity.min(c.remaining() / 20));
             for _ in 0..h_arity {
                 let rid = c.read_u32()?;
                 if rid == 0 {

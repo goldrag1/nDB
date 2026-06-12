@@ -239,7 +239,12 @@ impl Value {
             }
             TAG_VECTOR => {
                 let len = c.read_u32()? as usize;
-                let mut v = Vec::with_capacity(len);
+                // Cap the speculative allocation by what the remaining
+                // input can actually hold: each element is a 4-byte f32,
+                // so a `len` larger than `remaining / 4` is malformed —
+                // never pre-allocate gigabytes for hostile input. The read
+                // loop below still errors cleanly when the bytes run out.
+                let mut v = Vec::with_capacity(len.min(c.remaining() / 4));
                 for _ in 0..len {
                     v.push(c.read_f32()?);
                 }
