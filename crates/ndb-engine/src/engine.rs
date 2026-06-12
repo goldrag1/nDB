@@ -611,6 +611,15 @@ pub struct Engine {
     /// group. Types not present default to `LatestOnly`. Same in-memory
     /// caveat as `commit_timestamps` — v1 session-local; v2 persists.
     retention: HashMap<TypeId, RetentionPolicy>,
+    /// Tombstones resident in the open SSTables: `target_id → max
+    /// tx_id_supersede`. The streaming scan needs every cross-kind
+    /// tombstone up front (entity/hyperedge records and their tombstones
+    /// sort under different kind bytes, so the merge never groups them).
+    /// Cached here so `snapshot_iter_streaming` doesn't re-decode every
+    /// SSTable record per call; maintained at open / flush / compaction
+    /// — the only points where SSTable membership changes. Memtable
+    /// tombstones are NOT in this map; the scan overlays them per call.
+    sstable_tombstones: std::collections::HashMap<uuid::Uuid, TxId>,
     /// Resident-memory tunables. `EngineConfig::default()` reproduces the
     /// historical behaviour; opt into low-RAM mode via `open_with_config`.
     config: EngineConfig,
@@ -711,6 +720,7 @@ impl Engine {
             db,
             commit_timestamps: std::collections::BTreeMap::new(),
             retention: HashMap::new(),
+            sstable_tombstones: std::collections::HashMap::new(),
             config,
             property_index_files: HashMap::new(),
             vector_index_files: HashMap::new(),
@@ -848,6 +858,7 @@ impl Engine {
             db,
             commit_timestamps: std::collections::BTreeMap::new(),
             retention: HashMap::new(),
+            sstable_tombstones: std::collections::HashMap::new(),
             config,
             property_index_files: HashMap::new(),
             vector_index_files: HashMap::new(),
@@ -857,6 +868,7 @@ impl Engine {
             entity_type_files: HashMap::new(),
             lookup_key_files: HashMap::new(),
         };
+        engine.rebuild_sstable_tombstone_cache();
         // Low-RAM core: open the on-disk index sidecars (under
         // `mmap_indexes`) BEFORE rebuilding RAM indexes, so the rebuild can
         // skip the data already served from disk.
@@ -2526,17 +2538,13 @@ impl Engine {
         for sst in &self.sstables {
             sources.push(MergeSource::SSTable(sst.iter()));
         }
-        // Pre-scan tombstones across every source — entity/hyperedge
-        // records and their tombstones live under different SSTableKey
-        // kind bytes, so the merge sort never groups them together.
-        // Without this pre-pass the streaming pump would emit deleted
-        // records (the per-key resolve only sees same-kind versions).
-        // Tombstones are tiny (target_uuid + tx_id_supersede) so the
-        // pre-scan cost stays well below the entity-iteration cost it
-        // gates.
-        let mut tombstones: std::collections::HashMap<uuid::Uuid, TxId> =
-            std::collections::HashMap::new();
-        // Memtable tombstones.
+        // The streaming pump needs every cross-kind tombstone up front —
+        // entity/hyperedge records and their tombstones live under
+        // different SSTableKey kind bytes, so the merge sort never groups
+        // them together. SSTable-resident tombstones come from the cache
+        // maintained at open / flush / compaction; only the (small,
+        // already in-memory) memtable is scanned per call.
+        let mut tombstones = self.sstable_tombstones.clone();
         for (k, r) in self.memtable.iter() {
             if k.kind == crate::record::RecordKind::Tombstone.as_byte()
                 && let Record::Tombstone(t) = r
@@ -2551,24 +2559,46 @@ impl Engine {
                     .or_insert(t.tx_id_supersede);
             }
         }
-        // SSTable tombstones — block-index sidecar gives O(log n) seek
-        // when present; otherwise the iter call still covers it.
+        SnapshotStream::new(sources, snapshot).with_tombstones(tombstones)
+    }
+
+    /// Rebuild [`Self::sstable_tombstones`] from scratch by scanning every
+    /// open SSTable. Called when SSTable membership changes in a way that
+    /// can REMOVE tombstones (open, compaction, manifest reload); flush
+    /// only adds a table, so it uses the cheaper
+    /// [`Self::merge_sstable_tombstones_from`].
+    fn rebuild_sstable_tombstone_cache(&mut self) {
+        self.sstable_tombstones.clear();
+        let mut map = std::mem::take(&mut self.sstable_tombstones);
         for sst in &self.sstables {
-            for item in sst.iter() {
-                let Ok((rec, _)) = item else { continue };
-                if let Record::Tombstone(t) = &rec {
-                    tombstones
-                        .entry(t.target_id)
-                        .and_modify(|cur| {
-                            if t.tx_id_supersede > *cur {
-                                *cur = t.tx_id_supersede;
-                            }
-                        })
-                        .or_insert(t.tx_id_supersede);
-                }
+            Self::merge_tombstones_into(&mut map, sst);
+        }
+        self.sstable_tombstones = map;
+    }
+
+    /// Merge the tombstones of one (newly flushed) SSTable into the cache.
+    fn merge_sstable_tombstones_from(&mut self, reader: &SSTableReader) {
+        let mut map = std::mem::take(&mut self.sstable_tombstones);
+        Self::merge_tombstones_into(&mut map, reader);
+        self.sstable_tombstones = map;
+    }
+
+    fn merge_tombstones_into(
+        map: &mut std::collections::HashMap<uuid::Uuid, TxId>,
+        sst: &SSTableReader,
+    ) {
+        for item in sst.iter() {
+            let Ok((rec, _)) = item else { continue };
+            if let Record::Tombstone(t) = &rec {
+                map.entry(t.target_id)
+                    .and_modify(|cur| {
+                        if t.tx_id_supersede > *cur {
+                            *cur = t.tx_id_supersede;
+                        }
+                    })
+                    .or_insert(t.tx_id_supersede);
             }
         }
-        SnapshotStream::new(sources, snapshot).with_tombstones(tombstones)
     }
 
     /// Iterate every record visible at `snapshot`, in (kind, primary)
@@ -2639,6 +2669,7 @@ impl Engine {
         // SSTable's contents. Read path uses them only under
         // `config.mmap_indexes`; default mode ignores them.
         self.write_index_sidecars(&reader)?;
+        self.merge_sstable_tombstones_from(&reader);
         self.sstables.insert(0, reader);
         // Under mmap mode: register the new sidecars and drop the just-
         // flushed entries from the RAM mirrors (bounded footprint).
@@ -2852,6 +2883,8 @@ impl Engine {
         self.write_index_sidecars(&reader)?;
         self.sstables.clear();
         self.sstables.push(reader);
+        // Compaction can drop tombstones whose targets it erased.
+        self.rebuild_sstable_tombstone_cache();
 
         // Step 7: remove old files (best-effort). Also remove the
         // companion `<seq>.idx` block-index and `<seq>.pidx` property-index
@@ -2989,6 +3022,8 @@ impl Engine {
 
         // Reopen the full chain from the new manifest (newest layer first).
         self.sstables = open_sstables_from_manifest(&self.db, &self.cipher)?;
+        // Merged-out inputs may have carried tombstones the output dropped.
+        self.rebuild_sstable_tombstone_cache();
 
         // Retire ONLY the input files — never a concurrently-flushed table.
         for old_seq in &plan.input_seqs {
