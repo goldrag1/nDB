@@ -18,6 +18,28 @@
 //! - [`gpu_sum`] returns `None` when no GPU adapter is present (e.g. CI /
 //!   headless boxes); callers fall back to the CPU reduction. Nothing in
 //!   the default build depends on a GPU existing.
+//!
+//! # When does this graduate to a production default?
+//!
+//! Not for `sum`, and not until both the operator and the hardware
+//! change. The benchmark is decisive: summing 500k values is ~0.1 ms
+//! while getting them off the SSD + decoding is ~300 ms — the arithmetic
+//! is ~3000× cheaper than the I/O it depends on. A GPU only wins when
+//! *compute* is the bottleneck. All four gates must hold first:
+//!
+//! 1. **Compute-bound operator** — high FLOPs/byte (ANN distance re-rank,
+//!    GNN, clustering), not a 1-add-per-element reduction like `sum`.
+//! 2. **Data already GPU-addressable** — unified memory (e.g. DGX Spark
+//!    Grace↔Blackwell) so the SSD→RAM→VRAM PCIe copy doesn't dwarf the
+//!    compute.
+//! 3. **Batch large enough** to amortise kernel launch (tens of µs).
+//! 4. **f32 precision acceptable** (or a f64 path is added).
+//!
+//! Per `docs/roadmap-agent-gpu.md`, the project keeps compute *off* the
+//! engine and serves GPUs via the zero-copy **Arrow → RAPIDS**
+//! (cuVS/cuGraph) handoff. So this kernel stays a dependency-light,
+//! CUDA-free demonstration + CPU fallback; real GPU compute should go
+//! through that Arrow path on unified-memory hardware, not through here.
 #![allow(
     clippy::cast_possible_truncation, // f64 -> f32 is the whole point; column lengths fit u32
     clippy::cast_precision_loss
