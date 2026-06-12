@@ -253,6 +253,68 @@ fn extract(record: &Record, source: &ColumnSource) -> Option<Value> {
     }
 }
 
+/// Owning variant of [`extract`] for property columns: moves the value
+/// out of the record (`swap_remove`) instead of cloning it. Only safe
+/// when no later column reads the same property — `Pipeline::run`
+/// precomputes that. Non-property sources fall through to [`extract`]
+/// (they never clone heap data).
+fn extract_take(record: &mut Record, source: &ColumnSource) -> Option<Value> {
+    match source {
+        ColumnSource::EntityProperty { type_id, property } => match record {
+            Record::Entity(e) => {
+                if let Some(t) = type_id
+                    && e.type_id != *t
+                {
+                    return None;
+                }
+                let idx = e.properties.iter().position(|(p, _)| p == property)?;
+                Some(e.properties.swap_remove(idx).1)
+            }
+            _ => None,
+        },
+        ColumnSource::HyperEdgeProperty { type_id, property } => match record {
+            Record::HyperEdge(h) => {
+                if let Some(t) = type_id
+                    && h.type_id != *t
+                {
+                    return None;
+                }
+                let idx = h.properties.iter().position(|(p, _)| p == property)?;
+                Some(h.properties.swap_remove(idx).1)
+            }
+            _ => None,
+        },
+        _ => extract(record, source),
+    }
+}
+
+/// The property a column consumes when extracted by-move, keyed so two
+/// columns that could read the same `(record kind, property)` slot are
+/// detected even when their `type_id` restrictions differ. `None` for
+/// sources that never move heap data out of the record.
+fn consumed_property(source: &ColumnSource) -> Option<(bool, PropertyId)> {
+    match source {
+        ColumnSource::EntityProperty { property, .. } => Some((true, *property)),
+        ColumnSource::HyperEdgeProperty { property, .. } => Some((false, *property)),
+        // TimestampBucket reads the property but emits a derived Copy
+        // value — it must not MOVE the slot (a later property column may
+        // still need it), and reading by ref is already allocation-free.
+        _ => None,
+    }
+}
+
+/// The property a column READS, whether or not it moves it. Superset of
+/// [`consumed_property`]: includes `TimestampBucket`. Used to decide if
+/// an earlier column is allowed to move a property slot out.
+fn read_property(source: &ColumnSource) -> Option<(bool, PropertyId)> {
+    match source {
+        ColumnSource::EntityProperty { property, .. }
+        | ColumnSource::TimestampBucket { property, .. } => Some((true, *property)),
+        ColumnSource::HyperEdgeProperty { property, .. } => Some((false, *property)),
+        _ => None,
+    }
+}
+
 /// Floor `ts` to the bucket starting at `origin_us + N * interval_us`.
 /// Behaves correctly for `ts < origin_us` (uses floor-style negative
 /// division so the bucket boundary is always `≤ ts`).
@@ -481,9 +543,24 @@ impl Pipeline {
     where
         I: IntoIterator<Item = Record>,
     {
-        // 1. Filter + project → Vec<Row>
+        // 1. Filter + project → Vec<Row>. Records arrive owned, so a
+        // column that is the LAST reader of its property moves the value
+        // out instead of cloning; only properties read by multiple
+        // columns pay for a clone.
+        let can_take: Vec<bool> = self
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                consumed_property(&c.source).is_some_and(|key| {
+                    !self.columns[i + 1..]
+                        .iter()
+                        .any(|later| read_property(&later.source) == Some(key))
+                })
+            })
+            .collect();
         let mut rows: Vec<Vec<Value>> = Vec::new();
-        for rec in records {
+        for mut rec in records {
             if let Some(f) = &self.filter
                 && !f(&rec)
             {
@@ -492,7 +569,15 @@ impl Pipeline {
             let row: Vec<Value> = self
                 .columns
                 .iter()
-                .map(|c| extract(&rec, &c.source).unwrap_or(Value::Null))
+                .zip(&can_take)
+                .map(|(c, &take)| {
+                    if take {
+                        extract_take(&mut rec, &c.source)
+                    } else {
+                        extract(&rec, &c.source)
+                    }
+                    .unwrap_or(Value::Null)
+                })
                 .collect();
             rows.push(row);
         }
@@ -543,18 +628,21 @@ impl Pipeline {
         // Bucket rows by the group-by columns. Use canonical bytes-key for
         // each row's group tuple so floats with same bit-pattern dedupe.
         let mut buckets: BTreeMap<Vec<u8>, (Vec<Value>, Vec<Vec<Value>>)> = BTreeMap::new();
+        let mut key: Vec<u8> = Vec::new();
         for row in rows {
-            let key: Vec<u8> = self
-                .group_by
-                .iter()
-                .flat_map(|&i| value_key_bytes(&row[i]))
-                .collect();
-            // Track the actual group-by values for the result header.
-            let group_vals: Vec<Value> = self.group_by.iter().map(|&i| row[i].clone()).collect();
-            let entry = buckets
-                .entry(key)
-                .or_insert_with(|| (group_vals, Vec::new()));
-            entry.1.push(row);
+            key.clear();
+            for &i in &self.group_by {
+                value_key_bytes_into(&mut key, &row[i]);
+            }
+            if let Some(entry) = buckets.get_mut(&key) {
+                entry.1.push(row);
+            } else {
+                // First row of a new bucket: clone the group-by values
+                // for the result header (once per bucket, not per row).
+                let group_vals: Vec<Value> =
+                    self.group_by.iter().map(|&i| row[i].clone()).collect();
+                buckets.insert(key.clone(), (group_vals, vec![row]));
+            }
         }
 
         // Build headers: group-by column headers first, then aggregate
@@ -757,8 +845,7 @@ pub fn value_partial_cmp(a: &Value, b: &Value) -> Option<Ordering> {
     }
 }
 
-fn value_key_bytes(v: &Value) -> Vec<u8> {
-    let mut out = Vec::new();
+fn value_key_bytes_into(out: &mut Vec<u8>, v: &Value) {
     match v {
         Value::Null => out.push(0x00),
         Value::Bool(b) => {
@@ -797,7 +884,6 @@ fn value_key_bytes(v: &Value) -> Vec<u8> {
             out.push(0xff);
         }
     }
-    out
 }
 
 // ---------------------------------------------------------------------------
