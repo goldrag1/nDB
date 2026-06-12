@@ -200,8 +200,7 @@ fn main() -> ExitCode {
         }
     }
     server = apply_env_resource_limits(server);
-    let audit_on =
-        args.audit || std::env::var("NDB_AUDIT").is_ok_and(|v| v == "1");
+    let audit_on = args.audit || std::env::var("NDB_AUDIT").is_ok_and(|v| v == "1");
     if audit_on {
         server = match server.with_audit_log() {
             Ok(s) => {

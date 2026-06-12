@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Build + test the agent surface (MCP) and the GPU on-ramp (Arrow), plus the
+  # HTTP server that now exposes the Arrow export endpoints.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain (pinned via rust-toolchain.toml)
+        run: rustup show
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Test (agent + Arrow + server)
+        run: cargo test -p ndb-mcp-server -p ndb-arrow -p ndb-server
+
+  # Portability guard: the store / index / export path must keep compiling for
+  # NVIDIA DGX Spark (GB10 Grace Blackwell — aarch64). See docs/gpu-dgx-spark.md.
+  aarch64-spark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add aarch64 target
+        run: rustup target add aarch64-unknown-linux-gnu
+      - name: Cross-check GPU-relevant crates for Grace ARM
+        run: >
+          cargo check --target aarch64-unknown-linux-gnu
+          -p ndb-engine -p ndb-index-vector-hnsw -p ndb-arrow

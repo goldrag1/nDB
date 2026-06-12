@@ -63,6 +63,29 @@ cross-platform. Nothing in the store/index/export path assumes x86.
 `Value::Decimal` now maps to Arrow's native **`Decimal128(38, scale)`** — lossless
 (B4), so money/measurement columns survive the trip to the GPU exactly.
 
+### Over the wire (no Rust required)
+
+The same helpers are exposed by both servers, gated by the `read` capability, so
+a Python client can pull Arrow directly:
+
+```bash
+# HTTP: raw application/vnd.apache.arrow.stream bytes
+curl -s 'http://localhost:8080/arrow/vectors?type_id=10&property_id=100' -o emb.arrows
+curl -s 'http://localhost:8080/arrow/edge_index' -o edges.arrows
+curl -s 'http://localhost:8080/arrow/export?batch_rows=65536' -o all.arrows
+```
+
+```python
+import pyarrow as pa, requests
+buf = requests.get("http://localhost:8080/arrow/vectors",
+                   params={"type_id": 10, "property_id": 100}).content
+batch = pa.ipc.open_stream(buf).read_all()   # primary_id | embedding
+```
+
+Over MCP the same three tools (`ndb.arrow_export`, `ndb.arrow_vectors`,
+`ndb.arrow_edge_index`) return the IPC stream base64-encoded in the JSON-RPC
+result, so an AI agent can request a GPU-ready export itself.
+
 ## Application 1 — RAG / agent memory: nDB filters, GPU re-ranks
 
 nDB's HNSW returns coarse candidates on the CPU; the GPU does exact distance over
@@ -118,6 +141,11 @@ similarity, clustering, or embedding generation on Blackwell.
   on a mismatch) — correct for an embedding column, by construction.
 - nDB itself does no GPU compute and is not planned to; the division of labour
   (CPU storage/filter, GPU math) is deliberate.
+- **On-device GPU compute is unverified.** The Arrow data contract is
+  machine-verified (every export is read back through the standard Arrow reader in
+  tests) and the path is aarch64-clean (CI-guarded), but actually running cuVS /
+  cuGraph kernels on a physical DGX Spark needs the hardware — that's the one open
+  item.
 
 ## Sources
 

@@ -196,6 +196,23 @@ pub fn records_to_batches(
     Ok(batches)
 }
 
+/// Serialise a single `RecordBatch` to an Arrow IPC stream. Used to ship the
+/// GPU hand-off batches ([`vector_column_batch`], [`hyperedge_edge_index`])
+/// over the wire.
+pub fn batch_to_ipc_stream(batch: &RecordBatch) -> Result<Vec<u8>, ArrowError> {
+    let mut buf = Vec::with_capacity(64 * 1024);
+    {
+        let mut writer = StreamWriter::try_new_with_options(
+            &mut buf,
+            &batch.schema(),
+            IpcWriteOptions::default(),
+        )?;
+        writer.write(batch)?;
+        writer.finish()?;
+    }
+    Ok(buf)
+}
+
 /// Convert records to a single Arrow IPC stream carrying *multiple* batches of
 /// at most `batch_rows` rows each (B1). The schema frame is written once;
 /// each batch follows. Readers (pyarrow, Polars, DuckDB, cuDF) consume it as
@@ -332,7 +349,9 @@ fn value_to_dtype(v: &Value) -> DataType {
         // measurement decimals. Mixed-scale columns widen to the max scale in
         // `bind_prop_column`, then values are rescaled losslessly on append.
         Value::Decimal { scale, .. } => DataType::Decimal128(38, decimal_scale(*scale)),
-        Value::Vector(_) => DataType::List(Arc::new(Field::new("item", DataType::Float32, false))),
+        // Inner `item` is nullable to match what `ListBuilder<Float32Builder>`
+        // actually builds — the schema field and the array must agree.
+        Value::Vector(_) => DataType::List(Arc::new(Field::new("item", DataType::Float32, true))),
         Value::Extension(_) => DataType::Binary,
     }
 }
@@ -464,7 +483,7 @@ impl PropBuilder {
             Self::Bin(_) => DataType::Binary,
             Self::Uuid(_) => DataType::FixedSizeBinary(16),
             Self::Vector(_) => {
-                DataType::List(Arc::new(Field::new("item", DataType::Float32, false)))
+                DataType::List(Arc::new(Field::new("item", DataType::Float32, true)))
             }
             Self::Decimal(_, s) => DataType::Decimal128(38, *s),
         }
@@ -1089,6 +1108,22 @@ mod tests {
     }
 
     #[test]
+    fn vector_property_round_trips_through_denormalised_batch() {
+        // Regression: the List inner-field nullability must match the builder,
+        // or RecordBatch::try_new rejects the vector column.
+        let recs = vec![entity(
+            1,
+            10,
+            1,
+            vec![(100, Value::Vector(vec![1.0, 2.0, 3.0]))],
+        )];
+        let batch = records_to_batch(&recs).unwrap();
+        assert_eq!(batch.num_rows(), 1);
+        let ipc = records_to_ipc_stream(&recs).unwrap();
+        assert!(!ipc.is_empty());
+    }
+
+    #[test]
     fn chunked_export_covers_all_rows_with_one_schema() {
         // B1: many small batches, identical schema, every row present once.
         let recs: Vec<Record> = (0..5u8)
@@ -1202,6 +1237,69 @@ mod tests {
         let batches: Vec<_> = reader.collect::<Result<Vec<_>, _>>().unwrap();
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].num_rows(), 1);
+    }
+
+    /// Read an Arrow IPC stream back into batches via the same reader RAPIDS /
+    /// pyarrow use — proves the bytes our GPU hand-off helpers emit are a valid,
+    /// consumable Arrow stream (the data contract, machine-verified).
+    fn read_ipc(bytes: Vec<u8>) -> Vec<RecordBatch> {
+        let reader =
+            arrow_ipc::reader::StreamReader::try_new(std::io::Cursor::new(bytes), None).unwrap();
+        reader.collect::<Result<Vec<_>, _>>().unwrap()
+    }
+
+    #[test]
+    fn chunked_ipc_stream_reads_back_all_rows() {
+        let recs: Vec<Record> = (0..5u8)
+            .map(|i| {
+                entity(
+                    i,
+                    10,
+                    u64::from(i) + 1,
+                    vec![(100, Value::I64(i64::from(i)))],
+                )
+            })
+            .collect();
+        let batches = read_ipc(records_to_ipc_stream_chunked(&recs, 2).unwrap());
+        assert_eq!(batches.len(), 3, "3 batches in the stream");
+        let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
+        assert_eq!(rows, 5);
+    }
+
+    #[test]
+    fn vector_batch_ipc_reads_back_as_fixed_size_list() {
+        let recs = vec![
+            entity(1, 10, 1, vec![(100, Value::Vector(vec![1.0, 2.0, 3.0]))]),
+            entity(2, 10, 2, vec![(100, Value::Vector(vec![4.0, 5.0, 6.0]))]),
+        ];
+        let batch = vector_column_batch(&recs, TypeId(10), PropertyId(100)).unwrap();
+        let back = read_ipc(batch_to_ipc_stream(&batch).unwrap());
+        assert_eq!(back[0].num_rows(), 2);
+        match back[0]
+            .schema()
+            .field_with_name("embedding")
+            .unwrap()
+            .data_type()
+        {
+            DataType::FixedSizeList(_, 3) => {}
+            other => panic!("expected FixedSizeList(_, 3) after round-trip, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn edge_index_ipc_reads_back() {
+        let h = Record::HyperEdge(HyperEdgeRecord {
+            hyperedge_id: HyperedgeId::from_uuid(Uuid::from_bytes([9; 16])),
+            type_id: TypeId(7),
+            tx_id_assert: TxId(1),
+            tx_id_supersede: TxId::ACTIVE,
+            roles: vec![(RoleId(1), ent_id(1)), (RoleId(2), ent_id(2))],
+            hyperedge_roles: vec![],
+            properties: vec![],
+        });
+        let batch = hyperedge_edge_index(&[h]).unwrap();
+        let back = read_ipc(batch_to_ipc_stream(&batch).unwrap());
+        assert_eq!(back[0].num_rows(), 2);
     }
 
     #[test]

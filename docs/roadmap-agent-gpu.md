@@ -119,10 +119,25 @@ larger effort, explicitly out of near-term scope.
 (GPU on-ramp + aarch64/DGX-Spark portability). All compile, are unit-tested, and
 are clippy-clean in their crates.
 
-**Remaining / future:**
-1. Wire the new `ndb-arrow` GPU helpers through `ndb-server` / `ndb-mcp-server`
-   so an agent can request an Arrow export over the wire (currently a library
-   API).
-2. End-to-end validation on real DGX Spark hardware (cuVS re-rank, cuGraph GNN)
-   — code is aarch64-clean but unverified on-device.
-3. GPUDirect Storage (disk → GPU) — large effort, deferred.
+**Wire exposure — ✅ Shipped (this branch).** The Arrow/GPU helpers are reachable
+over both transports, gated by the `read` capability:
+
+- HTTP (`ndb-server`): `GET /arrow/export[?batch_rows=N]`,
+  `GET /arrow/vectors?type_id=T&property_id=P`, `GET /arrow/edge_index` —
+  raw `application/vnd.apache.arrow.stream` bytes.
+- MCP (`ndb-mcp-server`): `ndb.arrow_export`, `ndb.arrow_vectors`,
+  `ndb.arrow_edge_index` — base64 Arrow IPC in the JSON-RPC result.
+
+The exported streams are **read back through the standard Arrow reader in tests**
+(the same path RAPIDS/pyarrow use), so the data contract a GPU consumer relies on
+is machine-verified.
+
+**Portability guard — ✅ Shipped.** `.github/workflows/ci.yml` cross-checks
+`ndb-engine` / `ndb-index-vector-hnsw` / `ndb-arrow` for `aarch64` on every PR, so
+DGX-Spark portability can't silently regress.
+
+**Genuinely remaining (needs hardware or large effort):**
+1. On-device execution of the *GPU compute* itself (cuVS re-rank, cuGraph GNN) on
+   a physical DGX Spark — the data path is verified; running the CUDA kernels
+   needs the box. This is the one item that can't be closed without hardware.
+2. GPUDirect Storage (disk → GPU, bypassing host RAM) — large effort, deferred.

@@ -47,6 +47,12 @@
 //!   list of entity uuids (exact match)
 //! - `ndb.property_range` — `{"type_id", "property_id", "low"?, "high"?}`
 //!   → list of entity uuids (range)
+//! - `ndb.arrow_export` — `{"batch_rows"?}` → base64 Arrow IPC stream of all
+//!   records (GPU/analytics on-ramp; see `docs/gpu-dgx-spark.md`)
+//! - `ndb.arrow_vectors` — `{"type_id", "property_id"}` → base64 Arrow IPC of a
+//!   dense `FixedSizeList<Float32,dim>` embedding matrix (cuVS)
+//! - `ndb.arrow_edge_index` — `{}` → base64 Arrow IPC hyperedge incidence list
+//!   (cuGraph/PyG)
 //!
 //! All wire payloads use the same JSON shape as ndb-engine::wire.
 
@@ -55,6 +61,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use ndb_engine::{
     Distance, Engine, EngineError, EntityId, EntityRecord, HyperEdgeRecord, HyperedgeId,
     JsonRecord, JsonValue, PropertyId, Record, Resolved, RoleId, TxId, TypeId, Value,
@@ -111,7 +119,10 @@ fn tool_capability(tool: &str) -> Option<Capability> {
         | "ndb.lookup_by_key"
         | "ndb.vector_search"
         | "ndb.property_lookup"
-        | "ndb.property_range" => Some(Capability::Read),
+        | "ndb.property_range"
+        | "ndb.arrow_export"
+        | "ndb.arrow_vectors"
+        | "ndb.arrow_edge_index" => Some(Capability::Read),
         "ndb.iter" => Some(Capability::Iter),
         "ndb.commit_entity" | "ndb.commit_hyperedge" => Some(Capability::Commit),
         _ => None,
@@ -398,6 +409,9 @@ impl McpServer {
             "ndb.vector_search" => self.tool_vector_search(args),
             "ndb.property_lookup" => self.tool_property_lookup(args),
             "ndb.property_range" => self.tool_property_range(args),
+            "ndb.arrow_export" => self.tool_arrow_export(args),
+            "ndb.arrow_vectors" => self.tool_arrow_vectors(args),
+            "ndb.arrow_edge_index" => self.tool_arrow_edge_index(args),
             other => Err(McpError::UnknownTool(other.into())),
         };
         let (status, failure_owned) = match &result {
@@ -648,6 +662,70 @@ impl McpServer {
         }))
     }
 
+    /// `ndb.arrow_export` — every visible record at the latest snapshot as an
+    /// Arrow IPC stream (fixed-size batches, one schema), base64-encoded for
+    /// the JSON-RPC envelope. The on-ramp to Polars/pandas/DuckDB/cuDF and the
+    /// GPU pipeline (see `docs/gpu-dgx-spark.md`).
+    fn tool_arrow_export(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+        let batch_rows = args
+            .get("batch_rows")
+            .and_then(serde_json::Value::as_u64)
+            .map_or(65_536_usize, |n| n.try_into().unwrap_or(65_536))
+            .max(1);
+        let records = self.snapshot_records()?;
+        let ipc = ndb_arrow::records_to_ipc_stream_chunked(&records, batch_rows)
+            .map_err(|e| McpError::Convert(e.to_string()))?;
+        Ok(arrow_payload(&ipc))
+    }
+
+    /// `ndb.arrow_vectors` — a dense `primary_id + embedding:
+    /// FixedSizeList<Float32, dim>` Arrow batch for the given vector property,
+    /// base64-encoded. The layout cuVS/RAPIDS expect for GPU ANN re-rank.
+    fn tool_arrow_vectors(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+        let type_id = args
+            .get("type_id")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+            .ok_or_else(|| McpError::BadArgs("arrow_vectors: missing 'type_id'".into()))?;
+        let property_id = args
+            .get("property_id")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+            .ok_or_else(|| McpError::BadArgs("arrow_vectors: missing 'property_id'".into()))?;
+        let records = self.snapshot_records()?;
+        let batch = ndb_arrow::vector_column_batch(
+            &records,
+            TypeId::new(type_id),
+            PropertyId::new(property_id),
+        )
+        .map_err(|e| McpError::Convert(e.to_string()))?;
+        let ipc =
+            ndb_arrow::batch_to_ipc_stream(&batch).map_err(|e| McpError::Convert(e.to_string()))?;
+        Ok(arrow_payload(&ipc))
+    }
+
+    /// `ndb.arrow_edge_index` — every hyperedge flattened into a bipartite
+    /// `(hyperedge_id, role_id, participant_id, participant_kind)` incidence
+    /// list for cuGraph/DGL/PyG, base64-encoded Arrow IPC.
+    fn tool_arrow_edge_index(
+        &self,
+        _args: &serde_json::Value,
+    ) -> Result<serde_json::Value, McpError> {
+        let records = self.snapshot_records()?;
+        let batch = ndb_arrow::hyperedge_edge_index(&records)
+            .map_err(|e| McpError::Convert(e.to_string()))?;
+        let ipc =
+            ndb_arrow::batch_to_ipc_stream(&batch).map_err(|e| McpError::Convert(e.to_string()))?;
+        Ok(arrow_payload(&ipc))
+    }
+
+    /// Read every record at the latest snapshot — shared by the Arrow exporters.
+    fn snapshot_records(&self) -> Result<Vec<Record>, McpError> {
+        let engine = self.engine.write().expect("engine lock poisoned");
+        let snap = TxId::new(engine.manifest().last_tx_id);
+        Ok(engine.snapshot_iter(snap)?)
+    }
+
     /// Commit an n-ary relationship as a single hyperedge record. This is the
     /// agent-facing surface for nDB's distinctive model: a relationship of any
     /// arity is one record, not a junction table. `roles` connect entities;
@@ -846,6 +924,17 @@ impl McpServer {
             }]
         }))
     }
+}
+
+/// Wrap raw Arrow IPC bytes in the JSON envelope MCP tools return: base64 for
+/// the binary, plus the decoded byte length so a client can size its buffer.
+fn arrow_payload(ipc: &[u8]) -> serde_json::Value {
+    serde_json::json!({
+        "format": "arrow_ipc_stream",
+        "encoding": "base64",
+        "byte_len": ipc.len(),
+        "data": BASE64.encode(ipc),
+    })
 }
 
 /// Static `resources/list` set (A4).
@@ -1220,6 +1309,26 @@ fn tool_list() -> Vec<serde_json::Value> {
                 "high": wire_value_schema()
             }),
             &["type_id", "property_id"],
+        ),
+        tool(
+            "ndb.arrow_export",
+            "export all records as a base64 Arrow IPC stream (fixed-size batches, one schema) for Polars/pandas/DuckDB/cuDF",
+            serde_json::json!({
+                "batch_rows": {"type": "integer", "minimum": 1, "default": 65536, "description": "rows per Arrow batch"}
+            }),
+            &[],
+        ),
+        tool(
+            "ndb.arrow_vectors",
+            "export a dense embedding matrix (primary_id + FixedSizeList<Float32,dim>) as base64 Arrow IPC for GPU ANN (cuVS)",
+            serde_json::json!({"type_id": type_id_prop, "property_id": prop_id_prop}),
+            &["type_id", "property_id"],
+        ),
+        tool(
+            "ndb.arrow_edge_index",
+            "export the hyperedge incidence list (hyperedge_id, role_id, participant_id, participant_kind) as base64 Arrow IPC for GNNs (cuGraph/PyG)",
+            serde_json::json!({}),
+            &[],
         ),
     ]
 }
@@ -1700,6 +1809,58 @@ mod tests {
             .unwrap();
         assert!(text.contains("ndb.read"));
         assert!(text.contains("ndb.neighbors"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn arrow_export_tools_return_base64_ipc() {
+        let dir = temp_dir("arrow");
+        let server = McpServer::open(&dir).unwrap();
+        // Commit an entity (type 5) with a 3-d vector on property 20.
+        call(
+            &server,
+            r#"{"jsonrpc":"2.0","id":50,"method":"tools/call","params":{
+                "name":"ndb.commit_entity",
+                "arguments":{"type_id":5,"properties":[
+                    {"prop_id":20,"value":{"tag":"vector","value":[1.0,2.0,3.0]}}
+                ]}
+            }}"#,
+        );
+
+        // The Arrow IPC stream begins with the 0xFFFFFFFF continuation marker;
+        // decode the base64 and check it.
+        let is_arrow = |b64: &str| {
+            let bytes = BASE64.decode(b64).expect("valid base64");
+            bytes.len() >= 4 && bytes[..4] == [0xFF, 0xFF, 0xFF, 0xFF]
+        };
+
+        let exp = call(
+            &server,
+            r#"{"jsonrpc":"2.0","id":51,"method":"tools/call","params":{"name":"ndb.arrow_export"}}"#,
+        );
+        assert_eq!(exp["result"]["encoding"], "base64");
+        assert!(is_arrow(exp["result"]["data"].as_str().unwrap()));
+
+        let vecs = call(
+            &server,
+            r#"{"jsonrpc":"2.0","id":52,"method":"tools/call","params":{
+                "name":"ndb.arrow_vectors","arguments":{"type_id":5,"property_id":20}
+            }}"#,
+        );
+        assert!(is_arrow(vecs["result"]["data"].as_str().unwrap()));
+
+        let edges = call(
+            &server,
+            r#"{"jsonrpc":"2.0","id":53,"method":"tools/call","params":{"name":"ndb.arrow_edge_index"}}"#,
+        );
+        assert!(is_arrow(edges["result"]["data"].as_str().unwrap()));
+
+        // Missing required params → JSON-RPC error.
+        let bad = call(
+            &server,
+            r#"{"jsonrpc":"2.0","id":54,"method":"tools/call","params":{"name":"ndb.arrow_vectors"}}"#,
+        );
+        assert!(bad["error"].is_object());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
