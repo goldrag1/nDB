@@ -23,7 +23,29 @@ not yet "easy." This stage closes that.
 
 ## Components
 
-### 1. Server follower mode (the enabler) — build first
+### 0. Base-backup-over-HTTP bootstrap (prerequisite — discovered 2026-06-14)
+
+**A correct follower must bootstrap from the leader's base backup before
+streaming.** The pull watermark is `(wal_seq, byte_offset)`; those only line up
+with the leader if the follower's WAL *is* a byte-for-byte continuation of the
+leader's — i.e. it started from `backup_to`. A follower that starts empty and
+streams from the leader's current segment **silently diverges** if the leader
+rotated/pruned its WAL before the follower joined (`poll_once` returns
+`Rotated` for the pruned case, but fresh-empty-follower offset 0 against an
+already-rotated leader has no safe meaning).
+
+`Engine::backup_to(dest)` exists but is **local-only — no HTTP route**. So this
+stage must add:
+- Leader: `GET /v1/backup` — stream a consistent base backup (e.g. tar of the
+  DB dir produced by `backup_to` to a temp), plus the `(wal_seq, offset)`
+  watermark it corresponds to.
+- Follower bootstrap: on first start with an empty DB, `GET /v1/backup`,
+  restore it, initialise the `FollowerCursor` at the backup's watermark, then
+  enter the pull loop.
+
+This is the real keystone; component 1 builds on it.
+
+### 1. Server follower mode (the enabler) — build on §0
 - New server flags: `--replicate-from <leader-url>` and
   `--replicate-interval <secs>` (default 2s). Optional `--replicate-token` for
   the leader's bearer auth.
