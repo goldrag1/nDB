@@ -1,0 +1,35 @@
+# Headless service: stable per-pod DNS (<fullname>-0.<fullname>-headless) so a
+# follower can address the leader (ordinal 0) directly.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ndb.fullname" . }}-headless
+  labels:
+    {{- include "ndb.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true # leader must be reachable for followers to bootstrap before Ready
+  selector:
+    {{- include "ndb.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.port }}
+      targetPort: http
+---
+# Client service: load-balances reads across all pods (leader + replicas).
+# Point your application's reads here; send writes to the leader pod / a
+# leader-only Service if you need write affinity.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ndb.fullname" . }}
+  labels:
+    {{- include "ndb.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "ndb.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.port }}
+      targetPort: http

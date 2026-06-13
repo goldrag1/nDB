@@ -1,0 +1,22 @@
+nDB is deploying as a {{ .Values.replicaCount }}-pod StatefulSet.
+
+  Leader (writes + reads):  {{ include "ndb.fullname" . }}-0
+  Replicas (reads only):    {{ include "ndb.fullname" . }}-1 .. -{{ sub (.Values.replicaCount | int) 1 }}
+                            (bootstrap from + follow the leader; writes → 403)
+
+Reads (load-balanced across all pods):
+  http://{{ include "ndb.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.port }}/v1/health
+
+Writes (send to the leader):
+  http://{{ include "ndb.fullname" . }}-0.{{ include "ndb.fullname" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.port }}/v1/commit
+
+Port-forward to try it locally:
+  kubectl port-forward svc/{{ include "ndb.fullname" . }} {{ .Values.port }}:{{ .Values.port }}
+  curl localhost:{{ .Values.port }}/v1/health
+
+Probes: liveness GET /v1/health, readiness GET /v1/ready.
+{{- if not .Values.persistence.enabled }}
+
+WARNING: persistence.enabled=false — data is in emptyDir and is LOST on pod
+restart. Set persistence.enabled=true for anything real.
+{{- end }}

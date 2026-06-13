@@ -1,0 +1,41 @@
+# Default values for the nDB chart.
+
+image:
+  repository: ghcr.io/goldrag1/ndb
+  tag: "" # defaults to .Chart.appVersion
+  pullPolicy: IfNotPresent
+
+# Total pods. Ordinal 0 is the leader (writes); ordinals 1+ are read-only
+# replicas that bootstrap from and follow the leader. 1 = single-node.
+replicaCount: 3
+
+# Container/Service port the server binds.
+port: 8742
+
+# Seconds between follower pulls when caught up.
+replicateInterval: 2
+
+persistence:
+  enabled: true
+  size: 10Gi
+  # storageClassName: ""   # use the cluster default unless set
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    memory: 1Gi
+
+# Optional bearer token for Admin routes (/backup, /replicate) and, if you
+# also gate reads/writes, every route. Followers use it to pull from the
+# leader. Provide via an existing secret OR an inline value (dev only).
+auth:
+  # Name of an existing secret with key `token`. Takes precedence over `token`.
+  existingSecret: ""
+  token: ""
+
+# Pod scheduling.
+nodeSelector: {}
+tolerations: []
+affinity: {}

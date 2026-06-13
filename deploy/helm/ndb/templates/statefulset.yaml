@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "ndb.fullname" . }}
+  labels:
+    {{- include "ndb.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "ndb.fullname" . }}-headless
+  replicas: {{ .Values.replicaCount }}
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "ndb.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ndb.selectorLabels" . | nindent 8 }}
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: ndb
+          image: {{ include "ndb.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.port }}
+          {{- if or .Values.auth.existingSecret .Values.auth.token }}
+          env:
+            - name: NDB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret | default (printf "%s-auth" (include "ndb.fullname" .)) }}
+                  key: token
+          {{- end }}
+          # Ordinal 0 is the leader (writes); ordinals 1+ bootstrap from and
+          # follow it. StatefulSet pods share one spec, so the ordinal is read
+          # from $HOSTNAME at start and the follower flags added conditionally.
+          command: ["/usr/bin/tini", "--", "/bin/sh", "-c"]
+          args:
+            - |
+              ORD="${HOSTNAME##*-}"
+              LEADER="{{ include "ndb.fullname" . }}-0.{{ include "ndb.fullname" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.port }}"
+              if [ "$ORD" = "0" ]; then
+                exec ndb-server --path /data --bind 0.0.0.0:{{ .Values.port }}
+              else
+                exec ndb-server --path /data --bind 0.0.0.0:{{ .Values.port }} \
+                  --replicate-from "http://${LEADER}" \
+                  --replicate-interval {{ .Values.replicateInterval }} \
+                  {{- if or .Values.auth.existingSecret .Values.auth.token }}
+                  --replicate-token "$NDB_TOKEN"
+                  {{- end }}
+              fi
+          livenessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /v1/ready
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if not .Values.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.persistence.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+  {{- end }}
