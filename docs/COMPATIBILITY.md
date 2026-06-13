@@ -55,11 +55,11 @@ depends on.
 | **Engine / server release** | `nDB X.Y.Z` | workspace `Cargo.toml` | `2.4.0` | SemVer. Breaking API/behaviour → major. |
 | **Wire protocol** | `/vN` URL prefix | `ndb-server` routes | `v1` | Within `v1`: additive only. A break ships `/v2` *alongside* `/v1`; live clients never break. |
 | **On-disk format** | `FORMAT_VERSION` | `record.rs` | `3` | "Always opens" (above). New version = new capability + retained old readers. |
-| **TypeScript SDK** | `@ndb/client` semver | `clients/ts` | (initial) | SemVer, tracks protocol `v1`. Major SDK bump only on a protocol major. |
+| **TypeScript SDK** | `@n-dimension-database-ndb/client` semver | `clients/ts` | (initial) | SemVer, tracks protocol `v1`. Major SDK bump only on a protocol major. |
 
 ### What "pinning" means for a consumer
 
-- **An application** pins the **SDK** (`@ndb/client@^1`) and talks to a `/v1`
+- **An application** pins the **SDK** (`@n-dimension-database-ndb/client@^1`) and talks to a `/v1`
   server. Any `1.x` server speaks `/v1`; upgrade the server freely.
 - **A server operator** upgrades the **engine/server** release at will; the
   on-disk format promise means existing databases keep opening, and the `/v1`

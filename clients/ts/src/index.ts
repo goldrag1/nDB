@@ -1,5 +1,5 @@
 /**
- * @ndb/client — thin typed client for the nDB wire protocol v1.
+ * @n-dimension-database-ndb/client — thin typed client for the nDB wire protocol v1.
  *
  * Zero runtime dependencies. Targets the `/v1` HTTP API documented in
  * docs/PROTOCOL.md. Runs anywhere `fetch` + `AbortController` exist:

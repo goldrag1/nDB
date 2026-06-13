@@ -1,5 +1,5 @@
 /**
- * Launch test: the @ndb/mcp wrapper resolves a binary, starts the server, and
+ * Launch test: the @n-dimension-database-ndb/mcp wrapper resolves a binary, starts the server, and
  * speaks MCP (newline-delimited JSON-RPC) over stdio — initialize + tools/list
  * return the nDB tool surface.
  *

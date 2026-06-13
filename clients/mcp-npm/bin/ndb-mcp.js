@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * @ndb/mcp launcher.
+ * @n-dimension-database-ndb/mcp launcher.
  *
  * Resolves the platform `ndb-mcp-server` binary and execs it, passing through
  * args and stdio so the MCP JSON-RPC transport (newline-delimited over
@@ -32,7 +32,7 @@ function platformTarget() {
   };
   const key = map[`${plat}-${arch}`];
   const ext = plat === "win32" ? ".exe" : "";
-  return { pkg: key && `@ndb/mcp-${key}`, ext };
+  return { pkg: key && `@n-dimension-database-ndb/mcp-${key}`, ext };
 }
 
 function resolveBinary() {
@@ -74,7 +74,7 @@ function resolveBinary() {
 }
 
 function fail(msg) {
-  process.stderr.write(`@ndb/mcp: ${msg}\n`);
+  process.stderr.write(`@n-dimension-database-ndb/mcp: ${msg}\n`);
   process.exit(1);
 }
 

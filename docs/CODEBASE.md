@@ -34,8 +34,8 @@ Workspace: edition 2024, `unsafe_code = forbid`, version 1.3.0. Authoritative de
 - `ndb-renderer` pulls `ndb-slicer`. `bench-race-sqlite-rust` is independent (rusqlite only).
 
 ## Clients & deploy
-- **`clients/ts`** — `@ndb/client` (v0.1.0): thin typed TS SDK for wire protocol v1, zero deps, runs on Node/browser/Deno/edge. `src/index.ts` → `dist/index.js`.
-- **`clients/mcp-npm`** — `@ndb/mcp` (v0.1.0): one-command launcher (`ndb-mcp` bin) pointing Claude/Cursor/Codex at an nDB database; wraps `ndb-mcp-server`. `bin/ndb-mcp.js`.
+- **`clients/ts`** — `@n-dimension-database-ndb/client` (v0.1.0): thin typed TS SDK for wire protocol v1, zero deps, runs on Node/browser/Deno/edge. `src/index.ts` → `dist/index.js`.
+- **`clients/mcp-npm`** — `@n-dimension-database-ndb/mcp` (v0.1.0): one-command launcher (`ndb-mcp` bin) pointing Claude/Cursor/Codex at an nDB database; wraps `ndb-mcp-server`. `bin/ndb-mcp.js`.
 - **`clients/python`** — Python wire client (`ndb_client/`, `pyproject.toml`, tests).
 - **`Dockerfile`** + **`docker-compose.yml`** (single server) + **`docker-compose.sharded.yml`** (router + N shards).
 - **`deploy/helm/ndb`** — Helm chart (`Chart.yaml`, `values.yaml`); `deploy/README.md`.

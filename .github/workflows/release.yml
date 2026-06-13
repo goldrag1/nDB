@@ -47,14 +47,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ndb-${{ matrix.name }}.tar.gz
-      # Per-platform npm package holding the MCP server binary. The @ndb/mcp
+      # Per-platform npm package holding the MCP server binary. The @n-dimension-database-ndb/mcp
       # launcher resolves the one matching the host via optionalDependencies.
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
-      - name: Assemble + publish @ndb/mcp-${{ matrix.npmpkg }}
-        continue-on-error: true # non-blocking until NPM_TOKEN + @ndb org exist; binaries already attached above
+      - name: Assemble + publish @n-dimension-database-ndb/mcp-${{ matrix.npmpkg }}
+        continue-on-error: true # non-blocking until NPM_TOKEN + @n-dimension-database-ndb org exist; binaries already attached above
         run: |
           ext=""; [ "${{ matrix.npmos }}" = "win32" ] && ext=".exe"
           pkg="ndb-mcp-${{ matrix.npmpkg }}"
@@ -63,7 +63,7 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           cat > "$pkg/package.json" <<JSON
           {
-            "name": "@ndb/mcp-${{ matrix.npmpkg }}",
+            "name": "@n-dimension-database-ndb/mcp-${{ matrix.npmpkg }}",
             "version": "$version",
             "description": "nDB MCP server binary for ${{ matrix.npmpkg }}.",
             "license": "MIT",
@@ -105,14 +105,14 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-  # ---- npm packages: @ndb/client + @ndb/mcp ------------------------------
-  # Runs after `binaries` so the per-platform @ndb/mcp-* packages (which the
-  # @ndb/mcp launcher depends on) are already on the registry.
+  # ---- npm packages: @n-dimension-database-ndb/client + @n-dimension-database-ndb/mcp ------------------------------
+  # Runs after `binaries` so the per-platform @n-dimension-database-ndb/mcp-* packages (which the
+  # @n-dimension-database-ndb/mcp launcher depends on) are already on the registry.
   npm:
-    name: npm @ndb/client + @ndb/mcp
+    name: npm @n-dimension-database-ndb/client + @n-dimension-database-ndb/mcp
     needs: binaries
     runs-on: ubuntu-latest
-    # Non-blocking until the @ndb npm org + NPM_TOKEN secret exist. The image
+    # Non-blocking until the @n-dimension-database-ndb npm org + NPM_TOKEN secret exist. The image
     # (docker job) + release binaries (binaries job) still publish without it;
     # re-run this job once npm is set up.
     continue-on-error: true
@@ -122,7 +122,7 @@ jobs:
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
-      - name: Publish @ndb/client
+      - name: Publish @n-dimension-database-ndb/client
         working-directory: clients/ts
         run: |
           npm ci
@@ -131,7 +131,7 @@ jobs:
           npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Publish @ndb/mcp
+      - name: Publish @n-dimension-database-ndb/mcp
         working-directory: clients/mcp-npm
         run: npm publish --access public
         env:

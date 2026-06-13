@@ -29,11 +29,11 @@ cron. Operational endpoints: `/v1/health` (liveness), `/v1/ready` (readiness),
 ### 2. Talk to it from TypeScript
 
 ```sh
-npm i @ndb/client
+npm i @n-dimension-database-ndb/client
 ```
 
 ```ts
-import { NdbClient } from "@ndb/client";
+import { NdbClient } from "@n-dimension-database-ndb/client";
 
 const db = new NdbClient("http://127.0.0.1:8742", { retries: 3 });
 
@@ -78,7 +78,7 @@ through the data.
 ### 1. Run the MCP server
 
 ```sh
-npx @ndb/mcp --path ./db
+npx @n-dimension-database-ndb/mcp --path ./db
 ```
 
 (Or run the binary from a release / `cargo run -p ndb-mcp-server -- --path ./db`.)
@@ -90,7 +90,7 @@ Add nDB to your MCP client config (Claude Desktop / Cursor / Codex):
 ```json
 {
   "mcpServers": {
-    "ndb": { "command": "npx", "args": ["@ndb/mcp", "--path", "./db"] }
+    "ndb": { "command": "npx", "args": ["@n-dimension-database-ndb/mcp", "--path", "./db"] }
   }
 }
 ```

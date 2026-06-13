@@ -1,5 +1,5 @@
 {
-  "name": "@ndb/client",
+  "name": "@n-dimension-database-ndb/client",
   "version": "0.1.0",
   "description": "Thin typed client for the nDB wire protocol v1 — n-dimensional database. Zero dependencies; Node, browser, Deno, edge.",
   "type": "module",

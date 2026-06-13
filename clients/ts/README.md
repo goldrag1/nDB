@@ -1,4 +1,4 @@
-# @ndb/client
+# @n-dimension-database-ndb/client
 
 Thin, typed TypeScript client for the [nDB](https://github.com/goldrag1/nDB)
 wire protocol **v1**. Zero runtime dependencies. Runs anywhere `fetch` exists —
@@ -11,13 +11,13 @@ guarantees: [`docs/COMPATIBILITY.md`](../../docs/COMPATIBILITY.md).
 ## Install
 
 ```sh
-npm i @ndb/client
+npm i @n-dimension-database-ndb/client
 ```
 
 ## Use
 
 ```ts
-import { NdbClient } from "@ndb/client";
+import { NdbClient } from "@n-dimension-database-ndb/client";
 
 const db = new NdbClient("http://127.0.0.1:8742", {
   token: process.env.NDB_TOKEN, // optional bearer token
