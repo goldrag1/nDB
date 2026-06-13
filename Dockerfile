@@ -12,9 +12,9 @@ WORKDIR /src
 # Copy the whole workspace (Cargo.toml + crates). A .dockerignore keeps
 # target/ and node_modules/ out so the context stays small.
 COPY . .
-# Build only the server binary in release mode.
-RUN cargo build --release -p ndb-server && \
-    cp target/release/ndb-server /usr/local/bin/ndb-server
+# Build the server + the sharding router in release mode.
+RUN cargo build --release -p ndb-server -p ndb-router && \
+    cp target/release/ndb-server target/release/ndb-router /usr/local/bin/
 
 # ---- runtime stage --------------------------------------------------------
 FROM debian:bookworm-slim AS runtime
@@ -24,6 +24,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates tini && \
     rm -rf /var/lib/apt/lists/*
 COPY --from=build /usr/local/bin/ndb-server /usr/local/bin/ndb-server
+COPY --from=build /usr/local/bin/ndb-router /usr/local/bin/ndb-router
 
 # Non-root runtime user owning the data dir.
 RUN useradd --system --uid 10001 --home /data ndb && \

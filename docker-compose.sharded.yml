@@ -1,0 +1,46 @@
+# A sharded nDB cluster: an ndb-router in front of N single-writer shards.
+#
+#   docker compose -f docker-compose.sharded.yml up --build
+#
+# - router → http://localhost:8740  (point clients/agents here)
+# - shard-0, shard-1 → internal only (the router fans out to them)
+#
+# Writes/reads go to the router on :8740; it routes by hash(id) (entities to
+# their owning shard, hyperedges to their anchor shard) and merges scans + kNN.
+# This is the scale-out topology; for read HA, each shard could additionally run
+# followers (see docker-compose.yml). Distinct from the leader/follower file.
+services:
+  shard-0:
+    build: .
+    command: ["--path", "/data", "--bind", "0.0.0.0:8742"]
+    volumes:
+      - shard0-data:/data
+    restart: unless-stopped
+
+  shard-1:
+    build: .
+    command: ["--path", "/data", "--bind", "0.0.0.0:8742"]
+    volumes:
+      - shard1-data:/data
+    restart: unless-stopped
+
+  router:
+    build: .
+    entrypoint: ["/usr/bin/tini", "--", "ndb-router"]
+    command:
+      - "--bind"
+      - "0.0.0.0:8740"
+      - "--shards"
+      - "http://shard-0:8742,http://shard-1:8742"
+    ports:
+      - "8740:8740"
+    depends_on:
+      shard-0:
+        condition: service_started
+      shard-1:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  shard0-data:
+  shard1-data:

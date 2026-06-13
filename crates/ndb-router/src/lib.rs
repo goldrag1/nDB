@@ -7,11 +7,14 @@
 //!
 //! Routing model (see `docs/superpowers/specs/2026-06-14-ndb-scale-sharding-design.md`):
 //! - **Shard key:** `hash(entity_id) % N` (D1). UUIDv7 ids hash uniformly.
-//! - **Point reads** (`/v1/read/:id`) route to the one owning shard.
-//! - **Scans** (`/v1/iter`) scatter to every shard and merge.
+//! - **Point reads** (`/v1/read/:id`): hash-first to the owning shard, then
+//!   scatter-on-miss (covers anchor-placed hyperedges).
+//! - **Commits** (`/v1/commit`): split by routing key — entity → owning shard,
+//!   hyperedge → anchor shard (D2), dictionary/metadata → broadcast.
+//! - **Scans** (`/v1/iter`): scatter to every shard and merge.
+//! - **Vector kNN** (`/v1/vector_search`): scatter the query, merge global top-k.
 //!
-//! This is the read-path increment. Mutation routing (commit-splitting,
-//! hyperedge anchor placement per D2) and kNN merge are subsequent increments.
+//! Subsequent increments: cross-shard traversal (`neighbors`), online resharding.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
