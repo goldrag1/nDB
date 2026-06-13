@@ -283,3 +283,85 @@ fn router_vector_search_merges_global_top_k() {
     std::fs::remove_dir_all(&dir0).ok();
     std::fs::remove_dir_all(&dir1).ok();
 }
+
+#[test]
+fn router_traverse_finds_cross_shard_neighbors() {
+    let dir0 = temp_dir("t0");
+    let dir1 = temp_dir("t1");
+    let s0 = Arc::new(Server::open(&dir0).unwrap());
+    let s1 = Arc::new(Server::open(&dir1).unwrap());
+    let a0 = spawn_shard(Arc::clone(&s0));
+    let a1 = spawn_shard(Arc::clone(&s1));
+    let urls = vec![format!("http://{a0}"), format!("http://{a1}")];
+    let shard_addr = [a0, a1];
+    let map = ShardMap::new(urls.clone());
+    let router = spawn_router(urls);
+
+    // A, B, and C chosen so C lands on a DIFFERENT shard than A.
+    let ent_a = uuid::Uuid::now_v7().to_string();
+    let ent_b = uuid::Uuid::now_v7().to_string();
+    let mut ent_c = uuid::Uuid::now_v7().to_string();
+    while map.shard_for_key(&ent_c) == map.shard_for_key(&ent_a) {
+        ent_c = uuid::Uuid::now_v7().to_string();
+    }
+    let commit = |id: &str| {
+        let body = format!(
+            "{{\"records\":[{{\"kind\":\"entity\",\"entity_id\":\"{id}\",\"type_id\":1,\"tx_id_assert\":0,\"tx_id_supersede\":\"active\",\"properties\":[]}}]}}"
+        );
+        assert_eq!(post(router, "/v1/commit", &body).0, 200);
+    };
+    commit(&ent_a);
+    commit(&ent_b);
+    commit(&ent_c);
+
+    // edge1 (A,B): anchor A → on hash(A)'s shard.
+    // edge2 (C,A): anchor C → on hash(C)'s shard (≠ A's), with A a NON-anchor member.
+    for (anchor_role, other_role, he) in [(&ent_a, &ent_b, "edge1"), (&ent_c, &ent_a, "edge2")] {
+        let he_id = uuid::Uuid::now_v7().to_string();
+        let body = format!(
+            "{{\"records\":[{{\"kind\":\"hyper_edge\",\"hyperedge_id\":\"{he_id}\",\"type_id\":2,\"tx_id_assert\":0,\"tx_id_supersede\":\"active\",\"roles\":[{{\"role_id\":7,\"entity_id\":\"{anchor_role}\"}},{{\"role_id\":8,\"entity_id\":\"{other_role}\"}}],\"properties\":[]}}]}}"
+        );
+        assert_eq!(post(router, "/v1/commit", &body).0, 200, "commit {he}");
+    }
+
+    // 1-hop traverse from A through the router must reach BOTH B and C.
+    let tq = format!("{{\"start\":\"{ent_a}\",\"hops\":[{{}}]}}");
+    let (st, body) = post(router, "/v1/traverse", &tq);
+    assert_eq!(st, 200, "router traverse: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let reached: Vec<&str> = v["entity_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|x| x.as_str())
+        .collect();
+    assert!(
+        reached.contains(&ent_b.as_str()),
+        "must reach B (edge on A's shard): {reached:?}"
+    );
+    assert!(
+        reached.contains(&ent_c.as_str()),
+        "must reach C (edge on C's shard — needs scatter): {reached:?}"
+    );
+
+    // Discriminator: a single-shard traverse on A's shard alone MISSES C
+    // (edge2 lives on C's shard), proving the router's cross-shard scatter is
+    // what makes the neighbor set complete.
+    let a_shard = map.shard_for_key(&ent_a);
+    let (st, sbody) = post(shard_addr[a_shard], "/v1/traverse", &tq);
+    assert_eq!(st, 200);
+    let sv: serde_json::Value = serde_json::from_str(&sbody).unwrap();
+    let sreached: Vec<&str> = sv["entity_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|x| x.as_str())
+        .collect();
+    assert!(
+        !sreached.contains(&ent_c.as_str()),
+        "single shard must NOT see the off-shard edge: {sreached:?}"
+    );
+
+    std::fs::remove_dir_all(&dir0).ok();
+    std::fs::remove_dir_all(&dir1).ok();
+}

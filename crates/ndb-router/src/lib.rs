@@ -194,6 +194,7 @@ impl Router {
             ("GET", "/iter") => self.route_iter(),
             ("POST", "/commit") => self.route_commit(body),
             ("POST", "/vector_search") => self.route_vector_search(body),
+            ("POST", "/traverse") => self.route_traverse(body),
             _ => error_body(
                 501,
                 "not_implemented",
@@ -402,6 +403,90 @@ impl Router {
         });
         hits.truncate(k);
         let out = serde_json::json!({ "hits": hits });
+        (
+            200,
+            "application/json",
+            serde_json::to_vec(&out).unwrap_or_default(),
+        )
+    }
+
+    /// Cross-shard breadth-first traversal, driven hop-by-hop by the router.
+    ///
+    /// A single shard's `hyperedges_for_entity(X)` only sees edges it stores —
+    /// under D2 anchor placement, edges where X is a **non-anchor** member live
+    /// on the anchor's shard, not X's. So per hop, for every entity in the
+    /// frontier, we run a **single-hop** traverse on **every** shard and union
+    /// the results into the next frontier. Each shard contributes the incident
+    /// edges it owns; the union is the complete neighbor set.
+    ///
+    /// `MAX_FRONTIER` bounds the fan-out (v1 is bounded-depth/-breadth); a
+    /// larger frontier returns `413 frontier_too_large` rather than melt the
+    /// cluster.
+    fn route_traverse(&self, body: &[u8]) -> (u16, &'static str, Vec<u8>) {
+        const MAX_FRONTIER: usize = 10_000;
+        let req: serde_json::Value = match serde_json::from_slice(body) {
+            Ok(v) => v,
+            Err(e) => return error_body(400, "bad_request", &format!("invalid JSON: {e}")),
+        };
+        let Some(start) = req.get("start").and_then(serde_json::Value::as_str) else {
+            return error_body(400, "bad_request", "missing start");
+        };
+        let hops = req
+            .get("hops")
+            .and_then(|h| h.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let mut frontier: std::collections::BTreeSet<String> =
+            std::iter::once(start.to_string()).collect();
+        for hop in &hops {
+            let mut next: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            for entity in &frontier {
+                let sub = serde_json::json!({ "start": entity, "hops": [hop] });
+                let payload = serde_json::to_vec(&sub).unwrap_or_default();
+                for url in self.map.urls() {
+                    match post_to_shard(url, "/v1/traverse", &payload) {
+                        Ok((status, resp)) if (200..300).contains(&status) => {
+                            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&resp)
+                                && let Some(ids) = v.get("entity_ids").and_then(|e| e.as_array())
+                            {
+                                for id in ids {
+                                    if let Some(s) = id.as_str() {
+                                        next.insert(s.to_string());
+                                    }
+                                }
+                            }
+                        }
+                        Ok((status, resp)) => {
+                            return error_body(
+                                502,
+                                "bad_gateway",
+                                &format!(
+                                    "shard {url} traverse status {status}: {}",
+                                    String::from_utf8_lossy(&resp)
+                                ),
+                            );
+                        }
+                        Err(e) => {
+                            return error_body(502, "bad_gateway", &format!("shard {url}: {e}"));
+                        }
+                    }
+                }
+            }
+            if next.len() > MAX_FRONTIER {
+                return error_body(
+                    413,
+                    "frontier_too_large",
+                    &format!(
+                        "traversal frontier {} exceeds v1 cap {MAX_FRONTIER}",
+                        next.len()
+                    ),
+                );
+            }
+            frontier = next;
+        }
+        let entity_ids: Vec<String> = frontier.into_iter().collect();
+        let out = serde_json::json!({ "entity_ids": entity_ids });
         (
             200,
             "application/json",
