@@ -61,6 +61,9 @@ pub struct AppState {
     active: RwLock<String>,
     /// In-memory token → session map.
     pub sessions: identity::Sessions,
+    /// When set, read routes are served to unauthenticated callers as an
+    /// implicit viewer. Writes and user-admin always still require a session.
+    pub public_read: bool,
 }
 
 impl AppState {
@@ -76,7 +79,16 @@ impl AppState {
             root,
             databases: RwLock::new(dbs),
             sessions: identity::Sessions::new(),
+            public_read: false,
         }
+    }
+
+    /// Enable anonymous (no-session) access to read routes. Builder form so
+    /// existing `new` call sites are unaffected.
+    #[must_use]
+    pub fn with_public_read(mut self, enabled: bool) -> Self {
+        self.public_read = enabled;
+        self
     }
 
     fn lock_active(&self) -> String {
@@ -356,10 +368,10 @@ fn dispatch(
         }
 
         // ---- reads (any authenticated role) ----
-        ("GET", "/api/catalog") => guard_read(session.as_ref(), || {
+        ("GET", "/api/catalog") => guard_read(session.as_ref(), state.public_read, || {
             Resp::ok(store.catalog(qp.u64("as_of")))
         }),
-        ("GET", "/api/table") => guard_read(session.as_ref(), || {
+        ("GET", "/api/table") => guard_read(session.as_ref(), state.public_read, || {
             let Some(kind) = qp.u64("kind") else {
                 return Resp::fail(400, "bad_request", "missing kind");
             };
@@ -376,19 +388,19 @@ fn dispatch(
             #[allow(clippy::cast_possible_truncation)]
             Resp::ok(store.table(kind as u32, &tq))
         }),
-        ("GET", "/api/record") => guard_read(session.as_ref(), || {
+        ("GET", "/api/record") => guard_read(session.as_ref(), state.public_read, || {
             let Some(id) = qp.get("id").and_then(|s| Uuid::parse_str(s).ok()) else {
                 return Resp::fail(400, "bad_request", "missing or invalid id");
             };
             Resp::ok(store.record(id, qp.u64("as_of")))
         }),
-        ("GET", "/api/history") => guard_read(session.as_ref(), || {
+        ("GET", "/api/history") => guard_read(session.as_ref(), state.public_read, || {
             let Some(id) = qp.get("id").and_then(|s| Uuid::parse_str(s).ok()) else {
                 return Resp::fail(400, "bad_request", "missing or invalid id");
             };
             Resp::ok(store.history(id, qp.get("property")))
         }),
-        ("GET", "/api/pivot") => guard_read(session.as_ref(), || {
+        ("GET", "/api/pivot") => guard_read(session.as_ref(), state.public_read, || {
             let Some(kind) = qp.u64("kind") else {
                 return Resp::fail(400, "bad_request", "missing kind");
             };
@@ -399,17 +411,17 @@ fn dispatch(
             #[allow(clippy::cast_possible_truncation)]
             Resp::ok(store.pivot(kind as u32, row, col, agg, qp.get("value"), qp.u64("as_of")))
         }),
-        ("GET", "/api/graph") => guard_read(session.as_ref(), || {
+        ("GET", "/api/graph") => guard_read(session.as_ref(), state.public_read, || {
             let limit = usize::try_from(qp.u64("limit").unwrap_or(300)).unwrap_or(300);
             Resp::ok(store.graph(qp.u64("as_of"), limit))
         }),
-        ("GET", "/api/neighbors") => guard_read(session.as_ref(), || {
+        ("GET", "/api/neighbors") => guard_read(session.as_ref(), state.public_read, || {
             let Some(id) = qp.get("id").and_then(|s| Uuid::parse_str(s).ok()) else {
                 return Resp::fail(400, "bad_request", "missing or invalid id");
             };
             Resp::ok(store.neighbors(id, qp.u64("as_of")))
         }),
-        ("GET", "/api/hyperedges") => guard_read(session.as_ref(), || {
+        ("GET", "/api/hyperedges") => guard_read(session.as_ref(), state.public_read, || {
             let Some(kind) = qp.u64("kind") else {
                 return Resp::fail(400, "bad_request", "missing kind");
             };
@@ -417,7 +429,7 @@ fn dispatch(
             #[allow(clippy::cast_possible_truncation)]
             Resp::ok(store.hyperedges(kind as u32, qp.u64("as_of"), limit))
         }),
-        ("GET", "/api/similar") => guard_read(session.as_ref(), || {
+        ("GET", "/api/similar") => guard_read(session.as_ref(), state.public_read, || {
             let Some(id) = qp.get("id").and_then(|s| Uuid::parse_str(s).ok()) else {
                 return Resp::fail(400, "bad_request", "missing or invalid id");
             };
@@ -427,27 +439,27 @@ fn dispatch(
             let k = usize::try_from(qp.u64("k").unwrap_or(10)).unwrap_or(10);
             Resp::ok(store.find_similar(id, property, k))
         }),
-        ("GET", "/api/schema") => guard_read(session.as_ref(), || Resp::ok(store.schema())),
-        ("GET", "/api/integrity") => guard_read(session.as_ref(), || Resp::ok(store.integrity())),
-        ("GET", "/api/tx_time") => guard_read(session.as_ref(), || {
+        ("GET", "/api/schema") => guard_read(session.as_ref(), state.public_read, || Resp::ok(store.schema())),
+        ("GET", "/api/integrity") => guard_read(session.as_ref(), state.public_read, || Resp::ok(store.integrity())),
+        ("GET", "/api/tx_time") => guard_read(session.as_ref(), state.public_read, || {
             let Some(tx) = qp.u64("tx") else {
                 return Resp::fail(400, "bad_request", "missing tx");
             };
             Resp::ok(store.tx_time(tx))
         }),
-        ("GET", "/api/tx_at") => guard_read(session.as_ref(), || {
+        ("GET", "/api/tx_at") => guard_read(session.as_ref(), state.public_read, || {
             let Some(us) = qp.get("us").and_then(|s| s.parse::<i64>().ok()) else {
                 return Resp::fail(400, "bad_request", "missing us (microseconds)");
             };
             Resp::ok(store.tx_at(us))
         }),
-        ("GET", "/api/diff") => guard_read(session.as_ref(), || {
+        ("GET", "/api/diff") => guard_read(session.as_ref(), state.public_read, || {
             let (Some(from), Some(to)) = (qp.u64("from"), qp.u64("to")) else {
                 return Resp::fail(400, "bad_request", "missing from/to tx");
             };
             Resp::ok(store.diff(from, to))
         }),
-        ("POST", "/api/query") => guard_read(session.as_ref(), || run_query(store, body)),
+        ("POST", "/api/query") => guard_read(session.as_ref(), state.public_read, || run_query(store, body)),
 
         // ---- writes (editor / admin) ----
         ("POST", "/api/commit") => match writer(session.as_ref()) {
@@ -547,8 +559,8 @@ fn dispatch(
 
 // ---- auth helpers ------------------------------------------------------
 
-fn guard_read(session: Option<&Session>, f: impl FnOnce() -> Resp) -> Resp {
-    if session.is_some() {
+fn guard_read(session: Option<&Session>, public_read: bool, f: impl FnOnce() -> Resp) -> Resp {
+    if session.is_some() || public_read {
         f()
     } else {
         Resp::fail(401, "unauthorized", "login required")

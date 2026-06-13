@@ -1540,6 +1540,193 @@ impl Store {
         Ok(tx.get())
     }
 
+    /// Like [`create`](Self::create), but writes the entity under the supplied
+    /// UUID instead of allocating a fresh one. Used by [`merge_from`](Self::merge_from)
+    /// so cross-database `$ref` values keep resolving after a copy.
+    ///
+    /// # Errors
+    /// Propagates engine errors.
+    pub fn create_with_id(
+        &self,
+        id: Uuid,
+        kind: &str,
+        props: &[(String, Value)],
+        author: Option<&str>,
+    ) -> Result<u64, StoreError> {
+        let recs = self.records(self.snapshot(None));
+        let names = Self::names(&recs);
+        let mut alloc = Allocator::new(&names);
+
+        let tx = self.engine.with_write_txn(|mut txn| {
+            let type_id = alloc.type_id(kind, &mut txn);
+            let mut entity_props = Vec::with_capacity(props.len() + 1);
+            for (name, value) in props {
+                let pid = alloc.prop_id(name, &mut txn);
+                entity_props.push((pid, value.clone()));
+            }
+            if let Some(a) = author
+                && !is_reserved(kind)
+            {
+                let apid = alloc.prop_id(AUTHOR_PROP, &mut txn);
+                entity_props.push((apid, Value::String(a.to_string())));
+            }
+            txn.put_entity(EntityRecord {
+                entity_id: EntityId::from_bytes(*id.as_bytes()),
+                type_id,
+                tx_id_assert: TxId::ACTIVE,
+                tx_id_supersede: TxId::ACTIVE,
+                properties: entity_props,
+            });
+            txn.commit()
+        })?;
+        Ok(tx.get())
+    }
+
+    /// Like [`create_hyperedge`](Self::create_hyperedge), but writes the edge
+    /// under the supplied UUID. Edge-on-edge fillers (`edge_roles`) therefore
+    /// keep resolving after a cross-database copy.
+    ///
+    /// # Errors
+    /// `BadValue` if no role-fillers are given; engine errors otherwise.
+    pub fn create_hyperedge_with_id(
+        &self,
+        id: Uuid,
+        kind: &str,
+        entity_roles: &[(String, Uuid)],
+        edge_roles: &[(String, Uuid)],
+        props: &[(String, Value)],
+    ) -> Result<u64, StoreError> {
+        if entity_roles.is_empty() && edge_roles.is_empty() {
+            return Err(StoreError::BadValue(
+                "an edge needs at least one role-filler".to_string(),
+            ));
+        }
+        let recs = self.records(self.snapshot(None));
+        let names = Self::names(&recs);
+        let mut alloc = Allocator::new(&names);
+
+        let tx = self.engine.with_write_txn(|mut txn| {
+            let type_id = alloc.type_id(kind, &mut txn);
+            let mut roles = Vec::with_capacity(entity_roles.len());
+            for (rname, ent) in entity_roles {
+                let rid = alloc.role_id(rname, &mut txn);
+                roles.push((rid, EntityId::from_bytes(*ent.as_bytes())));
+            }
+            let mut hyperedge_roles = Vec::with_capacity(edge_roles.len());
+            for (rname, edge) in edge_roles {
+                let rid = alloc.role_id(rname, &mut txn);
+                hyperedge_roles.push((rid, HyperedgeId::from_bytes(*edge.as_bytes())));
+            }
+            let mut properties = Vec::with_capacity(props.len());
+            for (name, value) in props {
+                let pid = alloc.prop_id(name, &mut txn);
+                properties.push((pid, value.clone()));
+            }
+            txn.put_hyperedge(HyperEdgeRecord {
+                hyperedge_id: HyperedgeId::from_bytes(*id.as_bytes()),
+                type_id,
+                tx_id_assert: TxId::ACTIVE,
+                tx_id_supersede: TxId::ACTIVE,
+                roles,
+                hyperedge_roles,
+                properties,
+            });
+            txn.commit()
+        })?;
+        Ok(tx.get())
+    }
+
+    /// Copy every live entity and hyperedge from `source` into this database,
+    /// **preserving their UUIDs** and re-interning `source`'s type/property/role
+    /// **names** into this database's dictionary. Entities are written before
+    /// hyperedges so role-fillers exist first; edges-on-edges resolve because
+    /// ids are preserved. Reserved (`$`-prefixed) kinds/properties are skipped,
+    /// so accounts and author attribution never leak between databases.
+    ///
+    /// This fuses several single-domain databases into one multi-kind database.
+    /// Returns `(entities_copied, hyperedges_copied)`.
+    ///
+    /// # Errors
+    /// Propagates the first engine/write error encountered.
+    pub fn merge_from(&self, source: &Store) -> Result<(usize, usize), StoreError> {
+        let snap = source.snapshot(None);
+        let recs = source.records(snap);
+        let names = Self::names(&recs);
+
+        let mut entities = 0usize;
+        for r in &recs {
+            let Record::Entity(e) = r else { continue };
+            let Some(kind) = names.type_name.get(&e.type_id.get()) else {
+                continue;
+            };
+            if is_reserved(kind) {
+                continue;
+            }
+            let props: Vec<(String, Value)> = e
+                .properties
+                .iter()
+                .filter_map(|(pid, v)| {
+                    let name = names.prop_name.get(&pid.get())?;
+                    if is_reserved(name) {
+                        return None;
+                    }
+                    Some((name.clone(), v.clone()))
+                })
+                .collect();
+            self.create_with_id(e.entity_id.into_uuid(), kind, &props, None)?;
+            entities += 1;
+        }
+
+        let mut hyperedges = 0usize;
+        for r in &recs {
+            let Record::HyperEdge(h) = r else { continue };
+            let Some(kind) = names.type_name.get(&h.type_id.get()) else {
+                continue;
+            };
+            if is_reserved(kind) {
+                continue;
+            }
+            let entity_roles: Vec<(String, Uuid)> = h
+                .roles
+                .iter()
+                .filter_map(|(rid, ent)| {
+                    Some((names.role_name.get(&rid.get())?.clone(), ent.into_uuid()))
+                })
+                .collect();
+            let edge_roles: Vec<(String, Uuid)> = h
+                .hyperedge_roles
+                .iter()
+                .filter_map(|(rid, edge)| {
+                    Some((names.role_name.get(&rid.get())?.clone(), edge.into_uuid()))
+                })
+                .collect();
+            if entity_roles.is_empty() && edge_roles.is_empty() {
+                continue;
+            }
+            let props: Vec<(String, Value)> = h
+                .properties
+                .iter()
+                .filter_map(|(pid, v)| {
+                    let name = names.prop_name.get(&pid.get())?;
+                    if is_reserved(name) {
+                        return None;
+                    }
+                    Some((name.clone(), v.clone()))
+                })
+                .collect();
+            self.create_hyperedge_with_id(
+                h.hyperedge_id.into_uuid(),
+                kind,
+                &entity_roles,
+                &edge_roles,
+                &props,
+            )?;
+            hyperedges += 1;
+        }
+
+        Ok((entities, hyperedges))
+    }
+
     /// Declare a property as a vector so its values are indexed for similarity
     /// search. Allocates the property name if new. Register before writing the
     /// vectors you want searchable.

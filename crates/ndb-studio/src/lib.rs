@@ -11,4 +11,5 @@
 pub mod http;
 pub mod identity;
 pub mod jsonval;
+pub mod seed;
 pub mod store;

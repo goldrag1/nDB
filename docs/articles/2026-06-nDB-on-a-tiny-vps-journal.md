@@ -29,3 +29,25 @@ Mem:  7.8Gi total  2.9Gi used  1.9Gi free  3.2Gi buff/cache  4.8Gi available
 **Topology chosen:** one hostname `ndb.nextstar-erp.com`, path-routed: `/v1/*` → ndb-server (read-only, :8742), else → Studio GUI (`--public-read`, :8780). Both cgroup-capped (`MemoryMax=384M`, `CPUQuota=50%` each → Frappe keeps ≥1 core).
 
 ---
+
+## 2026-06-14 — Merge attempt → the datasets are nameless → pivot to a seed
+
+Built `--merge` + UUID-preserving `create_with_id`/`merge_from` per the spec. First run on the originals: **mutated the source WALs** (opening read-write triggers WAL recovery — `exoplanet/000003.ndblog` truncated to 0, `alphafold` grew to 286 KB). **Lesson:** demo/source DBs are sacred — always merge from `cp -r` copies, never the originals. (Engine opens are read-write; there is no read-only `Engine::open`.)
+
+Then the real surprise: merge copied **0** from alphafold/exoplanet but 168 from biodiv. Instrumented `merge_from` with a record-variant histogram:
+
+```
+alphafold: head=134 recs=1783 entity=1624 edge=25 typename=0 propkey=0 rolename=0 other=134
+exoplanet: head=303 recs=606  entity=163  edge=140 typename=0 propkey=0 rolename=0 other=303
+biodiv:    head=240 recs=509  entity=168  edge=63  typename=7 propkey=21 rolename=11 other=239
+chemistry: head=180 recs=354  entity=131  edge=43  typename=0 propkey=0 rolename=0 other=180
+seismic:   head=192 recs=5157 entity=4827 edge=138 typename=0 propkey=0 rolename=0 other=192
+```
+
+**Cause:** 4 of 5 prebuilt demo DBs carry **zero TypeName/PropertyKey/RoleName dictionary records** — built by a benchmark tool (`/home/long/long/rust/ndb-bench`) that writes entities with hardcoded type-id **constants** and never registers human-readable names. `merge_from` keyed on names → skipped every entity whose type-id had no name. The catalog had the same blindness (showed `kind:7`). biodiv is the lone outlier (its builder wrote names). The three target DBs even use *different* nameless schemas (alphafold types {2,3,6,7}, exoplanet {2,3,4}, biodiv {1,2}) — no single mapping to reconstruct.
+
+**Generalizable rule:** `snapshot_iter`-derived names only work if the dictionary records are in the live stream. A DB built straight against the engine with raw type-ids is *data-complete but name-blind* — fine for benchmarks, useless for a human explorer. Don't assume a prebuilt nDB is demo-ready; check that `catalog` resolves real kind/property names, not `kind:N`.
+
+**Pivot:** author a small, properly-named, hyperedge- and vector-rich demo dataset via a `--seed-demo` routine (proteins · exoplanets · species). Cleaner names, richer relationships, fully reproducible, no dependency on name-blind legacy DBs. The `create_with_id`/`merge_from` capability stays (genuinely useful for fusing *named* DBs), just off the demo's critical path.
+
+---
