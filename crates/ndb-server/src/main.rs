@@ -4,7 +4,7 @@
 use std::process::ExitCode;
 
 use ndb_engine::{PropertyId, TypeId};
-use ndb_server::Server;
+use ndb_server::{Server, bootstrap_follower_if_needed, run_follower_loop};
 
 // =====================================================================
 // Bench-mode schema constants — exported so benchmark clients can compile
@@ -63,6 +63,12 @@ fn usage() {
          When both --tls-cert and --tls-key are supplied, the server binds TLS on --bind.\n\
          When only one is supplied or neither, the server binds plain HTTP on --bind.\n\
          \n\
+         Replication (read-only follower):\n\
+           --replicate-from <url>       Bootstrap from this leader's base backup, then stream its commits.\n\
+           --replicate-interval <secs>  Seconds between pulls when caught up (default 2).\n\
+           --replicate-token <token>    Bearer token for the leader's Admin /backup + /replicate.\n\
+         A follower serves reads and rejects writes (403 read_only).\n\
+         \n\
          Routes:\n\
            GET  /health           — liveness; always 200\n\
            GET  /ready            — readiness; 200 when engine usable, 503 while draining\n\
@@ -87,6 +93,12 @@ struct Args {
     bench_mode: bool,
     tls_cert: Option<String>,
     tls_key: Option<String>,
+    /// Run as a read-only follower streaming from this leader base URL.
+    replicate_from: Option<String>,
+    /// Seconds between follower pulls when caught up (default 2).
+    replicate_interval: u64,
+    /// Bearer token for the leader's Admin-gated /backup + /replicate.
+    replicate_token: Option<String>,
 }
 
 fn parse_args() -> Option<Args> {
@@ -97,6 +109,9 @@ fn parse_args() -> Option<Args> {
     let mut bench_mode = false;
     let mut tls_cert: Option<String> = None;
     let mut tls_key: Option<String> = None;
+    let mut replicate_from: Option<String> = None;
+    let mut replicate_interval: u64 = 2;
+    let mut replicate_token: Option<String> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--path" | "-p" => path = args.next(),
@@ -105,6 +120,11 @@ fn parse_args() -> Option<Args> {
             "--bench-mode" => bench_mode = true,
             "--tls-cert" => tls_cert = args.next(),
             "--tls-key" => tls_key = args.next(),
+            "--replicate-from" => replicate_from = args.next(),
+            "--replicate-interval" => {
+                replicate_interval = args.next().and_then(|v| v.parse().ok()).unwrap_or(2).max(1);
+            }
+            "--replicate-token" => replicate_token = args.next(),
             "--help" | "-h" => {
                 usage();
                 return None;
@@ -123,6 +143,9 @@ fn parse_args() -> Option<Args> {
         bench_mode,
         tls_cert,
         tls_key,
+        replicate_from,
+        replicate_interval,
+        replicate_token,
     })
 }
 
@@ -144,6 +167,26 @@ fn main() -> ExitCode {
     let Some(args) = parse_args() else {
         return ExitCode::from(2);
     };
+    // Follower bootstrap: if pointed at a leader and this data dir is empty,
+    // pull + restore the leader's base backup BEFORE opening the engine, so the
+    // pull cursor aligns with the leader's WAL.
+    if let Some(leader) = &args.replicate_from {
+        match bootstrap_follower_if_needed(
+            std::path::Path::new(&args.path),
+            leader,
+            args.replicate_token.as_deref(),
+        ) {
+            Ok(true) => eprintln!("ndb-server: bootstrapped follower from base backup at {leader}"),
+            Ok(false) => eprintln!(
+                "ndb-server: follower resuming from existing data at {}",
+                args.path
+            ),
+            Err(e) => {
+                eprintln!("follower bootstrap from {leader} failed: {e}");
+                return ExitCode::from(1);
+            }
+        }
+    }
     let mut server = match Server::open(&args.path) {
         Ok(s) => s,
         Err(e) => {
@@ -151,6 +194,10 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    // A follower serves reads but rejects writes (they go to the leader).
+    if args.replicate_from.is_some() {
+        server = server.with_read_only(true);
+    }
     if args.bench_mode {
         let engine = server.engine();
         let mut e = engine.write().expect("engine lock poisoned");
@@ -235,11 +282,42 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // Spawn the follower pull loop (if following) before entering the blocking
+    // serve loop. It streams the leader's post-bootstrap commits in the
+    // background; stopped after the server's run() returns.
+    let follower = args.replicate_from.clone().map(|leader| {
+        let engine = server.engine();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_t = std::sync::Arc::clone(&stop);
+        let token = args.replicate_token.clone();
+        let interval = std::time::Duration::from_secs(args.replicate_interval);
+        let handle = std::thread::spawn(move || {
+            let mut client = match ndb_client::Client::new(&leader) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("follower: invalid leader url {leader}: {e}");
+                    return;
+                }
+            };
+            if let Some(t) = token {
+                client = client.with_token(t);
+            }
+            eprintln!("ndb-server: following {leader} (interval {interval:?})");
+            run_follower_loop(&engine, &client, interval, &stop_t);
+        });
+        (handle, stop)
+    });
+
     let run_result = if use_tls {
         server.run_tls(&args.bind)
     } else {
         server.run(&args.bind)
     };
+
+    if let Some((handle, stop)) = follower {
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = handle.join();
+    }
     if let Err(e) = run_result {
         eprintln!("server error: {e}");
         return ExitCode::from(1);
