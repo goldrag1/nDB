@@ -190,10 +190,11 @@ impl Router {
             }
             ("GET", "/iter") => self.route_iter(),
             ("POST", "/commit") => self.route_commit(body),
+            ("POST", "/vector_search") => self.route_vector_search(body),
             _ => error_body(
                 501,
                 "not_implemented",
-                "router increment: GET /v1/health, /v1/read/:id, /v1/iter, POST /v1/commit are routed",
+                "router increment: GET /v1/health, /v1/read/:id, /v1/iter, POST /v1/commit, POST /v1/vector_search are routed",
             ),
         }
     }
@@ -342,6 +343,66 @@ impl Router {
             200,
             "application/json",
             serde_json::to_vec(&body).unwrap_or_default(),
+        )
+    }
+
+    /// Vector kNN across shards: scatter the SAME query to every shard, then
+    /// **merge top-k**. Each shard returns its own ascending-by-distance hits;
+    /// the global top-k is the k smallest-distance hits of the union (distance
+    /// is smaller-is-closer for every metric, so one ascending sort suffices —
+    /// no metric branching). A shard failure fails the whole query (an
+    /// incomplete kNN would silently return a wrong ranking).
+    fn route_vector_search(&self, body: &[u8]) -> (u16, &'static str, Vec<u8>) {
+        let req: serde_json::Value = match serde_json::from_slice(body) {
+            Ok(v) => v,
+            Err(e) => return error_body(400, "bad_request", &format!("invalid JSON: {e}")),
+        };
+        let k = req
+            .get("k")
+            .and_then(serde_json::Value::as_u64)
+            .map_or(usize::MAX, |n| usize::try_from(n).unwrap_or(usize::MAX));
+
+        let mut hits: Vec<serde_json::Value> = Vec::new();
+        for url in self.map.urls() {
+            match post_to_shard(url, "/v1/vector_search", body) {
+                Ok((status, resp)) if (200..300).contains(&status) => {
+                    let parsed: serde_json::Value = serde_json::from_slice(&resp)
+                        .unwrap_or_else(|_| serde_json::json!({ "hits": [] }));
+                    if let Some(arr) = parsed.get("hits").and_then(|h| h.as_array()) {
+                        hits.extend(arr.iter().cloned());
+                    }
+                }
+                Ok((status, resp)) => {
+                    return error_body(
+                        502,
+                        "bad_gateway",
+                        &format!(
+                            "shard {url} vector_search status {status}: {}",
+                            String::from_utf8_lossy(&resp)
+                        ),
+                    );
+                }
+                Err(e) => return error_body(502, "bad_gateway", &format!("shard {url}: {e}")),
+            }
+        }
+        // Ascending by distance (missing distance sorts last).
+        hits.sort_by(|a, b| {
+            let da = a
+                .get("distance")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(f64::INFINITY);
+            let db = b
+                .get("distance")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(f64::INFINITY);
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        hits.truncate(k);
+        let out = serde_json::json!({ "hits": hits });
+        (
+            200,
+            "application/json",
+            serde_json::to_vec(&out).unwrap_or_default(),
         )
     }
 

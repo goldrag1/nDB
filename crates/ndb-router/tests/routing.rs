@@ -211,3 +211,75 @@ fn router_commit_routes_entities_and_hyperedge_to_anchor() {
     std::fs::remove_dir_all(&dir0).ok();
     std::fs::remove_dir_all(&dir1).ok();
 }
+
+#[test]
+fn router_vector_search_merges_global_top_k() {
+    use ndb_engine::PropertyId;
+
+    let dir0 = temp_dir("v0");
+    let dir1 = temp_dir("v1");
+    let s0 = Arc::new(Server::open(&dir0).unwrap());
+    let s1 = Arc::new(Server::open(&dir1).unwrap());
+    // Register the vector property on both shards before any commits.
+    for s in [&s0, &s1] {
+        s.engine()
+            .write()
+            .unwrap()
+            .register_vector_property(PropertyId::new(13));
+    }
+    let a0 = spawn_shard(Arc::clone(&s0));
+    let a1 = spawn_shard(Arc::clone(&s1));
+    let urls = vec![format!("http://{a0}"), format!("http://{a1}")];
+    let router = spawn_router(urls);
+
+    // Commit 6 entities THROUGH the router with 2-D vectors [d, 0] for d=1..=6.
+    // The router scatters them across both shards by hash(entity_id).
+    let mut id_for_d: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    for d in 1..=6i64 {
+        let id = uuid::Uuid::now_v7().to_string();
+        id_for_d.insert(id.clone(), d);
+        let body = format!(
+            "{{\"records\":[{{\"kind\":\"entity\",\"entity_id\":\"{id}\",\"type_id\":1,\"tx_id_assert\":0,\"tx_id_supersede\":\"active\",\"properties\":[{{\"prop_id\":13,\"value\":{{\"tag\":\"vector\",\"value\":[{d}.0,0.0]}}}}]}}]}}"
+        );
+        let (st, b) = post(router, "/v1/commit", &body);
+        assert_eq!(st, 200, "router commit vector entity d={d}: {b}");
+    }
+
+    // kNN through the router with k=3, query at the origin. L2Squared distance
+    // of [d,0] from origin is d²: the global top-3 must be d=1,2,3 → 1,4,9.
+    let q = "{\"type_id\":1,\"property_id\":13,\"query\":[0.0,0.0],\"k\":3,\"metric\":\"l2\"}";
+    let (st, body) = post(router, "/v1/vector_search", q);
+    assert_eq!(st, 200, "vector_search: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let hits = v["hits"].as_array().expect("hits array");
+    assert_eq!(hits.len(), 3, "global top-k must be exactly 3: {body}");
+
+    // Ascending distance, and exactly d=1,2,3 (distances 1,4,9) regardless of
+    // which shard each vector landed on — proves the cross-shard top-k merge.
+    let dists: Vec<f64> = hits
+        .iter()
+        .map(|h| h["distance"].as_f64().unwrap())
+        .collect();
+    assert!(
+        dists[0] <= dists[1] && dists[1] <= dists[2],
+        "hits not ascending: {dists:?}"
+    );
+    let ds: Vec<i64> = hits
+        .iter()
+        .map(|h| id_for_d[h["entity_id"].as_str().unwrap()])
+        .collect();
+    assert_eq!(
+        ds,
+        vec![1, 2, 3],
+        "global top-3 must be the 3 closest vectors, got d={ds:?}"
+    );
+    for (got, want) in dists.iter().zip([1.0, 4.0, 9.0]) {
+        assert!(
+            (got - want).abs() < 1e-3,
+            "distance {got} != {want} (L2Squared)"
+        );
+    }
+
+    std::fs::remove_dir_all(&dir0).ok();
+    std::fs::remove_dir_all(&dir1).ok();
+}
