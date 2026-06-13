@@ -1,0 +1,30 @@
+{
+  "name": "@ndb/client",
+  "version": "0.1.0",
+  "description": "Thin typed client for the nDB wire protocol v1 — n-dimensional database. Zero dependencies; Node, browser, Deno, edge.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "keywords": ["ndb", "database", "hypergraph", "graph", "vector", "client"],
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/goldrag1/nDB.git", "directory": "clients/ts" },
+  "engines": { "node": ">=18" },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^22.0.0"
+  }
+}

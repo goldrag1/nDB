@@ -58,7 +58,7 @@ records. A hyperedge carries `roles` (entity role-fillers) and optional
 `hyperedge_roles` (edges-on-edges) and `properties`. `value.tag` ∈
 `string|i64|f64|bool|bytes|entity_ref|vector|decimal|…`.
 
-Response: `{"ok": true, "tx_id": N}`.
+Response: `{"tx_id": N}` (the assigned transaction id).
 
 ### Reads
 
@@ -66,8 +66,11 @@ Response: `{"ok": true, "tx_id": N}`.
 Response: `{"outcome": "live", "record": { … }}` (or `"outcome":"tombstoned"` /
 `"not_found"`). Missing ids return 200 with a non-`live` outcome, not 404.
 
-**`GET /v1/iter[?cursor=&limit=]`** — capability `Iter`. Walk records.
-Response: `{"records": [ … ], "next_cursor": "<opaque>|null"}`.
+**`GET /v1/iter[?snapshot=<tx|ts>]`** — capability `Iter`. Stream all visible
+records at a snapshot. Response is **JSONL** (`application/jsonl`): one JSON
+record per line, not a JSON array. Internal metadata records (tx-timestamp,
+retention) are filtered out. `snapshot` optionally pins an `as_of` read.
+(Cursor pagination is exposed via the MCP `ndb.iter` tool, not this route.)
 
 **`POST /v1/query`** — capability `Read`. Run a wire-AST query (the
 machine-readable form). Request: a `QueryRequest` JSON object. Response:
