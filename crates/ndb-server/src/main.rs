@@ -171,20 +171,41 @@ fn main() -> ExitCode {
     // pull + restore the leader's base backup BEFORE opening the engine, so the
     // pull cursor aligns with the leader's WAL.
     if let Some(leader) = &args.replicate_from {
-        match bootstrap_follower_if_needed(
-            std::path::Path::new(&args.path),
-            leader,
-            args.replicate_token.as_deref(),
-        ) {
-            Ok(true) => eprintln!("ndb-server: bootstrapped follower from base backup at {leader}"),
-            Ok(false) => eprintln!(
-                "ndb-server: follower resuming from existing data at {}",
-                args.path
-            ),
-            Err(e) => {
-                eprintln!("follower bootstrap from {leader} failed: {e}");
-                return ExitCode::from(1);
+        // Retry: the leader may not be reachable yet (e.g. both started together
+        // under docker-compose / k8s). Back off and keep trying for ~60s.
+        let mut last_err = String::new();
+        let mut done = false;
+        for attempt in 1..=60 {
+            match bootstrap_follower_if_needed(
+                std::path::Path::new(&args.path),
+                leader,
+                args.replicate_token.as_deref(),
+            ) {
+                Ok(true) => {
+                    eprintln!("ndb-server: bootstrapped follower from base backup at {leader}");
+                    done = true;
+                    break;
+                }
+                Ok(false) => {
+                    eprintln!(
+                        "ndb-server: follower resuming from existing data at {}",
+                        args.path
+                    );
+                    done = true;
+                    break;
+                }
+                Err(e) => {
+                    last_err = e.to_string();
+                    if attempt == 1 {
+                        eprintln!("ndb-server: waiting for leader {leader} to become reachable…");
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
             }
+        }
+        if !done {
+            eprintln!("follower bootstrap from {leader} failed after retries: {last_err}");
+            return ExitCode::from(1);
         }
     }
     let mut server = match Server::open(&args.path) {

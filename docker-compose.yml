@@ -1,0 +1,43 @@
+# A live nDB leader + auto-following read-only replica.
+#
+#   docker compose up --build
+#
+# - leader   → http://localhost:8742  (writes + reads)
+# - follower → http://localhost:8743  (reads only; streams from the leader)
+#
+# The follower bootstraps from the leader's base backup on first start
+# (GET /v1/backup), then streams committed records. Write to :8742, read from
+# either; a write to :8743 returns 403 read_only.
+services:
+  leader:
+    build: .
+    command: ["--path", "/data", "--bind", "0.0.0.0:8742"]
+    ports:
+      - "8742:8742"
+    volumes:
+      - leader-data:/data
+    restart: unless-stopped
+
+  follower:
+    build: .
+    command:
+      - "--path"
+      - "/data"
+      - "--bind"
+      - "0.0.0.0:8742"
+      - "--replicate-from"
+      - "http://leader:8742"
+      - "--replicate-interval"
+      - "2"
+    ports:
+      - "8743:8742"
+    volumes:
+      - follower-data:/data
+    restart: unless-stopped
+    depends_on:
+      leader:
+        condition: service_started
+
+volumes:
+  leader-data:
+  follower-data:
