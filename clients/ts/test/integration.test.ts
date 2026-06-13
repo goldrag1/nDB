@@ -99,10 +99,15 @@ test("reading an unknown id is not-found, not a throw", async () => {
   assert.notEqual(r.outcome, "live");
 });
 
-test("NdbError surfaces protocol errors with status + code", async () => {
-  // A malformed commit body must produce a structured NdbError, not a crash.
+test("NdbError surfaces protocol errors with status + parsed code", async () => {
+  // A malformed query body must produce a structured NdbError whose code comes
+  // from the server envelope ({error, detail}), not the generic fallback.
   await assert.rejects(
     () => client.query("this is not a valid QueryRequest object" as unknown),
-    (err: unknown) => err instanceof NdbError && err.status >= 400,
+    (err: unknown) =>
+      err instanceof NdbError &&
+      err.status >= 400 &&
+      err.code !== "http_error" && // proves the {error, detail} envelope was parsed
+      err.code.length > 0,
   );
 });

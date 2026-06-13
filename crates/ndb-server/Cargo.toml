@@ -20,6 +20,7 @@ path = "src/main.rs"
 ndb-engine     = { path = "../ndb-engine" }
 ndb-query      = { path = "../ndb-query" }
 ndb-arrow      = { path = "../ndb-arrow" }
+ndb-client-rust = { path = "../ndb-client-rust" }
 serde          = { workspace = true }
 serde_json     = { workspace = true }
 thiserror      = { workspace = true }

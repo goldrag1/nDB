@@ -82,7 +82,10 @@ pub fn unpack_into(bytes: &[u8], dest: &Path) -> io::Result<()> {
     let mut magic = [0u8; 4];
     c.read_exact(&mut magic)?;
     if &magic != MAGIC {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "bad archive magic"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "bad archive magic",
+        ));
     }
     let mut v = [0u8; 1];
     c.read_exact(&mut v)?;

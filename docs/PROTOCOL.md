@@ -15,8 +15,9 @@ pre-`/v1` bare paths (`/commit`, …) remain as **deprecated aliases** — see
   the raw query string (`text/plain`), and `GET /v1/arrow/*`, whose response is
   `application/vnd.apache.arrow.stream`.
 - **Errors:** non-2xx responses carry
-  `{"error": {"code": "<machine_code>", "message": "<human text>"}}`.
-  Codes include `unauthorized` (401), `forbidden` (403), `not_found` (404),
+  `{"error": "<machine_code>", "detail": "<human text>"}` — `error` is a short
+  machine code string, `detail` is the human-readable message. Codes include
+  `unauthorized` (401), `read_only`/`forbidden` (403), `not_found` (404),
   `bad_request` (400), `internal` (500), `unavailable` (503).
 - **Capabilities:** `Health`, `Read`, `Iter`, `Commit`, `Flush`, `Compact`,
   `Admin`.

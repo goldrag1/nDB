@@ -2246,7 +2246,117 @@ fn v1_prefix_aliases_bare_routes() {
 
     // A `/v1`-lookalike with no segment boundary is NOT stripped → 404.
     let bogus = get(addr, "/v1health");
-    assert_eq!(bogus.status, 404, "/v1health must not canonicalise to /health");
+    assert_eq!(
+        bogus.status, 404,
+        "/v1health must not canonicalise to /health"
+    );
 
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// End-to-end replication: a follower bootstraps from the leader's base backup
+/// (`GET /v1/backup`), then streams post-backup commits via the pull loop, and
+/// rejects writes (read-only). Exercises backup_archive + replication_watermark
+/// + run_follower_loop over real HTTP.
+#[test]
+fn follower_bootstraps_and_streams_from_leader() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let mk_commit = |id: EntityId, email: &str| {
+        serde_json::json!({
+            "records": [{
+                "kind": "entity",
+                "entity_id": id.into_uuid().to_string(),
+                "type_id": 1,
+                "tx_id_assert": 0,
+                "tx_id_supersede": "active",
+                "properties": [{ "prop_id": 10, "value": { "tag": "string", "value": email } }]
+            }]
+        })
+        .to_string()
+    };
+
+    // --- leader ---
+    let leader_dir = temp_dir("repl_leader");
+    let leader = Arc::new(Server::open(&leader_dir).unwrap());
+    {
+        let e = leader.engine();
+        let mut e = e.write().unwrap();
+        e.require_property(TypeId::new(1), PropertyId::new(10));
+        e.expect_value_tag(TypeId::new(1), PropertyId::new(10), TAG_STRING);
+    }
+    let leader_addr = spawn_server(Arc::clone(&leader), 2000);
+    let leader_url = format!("http://{leader_addr}");
+
+    // A pre-backup commit — must arrive on the follower via the base backup.
+    let before = EntityId::now_v7();
+    assert_eq!(
+        post(leader_addr, "/v1/commit", &mk_commit(before, "before@x")).status,
+        200
+    );
+
+    // --- follower bootstraps from the leader's base backup ---
+    let follower_dir = temp_dir("repl_follower");
+    let restored =
+        ndb_server::bootstrap_follower_if_needed(&follower_dir, &leader_url, None).unwrap();
+    assert!(restored, "follower should restore a base backup");
+
+    let follower = Arc::new(Server::open(&follower_dir).unwrap().with_read_only(true));
+    let follower_addr = spawn_server(Arc::clone(&follower), 2000);
+
+    // The pre-backup record is already present (it came in the backup).
+    let r = get(follower_addr, &format!("/v1/read/{}", before.into_uuid()));
+    assert_eq!(r.status, 200);
+    let rb: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+    assert_eq!(
+        rb["outcome"], "live",
+        "pre-backup record present on follower"
+    );
+
+    // --- start the follower pull loop ---
+    let stop = Arc::new(AtomicBool::new(false));
+    let feng = follower.engine();
+    let stop_loop = Arc::clone(&stop);
+    let lurl = leader_url.clone();
+    let handle = thread::spawn(move || {
+        let client = ndb_client::Client::new(&lurl).unwrap();
+        ndb_server::run_follower_loop(&feng, &client, Duration::from_millis(40), &stop_loop);
+    });
+
+    // A post-backup commit on the leader — must STREAM to the follower.
+    let after = EntityId::now_v7();
+    assert_eq!(
+        post(leader_addr, "/v1/commit", &mk_commit(after, "after@x")).status,
+        200
+    );
+
+    let mut replicated = false;
+    for _ in 0..150 {
+        let rr = get(follower_addr, &format!("/v1/read/{}", after.into_uuid()));
+        if rr.status == 200 {
+            let b: serde_json::Value = serde_json::from_slice(&rr.body).unwrap();
+            if b["outcome"] == "live" {
+                replicated = true;
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(40));
+    }
+    assert!(replicated, "post-backup commit must stream to the follower");
+
+    // Writes to the follower are rejected (read-only replica): 403 read_only,
+    // the same path the server's --read-only flag uses.
+    let w = post(
+        follower_addr,
+        "/v1/commit",
+        &mk_commit(EntityId::now_v7(), "nope@x"),
+    );
+    assert_eq!(w.status, 403, "follower must reject writes (read-only)");
+    let wb: serde_json::Value = serde_json::from_slice(&w.body).unwrap();
+    assert_eq!(wb["error"], "read_only", "envelope: {{error, detail}}");
+
+    stop.store(true, Ordering::Relaxed);
+    let _ = handle.join();
+    std::fs::remove_dir_all(&leader_dir).ok();
+    std::fs::remove_dir_all(&follower_dir).ok();
 }

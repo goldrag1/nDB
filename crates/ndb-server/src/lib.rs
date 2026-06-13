@@ -53,8 +53,8 @@ use ndb_engine::id::{EntityId, PropertyId, TypeId};
 use ndb_engine::index::Distance;
 use ndb_engine::value::Value;
 use ndb_engine::{
-    CommitRequest, CommitResponse, Engine, EngineError, ErrorResponse, JsonRecord, JsonValue,
-    LookupRequest, LookupResponse, PropertyLookupRequest, PropertyLookupResponse,
+    CommitRequest, CommitResponse, Engine, EngineError, ErrorResponse, FollowerCursor, JsonRecord,
+    JsonValue, LookupRequest, LookupResponse, PropertyLookupRequest, PropertyLookupResponse,
     PropertyRangeRequest, PropertyRangeResponse, QueryError, QueryRequest, ReadResponse, Record,
     Resolved, SubscribeRequest, TraverseRequest, TraverseResponse, TxId, VectorHit, VectorMetric,
     VectorSearchRequest, VectorSearchResponse, WireError, WriteTxn, execute_query,
@@ -1633,6 +1633,7 @@ impl Server {
                 let query = full_path.split_once('?').map(|(_, q)| q);
                 self.handle_arrow_edge_index(query, out, outcome)
             }
+            ("GET", "/backup") => self.handle_backup(out, outcome),
             ("POST", "/flush") => self.handle_flush(out, outcome),
             ("POST", "/compact") => self.handle_compact(out, outcome),
             ("POST", "/replicate") => self.handle_replicate(body, out, outcome),
@@ -1841,6 +1842,38 @@ impl Server {
                 "records": records,
             }),
         )
+    }
+
+    /// `GET /backup` — stream a consistent base backup as a `backup_archive`
+    /// blob (Admin-gated). A follower restores this before streaming via
+    /// `/replicate`, so its WAL watermark aligns with the leader's. The backup
+    /// is taken under the read lock into a temp dir, packed, and the temp dir
+    /// removed.
+    fn handle_backup(
+        &self,
+        out: &mut dyn Write,
+        outcome: &mut DispatchOutcome,
+    ) -> Result<(), ServerError> {
+        let tmp =
+            std::env::temp_dir().join(format!("ndb-backup-{}", uuid::Uuid::now_v7().simple()));
+        {
+            let engine = self.engine.read().expect("engine lock poisoned");
+            engine.backup_to(&tmp)?;
+        }
+        let packed = ndb_engine::backup_archive::pack_dir(&tmp).map_err(ServerError::Io);
+        let _ = std::fs::remove_dir_all(&tmp);
+        let blob = packed?;
+        outcome.status = 200;
+        write_status_line(out, 200)?;
+        write!(
+            out,
+            "Content-Type: application/octet-stream\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\r\n",
+            blob.len()
+        )?;
+        out.write_all(&blob)?;
+        Ok(())
     }
 
     fn handle_commit(
@@ -3156,6 +3189,101 @@ struct DispatchOutcome {
     failure: Option<String>,
 }
 
+/// Bootstrap a follower's data directory from the leader's base backup when
+/// the directory has no database yet. Returns `Ok(true)` if a backup was
+/// pulled + restored, `Ok(false)` if a database was already present (resume in
+/// place). Call BEFORE `Server::open` on a follower.
+///
+/// # Errors
+/// On a transport failure pulling `/backup`, a malformed archive, or IO error.
+pub fn bootstrap_follower_if_needed(
+    db_dir: &Path,
+    leader_url: &str,
+    token: Option<&str>,
+) -> Result<bool, ServerError> {
+    // "CURRENT" is the manifest pointer every nDB database has; its presence
+    // means this directory already holds a database (resume, don't re-bootstrap).
+    if db_dir.join("CURRENT").exists() {
+        return Ok(false);
+    }
+    let mut client = ndb_client::Client::new(leader_url)
+        .map_err(|e| ServerError::Io(std::io::Error::other(e.to_string())))?;
+    if let Some(t) = token {
+        client = client.with_token(t);
+    }
+    let blob = client
+        .backup_archive()
+        .map_err(|e| ServerError::Io(std::io::Error::other(format!("pull base backup: {e}"))))?;
+    ndb_engine::backup_archive::unpack_into(&blob, db_dir).map_err(ServerError::Io)?;
+    Ok(true)
+}
+
+/// Background pull loop for a read-only follower. Streams record batches past
+/// its `(wal_seq, offset)` watermark from the leader, applies each under the
+/// write lock, and advances the cursor — mirroring
+/// [`ndb_engine::poll_once`]'s advance rules but fetching OUTSIDE the lock so
+/// reads aren't blocked across the network round-trip. Runs until `stop` is
+/// set; backs off `interval` when caught up or on error.
+pub fn run_follower_loop(
+    engine: &Arc<RwLock<Engine>>,
+    client: &ndb_client::Client,
+    interval: Duration,
+    stop: &AtomicBool,
+) {
+    let mut cursor = {
+        let e = engine.read().expect("engine lock poisoned");
+        match e.replication_watermark() {
+            Ok((wal_seq, offset)) => FollowerCursor { wal_seq, offset },
+            Err(_) => FollowerCursor {
+                wal_seq: e.active_wal_seq(),
+                offset: 0,
+            },
+        }
+    };
+    while !stop.load(Ordering::Relaxed) {
+        match client.replicate(cursor.wal_seq, cursor.offset) {
+            Ok(batch) => {
+                if !batch.available {
+                    eprintln!(
+                        "ndb follower: leader pruned WAL segment {} (offset {}); \
+                         re-bootstrap required",
+                        cursor.wal_seq, cursor.offset
+                    );
+                    std::thread::sleep(interval);
+                    continue;
+                }
+                let n = batch.records.len();
+                let next_offset = batch.next_offset;
+                let segment_sealed = batch.segment_sealed;
+                let next_wal_seq = batch.next_wal_seq;
+                if n > 0 {
+                    let mut e = engine.write().expect("engine lock poisoned");
+                    if let Err(err) = e.ingest_replicated(batch.records) {
+                        drop(e);
+                        eprintln!("ndb follower: ingest failed: {err}");
+                        std::thread::sleep(interval);
+                        continue;
+                    }
+                }
+                cursor.offset = next_offset;
+                if n == 0 && segment_sealed {
+                    if let Some(next) = next_wal_seq {
+                        cursor.wal_seq = next;
+                        cursor.offset = 0;
+                    }
+                }
+                if n == 0 {
+                    std::thread::sleep(interval);
+                }
+            }
+            Err(err) => {
+                eprintln!("ndb follower: pull failed: {err}");
+                std::thread::sleep(interval);
+            }
+        }
+    }
+}
+
 /// Wire-protocol v1: strip a leading `/v1` path segment so `/v1/<route>`
 /// and the bare `/<route>` both canonicalise to the same handler. The bare
 /// routes remain as **deprecated aliases**; the SDK targets `/v1`. Only a
@@ -3185,6 +3313,8 @@ fn required_capability(method: &str, path: &str) -> Option<Capability> {
         ("POST", "/compact") => Some(Capability::Compact),
         // Operator-only lifecycle route: requires the Admin wildcard.
         ("POST", "/admin/shutdown" | "/replicate") => Some(Capability::Admin),
+        // Base-backup egress (follower bootstrap) — Admin, like /replicate.
+        ("GET", "/backup") => Some(Capability::Admin),
         // Read-gated routes: indexed query / traversal / query-language /
         // subscribe, plus the Arrow / GPU export egress (`/arrow/*`).
         ("GET", "/arrow/export" | "/arrow/vectors" | "/arrow/edge_index")
@@ -3216,6 +3346,7 @@ fn route_label(method: &str, path: &str) -> &'static str {
         ("POST", "/flush") => "/flush",
         ("POST", "/compact") => "/compact",
         ("POST", "/replicate") => "/replicate",
+        ("GET", "/backup") => "/backup",
         ("POST", "/lookup") => "/lookup",
         ("POST", "/vector_search") => "/vector_search",
         ("POST", "/property_lookup") => "/property_lookup",

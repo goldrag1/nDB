@@ -247,6 +247,53 @@ impl Client {
         parse_2xx(status, &body)
     }
 
+    /// `GET /backup` — pull a consistent base backup as an archive blob
+    /// (see [`ndb_engine::backup_archive`]). Used by a follower to bootstrap
+    /// before streaming. Admin-gated on the leader.
+    pub fn backup_archive(&self) -> Result<Vec<u8>, ClientError> {
+        let (status, body) = self.get("/backup")?;
+        if !(200..300).contains(&status) {
+            return Err(http_error(status, &body));
+        }
+        Ok(body)
+    }
+
+    /// `POST /replicate` — pull the record batch past the follower's
+    /// `(wal_seq, after)` watermark, decoded into a [`StreamedBatch`]. The
+    /// follower applies `batch.records` via `Engine::ingest_replicated` and
+    /// advances its cursor. Admin-gated on the leader.
+    ///
+    /// [`StreamedBatch`]: ndb_engine::replication::StreamedBatch
+    pub fn replicate(
+        &self,
+        wal_seq: u64,
+        after: u64,
+    ) -> Result<ndb_engine::replication::StreamedBatch, ClientError> {
+        #[derive(Deserialize)]
+        struct Wire {
+            current_wal_seq: u64,
+            available: bool,
+            segment_sealed: bool,
+            next_wal_seq: Option<u64>,
+            next_offset: u64,
+            records: String,
+        }
+        let body = serde_json::to_vec(&serde_json::json!({"wal_seq": wal_seq, "after": after}))
+            .map_err(|e| ClientError::Parse(e.to_string()))?;
+        let (status, resp) = self.post("/replicate", &body)?;
+        let w: Wire = parse_2xx(status, &resp)?;
+        let records = ndb_engine::replication::decode_records_b64(&w.records)
+            .map_err(|e| ClientError::Parse(format!("replicate batch: {e}")))?;
+        Ok(ndb_engine::replication::StreamedBatch {
+            current_wal_seq: w.current_wal_seq,
+            available: w.available,
+            segment_sealed: w.segment_sealed,
+            next_wal_seq: w.next_wal_seq,
+            records,
+            next_offset: w.next_offset,
+        })
+    }
+
     /// `POST /lookup` — find entity by external lookup-key. Returns the
     /// uuid as a string, or `None` if no entity matches.
     pub fn lookup_by_key(

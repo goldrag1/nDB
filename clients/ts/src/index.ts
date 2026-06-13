@@ -268,9 +268,15 @@ async function errorFromResponse(resp: Response): Promise<NdbError> {
   let message = resp.statusText || `HTTP ${resp.status}`;
   try {
     const body = (await resp.json()) as {
-      error?: { code?: string; message?: string };
+      error?: string | { code?: string; message?: string };
+      detail?: string;
     };
-    if (body?.error) {
+    // nDB envelope: { "error": "<code>", "detail": "<message>" }.
+    if (typeof body?.error === "string") {
+      code = body.error;
+      if (typeof body.detail === "string") message = body.detail;
+    } else if (body?.error && typeof body.error === "object") {
+      // Tolerate a nested { error: { code, message } } shape too.
       code = body.error.code ?? code;
       message = body.error.message ?? message;
     }

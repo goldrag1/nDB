@@ -27,6 +27,7 @@
 
 #![warn(missing_docs)]
 
+pub mod backup_archive;
 pub mod block_index;
 pub mod bloom;
 pub mod capability;
@@ -39,7 +40,6 @@ pub mod error;
 pub mod id;
 pub mod index;
 pub mod memtable;
-pub mod backup_archive;
 pub mod mvcc;
 pub mod query;
 pub mod record;
