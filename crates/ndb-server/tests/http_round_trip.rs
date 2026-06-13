@@ -1992,6 +1992,10 @@ fn metrics_endpoint_exposes_expected_series() {
         "ndb_connections_rejected_total",
         "ndb_request_duration_seconds_sum",
         "ndb_request_duration_seconds_count",
+        // Latency histogram (p50/p95/p99 via histogram_quantile).
+        "ndb_request_duration_seconds_bucket{le=\"0.01\"}",
+        "ndb_request_duration_seconds_bucket{le=\"+Inf\"}",
+        "# TYPE ndb_request_duration_seconds histogram",
         "ndb_bytes_read_total",
         "ndb_bytes_written_total",
     ] {

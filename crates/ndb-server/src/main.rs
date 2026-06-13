@@ -60,6 +60,10 @@ fn usage() {
            NDB_AUDIT=1               Equivalent to --audit (append <db>/.audit.jsonl per request).\n\
            NDB_MAX_CONNECTIONS=<n>   Cap simultaneously-handled connections (default 256). Excess gets 503.\n\
          \n\
+         Observability:\n\
+           --slow-query-ms <ms>     Log requests taking >= <ms> as structured stderr lines (0 = off).\n\
+           GET /metrics now exposes ndb_request_duration_seconds as a histogram (p50/p95/p99).\n\
+         \n\
          When both --tls-cert and --tls-key are supplied, the server binds TLS on --bind.\n\
          When only one is supplied or neither, the server binds plain HTTP on --bind.\n\
          \n\
@@ -99,6 +103,8 @@ struct Args {
     replicate_interval: u64,
     /// Bearer token for the leader's Admin-gated /backup + /replicate.
     replicate_token: Option<String>,
+    /// Slow-query log threshold in ms (0 = disabled).
+    slow_query_ms: u64,
 }
 
 fn parse_args() -> Option<Args> {
@@ -112,6 +118,7 @@ fn parse_args() -> Option<Args> {
     let mut replicate_from: Option<String> = None;
     let mut replicate_interval: u64 = 2;
     let mut replicate_token: Option<String> = None;
+    let mut slow_query_ms: u64 = 0;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--path" | "-p" => path = args.next(),
@@ -125,6 +132,9 @@ fn parse_args() -> Option<Args> {
                 replicate_interval = args.next().and_then(|v| v.parse().ok()).unwrap_or(2).max(1);
             }
             "--replicate-token" => replicate_token = args.next(),
+            "--slow-query-ms" => {
+                slow_query_ms = args.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+            }
             "--help" | "-h" => {
                 usage();
                 return None;
@@ -146,6 +156,7 @@ fn parse_args() -> Option<Args> {
         replicate_from,
         replicate_interval,
         replicate_token,
+        slow_query_ms,
     })
 }
 
@@ -268,6 +279,10 @@ fn main() -> ExitCode {
         }
     }
     server = apply_env_resource_limits(server);
+    if args.slow_query_ms > 0 {
+        eprintln!("ndb-server: slow-query log at >= {} ms", args.slow_query_ms);
+        server = server.with_slow_query_ms(args.slow_query_ms);
+    }
     let audit_on = args.audit || std::env::var("NDB_AUDIT").is_ok_and(|v| v == "1");
     if audit_on {
         server = match server.with_audit_log() {

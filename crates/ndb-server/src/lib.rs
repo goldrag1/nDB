@@ -150,6 +150,10 @@ pub struct ServerConfig {
     pub auto_compaction_sstable_threshold: usize,
     /// How often the background compactor checks the SSTable count.
     pub auto_compaction_interval: Duration,
+    /// Slow-query log threshold. When set, any request whose handling time
+    /// meets or exceeds this emits a structured `ndb slow-query: …` line to
+    /// stderr. `None` (default) disables it.
+    pub slow_query_threshold: Option<Duration>,
 }
 
 impl Default for ServerConfig {
@@ -164,6 +168,7 @@ impl Default for ServerConfig {
             accept_poll_interval: DEFAULT_ACCEPT_POLL_INTERVAL,
             auto_compaction_sstable_threshold: DEFAULT_AUTO_COMPACTION_THRESHOLD,
             auto_compaction_interval: DEFAULT_AUTO_COMPACTION_INTERVAL,
+            slow_query_threshold: None,
         }
     }
 }
@@ -181,6 +186,9 @@ impl Default for ServerConfig {
 /// [`render_metrics`](ServerMetrics::render); see the `/metrics` route.
 #[derive(Debug, Default)]
 pub struct ServerMetrics {
+    /// Per-request latency histogram (global). Enables p50/p95/p99 via the
+    /// standard Prometheus `histogram_quantile` over the `_bucket` series.
+    latency: LatencyHistogram,
     /// Connections currently being handled (the in-flight gauge).
     in_flight: AtomicUsize,
     /// Connections rejected because the in-flight cap was reached.
@@ -200,6 +208,50 @@ pub struct ServerMetrics {
     responses_by_status: Mutex<BTreeMap<u16, u64>>,
     /// `ndb_auto_compactions_total` — background-compactor runs completed.
     auto_compactions: AtomicU64,
+}
+
+/// Cumulative Prometheus histogram buckets for request latency:
+/// `(le_label_seconds, upper_bound_microseconds)`. An observation increments
+/// every bucket whose bound it is `<=`, so each counter is already cumulative.
+const LATENCY_BUCKETS: [(&str, u64); 13] = [
+    ("0.0005", 500),
+    ("0.001", 1_000),
+    ("0.0025", 2_500),
+    ("0.005", 5_000),
+    ("0.01", 10_000),
+    ("0.025", 25_000),
+    ("0.05", 50_000),
+    ("0.1", 100_000),
+    ("0.25", 250_000),
+    ("0.5", 500_000),
+    ("1", 1_000_000),
+    ("2.5", 2_500_000),
+    ("5", 5_000_000),
+];
+
+/// Fixed-bucket latency histogram. A sub-struct so `ServerMetrics` keeps its
+/// `#[derive(Default)]` (an array of `AtomicU64` isn't itself `Default`).
+#[derive(Debug)]
+struct LatencyHistogram {
+    buckets: [AtomicU64; LATENCY_BUCKETS.len()],
+}
+
+impl Default for LatencyHistogram {
+    fn default() -> Self {
+        Self {
+            buckets: std::array::from_fn(|_| AtomicU64::new(0)),
+        }
+    }
+}
+
+impl LatencyHistogram {
+    fn observe_us(&self, us: u64) {
+        for (i, (_, bound)) in LATENCY_BUCKETS.iter().enumerate() {
+            if us <= *bound {
+                self.buckets[i].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
 }
 
 impl ServerMetrics {
@@ -225,6 +277,7 @@ impl ServerMetrics {
         let us = u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX);
         self.duration_us_sum.fetch_add(us, Ordering::Relaxed);
         self.duration_count.fetch_add(1, Ordering::Relaxed);
+        self.latency.observe_us(us);
     }
 
     /// Render the full metrics snapshot in Prometheus text exposition
@@ -284,7 +337,15 @@ impl ServerMetrics {
         #[allow(clippy::cast_precision_loss)]
         let dur_sum_seconds = dur_sum_us as f64 / 1_000_000.0;
         s.push_str("# HELP ndb_request_duration_seconds Request handling duration in seconds.\n");
-        s.push_str("# TYPE ndb_request_duration_seconds summary\n");
+        s.push_str("# TYPE ndb_request_duration_seconds histogram\n");
+        for (i, (le, _)) in LATENCY_BUCKETS.iter().enumerate() {
+            let c = self.latency.buckets[i].load(Ordering::Relaxed);
+            let _ = writeln!(s, "ndb_request_duration_seconds_bucket{{le=\"{le}\"}} {c}");
+        }
+        let _ = writeln!(
+            s,
+            "ndb_request_duration_seconds_bucket{{le=\"+Inf\"}} {dur_count}"
+        );
         let _ = writeln!(s, "ndb_request_duration_seconds_sum {dur_sum_seconds}");
         let _ = writeln!(s, "ndb_request_duration_seconds_count {dur_count}");
         // Byte counters.
@@ -908,6 +969,18 @@ impl Server {
         self
     }
 
+    /// Enable the slow-query log: requests taking at least `ms` milliseconds
+    /// emit a structured `ndb slow-query: …` line to stderr. `0` disables it.
+    #[must_use]
+    pub fn with_slow_query_ms(mut self, ms: u64) -> Self {
+        self.config.slow_query_threshold = if ms == 0 {
+            None
+        } else {
+            Some(Duration::from_millis(ms))
+        };
+        self
+    }
+
     /// Configure the background compactor (Tier 1). `threshold` is the open
     /// SSTable count that triggers a merge; `0` disables the background
     /// compactor entirely (compaction then happens only on `POST /compact`).
@@ -1438,7 +1511,8 @@ impl Server {
         };
         let _ = counter.flush();
 
-        self.metrics.observe_done(outcome.status, start.elapsed());
+        let elapsed = start.elapsed();
+        self.metrics.observe_done(outcome.status, elapsed);
         // Audit AFTER response is flushed; failures here don't break the request.
         let principal = if outcome.principal.is_empty() {
             if self.auth_token.is_none() && self.principals.is_none() {
@@ -1449,6 +1523,18 @@ impl Server {
         } else {
             outcome.principal.as_str()
         };
+        if let Some(thr) = self.config.slow_query_threshold
+            && elapsed >= thr
+        {
+            eprintln!(
+                "ndb slow-query: route={} method={} status={} duration_ms={:.1} principal={}",
+                route,
+                req.method,
+                outcome.status,
+                elapsed.as_secs_f64() * 1000.0,
+                principal
+            );
+        }
         self.record_audit(
             principal,
             &req.method,
