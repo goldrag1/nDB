@@ -126,25 +126,87 @@ fn router_point_routes_and_scatter_gathers() {
         );
     }
 
-    // Discriminating case: an id committed to the WRONG (non-owning) shard is
-    // NOT found through the router — proving it routes by hash, not broadcast.
-    let id_c = uuid::Uuid::now_v7().to_string();
-    let owning = map.shard_for_key(&id_c);
-    let wrong = 1 - owning;
-    commit_entity(shard_addr[wrong], &id_c, "c@x");
-    let (st, body) = get(router, &format!("/v1/read/{id_c}"));
+    // An id present on NO shard is a clean not-found through the router
+    // (hash-first hits the owning shard, scatter finds nothing → non-live).
+    let absent = uuid::Uuid::now_v7().to_string();
+    let (st, body) = get(router, &format!("/v1/read/{absent}"));
     assert_eq!(st, 200);
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_ne!(
-        v["outcome"], "live",
-        "router must read only the owning shard, not the wrong one"
-    );
+    assert_ne!(v["outcome"], "live", "absent id must be non-live");
 
     // Scatter-gather: /iter merges records from both shards (a@x and b@x).
     let (st, body) = get(router, "/v1/iter");
     assert_eq!(st, 200, "iter: {body}");
     assert!(body.contains("a@x"), "iter missing shard-0 record:\n{body}");
     assert!(body.contains("b@x"), "iter missing shard-1 record:\n{body}");
+
+    std::fs::remove_dir_all(&dir0).ok();
+    std::fs::remove_dir_all(&dir1).ok();
+}
+
+#[test]
+fn router_commit_routes_entities_and_hyperedge_to_anchor() {
+    let dir0 = temp_dir("c0");
+    let dir1 = temp_dir("c1");
+    let s0 = Arc::new(Server::open(&dir0).unwrap());
+    let s1 = Arc::new(Server::open(&dir1).unwrap());
+    let a0 = spawn_shard(Arc::clone(&s0));
+    let a1 = spawn_shard(Arc::clone(&s1));
+    let urls = vec![format!("http://{a0}"), format!("http://{a1}")];
+    let shard_addr = [a0, a1];
+    let map = ShardMap::new(urls.clone());
+    let router = spawn_router(urls);
+
+    // Commit two entities THROUGH the router; each must land on its owning shard.
+    let ent_a = uuid::Uuid::now_v7().to_string();
+    let ent_b = uuid::Uuid::now_v7().to_string();
+    for (id, email) in [(&ent_a, "ea@x"), (&ent_b, "eb@x")] {
+        let body = format!(
+            "{{\"records\":[{{\"kind\":\"entity\",\"entity_id\":\"{id}\",\"type_id\":1,\"tx_id_assert\":0,\"tx_id_supersede\":\"active\",\"properties\":[{{\"prop_id\":10,\"value\":{{\"tag\":\"string\",\"value\":\"{email}\"}}}}]}}]}}"
+        );
+        let (st, b) = post(router, "/v1/commit", &body);
+        assert_eq!(st, 200, "router commit entity {id}: {b}");
+    }
+    // Each entity is physically on its owning shard (read the shard directly).
+    for id in [&ent_a, &ent_b] {
+        let owner = map.shard_for_key(id);
+        let (st, body) = get(shard_addr[owner], &format!("/v1/read/{id}"));
+        assert_eq!(st, 200);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            v["outcome"], "live",
+            "entity {id} must be on its owning shard {owner}"
+        );
+    }
+
+    // Commit a hyperedge THROUGH the router. Its anchor is ent_a, so it must
+    // land on hash(ent_a)'s shard — NOT hash(hyperedge_id)'s shard.
+    let he_id = uuid::Uuid::now_v7().to_string();
+    let anchor_shard = map.shard_for_key(&ent_a);
+    let body = format!(
+        "{{\"records\":[{{\"kind\":\"hyper_edge\",\"hyperedge_id\":\"{he_id}\",\"type_id\":2,\"tx_id_assert\":0,\"tx_id_supersede\":\"active\",\"roles\":[{{\"role_id\":7,\"entity_id\":\"{ent_a}\"}},{{\"role_id\":8,\"entity_id\":\"{ent_b}\"}}],\"properties\":[]}}]}}"
+    );
+    let (st, b) = post(router, "/v1/commit", &body);
+    assert_eq!(st, 200, "router commit hyperedge: {b}");
+
+    // Physically on the anchor shard:
+    let (st, body) = get(shard_addr[anchor_shard], &format!("/v1/read/{he_id}"));
+    assert_eq!(st, 200);
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        v["outcome"], "live",
+        "hyperedge must live on its anchor shard {anchor_shard}"
+    );
+
+    // And reachable via the router by its own id (hash-first + scatter-on-miss,
+    // since hash(he_id) likely != anchor shard).
+    let (st, body) = get(router, &format!("/v1/read/{he_id}"));
+    assert_eq!(st, 200, "router read hyperedge: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        v["outcome"], "live",
+        "router must find the anchor-placed hyperedge by id"
+    );
 
     std::fs::remove_dir_all(&dir0).ok();
     std::fs::remove_dir_all(&dir1).ok();

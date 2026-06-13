@@ -13,7 +13,7 @@
 //! This is the read-path increment. Mutation routing (commit-splitting,
 //! hyperedge anchor placement per D2) and kNN merge are subsequent increments.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 
 use ndb_client::Client;
@@ -143,19 +143,29 @@ impl Router {
         if reader.read_line(&mut request_line)? == 0 {
             return Ok(());
         }
-        // Drain headers (read path needs no body).
+        // Read headers, capturing Content-Length so we can read a POST body.
+        let mut content_length = 0usize;
         loop {
             let mut line = String::new();
             if reader.read_line(&mut line)? == 0 || line == "\r\n" || line == "\n" {
                 break;
             }
+            if let Some((name, value)) = line.split_once(':')
+                && name.trim().eq_ignore_ascii_case("content-length")
+            {
+                content_length = value.trim().parse().unwrap_or(0);
+            }
+        }
+        let mut req_body = vec![0u8; content_length];
+        if content_length > 0 {
+            reader.read_exact(&mut req_body)?;
         }
         let mut parts = request_line.split_whitespace();
         let method = parts.next().unwrap_or("");
         let raw_path = parts.next().unwrap_or("");
         let path = canonicalize_v1(raw_path.split('?').next().unwrap_or(""));
 
-        let (status, ctype, body) = self.route(method, path);
+        let (status, ctype, body) = self.route(method, path, &req_body);
         write!(
             stream,
             "HTTP/1.1 {status} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n",
@@ -167,7 +177,7 @@ impl Router {
     }
 
     /// Map a (method, canonical-path) to a response.
-    fn route(&self, method: &str, path: &str) -> (u16, &'static str, Vec<u8>) {
+    fn route(&self, method: &str, path: &str, body: &[u8]) -> (u16, &'static str, Vec<u8>) {
         match (method, path) {
             ("GET", "/health") => (
                 200,
@@ -179,31 +189,160 @@ impl Router {
                 self.route_read(id)
             }
             ("GET", "/iter") => self.route_iter(),
+            ("POST", "/commit") => self.route_commit(body),
             _ => error_body(
                 501,
                 "not_implemented",
-                "router read-path increment: only GET /v1/health, /v1/read/:id, /v1/iter are routed yet",
+                "router increment: GET /v1/health, /v1/read/:id, /v1/iter, POST /v1/commit are routed",
             ),
         }
     }
 
-    /// Point read: route to the owning shard and return its response verbatim.
+    /// Point read with hash-first + scatter-on-miss.
+    ///
+    /// An **entity** lives on `hash(entity_id)` → the owning shard answers on
+    /// the fast path. A **hyperedge** lives on its anchor's shard (D2), which
+    /// is `hash(anchor_entity_id)` ≠ `hash(hyperedge_id)` — so when the hashed
+    /// shard doesn't have it, we scatter to the rest and return the first live
+    /// hit. This keeps reads correct for both record kinds without the router
+    /// knowing an id's kind up front.
     fn route_read(&self, id: &str) -> (u16, &'static str, Vec<u8>) {
         if id.is_empty() {
             return error_body(400, "bad_request", "missing id");
         }
-        let url = self.map.url_for_key(id);
-        let client = match Client::new(url) {
-            Ok(c) => c,
-            Err(e) => return error_body(502, "bad_gateway", &format!("shard url: {e}")),
-        };
-        match client.read(id) {
-            Ok(resp) => match serde_json::to_vec(&resp) {
-                Ok(b) => (200, "application/json", b),
-                Err(e) => error_body(500, "internal", &format!("serialize: {e}")),
-            },
-            Err(e) => error_body(502, "bad_gateway", &format!("shard read: {e}")),
+        let owner = self.map.shard_for_key(id);
+        // Fast path: the hash-owning shard.
+        match self.read_from(owner, id) {
+            Ok(Some(body)) => return (200, "application/json", body),
+            Ok(None) => {}
+            Err(e) => return error_body(502, "bad_gateway", &e),
         }
+        // Miss: scatter to the other shards (covers anchor-placed hyperedges).
+        for i in 0..self.map.len() {
+            if i == owner {
+                continue;
+            }
+            match self.read_from(i, id) {
+                Ok(Some(body)) => return (200, "application/json", body),
+                Ok(None) => {}
+                Err(e) => return error_body(502, "bad_gateway", &e),
+            }
+        }
+        // Not live on any shard — return the owning shard's (non-live) body.
+        match self.read_from_raw(owner, id) {
+            Ok(body) => (200, "application/json", body),
+            Err(e) => error_body(502, "bad_gateway", &e),
+        }
+    }
+
+    /// Read `id` from shard `i`; `Ok(Some(body))` if live, `Ok(None)` if the
+    /// shard returned a non-live outcome, `Err` on transport failure.
+    /// (`ReadResponse` is a serde-tagged enum on `outcome`; we test the tag in
+    /// JSON rather than name the enum the router doesn't import.)
+    fn read_from(&self, i: usize, id: &str) -> Result<Option<Vec<u8>>, String> {
+        let resp = self
+            .shard_client(i)?
+            .read(id)
+            .map_err(|e| format!("shard read: {e}"))?;
+        let v = serde_json::to_value(&resp).map_err(|e| format!("serialize: {e}"))?;
+        let is_live = v.get("outcome").and_then(serde_json::Value::as_str) == Some("live");
+        let body = serde_json::to_vec(&v).map_err(|e| format!("serialize: {e}"))?;
+        Ok(if is_live { Some(body) } else { None })
+    }
+
+    /// Read `id` from shard `i`, returning the serialized response regardless
+    /// of outcome (used to surface a not-found body after a scatter miss).
+    fn read_from_raw(&self, i: usize, id: &str) -> Result<Vec<u8>, String> {
+        let resp = self
+            .shard_client(i)?
+            .read(id)
+            .map_err(|e| format!("shard read: {e}"))?;
+        serde_json::to_vec(&resp).map_err(|e| format!("serialize: {e}"))
+    }
+
+    fn shard_client(&self, i: usize) -> Result<Client, String> {
+        Client::new(&self.map.urls()[i]).map_err(|e| format!("shard url: {e}"))
+    }
+
+    /// Commit routing (D1 + D2). Splits the batch by routing key and sends a
+    /// per-shard sub-commit:
+    /// - **entity** → `hash(entity_id)`
+    /// - **hyperedge** → `hash(anchor)` where anchor = the first role-filler's
+    ///   entity id (D2 anchor placement); falls back to `hyperedge_id` if it
+    ///   has no entity role-fillers.
+    /// - **tombstone** → `hash(target_id)`
+    /// - **dictionary / policy / metadata** (any other `kind`) → **broadcast**
+    ///   to every shard. These carry caller-assigned ids, so broadcasting keeps
+    ///   the per-shard dictionaries consistent.
+    ///
+    /// No distributed transaction (D4): each shard's sub-commit is atomic on
+    /// that shard. If a sub-commit fails after others succeeded, that is a
+    /// partial commit — reported as `502 partial_commit`, not rolled back.
+    fn route_commit(&self, body: &[u8]) -> (u16, &'static str, Vec<u8>) {
+        let parsed: serde_json::Value = match serde_json::from_slice(body) {
+            Ok(v) => v,
+            Err(e) => return error_body(400, "bad_request", &format!("invalid JSON: {e}")),
+        };
+        let Some(records) = parsed.get("records").and_then(|r| r.as_array()) else {
+            return error_body(400, "bad_request", "missing records array");
+        };
+
+        let n = self.map.len();
+        let mut per_shard: Vec<Vec<serde_json::Value>> = vec![Vec::new(); n];
+        let mut globals: Vec<serde_json::Value> = Vec::new();
+        for rec in records {
+            match routing_key(rec) {
+                Some(key) => per_shard[self.map.shard_for_key(&key)].push(rec.clone()),
+                None => globals.push(rec.clone()), // dictionary / metadata → all shards
+            }
+        }
+
+        let mut max_tx: u64 = 0;
+        let mut failures: Vec<String> = Vec::new();
+        let mut committed_shards = 0usize;
+        for (i, keyed) in per_shard.into_iter().enumerate() {
+            if keyed.is_empty() && globals.is_empty() {
+                continue;
+            }
+            let mut recs = globals.clone();
+            recs.extend(keyed);
+            let sub = serde_json::json!({ "records": recs });
+            let payload = serde_json::to_vec(&sub).unwrap_or_default();
+            match post_to_shard(&self.map.urls()[i], "/v1/commit", &payload) {
+                Ok((status, resp)) if (200..300).contains(&status) => {
+                    committed_shards += 1;
+                    if let Some(tx) = serde_json::from_slice::<serde_json::Value>(&resp)
+                        .ok()
+                        .and_then(|v| v.get("tx_id").and_then(serde_json::Value::as_u64))
+                    {
+                        max_tx = max_tx.max(tx);
+                    }
+                }
+                Ok((status, resp)) => failures.push(format!(
+                    "shard {i} status {status}: {}",
+                    String::from_utf8_lossy(&resp)
+                )),
+                Err(e) => failures.push(format!("shard {i}: {e}")),
+            }
+        }
+
+        if !failures.is_empty() {
+            return error_body(
+                502,
+                "partial_commit",
+                &format!(
+                    "{committed_shards} shard(s) committed, {} failed: {}",
+                    failures.len(),
+                    failures.join("; ")
+                ),
+            );
+        }
+        let body = serde_json::json!({ "tx_id": max_tx });
+        (
+            200,
+            "application/json",
+            serde_json::to_vec(&body).unwrap_or_default(),
+        )
     }
 
     /// Scatter-gather: collect records from every shard, merge to one JSONL
@@ -237,6 +376,64 @@ impl Router {
         }
         (200, "application/jsonl", out)
     }
+}
+
+/// The routing key for a commit record: which entity/edge id decides its
+/// shard. `None` means "no key" → a global record (dictionary / metadata) that
+/// must be broadcast to every shard.
+fn routing_key(rec: &serde_json::Value) -> Option<String> {
+    let s = |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_owned);
+    match rec.get("kind").and_then(serde_json::Value::as_str) {
+        Some("entity") => s(rec, "entity_id"),
+        Some("hyper_edge") => {
+            // Anchor = first role-filler's entity id (D2); fall back to the
+            // hyperedge's own id if it has no entity role-fillers.
+            rec.get("roles")
+                .and_then(|r| r.as_array())
+                .and_then(|a| a.first())
+                .and_then(|r0| r0.get("entity_id"))
+                .and_then(|x| x.as_str())
+                .map(str::to_owned)
+                .or_else(|| s(rec, "hyperedge_id"))
+        }
+        Some("tombstone") => s(rec, "target_id"),
+        // Dictionary (type_name/role_name/property_key) + policy/metadata: no
+        // routing key → broadcast (they carry caller-assigned ids).
+        _ => None,
+    }
+}
+
+/// Minimal HTTP POST to a shard (`url` like `http://host:port`). Returns the
+/// shard's `(status, body)`. One request per connection (`Connection: close`).
+fn post_to_shard(url: &str, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), String> {
+    let host_port = url
+        .strip_prefix("http://")
+        .unwrap_or(url)
+        .trim_end_matches('/');
+    let mut stream =
+        TcpStream::connect(host_port).map_err(|e| format!("connect {host_port}: {e}"))?;
+    let header = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host_port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream
+        .write_all(header.as_bytes())
+        .map_err(|e| e.to_string())?;
+    stream.write_all(body).map_err(|e| e.to_string())?;
+    stream.flush().map_err(|e| e.to_string())?;
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).map_err(|e| e.to_string())?;
+    let sep = raw
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .ok_or_else(|| "no header terminator from shard".to_string())?;
+    let status = std::str::from_utf8(&raw[..sep])
+        .ok()
+        .and_then(|h| h.lines().next())
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|c| c.parse().ok())
+        .ok_or_else(|| "unparseable shard status".to_string())?;
+    Ok((status, raw[sep + 4..].to_vec()))
 }
 
 /// Strip a leading `/v1` segment, matching the shards' own aliasing.
