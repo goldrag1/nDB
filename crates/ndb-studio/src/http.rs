@@ -350,10 +350,11 @@ fn dispatch(
         // ---- public ----
         ("GET", "/api/health") => Resp::ok(json!({ "status": "ok", "head": store.head() })),
         ("GET", "/api/me") => match &session {
-            Some(s) => Resp::ok(
-                json!({ "authed": true, "user": s.username, "role": s.role.as_str(), "db": state.lock_active() }),
-            ),
-            None => Resp::ok(json!({ "authed": false })),
+            Some(s) => Resp::ok(json!({
+                "authed": true, "user": s.username, "role": s.role.as_str(),
+                "db": state.lock_active(), "public_read": state.public_read,
+            })),
+            None => Resp::ok(json!({ "authed": false, "public_read": state.public_read })),
         },
         ("POST", "/api/login") => login(state, body),
         ("POST", "/api/logout") => {
