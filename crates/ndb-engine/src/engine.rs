@@ -1923,6 +1923,24 @@ impl Engine {
         Ok(stats)
     }
 
+    /// The replication watermark of the current durable state: the active WAL
+    /// segment and its durable byte length. A follower that has just restored a
+    /// base backup from this engine starts its [`FollowerCursor`] here — the
+    /// restored WAL is byte-identical up to this point, so streaming from it
+    /// applies only records committed *after* the backup (no double-apply).
+    ///
+    /// [`FollowerCursor`]: crate::replication::FollowerCursor
+    ///
+    /// # Errors
+    /// Propagates WAL read errors while measuring the durable length.
+    pub fn replication_watermark(&self) -> Result<(u64, u64), EngineError> {
+        let seq = self.active_wal_seq();
+        // `after = 0` reads the active segment to its durable end; we want only
+        // its `next_offset` (the end), not the records.
+        let sb = self.serve_replication(seq, 0)?;
+        Ok((seq, sb.next_offset))
+    }
+
     /// Per-index resident heap estimate. Diagnostic — walks the indexes
     /// (O(N)); use for the RAM-vs-DB-size baseline curve, not the hot
     /// path. See [`IndexMemoryStats`].

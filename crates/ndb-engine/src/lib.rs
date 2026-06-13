@@ -39,6 +39,7 @@ pub mod error;
 pub mod id;
 pub mod index;
 pub mod memtable;
+pub mod backup_archive;
 pub mod mvcc;
 pub mod query;
 pub mod record;
