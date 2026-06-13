@@ -1,0 +1,9 @@
+target/
+**/target/
+**/node_modules/
+**/dist/
+.git/
+docs/
+*.md
+.github/
+.worktrees/

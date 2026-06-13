@@ -1,93 +1,122 @@
-# nDB Quickstart (application developers)
+# nDB Quickstart
 
-A 5-minute path from an empty checkout to reading and writing data over
-the network. For the data model (hyperedges, time-travel) see the
-[white paper](nDB-whitepaper.md); for the query language see §12 of the
-[design spec](superpowers/specs/2026-05-27-nDB-hypergraph-design.md).
+Two ≤5-minute paths: one for **application developers**, one for **AI coding
+agents**. For the data model (hyperedges, time-travel) see the
+[white paper](nDB-whitepaper.md); for the wire contract see
+[PROTOCOL.md](PROTOCOL.md); for upgrade/durability guarantees see
+[COMPATIBILITY.md](COMPATIBILITY.md).
 
-## 1. Run the server
+---
 
-```sh
-# Build + start the HTTP server on a database directory (created if absent).
-cargo run --release -p ndb-server -- --path ./mydb --bind 127.0.0.1:8742
-```
+## Path A — Application developer (TypeScript)
 
-The server exposes JSON over HTTP/1.1. Operational endpoints:
-
-| Endpoint | Purpose |
-|---|---|
-| `GET /health` | liveness — always `200 {"status":"ok"}` |
-| `GET /ready`  | readiness — `503` while shutting down / engine unavailable |
-| `GET /metrics`| Prometheus text (`ndb_requests_total`, `ndb_auto_compactions_total`, …) |
-| `GET /status` | `{"sstable_count", …}` |
+### 1. Run the server (Docker — no toolchain needed)
 
 ```sh
-curl -s http://127.0.0.1:8742/health
-# {"status":"ok"}
+docker run -p 8742:8742 -v ndb-data:/data ghcr.io/goldrag1/ndb
+curl -s http://127.0.0.1:8742/v1/health        # {"status":"ok"}
 ```
 
-Compaction runs automatically in the background once the SSTable count
-crosses a threshold (default 8, checked every 30s) — no cron needed. Tune
-or disable it with `Server::with_auto_compaction(threshold, interval)`.
+Prefer a binary? Grab `ndb-<platform>.tar.gz` from the
+[latest release](https://github.com/goldrag1/nDB/releases) and run
+`./ndb-server --path ./mydb --bind 127.0.0.1:8742`. From source:
+`cargo run --release -p ndb-server -- --path ./mydb --bind 127.0.0.1:8742`.
 
-## 2. Talk to it from Rust
+Compaction runs automatically once the SSTable count crosses a threshold — no
+cron. Operational endpoints: `/v1/health` (liveness), `/v1/ready` (readiness),
+`/v1/metrics` (Prometheus), `/v1/status`.
 
-```toml
-# Cargo.toml
-[dependencies]
-ndb-client-rust = { path = "…/crates/ndb-client-rust" }
+### 2. Talk to it from TypeScript
+
+```sh
+npm i @ndb/client
 ```
 
-```rust
-use std::time::Duration;
-use ndb_client::Client;
+```ts
+import { NdbClient } from "@ndb/client";
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Retries are opt-in: GET requests retry fully (transport + 502/503/504);
-    // writes retry only the connection, so a commit is never double-applied.
-    let client = Client::new("http://127.0.0.1:8742")?
-        .with_retries(3, Duration::from_millis(100))
-        .with_token(std::env::var("NDB_TOKEN").unwrap_or_default());
+const db = new NdbClient("http://127.0.0.1:8742", { retries: 3 });
 
-    // Liveness.
-    let h = client.health()?;
-    println!("server status: {}", h.status);
+console.log((await db.health()).status);             // "ok"
 
-    // Query with the §12 query language (text form). Variables are `?name`;
-    // writes use create/set/merge/delete clauses, reads return tuples.
-    let result = client.query_text("match customer(name: ?n) return ?n limit 10")?;
-    println!("columns: {:?}, rows: {}", result.columns, result.rows.len());
+const id = crypto.randomUUID();
+const { tx_id } = await db.commit({
+  records: [{
+    kind: "entity",
+    entity_id: id,
+    type_id: 1,
+    tx_id_assert: 0,
+    tx_id_supersede: "active",
+    properties: [{ prop_id: 10, value: { tag: "string", value: "alice@example.com" } }],
+  }],
+});
 
-    Ok(())
+const r = await db.read(id);                          // { outcome: "live", … }
+const q = await db.queryText("match entity() return ?x limit 10");
+console.log(q.columns, q.rows);
+```
+
+Runs in Node ≥18, browsers, Deno, and edge runtimes — anything with `fetch`.
+Full API + retry semantics: [`clients/ts/README.md`](../clients/ts/README.md).
+
+### 3. Or embed the engine directly (no server)
+
+For in-process use, depend on `ndb-engine` and drive `Engine` / `WriteTxn` /
+`snapshot_iter_streaming` directly — the server is just a network skin over the
+same library. See `crates/ndb-engine/examples/`. Rust and Python network
+clients also ship (`crates/ndb-client-rust`, the Python client, and `ndb-cli`).
+
+---
+
+## Path B — AI coding agent (MCP)
+
+nDB speaks the **Model Context Protocol** — the same protocol Claude, Cursor,
+and Codex use for tools. Point your agent at a database and it can create and
+traverse n-ary relationships (hyperedges), do time-travel reads, and page
+through the data.
+
+### 1. Run the MCP server
+
+```sh
+npx @ndb/mcp --path ./db
+```
+
+(Or run the binary from a release / `cargo run -p ndb-mcp-server -- --path ./db`.)
+
+### 2. Connect your agent
+
+Add nDB to your MCP client config (Claude Desktop / Cursor / Codex):
+
+```json
+{
+  "mcpServers": {
+    "ndb": { "command": "npx", "args": ["@ndb/mcp", "--path", "./db"] }
+  }
 }
 ```
 
-Other client methods: `read(uuid)`, `iter()`, `lookup_by_key(...)`,
-`property_lookup(...)`, `property_range(...)`, `vector_search(...)`,
-`traverse(...)`, `query(&QueryRequest)`, plus admin `flush()` / `compact()`.
-Timeouts default to 60s read / 30s write and are tunable via
-`with_read_timeout` / `with_write_timeout`.
+### 3. What the agent gets
 
-## 3. Or use the CLI
+Tools (each with a JSON input schema, ReBAC-gated, audit-logged):
 
-```sh
-cargo run --release -p ndb-cli -- --url http://127.0.0.1:8742 health
-```
+- `ndb.commit_hyperedge` — create an n-ary relationship as one record
+  (entity and/or hyperedge role-fillers).
+- `ndb.neighbors` — one-hop traversal of incident hyperedges.
+- `ndb.read_as_of` — time-travel read by tx id or wall-clock timestamp.
+- `ndb.iter` — cursor-paginated walk of an arbitrarily large database.
 
-The `ndb` binary wraps the same client for shell / scripting use.
+Plus MCP **resources** (`ndb://schema`, `ndb://dictionaries`, `ndb://stats`)
+so the agent can discover the schema without trial-and-error, and **prompts**
+(query templates) for common explorations.
 
-## 4. Auth, TLS, encryption (production)
+---
 
-- **Auth:** start the server with a bearer token; clients send it via
-  `with_token` / the `NDB_TOKEN` env var. Per-tool access is gated by
-  ReBAC capabilities.
+## Auth, TLS, encryption (production)
+
+- **Auth:** start the server with a bearer token; clients send it
+  (`new NdbClient(url, { token })` / `NDB_TOKEN`). Per-route ReBAC gating.
 - **TLS:** `Server::with_tls_pem(cert, key)` then `run_tls(addr)`.
-- **At-rest encryption:** set `NDB_ENC_KEY` before `open`/`create`; the
-  engine encrypts new files (AES-GCM-256) and refuses to open on a key
-  mismatch.
+- **At-rest encryption:** set `NDB_ENC_KEY` before `open`/`create`; AES-GCM-256,
+  refuses to open on a key mismatch.
 
-## 5. Embed the engine directly (no server)
-
-For in-process use, depend on `ndb-engine` and drive `Engine` /
-`WriteTxn` / `snapshot_iter_streaming` directly — the server is just a
-network skin over the same library. See `crates/ndb-engine/examples/`.
+See [PRODUCTION.md](PRODUCTION.md) for the full operations guide.

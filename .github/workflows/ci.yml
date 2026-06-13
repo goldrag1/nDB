@@ -54,3 +54,44 @@ jobs:
         run: >
           cargo check --target aarch64-unknown-linux-gnu
           -p ndb-engine -p ndb-index-vector-hnsw -p ndb-arrow
+
+  # Adoptable-core gate 1: the Docker image builds and serves /v1/health
+  # within the 60s install budget (QUICKSTART path A, step 1).
+  docker-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t ndb:ci .
+      - name: Run + probe /v1/health
+        run: |
+          docker run -d --name ndb -p 8742:8742 ndb:ci
+          for i in $(seq 1 60); do
+            if curl -fs http://127.0.0.1:8742/v1/health | grep -q '"ok"'; then
+              echo "healthy after ${i}s"; docker rm -f ndb; exit 0
+            fi
+            sleep 1
+          done
+          echo "server did not become healthy in 60s"; docker logs ndb; docker rm -f ndb; exit 1
+
+  # Adoptable-core gate 2: the TypeScript SDK typechecks, builds, and passes
+  # its integration suite against a real server over /v1.
+  ts-sdk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/ts
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain (pinned via rust-toolchain.toml)
+        run: rustup show
+      - name: Build server binary (integration test spawns it)
+        working-directory: .
+        run: cargo build -p ndb-server
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
