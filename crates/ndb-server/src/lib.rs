@@ -1506,7 +1506,9 @@ impl Server {
         out: &mut dyn Write,
         outcome: &mut DispatchOutcome,
     ) -> Result<(), ServerError> {
-        let path_no_q = req.path_no_query();
+        // Wire-protocol v1: `/v1/<route>` and bare `/<route>` are the same
+        // handler; bare routes are deprecated aliases (see `canonicalize_v1`).
+        let path_no_q = canonicalize_v1(req.path_no_query());
 
         // v2.2 CORS preflight: respond to OPTIONS with the configured
         // ACAO + the headers/methods the explorer SPA needs. Browsers
@@ -1599,8 +1601,9 @@ impl Server {
         }
 
         // For routes that accept query parameters, extract them from the
-        // full request path (path_no_q strips them).
-        let full_path = req.path.as_str();
+        // full request path (path_no_q strips them). Canonicalised so the
+        // `/read/` suffix + query parsing work under the `/v1` prefix too.
+        let full_path = canonicalize_v1(req.path.as_str());
         match (req.method.as_str(), path_no_q) {
             ("GET", "/health") => {
                 outcome.status = 200;
@@ -3153,10 +3156,23 @@ struct DispatchOutcome {
     failure: Option<String>,
 }
 
+/// Wire-protocol v1: strip a leading `/v1` path segment so `/v1/<route>`
+/// and the bare `/<route>` both canonicalise to the same handler. The bare
+/// routes remain as **deprecated aliases**; the SDK targets `/v1`. Only a
+/// `/v1` prefix followed by `/` (or the query string) is stripped, so
+/// `/v1foo` and a literal `/v1` are left untouched (→ 404).
+fn canonicalize_v1(path: &str) -> &str {
+    match path.strip_prefix("/v1") {
+        Some(rest) if rest.starts_with('/') || rest.starts_with('?') => rest,
+        _ => path,
+    }
+}
+
 /// Map a `(method, path)` to the capability required to invoke it. Returns
 /// `None` for routes the server doesn't recognise — those land in the 404
 /// branch which is intentionally open.
 fn required_capability(method: &str, path: &str) -> Option<Capability> {
+    let path = canonicalize_v1(path);
     match (method, path) {
         // `/health`, `/ready`, `/metrics` are liveness/observability probes
         // — treated like `/health`: routed without auth gating (the
@@ -3186,6 +3202,7 @@ fn required_capability(method: &str, path: &str) -> Option<Capability> {
 /// UUID) collapse to a placeholder so the label set stays bounded;
 /// unrecognised paths bucket into `"other"`.
 fn route_label(method: &str, path: &str) -> &'static str {
+    let path = canonicalize_v1(path);
     match (method, path) {
         ("GET", "/health") => "/health",
         ("GET", "/ready") => "/ready",

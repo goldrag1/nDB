@@ -2189,3 +2189,64 @@ fn admin_shutdown_requires_admin_capability() {
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// Wire-protocol v1: `/v1/<route>` reaches the same handler as the bare
+/// `/<route>` alias, and a non-segment `/v1`-lookalike is NOT stripped.
+#[test]
+fn v1_prefix_aliases_bare_routes() {
+    let dir = temp_dir("v1_prefix");
+    let server = Arc::new(Server::open(&dir).unwrap());
+    let addr = spawn_server(Arc::clone(&server), 6);
+    {
+        let e = server.engine();
+        let mut e = e.write().unwrap();
+        e.require_property(TypeId::new(1), PropertyId::new(10));
+        e.expect_value_tag(TypeId::new(1), PropertyId::new(10), TAG_STRING);
+    }
+
+    // /v1/health works identically to /health.
+    let v1 = get(addr, "/v1/health");
+    assert_eq!(v1.status, 200, "GET /v1/health");
+    let body: serde_json::Value = serde_json::from_slice(&v1.body).unwrap();
+    assert_eq!(body["status"], "ok");
+
+    // Commit under /v1, then read it back under /v1 (the `/read/` suffix +
+    // path-param extraction must survive the prefix).
+    let bob = EntityId::now_v7();
+    let commit_body = serde_json::json!({
+        "records": [{
+            "kind": "entity",
+            "entity_id": bob.into_uuid().to_string(),
+            "type_id": 1,
+            "tx_id_assert": 0,
+            "tx_id_supersede": "active",
+            "properties": [{
+                "prop_id": 10,
+                "value": {"tag": "string", "value": "bob@example.com"}
+            }]
+        }]
+    })
+    .to_string();
+    let c = post(addr, "/v1/commit", &commit_body);
+    assert_eq!(
+        c.status,
+        200,
+        "POST /v1/commit body: {}",
+        String::from_utf8_lossy(&c.body)
+    );
+
+    let r = get(addr, &format!("/v1/read/{}", bob.into_uuid()));
+    assert_eq!(r.status, 200, "GET /v1/read/:id");
+    let rbody: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+    assert_eq!(rbody["outcome"], "live");
+
+    // The bare alias still resolves the same record (back-compat).
+    let r2 = get(addr, &format!("/read/{}", bob.into_uuid()));
+    assert_eq!(r2.status, 200, "bare /read/:id alias");
+
+    // A `/v1`-lookalike with no segment boundary is NOT stripped → 404.
+    let bogus = get(addr, "/v1health");
+    assert_eq!(bogus.status, 404, "/v1health must not canonicalise to /health");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
