@@ -1,6 +1,6 @@
 {
   "name": "@n-dimension-database-ndb/mcp",
-  "version": "0.1.0",
+  "version": "2.4.0",
   "description": "Run the nDB Model Context Protocol server with one command — point Claude/Cursor/Codex at an nDB database.",
   "type": "module",
   "bin": { "ndb-mcp": "bin/ndb-mcp.js" },
@@ -14,8 +14,8 @@
   "engines": { "node": ">=18" },
   "//optionalDependencies": "Per-platform binary packages, published by .github/workflows/release.yml. npm installs only the one matching the host. The launcher (bin/ndb-mcp.js) resolves it; in a dev checkout it falls back to target/{release,debug}/ndb-mcp-server.",
   "optionalDependencies": {
-    "@n-dimension-database-ndb/mcp-linux-x64": "0.1.0",
-    "@n-dimension-database-ndb/mcp-linux-arm64": "0.1.0",
-    "@n-dimension-database-ndb/mcp-darwin-arm64": "0.1.0"
+    "@n-dimension-database-ndb/mcp-linux-x64": "2.4.0",
+    "@n-dimension-database-ndb/mcp-linux-arm64": "2.4.0",
+    "@n-dimension-database-ndb/mcp-darwin-arm64": "2.4.0"
   }
 }
