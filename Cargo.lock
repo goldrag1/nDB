@@ -1237,10 +1237,13 @@ version = "2.4.0"
 dependencies = [
  "ndb-engine",
  "ndb-server",
+ "rustls",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "uuid",
+ "webpki-roots 1.0.7",
 ]
 
 [[package]]
