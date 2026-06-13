@@ -10,6 +10,7 @@ members = [
     "crates/ndb-arrow",
     "crates/ndb-index-vector-hnsw",
     "crates/ndb-client-rust",
+    "crates/ndb-router",
     "crates/ndb-query",
     "crates/ndb-studio",
     "crates/nstack",

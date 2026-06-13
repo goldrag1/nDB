@@ -1,0 +1,30 @@
+[package]
+name         = "ndb-router"
+description  = "nDB sharding coordinator — routes /v1 requests across N single-writer shards"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+authors      = { workspace = true }
+repository   = { workspace = true }
+license      = { workspace = true }
+
+[lib]
+name = "ndb_router"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ndb-router"
+path = "src/main.rs"
+
+[dependencies]
+ndb-client-rust = { path = "../ndb-client-rust" }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+ndb-server = { path = "../ndb-server" }
+ndb-engine = { path = "../ndb-engine" }
+uuid       = { workspace = true }
+
+[lints]
+workspace = true
