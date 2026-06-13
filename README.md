@@ -9,6 +9,43 @@ reified properties. See the [white paper](docs/nDB-whitepaper.md) for the
 architectural narrative and the [full design spec](docs/superpowers/specs/2026-05-27-nDB-hypergraph-design.md)
 for the byte-level details.
 
+## Install & Quickstart
+
+Released as **v2.4.0** — installable, not just source.
+
+**Use it from TypeScript** (Node, browser, Deno, edge — zero deps):
+
+```sh
+npm i @n-dimension-database-ndb/client
+```
+```ts
+import { NdbClient } from "@n-dimension-database-ndb/client";
+const db = new NdbClient("http://127.0.0.1:8742");
+console.log((await db.health()).status); // "ok"
+```
+
+**Run the server** (Docker):
+
+```sh
+docker run -p 8742:8742 -v ndb-data:/data ghcr.io/goldrag1/ndb
+curl localhost:8742/v1/health            # {"status":"ok"}
+```
+
+…or grab a prebuilt binary (linux x86_64 / aarch64, macOS arm64) from the
+[latest release](https://github.com/goldrag1/nDB/releases/latest), or
+`cargo run --release -p ndb-server -- --path ./db`.
+
+**Point an AI agent at it** (Model Context Protocol — Claude / Cursor / Codex):
+
+```sh
+npx @n-dimension-database-ndb/mcp --path ./db
+```
+
+Full walkthrough: **[QUICKSTART](docs/QUICKSTART.md)** · wire contract:
+**[PROTOCOL](docs/PROTOCOL.md)** · "your data always opens" upgrade guarantee:
+**[COMPATIBILITY](docs/COMPATIBILITY.md)** · deploy (compose, Helm, sharded
+cluster + replication): **[deploy/README](deploy/README.md)**.
+
 ## Workspace
 
 | Crate                       | Purpose                                                                              |
@@ -19,11 +56,14 @@ for the byte-level details.
 | `ndb-client-rust`           | Reusable Rust client library (`ndb_client::Client`) — typed against the engine's wire shapes. |
 | `ndb-cli`                   | Command-line client over `ndb-client-rust`. Binary `ndb`.                            |
 | `ndb-mcp-server`            | Model Context Protocol bridge — exposes the engine to AI agents via stdio JSON-RPC, with the same ReBAC + audit-log surface as `ndb-server`. Binary `ndb-mcp-server`. |
+| `ndb-router`                | Stateless sharding coordinator — fans `/v1` across N single-writer shards: hash routing, hyperedge anchor placement, scatter-on-miss reads, kNN top-k merge, cross-shard traverse. Binary `ndb-router`. |
 | `ndb-slicer`                | CPU projection + aggregation over `Engine::snapshot_iter` output.                    |
 | `ndb-renderer`              | Text/TSV/CSV table output for `ndb-slicer` results.                                  |
 | `ndb-arrow`                 | Apache Arrow IPC bridge — `Engine::snapshot_iter` → `RecordBatch` + IPC bytes for Polars / pandas / DuckDB consumers. |
 | `ndb-index-vector-hnsw`     | HNSW ANN vector index (opt-in plugin) — drop-in replacement for the brute-force baseline once dataset size warrants it. |
 | `clients/python/ndb_client` | Pure-Python (`urllib`-only) HTTP client. `pip install ndb-client`.                  |
+| `clients/ts`                | Zero-dep typed TypeScript SDK. `npm i @n-dimension-database-ndb/client`. Node / browser / Deno / edge. |
+| `clients/mcp-npm`           | `npx`-runnable MCP launcher. `npx @n-dimension-database-ndb/mcp --path ./db`. Resolves the per-platform server binary. |
 
 ## For structural biologists — start here
 
