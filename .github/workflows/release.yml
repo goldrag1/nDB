@@ -53,6 +53,7 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
       - name: Assemble + publish @ndb/mcp-${{ matrix.npmpkg }}
+        continue-on-error: true # non-blocking until NPM_TOKEN + @ndb org exist; binaries already attached above
         run: |
           ext=""; [ "${{ matrix.npmos }}" = "win32" ] && ext=".exe"
           pkg="ndb-mcp-${{ matrix.npmpkg }}"
@@ -110,6 +111,10 @@ jobs:
     name: npm @ndb/client + @ndb/mcp
     needs: binaries
     runs-on: ubuntu-latest
+    # Non-blocking until the @ndb npm org + NPM_TOKEN secret exist. The image
+    # (docker job) + release binaries (binaries job) still publish without it;
+    # re-run this job once npm is set up.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

@@ -3,7 +3,7 @@ name: ndb
 description: nDB — n-dimensional hypergraph database. A StatefulSet leader with auto-following read-only replicas.
 type: application
 version: 0.1.0
-appVersion: "1.3.0"
+appVersion: "2.4.0"
 home: https://github.com/goldrag1/nDB
 sources:
   - https://github.com/goldrag1/nDB
