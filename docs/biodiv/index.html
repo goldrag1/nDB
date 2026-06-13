@@ -453,7 +453,7 @@ const KIND_LABEL = {
 
 const API_BASE  = (location.origin === "http://127.0.0.1:9881")
   ? "http://127.0.0.1:8748"
-  : "/biodiv_ndb/api";
+  : location.origin;   // deployed: same-origin; /iter & /query path-routed to the read-only server
 
 // ─── App state ──────────────────────────────────────────────────────────
 const state = {

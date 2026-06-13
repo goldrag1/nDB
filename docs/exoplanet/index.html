@@ -362,7 +362,7 @@ const API_URL = (() => {
   if (location.port === "9877" || location.hostname === "127.0.0.1" || location.hostname === "localhost") {
     return "http://127.0.0.1:8745";
   }
-  return location.origin + location.pathname.replace(/\/$/, "") + "/api";
+  return location.origin;   // deployed: same-origin; /iter path-routed to the read-only server
 })();
 document.getElementById("stat-api").textContent = API_URL.replace(/^https?:\/\//, "");
 

@@ -81,3 +81,22 @@ From a scratch dir, nothing preinstalled:
 **Gate:** the two universal adopter paths (TS SDK, curl) + the human GUI all pass against the live HTTPS instance, and writes are uniformly refused. The Rust-CLI-over-TLS gap is the one honest caveat.
 
 ---
+
+## 2026-06-14 — Add the 3D explorers (protein · exoplanet · biodiversity)
+
+The pre-built per-domain explorers (`docs/explorer` = AlphaFold 3D protein viz, `docs/exoplanet`, `docs/biodiv`) each fetch `/iter` (+ `/query`, `/commit`) from a **live** nDB and are coupled to their **original** dataset's schema. Crucially, **the name-blind problem doesn't affect them** — they hardcode the schema type-ids (they were built alongside the same builders), so they read the raw records fine. This is the *opposite* of Studio (which needs the dictionary). Lesson: "name-blind" is a Studio/catalog problem, not a data problem — purpose-built clients are unaffected.
+
+Local verify (each rendered against a read-only `ndb-server` on its original DB): exoplanet (163 ent / 148 edges, 3D scatter), protein (full AlphaFold ribbon, pLDDT colors), biodiv (species gallery with images). **CORS bit the local cross-origin test** (explorer :9877 → API :8745) — prod is same-origin so it won't, but to *see* the render locally I added a small `ndb-server --cors-origin <origin>` flag (wires the existing `with_cors_origin` builder; mirrors `--read-only`). Genuinely useful for adopters running a browser app on another origin.
+
+Deploy shape per domain: a read-only `ndb-server` (original DB) + a `python3 -m http.server` for the single-file explorer, both cgroup-capped, behind one subdomain; cloudflared path-routes `^/(iter|v1|commit|query|health…)` → API, default → static. Edited each explorer's API base to `location.origin` in production (same-origin → no CORS, `/iter` path-routes to its server) while keeping the localhost dev branches.
+
+**The Cloudflare Universal SSL trap:** first tried `protein.ndb.nextstar-erp.com` (etc.). DNS resolved (proxied) but every request was **HTTP 000 — TLS handshake failure (alert 552)**. Cause: Cloudflare's free **Universal SSL covers the apex + a ONE-level wildcard (`*.nextstar-erp.com`) only** — a *second*-level label like `protein.ndb.nextstar-erp.com` has no edge certificate. That's also why `ndb.nextstar-erp.com` (first-level) worked. Fix: use **first-level** subdomains — `ndb-protein.nextstar-erp.com`, `ndb-exoplanet…`, `ndb-biodiv…` — covered by `*.nextstar-erp.com`. Detection: `curl -v` shows `TLS alert, handshake failure (552)` while `dig` resolves fine. (Deeper subdomains need Advanced Certificate Manager / a dedicated cert.)
+
+**Live:**
+- `https://ndb-protein.nextstar-erp.com` — AlphaFold 3D protein explorer
+- `https://ndb-exoplanet.nextstar-erp.com` — exoplanet N-ary discovery 3D scatter
+- `https://ndb-biodiv.nextstar-erp.com` — biodiversity species gallery / ecological interactions
+
+Each is the original rich dataset (1624 / 163 / 168 entities) served read-only; writes 403; same-origin so no CORS; verified in-browser (0 errors beyond favicon). Total VPS footprint now: Studio + trio `/v1` + 3 API servers + 3 static servers = 8 cgroup-capped services, all tiny.
+
+---
