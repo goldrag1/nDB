@@ -40,7 +40,8 @@ jobs:
         run: |
           dir="ndb-${{ matrix.name }}"
           mkdir "$dir"
-          cp target/${{ matrix.target }}/release/ndb-server target/${{ matrix.target }}/release/ndb-cli target/${{ matrix.target }}/release/ndb-mcp-server "$dir/"
+          # NB: the ndb-cli crate's binary is named `ndb` (not `ndb-cli`).
+          cp target/${{ matrix.target }}/release/ndb-server target/${{ matrix.target }}/release/ndb target/${{ matrix.target }}/release/ndb-mcp-server "$dir/"
           tar czf "$dir.tar.gz" "$dir"
       - name: Attach to release
         uses: softprops/action-gh-release@v2
