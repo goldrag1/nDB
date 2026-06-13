@@ -51,3 +51,33 @@ seismic:   head=192 recs=5157 entity=4827 edge=138 typename=0 propkey=0 rolename
 **Pivot:** author a small, properly-named, hyperedge- and vector-rich demo dataset via a `--seed-demo` routine (proteins · exoplanets · species). Cleaner names, richer relationships, fully reproducible, no dependency on name-blind legacy DBs. The `create_with_id`/`merge_from` capability stays (genuinely useful for fusing *named* DBs), just off the demo's critical path.
 
 ---
+
+## 2026-06-14 — Build & deploy
+
+**Build:** planned a musl static build for portability, then checked: local AND VPS are both `Ubuntu GLIBC 2.39-0ubuntu8.7`. Same distro → a plain `cargo build --release` runs as-is. **Lesson:** musl is for *uncertain/older* targets; same-distro deploy → skip the musl toolchain entirely. `ndb-server` 22 MB, `ndb-studio` 12 MB, both dynamically linked to the matching glibc.
+
+**Ship:** `scp -r /tmp/ndb-deploy ~/ndb` (binaries + a seeded `studio-db` + a copy `server-db`). Two systemd units (`User=frappeuser`, `Restart=on-failure`) with cgroup caps `MemoryHigh=256M MemoryMax=384M MemorySwapMax=0 CPUQuota=50%` each → ≤1.0 core combined on the 2-core box, Frappe keeps ≥1 core. `enable --now` → both `active`. **Measured `MemoryCurrent` ≈ 0.45–0.5 MB each** — the cap is pure insurance; real footprint is trivial. Bootstrap admin password captured from `journalctl -u ndb-studio`.
+
+**Ingress (one hostname, path-routed):** inserted two rules into the existing `config-tamdinh.yml` above the `http_status:404` catch-all:
+```yaml
+  - hostname: ndb.nextstar-erp.com
+    path: ^/v1
+    service: http://localhost:8742
+  - hostname: ndb.nextstar-erp.com
+    service: http://localhost:8780
+```
+`cloudflared tunnel route dns <id> ndb.nextstar-erp.com` → **failed: `1003 record already exists`** (leftover from a prior life of the zone). Fix: `cloudflared tunnel route dns -f <id> ndb.nextstar-erp.com` (`--overwrite-dns`) → "Added CNAME … will route to this tunnel". **Lesson:** on a reused zone, expect a stale record; `-f` overwrites it (the tunnel's `cert.pem` carries the DNS-edit scope, no API token needed). After restart, the first few requests returned **502 while the edge↔tunnel mapping settled** — retried clean within seconds. Don't trust the first probe after a DNS/tunnel change.
+
+**Live:** `https://ndb.nextstar-erp.com/` (Studio GUI, anonymous read-only), `…/api/catalog` (named kinds + N-ary edges), `…/v1/health` (machine API). One URL, path-routed.
+
+## 2026-06-14 — Clean-room adoption sweep (as an outside dev/agent)
+
+From a scratch dir, nothing preinstalled:
+- **curl `/v1`** ✓ — `GET /v1/health` → `{"status":"ok"}`; `POST /v1/commit` → **403 `read_only`** with a clear message. The no-tooling baseline anyone can reproduce.
+- **TS SDK via real npm** ✓ — `npm i @n-dimension-database-ndb/client` (published, 2.4.0), `new NdbClient("https://ndb.nextstar-erp.com")` → `health()` ok over TLS (Node `fetch`), `query()` reached the engine and returned a proper nDB error envelope for a malformed body. The headline adopter path works against the public HTTPS endpoint.
+- **`ndb` Rust CLI** ✗ over HTTPS — **real finding:** `ndb-client-rust` is plain `std::net::TcpStream`, **no TLS** (accepts `http://host:port` or bare `host:port`, rejects `https://…`). A Cloudflare-fronted (TLS-only) nDB is therefore unreachable by the Rust CLI/client directly. Adopters on the CLI need: the TS SDK, `curl`, a local `cloudflared access` tunnel, or a plain-HTTP port. Worth a TLS client or a documented `cloudflared access` recipe.
+- **Public GUI (Playwright)** ✓ — logged-out browser renders the read-only explorer (named kinds, N-ary edges, vectors, per-cell history, time-travel slider), `read-only` badge + `Log in` button, **0 console errors**. Screenshot saved (`ndb-public-studio.png`).
+
+**Gate:** the two universal adopter paths (TS SDK, curl) + the human GUI all pass against the live HTTPS instance, and writes are uniformly refused. The Rust-CLI-over-TLS gap is the one honest caveat.
+
+---
