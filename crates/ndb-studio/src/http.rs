@@ -403,6 +403,12 @@ fn dispatch(
             let limit = usize::try_from(qp.u64("limit").unwrap_or(300)).unwrap_or(300);
             Resp::ok(store.graph(qp.u64("as_of"), limit))
         }),
+        ("GET", "/api/neighbors") => guard_read(session.as_ref(), || {
+            let Some(id) = qp.get("id").and_then(|s| Uuid::parse_str(s).ok()) else {
+                return Resp::fail(400, "bad_request", "missing or invalid id");
+            };
+            Resp::ok(store.neighbors(id, qp.u64("as_of")))
+        }),
         ("GET", "/api/hyperedges") => guard_read(session.as_ref(), || {
             let Some(kind) = qp.u64("kind") else {
                 return Resp::fail(400, "bad_request", "missing kind");
@@ -422,6 +428,19 @@ fn dispatch(
             Resp::ok(store.find_similar(id, property, k))
         }),
         ("GET", "/api/schema") => guard_read(session.as_ref(), || Resp::ok(store.schema())),
+        ("GET", "/api/integrity") => guard_read(session.as_ref(), || Resp::ok(store.integrity())),
+        ("GET", "/api/tx_time") => guard_read(session.as_ref(), || {
+            let Some(tx) = qp.u64("tx") else {
+                return Resp::fail(400, "bad_request", "missing tx");
+            };
+            Resp::ok(store.tx_time(tx))
+        }),
+        ("GET", "/api/tx_at") => guard_read(session.as_ref(), || {
+            let Some(us) = qp.get("us").and_then(|s| s.parse::<i64>().ok()) else {
+                return Resp::fail(400, "bad_request", "missing us (microseconds)");
+            };
+            Resp::ok(store.tx_at(us))
+        }),
         ("GET", "/api/diff") => guard_read(session.as_ref(), || {
             let (Some(from), Some(to)) = (qp.u64("from"), qp.u64("to")) else {
                 return Resp::fail(400, "bad_request", "missing from/to tx");
@@ -481,6 +500,22 @@ fn dispatch(
         },
         ("POST", "/api/databases/use") => match admin(session.as_ref()) {
             Ok(()) => db_action(body, |name| state.use_db(name)),
+            Err(r) => r,
+        },
+
+        // ---- storage engine (admin) ----
+        ("GET", "/api/engine/stats") => match admin(session.as_ref()) {
+            Ok(()) => Resp::ok(store.engine_stats()),
+            Err(r) => r,
+        },
+        ("POST", "/api/engine/compact") => match admin(session.as_ref()) {
+            Ok(()) => match store.compact() {
+                Ok(s) => Resp::ok(s),
+                Err(e) => Resp::code(
+                    e.status(),
+                    json!({ "error": { "code": e.code(), "message": e.message() } }),
+                ),
+            },
             Err(r) => r,
         },
 
@@ -813,28 +848,42 @@ fn commit(store: &Store, body: &[u8], author: &str) -> Resp {
             if kind.is_empty() {
                 return Resp::fail(400, "bad_request", "missing edge kind");
             }
-            let mut roles = Vec::new();
+            let mut entity_roles = Vec::new();
+            let mut edge_roles = Vec::new();
             if let Some(arr) = req.get("roles").and_then(J::as_array) {
                 for r in arr {
                     let role = r.get("role").and_then(J::as_str).unwrap_or("");
-                    let Some(target) = r
+                    let Some(refid) = r
                         .get("ref")
                         .and_then(J::as_str)
                         .and_then(|s| Uuid::parse_str(s).ok())
                     else {
-                        return Resp::fail(
-                            400,
-                            "bad_request",
-                            "role missing valid 'ref' entity id",
-                        );
+                        return Resp::fail(400, "bad_request", "role missing valid 'ref' id");
                     };
                     if role.is_empty() {
                         return Resp::fail(400, "bad_request", "role missing name");
                     }
-                    roles.push((role.to_string(), target));
+                    if r.get("target").and_then(J::as_str) == Some("edge") {
+                        edge_roles.push((role.to_string(), refid));
+                    } else {
+                        entity_roles.push((role.to_string(), refid));
+                    }
                 }
             }
-            finish(store.create_hyperedge(kind, &roles))
+            let mut props = Vec::new();
+            if let Some(arr) = req.get("properties").and_then(J::as_array) {
+                for p in arr {
+                    let Some(name) = p.get("name").and_then(J::as_str) else {
+                        return Resp::fail(400, "bad_request", "property missing name");
+                    };
+                    let value = match from_json(p.get("value").unwrap_or(&J::Null)) {
+                        Ok(v) => v,
+                        Err(m) => return Resp::fail(400, "bad_value", &m),
+                    };
+                    props.push((name.to_string(), value));
+                }
+            }
+            finish(store.create_hyperedge(kind, &entity_roles, &edge_roles, &props))
         }
         "register_vector" => {
             let prop = req.get("property").and_then(J::as_str).unwrap_or("");

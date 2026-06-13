@@ -1046,6 +1046,127 @@ impl Store {
         json!({ "kinds": kinds_json, "edges": edges_json, "relationships": rels_json })
     }
 
+    /// Referential-integrity audit of the current snapshot: `EntityRef`
+    /// properties pointing at entities that no longer exist (dangling refs),
+    /// and hyperedges whose role-fillers (entity or edge) don't resolve.
+    /// Because reads see only live records, a ref to a deleted entity shows up
+    /// here.
+    #[must_use]
+    pub fn integrity(&self) -> J {
+        let recs = self.records(self.snapshot(None));
+        let names = Self::names(&recs);
+        let kind_of = |tid: u32| {
+            names
+                .type_name
+                .get(&tid)
+                .cloned()
+                .unwrap_or_else(|| format!("kind:{tid}"))
+        };
+
+        let mut entity_ids: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+        let mut edge_ids: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+        for r in &recs {
+            match r {
+                Record::Entity(e) => {
+                    entity_ids.insert(e.entity_id.into_uuid());
+                }
+                Record::HyperEdge(h) => {
+                    edge_ids.insert(h.hyperedge_id.into_uuid());
+                }
+                _ => {}
+            }
+        }
+
+        let mut dangling_refs: Vec<J> = Vec::new();
+        let mut bad_edges: Vec<J> = Vec::new();
+        for r in &recs {
+            match r {
+                Record::Entity(e) => {
+                    let from_kind = kind_of(e.type_id.get());
+                    if is_reserved(&from_kind) {
+                        continue;
+                    }
+                    for (pid, v) in &e.properties {
+                        if let Value::EntityRef(t) = v
+                            && !entity_ids.contains(&t.into_uuid())
+                        {
+                            dangling_refs.push(json!({
+                                "from": e.entity_id.into_uuid().to_string(), "from_kind": from_kind,
+                                "property": names.prop_name.get(&pid.get()).cloned().unwrap_or_default(),
+                                "target": t.into_uuid().to_string(),
+                            }));
+                        }
+                    }
+                }
+                Record::HyperEdge(h) => {
+                    let edge_kind = kind_of(h.type_id.get());
+                    if is_reserved(&edge_kind) {
+                        continue;
+                    }
+                    let mut report = |role: u32, target: Uuid, tgt: &str| {
+                        bad_edges.push(json!({
+                            "edge": h.hyperedge_id.into_uuid().to_string(), "edge_kind": edge_kind,
+                            "role": names.role_name.get(&role).cloned().unwrap_or_default(),
+                            "target": target.to_string(), "target_kind": tgt,
+                        }));
+                    };
+                    for (rid, eid) in &h.roles {
+                        if !entity_ids.contains(&eid.into_uuid()) {
+                            report(rid.get(), eid.into_uuid(), "entity");
+                        }
+                    }
+                    for (rid, hid) in &h.hyperedge_roles {
+                        if !edge_ids.contains(&hid.into_uuid()) {
+                            report(rid.get(), hid.into_uuid(), "edge");
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        json!({
+            "ok": dangling_refs.is_empty() && bad_edges.is_empty(),
+            "counts": { "dangling_refs": dangling_refs.len(), "bad_edges": bad_edges.len() },
+            "dangling_refs": dangling_refs,
+            "bad_edges": bad_edges,
+        })
+    }
+
+    /// Wall-clock commit time (µs since epoch) of a transaction, if known.
+    /// Reads the persisted `TxTimestamp` records (so it survives restarts even
+    /// for WAL-only data), falling back to the engine's in-session map.
+    #[must_use]
+    pub fn tx_time(&self, tx: u64) -> J {
+        let recs = self.records(self.snapshot(None));
+        let t = recs
+            .iter()
+            .find_map(|r| match r {
+                Record::TxTimestamp(t) if t.tx_id.get() == tx => Some(t.timestamp_us),
+                _ => None,
+            })
+            .or_else(|| self.engine.commit_timestamp_us(TxId::new(tx)));
+        json!({ "tx": tx, "time_us": t })
+    }
+
+    /// The most recent transaction committed at or before a wall-clock instant
+    /// (µs since epoch) — resolves an "as of `<time>`" query to a tx.
+    #[must_use]
+    pub fn tx_at(&self, time_us: i64) -> J {
+        let recs = self.records(self.snapshot(None));
+        let mut best: Option<u64> = None;
+        for r in &recs {
+            if let Record::TxTimestamp(t) = r
+                && t.timestamp_us <= time_us
+                && best.is_none_or(|b| t.tx_id.get() > b)
+            {
+                best = Some(t.tx_id.get());
+            }
+        }
+        let tx = best.or_else(|| self.engine.tx_at_or_before(time_us).map(TxId::get));
+        json!({ "tx": tx })
+    }
+
     /// What changed between two snapshots: entities added, removed, and
     /// changed (with per-property old→new). Works on any pair of tx ids
     /// (either direction) — time-travel diffing the engine can't do as a
@@ -1118,20 +1239,36 @@ impl Store {
             return json!({ "type_id": type_id, "as_of": snap.get(), "kind": kind, "roles": [], "edges": [], "total": 0, "shown": 0 });
         }
 
-        // id → (label, kind) for resolving role fillers.
+        // id → (label, kind) for resolving entity fillers; edge id → kind for
+        // resolving edge-on-edge fillers.
         let mut ent: HashMap<Uuid, (String, String)> = HashMap::new();
+        let mut edge_kind: HashMap<Uuid, String> = HashMap::new();
         for r in &recs {
-            if let Record::Entity(e) = r {
-                let k = names
-                    .type_name
-                    .get(&e.type_id.get())
-                    .cloned()
-                    .unwrap_or_else(|| format!("kind:{}", e.type_id.get()));
-                ent.insert(e.entity_id.into_uuid(), (entity_label(e, &names), k));
+            match r {
+                Record::Entity(e) => {
+                    let k = names
+                        .type_name
+                        .get(&e.type_id.get())
+                        .cloned()
+                        .unwrap_or_else(|| format!("kind:{}", e.type_id.get()));
+                    ent.insert(e.entity_id.into_uuid(), (entity_label(e, &names), k));
+                }
+                Record::HyperEdge(h) => {
+                    edge_kind.insert(
+                        h.hyperedge_id.into_uuid(),
+                        names
+                            .type_name
+                            .get(&h.type_id.get())
+                            .cloned()
+                            .unwrap_or_else(|| format!("edge:{}", h.type_id.get())),
+                    );
+                }
+                _ => {}
             }
         }
 
         let mut role_ids: BTreeSet<u32> = BTreeSet::new();
+        let mut prop_names: BTreeSet<String> = BTreeSet::new();
         let mut edges: Vec<J> = Vec::new();
         let mut total = 0usize;
         for r in &recs {
@@ -1152,14 +1289,32 @@ impl Store {
                         .unwrap_or_else(|| format!("role:{}", rid.get()));
                     let id = eid.into_uuid();
                     let (label, k) = ent.get(&id).cloned().unwrap_or_default();
-                    fillers.insert(
-                        rn,
-                        json!({ "id": id.to_string(), "label": label, "kind": k }),
-                    );
+                    fillers.insert(rn, json!({ "id": id.to_string(), "label": label, "kind": k, "target": "entity" }));
                 }
-                edges.push(
-                    json!({ "id": h.hyperedge_id.into_uuid().to_string(), "fillers": fillers }),
-                );
+                for (rid, hid) in &h.hyperedge_roles {
+                    role_ids.insert(rid.get());
+                    let rn = names
+                        .role_name
+                        .get(&rid.get())
+                        .cloned()
+                        .unwrap_or_else(|| format!("role:{}", rid.get()));
+                    let id = hid.into_uuid();
+                    let k = edge_kind.get(&id).cloned().unwrap_or_default();
+                    fillers.insert(rn, json!({ "id": id.to_string(), "label": format!("⬡ {k}"), "kind": k, "target": "edge" }));
+                }
+                let mut props = serde_json::Map::new();
+                for (pid, v) in &h.properties {
+                    let pn = names
+                        .prop_name
+                        .get(&pid.get())
+                        .cloned()
+                        .unwrap_or_else(|| format!("prop:{}", pid.get()));
+                    if !is_reserved(&pn) {
+                        prop_names.insert(pn.clone());
+                        props.insert(pn, to_json(v));
+                    }
+                }
+                edges.push(json!({ "id": h.hyperedge_id.into_uuid().to_string(), "fillers": fillers, "properties": props }));
             }
         }
         let roles: Vec<String> = role_ids
@@ -1175,8 +1330,116 @@ impl Store {
 
         json!({
             "type_id": type_id, "as_of": snap.get(), "kind": kind,
-            "roles": roles, "edges": edges, "total": total, "shown": edges.len(),
+            "roles": roles, "propnames": prop_names.into_iter().collect::<Vec<_>>(),
+            "edges": edges, "total": total, "shown": edges.len(),
         })
+    }
+
+    /// The 1-hop neighbourhood of one entity: the focus plus everything
+    /// directly related (entity refs in/out, hyperedge co-members), as
+    /// `{nodes, links}` in the same shape as [`Self::graph`]. The unit of
+    /// graph exploration — expand from here outward, hop by hop.
+    #[must_use]
+    pub fn neighbors(&self, id: Uuid, as_of: Option<u64>) -> J {
+        let snap = self.snapshot(as_of);
+        let recs = self.records(snap);
+        let names = Self::names(&recs);
+        let kind_of = |tid: u32| {
+            names
+                .type_name
+                .get(&tid)
+                .cloned()
+                .unwrap_or_else(|| format!("kind:{tid}"))
+        };
+
+        let mut ent_map: HashMap<Uuid, &EntityRecord> = HashMap::new();
+        for r in &recs {
+            if let Record::Entity(e) = r {
+                ent_map.insert(e.entity_id.into_uuid(), e);
+            }
+        }
+        let Some(focus) = ent_map.get(&id) else {
+            return json!({ "focus": id.to_string(), "nodes": [], "links": [] });
+        };
+        if is_reserved(&kind_of(focus.type_id.get())) {
+            return json!({ "focus": id.to_string(), "nodes": [], "links": [] });
+        }
+
+        let mut node_ids: BTreeSet<Uuid> = BTreeSet::new();
+        node_ids.insert(id);
+        let mut links: Vec<J> = Vec::new();
+        let mut hub_nodes: Vec<(String, String)> = Vec::new(); // (hub id, kind)
+
+        // Outgoing refs from the focus.
+        for (pid, v) in &focus.properties {
+            if let Value::EntityRef(t) = v {
+                let tid = t.into_uuid();
+                if ent_map.contains_key(&tid) {
+                    node_ids.insert(tid);
+                    links.push(
+                        json!({ "source": id.to_string(), "target": tid.to_string(), "kind": "ref",
+                        "label": names.prop_name.get(&pid.get()).cloned().unwrap_or_default() }),
+                    );
+                }
+            }
+        }
+        // Incoming refs + hyperedge memberships.
+        for r in &recs {
+            match r {
+                Record::Entity(e) if e.entity_id.into_uuid() != id => {
+                    for (pid, v) in &e.properties {
+                        if let Value::EntityRef(t) = v
+                            && t.into_uuid() == id
+                        {
+                            let sid = e.entity_id.into_uuid();
+                            node_ids.insert(sid);
+                            links.push(json!({ "source": sid.to_string(), "target": id.to_string(), "kind": "ref",
+                                "label": names.prop_name.get(&pid.get()).cloned().unwrap_or_default() }));
+                        }
+                    }
+                }
+                Record::HyperEdge(h) => {
+                    let members: Vec<Uuid> = h
+                        .roles
+                        .iter()
+                        .map(|(_, e)| e.into_uuid())
+                        .filter(|m| ent_map.contains_key(m))
+                        .collect();
+                    if !members.contains(&id) {
+                        continue;
+                    }
+                    let label = kind_of(h.type_id.get());
+                    if members.len() == 2 {
+                        node_ids.insert(members[0]);
+                        node_ids.insert(members[1]);
+                        links.push(json!({ "source": members[0].to_string(), "target": members[1].to_string(), "kind": "hyperedge", "label": label }));
+                    } else if members.len() > 2 {
+                        let hid = h.hyperedge_id.into_uuid().to_string();
+                        hub_nodes.push((hid.clone(), label.clone()));
+                        for m in &members {
+                            node_ids.insert(*m);
+                            links.push(json!({ "source": hid, "target": m.to_string(), "kind": "hyperedge", "label": label }));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut nodes: Vec<J> = node_ids
+            .iter()
+            .filter_map(|u| {
+                let e = ent_map.get(u)?;
+                Some(json!({ "id": u.to_string(), "type_id": e.type_id.get(),
+                "kind": kind_of(e.type_id.get()), "label": entity_label(e, &names) }))
+            })
+            .collect();
+        for (hid, kind) in hub_nodes {
+            nodes.push(
+                json!({ "id": hid, "kind": kind, "label": kind, "hyper": true, "type_id": 0 }),
+            );
+        }
+        json!({ "focus": id.to_string(), "nodes": nodes, "links": links })
     }
 
     // ---- write paths ----------------------------------------------------
@@ -1223,19 +1486,23 @@ impl Store {
         Ok(tx.get())
     }
 
-    /// Create an N-ary hyperedge of `kind` linking entities by named role.
-    /// Unknown kind/role names are interned. Returns the new tx id.
+    /// Create an N-ary hyperedge of `kind`. `entity_roles` link entities by
+    /// named role; `edge_roles` link OTHER hyperedges by role (edges-on-edges);
+    /// `props` are the edge's own properties. Unknown kind/role/property names
+    /// are interned. Returns the new tx id.
     ///
     /// # Errors
-    /// `BadValue` if no roles are given; engine errors otherwise.
+    /// `BadValue` if no role-fillers are given; engine errors otherwise.
     pub fn create_hyperedge(
         &self,
         kind: &str,
-        roles: &[(String, Uuid)],
+        entity_roles: &[(String, Uuid)],
+        edge_roles: &[(String, Uuid)],
+        props: &[(String, Value)],
     ) -> Result<u64, StoreError> {
-        if roles.is_empty() {
+        if entity_roles.is_empty() && edge_roles.is_empty() {
             return Err(StoreError::BadValue(
-                "an edge needs at least one role".to_string(),
+                "an edge needs at least one role-filler".to_string(),
             ));
         }
         let recs = self.records(self.snapshot(None));
@@ -1244,19 +1511,29 @@ impl Store {
 
         let tx = self.engine.with_write_txn(|mut txn| {
             let type_id = alloc.type_id(kind, &mut txn);
-            let mut role_fillers = Vec::with_capacity(roles.len());
-            for (rname, ent) in roles {
+            let mut roles = Vec::with_capacity(entity_roles.len());
+            for (rname, ent) in entity_roles {
                 let rid = alloc.role_id(rname, &mut txn);
-                role_fillers.push((rid, EntityId::from_bytes(*ent.as_bytes())));
+                roles.push((rid, EntityId::from_bytes(*ent.as_bytes())));
+            }
+            let mut hyperedge_roles = Vec::with_capacity(edge_roles.len());
+            for (rname, edge) in edge_roles {
+                let rid = alloc.role_id(rname, &mut txn);
+                hyperedge_roles.push((rid, HyperedgeId::from_bytes(*edge.as_bytes())));
+            }
+            let mut properties = Vec::with_capacity(props.len());
+            for (name, value) in props {
+                let pid = alloc.prop_id(name, &mut txn);
+                properties.push((pid, value.clone()));
             }
             txn.put_hyperedge(HyperEdgeRecord {
                 hyperedge_id: HyperedgeId::now_v7(),
                 type_id,
                 tx_id_assert: TxId::ACTIVE,
                 tx_id_supersede: TxId::ACTIVE,
-                roles: role_fillers,
-                hyperedge_roles: Vec::new(),
-                properties: Vec::new(),
+                roles,
+                hyperedge_roles,
+                properties,
             });
             txn.commit()
         })?;
@@ -1458,6 +1735,45 @@ impl Store {
     pub fn delete_user(&self, username: &str) -> Result<u64, StoreError> {
         let (id, _, _) = self.find_user(username).ok_or(StoreError::NotFound)?;
         self.delete(id)
+    }
+
+    /// Storage-engine internals for the active database: head tx, `SSTable`
+    /// count, WAL seq, active MVCC snapshots, and a per-index resident-memory
+    /// breakdown — the LSM/MVCC state you can't normally see.
+    #[must_use]
+    pub fn engine_stats(&self) -> J {
+        let head = self.head();
+        let sstables = self.engine.sstable_count();
+        let active_snapshots = self.engine.active_snapshot_count();
+        let oldest = self.engine.oldest_active_snapshot().get();
+        let (mem, wal_seq) = {
+            let g = self.engine.raw_lock().read().expect("engine lock poisoned");
+            (g.index_memory_stats(), g.active_wal_seq())
+        };
+        json!({
+            "head": head, "sstables": sstables, "wal_seq": wal_seq,
+            "active_snapshots": active_snapshots, "oldest_snapshot": oldest,
+            "memory": {
+                "lookup_key": mem.lookup_key, "adjacency": mem.adjacency,
+                "type_cluster": mem.type_cluster, "entity_type_cluster": mem.entity_type_cluster,
+                "vector": mem.vector, "property_btree": mem.property_btree,
+                "memtable": mem.memtable, "index_total": mem.index_total(), "total": mem.total(),
+            },
+        })
+    }
+
+    /// Run a compaction on the active database, returning its stats.
+    ///
+    /// # Errors
+    /// Propagates engine errors.
+    pub fn compact(&self) -> Result<J, StoreError> {
+        let s = self.engine.compact()?;
+        Ok(json!({
+            "records_in": s.records_in,
+            "records_out": s.records_out,
+            "sstables_in": s.sstables_in,
+            "new_sstable_seq": s.new_sstable_seq,
+        }))
     }
 
     // ---- replication (leader / follower over the engine's WAL stream) ---
@@ -2120,6 +2436,8 @@ mod tests {
             .create_hyperedge(
                 "Authorship",
                 &[("author".into(), alice), ("paper".into(), paper)],
+                &[],
+                &[],
             )
             .expect("edge");
 
@@ -2145,7 +2463,60 @@ mod tests {
         assert_eq!(he["edges"][0]["fillers"]["paper"]["kind"], "Paper");
 
         // An empty edge is rejected.
-        assert!(store.create_hyperedge("X", &[]).is_err());
+        assert!(store.create_hyperedge("X", &[], &[], &[]).is_err());
+    }
+
+    /// Hyperedges can carry properties and fill roles in other hyperedges.
+    #[test]
+    fn hyperedge_properties_and_edges_on_edges() {
+        let store = fresh();
+        store
+            .create("Person", &[("name".into(), s("Alice"))], None)
+            .expect("a");
+        store
+            .create("Person", &[("name".into(), s("Bob"))], None)
+            .expect("b");
+        let tid =
+            u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
+        let rows = store.table(tid, &TableQuery::new(None, 5));
+        let a = Uuid::parse_str(rows["rows"][0]["id"].as_str().unwrap()).unwrap();
+        let b = Uuid::parse_str(rows["rows"][1]["id"].as_str().unwrap()).unwrap();
+
+        store
+            .create_hyperedge(
+                "Partnership",
+                &[("a".into(), a), ("b".into(), b)],
+                &[],
+                &[("since".into(), Value::I64(2021))],
+            )
+            .expect("edge");
+        let etid =
+            u32::try_from(store.catalog(None)["edges"][0]["type_id"].as_u64().unwrap()).unwrap();
+        let he = store.hyperedges(etid, None, 50);
+        assert_eq!(he["propnames"], json!(["since"]));
+        assert_eq!(he["edges"][0]["properties"]["since"], 2021);
+        let partnership = Uuid::parse_str(he["edges"][0]["id"].as_str().unwrap()).unwrap();
+
+        store
+            .create_hyperedge(
+                "Endorsement",
+                &[("by".into(), a)],
+                &[("about".into(), partnership)],
+                &[],
+            )
+            .expect("edge-on-edge");
+        let mtid = store.catalog(None)["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["name"] == "Endorsement")
+            .unwrap()["type_id"]
+            .as_u64()
+            .unwrap();
+        let m = store.hyperedges(u32::try_from(mtid).unwrap(), None, 50);
+        assert_eq!(m["edges"][0]["fillers"]["about"]["target"], "edge");
+        assert_eq!(m["edges"][0]["fillers"]["about"]["kind"], "Partnership");
+        assert_eq!(m["edges"][0]["fillers"]["by"]["target"], "entity");
     }
 
     /// The 360° record view surfaces outgoing/incoming refs + hyperedge roles.
@@ -2173,7 +2544,7 @@ mod tests {
             )
             .expect("ref");
         store
-            .create_hyperedge("Knows", &[("a".into(), alice), ("b".into(), bob)])
+            .create_hyperedge("Knows", &[("a".into(), alice), ("b".into(), bob)], &[], &[])
             .expect("edge");
 
         let ra = store.record(alice, None);
@@ -2185,6 +2556,62 @@ mod tests {
         let rb = store.record(bob, None);
         assert_eq!(rb["in_refs"][0]["label"], "Alice");
         assert_eq!(rb["in_refs"][0]["property"], "friend");
+    }
+
+    /// Integrity audit flags a ref to a deleted entity as dangling.
+    #[test]
+    fn integrity_finds_dangling_refs() {
+        let store = fresh();
+        store
+            .create("Person", &[("name".into(), s("A"))], None)
+            .expect("a");
+        store
+            .create("Person", &[("name".into(), s("B"))], None)
+            .expect("b");
+        let tid =
+            u32::try_from(store.catalog(None)["kinds"][0]["type_id"].as_u64().unwrap()).unwrap();
+        let rows = store.table(tid, &TableQuery::new(None, 5));
+        let a = Uuid::parse_str(rows["rows"][0]["id"].as_str().unwrap()).unwrap();
+        let b = Uuid::parse_str(rows["rows"][1]["id"].as_str().unwrap()).unwrap();
+        store
+            .set(
+                a,
+                "friend",
+                &Value::EntityRef(EntityId::from_bytes(*b.as_bytes())),
+                None,
+            )
+            .expect("ref");
+
+        assert_eq!(store.integrity()["ok"], true, "clean while B exists");
+        store.delete(b).expect("delete b");
+        let r = store.integrity();
+        assert_eq!(r["ok"], false);
+        assert_eq!(r["counts"]["dangling_refs"], 1);
+        assert_eq!(r["dangling_refs"][0]["property"], "friend");
+    }
+
+    /// Wall-clock time-travel: every commit has a timestamp, and a time
+    /// resolves to the latest tx at-or-before it.
+    #[test]
+    fn tx_time_and_tx_at() {
+        let store = fresh();
+        let t1 = store
+            .create("Person", &[("name".into(), s("A"))], None)
+            .expect("a");
+        let t2 = store
+            .create("Person", &[("name".into(), s("B"))], None)
+            .expect("b");
+        let ts1 = store.tx_time(t1)["time_us"].as_i64().expect("ts1");
+        let ts2 = store.tx_time(t2)["time_us"].as_i64().expect("ts2");
+        assert!(ts2 >= ts1, "timestamps monotonic");
+        assert!(
+            store.tx_at(ts2)["tx"].as_u64().unwrap() >= t2,
+            "at-or-before resolves to >= t2"
+        );
+        assert!(
+            store.tx_at(ts2 + 1_000_000_000)["tx"].as_u64().unwrap() >= t2,
+            "far future → head"
+        );
     }
 
     /// Temporal diff: added / removed / changed (with per-field old→new).
@@ -2288,7 +2715,7 @@ mod tests {
             )
             .expect("ref");
         store
-            .create_hyperedge("Knows", &[("a".into(), alice), ("b".into(), bob)])
+            .create_hyperedge("Knows", &[("a".into(), alice), ("b".into(), bob)], &[], &[])
             .expect("edge");
 
         let sc = store.schema();

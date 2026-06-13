@@ -28,6 +28,16 @@
   .slider input { width: 220px; }
   .badge { font-size: 11px; color: var(--muted); }
   .asof.live { color: var(--accent2); } .asof.past { color: #f0c674; }
+  .asof-time { color: var(--muted); font-size: 11px; }
+  #atBtn { font-size: 11px; padding: 2px 6px; }
+  #atInput { background: #0c1118; color: var(--ink); border: 1px solid #2c3a4a; border-radius: 6px; padding: 5px 7px; font: inherit; }
+  .cmddlg { min-width: 460px; padding: 8px; top: 12%; }
+  #cmdInput { width: 100%; box-sizing: border-box; background: #0c1118; color: var(--ink); border: 1px solid var(--accent); border-radius: 7px; padding: 9px 12px; font: 14px ui-sans-serif, system-ui; }
+  #cmdInput:focus { outline: none; }
+  .cmdlist { margin-top: 6px; max-height: 300px; overflow: auto; }
+  .cmdrow { display: flex; justify-content: space-between; gap: 10px; padding: 7px 10px; border-radius: 6px; cursor: pointer; }
+  .cmdrow.sel { background: #1d2733; }
+  .cmdhint { color: var(--muted); font-size: 11px; }
   aside {
     grid-area: side; border-right: 1px solid var(--line); background: var(--panel);
     overflow-y: auto; padding: 8px;
@@ -150,6 +160,8 @@
   .erow { display: grid; grid-template-columns: 130px 1fr auto; gap: 8px; margin-bottom: 6px; align-items: center; }
   .erow input, .erow select { background: #0c1118; color: var(--ink); border: 1px solid #2c3a4a; border-radius: 6px; padding: 5px 7px; font: inherit; }
   .erm { color: var(--danger); border: none; background: none; cursor: pointer; }
+  .eedge { color: var(--accent2); }
+  table .eprop { background: #11161e; color: var(--muted); }
   .edgehdr { display: flex; align-items: center; justify-content: space-between; }
   .edgeadd { font-size: 11px; padding: 1px 7px; }
   .recsec { margin-bottom: 10px; }
@@ -200,6 +212,8 @@
       <span>⏱</span>
       <input type="range" id="asof" min="0" max="0" value="0" step="1" />
       <span class="asof live" id="asofLabel">now</span>
+      <span class="asof-time" id="asofTime"></span>
+      <button id="atBtn" title="Jump to a point in time">⌚</button>
       <button id="diffBtn" title="Diff two points in time">⇄ Diff</button>
     </div>
     <div class="userbox">
@@ -253,7 +267,10 @@
   </dialog>
 
   <dialog id="nodeDlg">
-    <h3>Node · replication</h3>
+    <h3>Node · storage &amp; replication</h3>
+    <div class="recsh">Storage engine <button id="compactBtn" style="font-size:11px;padding:1px 8px;margin-left:6px">Compact now</button></div>
+    <div id="engineStats" class="histbody"></div>
+    <h4 style="margin:14px 0 6px;color:var(--muted)">Replication</h4>
     <div id="nodeStatus" class="histbody"></div>
     <h4 style="margin:14px 0 6px;color:var(--muted)">Pull from a peer (leader)</h4>
     <div class="field" style="grid-template-columns:1fr"><input id="npPeer" placeholder="http://host:port" autocomplete="off" /></div>
@@ -290,7 +307,34 @@
   <dialog id="schemaDlg">
     <h3>Schema overview</h3>
     <div id="schemaBody" class="histbody"></div>
-    <div class="dlg-actions"><button onclick="document.getElementById('schemaDlg').close()">Close</button></div>
+    <div class="dlg-actions"><button id="integBtn">Integrity check</button><div class="spacer" style="flex:1"></div><button onclick="document.getElementById('schemaDlg').close()">Close</button></div>
+  </dialog>
+
+  <dialog id="integrityDlg">
+    <h3>Integrity check</h3>
+    <div id="integrityBody" class="histbody"></div>
+    <div class="dlg-actions"><button onclick="document.getElementById('integrityDlg').close()">Close</button></div>
+  </dialog>
+
+  <dialog id="cmdDlg" class="cmddlg">
+    <input id="cmdInput" placeholder="Command, kind, edge, saved query, or paste an id…   (↑↓ Enter · Esc)" autocomplete="off" />
+    <div id="cmdList" class="cmdlist"></div>
+  </dialog>
+
+  <dialog id="bulkDlg">
+    <h3>Set field on <span id="bsCount"></span> records</h3>
+    <p class="nhint">Sets one property across the selected records. A new property name creates the column (schema-on-read). Value like <code>ref:&lt;uuid&gt;</code> links to an entity.</p>
+    <div class="field" style="grid-template-columns:130px 1fr"><label>Property</label><input id="bsName" list="bsList" placeholder="e.g. status" autocomplete="off" /><datalist id="bsList"></datalist></div>
+    <div class="field" style="grid-template-columns:130px 1fr"><label>Value</label><input id="bsVal" placeholder="value or ref:&lt;uuid&gt;" /></div>
+    <div class="dlg-actions"><button onclick="document.getElementById('bulkDlg').close()">Cancel</button><button class="primary" id="bsApply">Apply</button></div>
+  </dialog>
+
+  <dialog id="atDlg">
+    <h3>Jump to a point in time</h3>
+    <p class="nhint">Picks the latest transaction committed at or before the chosen instant — wall-clock time-travel.</p>
+    <div class="field" style="grid-template-columns:1fr auto"><input type="datetime-local" id="atInput" /><button class="primary" id="atGo">Go</button></div>
+    <div id="atMsg" class="badge"></div>
+    <div class="dlg-actions"><button onclick="document.getElementById('atDlg').close()">Close</button></div>
   </dialog>
 
   <dialog id="diffDlg">
@@ -307,9 +351,12 @@
   <dialog id="edgeDlg">
     <h3>New edge · N-ary relationship</h3>
     <div class="field" style="grid-template-columns:110px 1fr"><label>Edge kind</label><input id="neKind" placeholder="e.g. Authorship" autocomplete="off" /></div>
-    <h4 style="margin:12px 0 6px;color:var(--muted)">Roles → entities</h4>
+    <h4 style="margin:12px 0 6px;color:var(--muted)">Roles → entities or edges</h4>
     <div id="neRoles"></div>
     <button id="neAddRole" style="margin-top:6px">+ role</button>
+    <h4 style="margin:12px 0 6px;color:var(--muted)">Edge properties (optional)</h4>
+    <div id="neProps"></div>
+    <button id="neAddProp" style="margin-top:6px">+ property</button>
     <div class="dlg-actions"><button onclick="document.getElementById('edgeDlg').close()">Cancel</button><button class="primary" id="neSave">Create edge</button></div>
   </dialog>
 
@@ -455,6 +502,65 @@ function renderHelp() {
   ).join("");
 }
 
+// ---- Command palette (⌘K / Ctrl+K) ----
+let CMD_ITEMS = [], CMD_SEL = 0;
+function commands() {
+  const list = [];
+  for (const k of CATALOG) list.push({ label: `Kind · ${k.name}`, hint: `${k.count} records`, run: () => selectKind(k) });
+  for (const e of EDGES) list.push({ label: `Edge · ${e.name}`, hint: "N-ary", run: () => selectEdge(e) });
+  for (const [m, lbl] of [["table", "Table"], ["pivot", "Pivot"], ["graph", "Graph"], ["query", "Query"]])
+    list.push({ label: `View · ${lbl}`, run: async () => { SEL_EDGE = null; MODE = m; await renderMain(); } });
+  list.push({ label: "Open · Schema", run: () => $("schemaBtn").click() });
+  list.push({ label: "Open · Concepts", run: () => $("helpBtn").click() });
+  list.push({ label: "Open · Diff", run: () => $("diffBtn").click() });
+  list.push({ label: "Open · Jump to time", run: () => $("atBtn").click() });
+  list.push({ label: "Check · Integrity", run: openIntegrity });
+  if (ME.role === "admin") {
+    list.push({ label: "Open · Users", run: () => $("usersBtn").click() });
+    list.push({ label: "Open · Node / Storage", run: () => $("nodeBtn").click() });
+    list.push({ label: "Open · Databases", run: () => $("dbBtn").click() });
+  }
+  for (const sq of qStore.saved()) list.push({ label: `Query · ${sq.name}`, hint: "saved", run: async () => { SEL_EDGE = null; MODE = "query"; QUERY_TEXT = sq.q; await renderMain(); runQuery(); } });
+  return list;
+}
+function openCmd() { $("cmdInput").value = ""; renderCmd(""); $("cmdDlg").showModal(); setTimeout(() => $("cmdInput").focus(), 0); }
+function renderCmd(q) {
+  const all = commands();
+  const ql = q.toLowerCase().trim();
+  let items = ql ? all.filter((c) => c.label.toLowerCase().includes(ql)) : all;
+  if (/^[0-9a-fA-F-]{36}$/.test(q.trim())) items = [{ label: `Open record · ${q.trim().slice(0, 8)}…`, run: () => openRecord(q.trim()) }, ...items];
+  CMD_ITEMS = items.slice(0, 12); CMD_SEL = 0;
+  $("cmdList").innerHTML = CMD_ITEMS.map((c, i) => `<div class="cmdrow ${i === 0 ? "sel" : ""}" data-i="${i}"><span>${esc(c.label)}</span>${c.hint ? `<span class="cmdhint">${esc(c.hint)}</span>` : ""}</div>`).join("") || `<div class="recempty">no matches</div>`;
+  $("cmdList").querySelectorAll(".cmdrow").forEach((r) => (r.onclick = () => runCmd(parseInt(r.dataset.i, 10))));
+}
+function markCmd() { $("cmdList").querySelectorAll(".cmdrow").forEach((r, i) => r.classList.toggle("sel", i === CMD_SEL)); }
+function runCmd(i) { const c = CMD_ITEMS[i]; if (c) { $("cmdDlg").close(); c.run(); } }
+$("cmdInput").oninput = (e) => renderCmd(e.target.value);
+$("cmdInput").onkeydown = (e) => {
+  if (e.key === "ArrowDown") { e.preventDefault(); CMD_SEL = Math.min(CMD_ITEMS.length - 1, CMD_SEL + 1); markCmd(); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); CMD_SEL = Math.max(0, CMD_SEL - 1); markCmd(); }
+  else if (e.key === "Enter") { e.preventDefault(); runCmd(CMD_SEL); }
+};
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); if (ME.authed) openCmd(); }
+});
+
+// ---- Integrity check ----
+async function openIntegrity() {
+  $("integrityBody").innerHTML = `<div class="badge">checking…</div>`;
+  $("integrityDlg").showModal();
+  const r = await api.get("/integrity");
+  if (r.ok) { $("integrityBody").innerHTML = `<div class="recempty" style="color:var(--accent2)">✓ No issues — all references and edge fillers resolve.</div>`; return; }
+  let h = `<div class="diffcounts"><span class="drem">${r.counts.dangling_refs} dangling refs</span><span class="dchg">${r.counts.bad_edges} bad edge fillers</span></div>`;
+  if (r.dangling_refs.length) h += `<div class="recsec"><div class="recsh">Dangling references</div>` +
+    r.dangling_refs.map((d) => `<div class="hrow"><span class="hval qref" data-id="${esc(d.from)}">${esc(d.from_kind)} <span class="ekind">${esc(d.property)}→</span></span><span class="htx">missing ${esc(d.target.slice(0, 8))}…</span></div>`).join("") + `</div>`;
+  if (r.bad_edges.length) h += `<div class="recsec"><div class="recsh">Edges with missing fillers</div>` +
+    r.bad_edges.map((d) => `<div class="hrow"><span class="hval">⬡ ${esc(d.edge_kind)} <span class="ekind">${esc(d.role)}</span></span><span class="htx">missing ${esc(d.target_kind)} ${esc(d.target.slice(0, 8))}…</span></div>`).join("") + `</div>`;
+  $("integrityBody").innerHTML = h;
+  $("integrityBody").querySelectorAll(".qref").forEach((el) => (el.onclick = () => openRecord(el.dataset.id)));
+}
+$("integBtn").onclick = () => { $("schemaDlg").close(); openIntegrity(); };
+
 // ---- Schema overview ----
 $("schemaBtn").onclick = async () => {
   const s = await api.get("/schema");
@@ -505,27 +611,31 @@ function renderEdges(d) {
   cancelGraphAnim();
   const c = $("content");
   const writable = !readOnly() && canWrite();
-  const roles = d.roles || [], edges = d.edges || [];
+  const roles = d.roles || [], edges = d.edges || [], propnames = d.propnames || [];
   let html = "";
   if (readOnly()) html += `<div class="banner">Viewing history as of tx ${ASOF} — read only.</div>`;
-  html += `<div class="toolbar"><h2>⬡ ${esc(d.kind)}</h2><span class="badge">${d.shown} / ${d.total} edges · ${roles.length} roles</span><div class="spacer" style="flex:1"></div>`;
+  html += `<div class="toolbar"><h2>⬡ ${esc(d.kind)}</h2><span class="badge">${d.shown} / ${d.total} edges · ${roles.length} roles${propnames.length ? " · " + propnames.length + " props" : ""}</span><div class="spacer" style="flex:1"></div>`;
   if (writable) html += `<button class="primary" id="newEdgeBtn">+ New edge</button>`;
   html += `</div>`;
-  html += `<div class="edgehint">Each row is <b>one</b> N-ary edge — a single relationship spanning ${roles.length || "N"} entities by role. A relational table needs junction rows to express this.</div>`;
+  html += `<div class="edgehint">Each row is <b>one</b> N-ary edge — a single relationship spanning ${roles.length || "N"} fillers by role, with its own properties. A relational table needs junction rows to express this.</div>`;
   if (!edges.length) {
     html += `<div class="empty">No edges of this kind yet.</div>`;
   } else {
     html += `<table><thead><tr>`;
     for (const r of roles) html += `<th>${esc(r)}</th>`;
+    for (const p of propnames) html += `<th class="eprop">${esc(p)}</th>`;
     html += `</tr></thead><tbody>`;
     for (const e of edges) {
       html += "<tr>";
       for (const r of roles) {
         const f = e.fillers[r];
-        html += f
-          ? `<td><span class="erole qref" data-id="${esc(f.id)}" title="${esc(f.id)}">${esc(f.label || f.id.slice(0, 8))}<span class="ekind">${esc(f.kind)}</span></span></td>`
-          : `<td><span class="tag">∅</span></td>`;
+        if (!f) { html += `<td><span class="tag">∅</span></td>`; continue; }
+        const chip = `${esc(f.label || f.id.slice(0, 8))}<span class="ekind">${esc(f.kind)}</span>`;
+        html += f.target === "edge"
+          ? `<td><span class="erole eedge" title="${esc(f.id)}">${chip}</span></td>`
+          : `<td><span class="erole qref" data-id="${esc(f.id)}" title="${esc(f.id)}">${chip}</span></td>`;
       }
+      for (const p of propnames) html += `<td class="eprop">${e.properties && p in e.properties ? fmt(e.properties[p]) : ""}</td>`;
       html += "</tr>";
     }
     html += "</tbody></table>";
@@ -535,26 +645,48 @@ function renderEdges(d) {
   if (writable) $("newEdgeBtn").onclick = openNewEdge;
 }
 
+let EDGE_LINKABLES = [];          // [{id,label,kind,target}]
+const EDGE_TARGET = new Map();    // id -> "entity" | "edge"
 async function openNewEdge() {
+  // Entities (from the graph) + existing edges (across edge kinds) as fillers.
   const g = await api.get("/graph?limit=1000");
-  EDGE_ENTITIES = (g.nodes || []).filter((n) => !n.hyper);
+  EDGE_LINKABLES = (g.nodes || []).filter((n) => !n.hyper).map((n) => ({ id: n.id, label: n.label, kind: n.kind, target: "entity" }));
+  for (const ek of EDGES) {
+    const he = await api.get(`/hyperedges?kind=${ek.type_id}&limit=200`);
+    for (const e of he.edges || []) EDGE_LINKABLES.push({ id: e.id, label: "⬡ " + he.kind, kind: he.kind, target: "edge" });
+  }
+  EDGE_TARGET.clear();
+  EDGE_LINKABLES.forEach((x) => EDGE_TARGET.set(x.id, x.target));
   $("neKind").value = SEL_EDGE ? SEL_EDGE.name : "";
   $("neRoles").innerHTML = "";
+  $("neProps").innerHTML = "";
   addEdgeRole(); addEdgeRole();
   $("edgeDlg").showModal();
 }
-function entityOptions() {
-  return `<option value="">— pick entity —</option>` +
-    EDGE_ENTITIES.map((n) => `<option value="${esc(n.id)}">${esc(n.kind)}: ${esc(n.label || n.id.slice(0, 8))}</option>`).join("");
+function fillerOptions() {
+  const ents = EDGE_LINKABLES.filter((n) => n.target === "entity");
+  const edgs = EDGE_LINKABLES.filter((n) => n.target === "edge");
+  let h = `<option value="">— pick filler —</option>`;
+  if (ents.length) h += `<optgroup label="Entities">` + ents.map((n) => `<option value="${esc(n.id)}">${esc(n.kind)}: ${esc(n.label || n.id.slice(0, 8))}</option>`).join("") + `</optgroup>`;
+  if (edgs.length) h += `<optgroup label="Edges (N-ary)">` + edgs.map((n) => `<option value="${esc(n.id)}">${esc(n.label)} (${esc(n.id.slice(0, 8))})</option>`).join("") + `</optgroup>`;
+  return h;
 }
 function addEdgeRole(role) {
   const row = document.createElement("div");
   row.className = "erow";
-  row.innerHTML = `<input class="erole-name" placeholder="role" value="${esc(role || "")}" autocomplete="off" /><select class="erole-ent">${entityOptions()}</select><button class="erm" title="remove">✕</button>`;
+  row.innerHTML = `<input class="erole-name" placeholder="role" value="${esc(role || "")}" autocomplete="off" /><select class="erole-ent">${fillerOptions()}</select><button class="erm" title="remove">✕</button>`;
   row.querySelector(".erm").onclick = () => row.remove();
   $("neRoles").appendChild(row);
 }
+function addEdgeProp(name, val) {
+  const row = document.createElement("div");
+  row.className = "field"; row.style.gridTemplateColumns = "1fr 1fr auto";
+  row.innerHTML = `<input class="ep-name" placeholder="property" value="${esc(name || "")}" autocomplete="off" /><input class="ep-val" placeholder="value or ref:&lt;uuid&gt;" value="${esc(val || "")}" /><button class="erm" title="remove">✕</button>`;
+  row.querySelector(".erm").onclick = () => row.remove();
+  $("neProps").appendChild(row);
+}
 $("neAddRole").onclick = () => addEdgeRole();
+$("neAddProp").onclick = () => addEdgeProp();
 $("neSave").onclick = async () => {
   const kind = $("neKind").value.trim();
   if (!kind) { toast("edge kind required", true); return; }
@@ -562,10 +694,15 @@ $("neSave").onclick = async () => {
   $("neRoles").querySelectorAll(".erow").forEach((row) => {
     const role = row.querySelector(".erole-name").value.trim();
     const ref = row.querySelector(".erole-ent").value;
-    if (role && ref) roles.push({ role, ref });
+    if (role && ref) roles.push({ role, ref, target: EDGE_TARGET.get(ref) || "entity" });
   });
-  if (!roles.length) { toast("add at least one role + entity", true); return; }
-  const r = await api.commit({ op: "create_edge", kind, roles });
+  if (!roles.length) { toast("add at least one role + filler", true); return; }
+  const properties = [];
+  $("neProps").querySelectorAll(".field").forEach((row) => {
+    const name = row.querySelector(".ep-name").value.trim();
+    if (name) properties.push({ name, value: parseScalar(row.querySelector(".ep-val").value) });
+  });
+  const r = await api.commit({ op: "create_edge", kind, roles, properties });
   if (r.status === 200) { $("edgeDlg").close(); toast("edge created · tx " + r.body.tx); await refreshAll(); }
   else toast(r.body.error?.message || "error", true);
 };
@@ -576,6 +713,7 @@ async function reloadView() { return SEL_EDGE ? loadEdges() : renderMain(); }
 // Dispatch the main pane on the current view mode.
 async function renderMain() {
   cancelGraphAnim();
+  if (typeof stopTimeline === "function") stopTimeline();
   if (MODE === "graph") return loadGraph();
   if (MODE === "query") return renderQuery();
   if (!SEL) return;
@@ -626,7 +764,7 @@ function renderTable(t) {
   html += `<div class="toolbar"><h2>${esc(SEL.name)}</h2>${modeTabsHtml()}`;
   html += `<input id="tblq" class="tblsearch" placeholder="search all columns…" value="${esc(TBL.q)}" />`;
   html += `<span class="badge">${from}–${to} of ${t.total}</span><div class="spacer" style="flex:1"></div>`;
-  if (writable && TBL.sel.size) html += `<button class="danger-btn" id="bulkDel">Delete ${TBL.sel.size}</button>`;
+  if (writable && TBL.sel.size) html += `<button id="bulkSet">Set field · ${TBL.sel.size}</button><button class="danger-btn" id="bulkDel">Delete ${TBL.sel.size}</button>`;
   html += `<button id="expCsv">Export CSV</button><button id="expJson">JSON</button>`;
   if (writable) html += `<button id="impBtn">Import</button><button class="primary" id="newBtn">+ New record</button>`;
   html += `</div>`;
@@ -688,6 +826,7 @@ function renderTable(t) {
     const ib = $("impBtn"); if (ib) ib.onclick = openImport;
     $("newBtn").onclick = openNew;
     const bd = $("bulkDel"); if (bd) bd.onclick = bulkDelete;
+    const bs = $("bulkSet"); if (bs) bs.onclick = openBulkSet;
     const sa = $("selAll");
     if (sa) {
       sa.checked = pageIds.length > 0 && pageIds.every((id) => TBL.sel.has(id));
@@ -782,6 +921,27 @@ $("impRun").onclick = async () => {
   }
   $("impStatus").textContent = `imported ${ok}/${recs.length}`;
   toast(`imported ${ok} records`);
+  await refreshAll();
+};
+
+function openBulkSet() {
+  // suggest existing columns of the current kind
+  const cols = (SEL.properties || []).map((p) => `<option value="${esc(p.name)}">`).join("");
+  $("bsCount").textContent = TBL.sel.size;
+  $("bsList").innerHTML = cols;
+  $("bsName").value = ""; $("bsVal").value = "";
+  $("bulkDlg").showModal();
+}
+$("bsApply").onclick = async () => {
+  const prop = $("bsName").value.trim();
+  if (!prop) { toast("property name required", true); return; }
+  const value = parseScalar($("bsVal").value);
+  const ids = [...TBL.sel];
+  let ok = 0;
+  for (const id of ids) { const r = await api.commit({ op: "set", id, property: prop, value }); if (r.status === 200) ok++; }
+  $("bulkDlg").close();
+  toast(`set ${prop} on ${ok}/${ids.length}`);
+  TBL.sel.clear();
   await refreshAll();
 };
 
@@ -1080,24 +1240,81 @@ async function openRecord(id) {
 // ---- Graph view (self-contained 2-D force layout on canvas) ----
 function cancelGraphAnim() { if (GRAPH_ANIM) { cancelAnimationFrame(GRAPH_ANIM); GRAPH_ANIM = null; } }
 
+// GVIEW: "full" = global graph; "ego" = accumulated exploration from a root.
+let GVIEW = { mode: "full", root: null, rootLabel: "", nodes: [], links: [], ids: new Set() };
+let GPOS = new Map();  // node id -> {x,y}, kept stable across re-renders
+let GANIM = null;      // timeline-animation timeout token
+
 async function loadGraph() {
+  stopTimeline();
+  GVIEW = { mode: "full", root: null, rootLabel: "", nodes: [], links: [], ids: new Set() };
+  GPOS.clear();
   const g = await api.get(`/graph?${ASOF === null ? "" : "as_of=" + ASOF + "&"}limit=300`);
   renderGraph(g);
+}
+
+// Enter ego mode rooted at an entity (1-hop), replacing the current view.
+async function enterEgo(id, label) {
+  stopTimeline();
+  GPOS.clear();
+  const n = await api.get(`/neighbors?id=${id}${ASOF === null ? "" : "&as_of=" + ASOF}`);
+  GVIEW = { mode: "ego", root: id, rootLabel: label || id.slice(0, 8), nodes: n.nodes || [], links: n.links || [], ids: new Set((n.nodes || []).map((x) => x.id)) };
+  renderGraph({ nodes: GVIEW.nodes, links: GVIEW.links, truncated: false });
+}
+
+// Play the transaction timeline: re-fetch the graph at increasing as_of and
+// re-mount on the same canvas (positions persist via GPOS), so the graph
+// visibly grows and rewires as commits land. nDB's thesis made literal.
+function stopTimeline() {
+  if (GANIM) { clearTimeout(GANIM); GANIM = null; }
+  const b = $("gPlay"); if (b) b.textContent = "▶ Play history";
+}
+function playTimeline() {
+  if (GANIM) { stopTimeline(); return; }
+  const b = $("gPlay"); if (b) b.textContent = "■ Stop";
+  GPOS.clear();
+  const stepBy = Math.max(1, Math.ceil(HEAD / 40));
+  let tx = 0;
+  const tick = async () => {
+    tx = Math.min(HEAD, tx + stepBy);
+    const g = await api.get(`/graph?as_of=${tx}&limit=300`);
+    cancelGraphAnim();
+    startGraph(g);
+    const gs = $("gstat"); if (gs) gs.textContent = `tx ${tx} / ${HEAD} · ${(g.nodes || []).length} nodes ▶`;
+    if (tx >= HEAD) { stopTimeline(); return; }
+    GANIM = setTimeout(tick, 650);
+  };
+  tick();
+}
+// Merge another node's neighbours into the ego view (expand outward).
+async function expandEgo(id) {
+  const n = await api.get(`/neighbors?id=${id}${ASOF === null ? "" : "&as_of=" + ASOF}`);
+  for (const node of n.nodes || []) if (!GVIEW.ids.has(node.id)) { GVIEW.ids.add(node.id); GVIEW.nodes.push(node); }
+  const seen = new Set(GVIEW.links.map((l) => l.source + "|" + l.target + "|" + l.label));
+  for (const l of n.links || []) { const k = l.source + "|" + l.target + "|" + l.label; if (!seen.has(k)) { seen.add(k); GVIEW.links.push(l); } }
+  renderGraph({ nodes: GVIEW.nodes, links: GVIEW.links, truncated: false });
 }
 
 function renderGraph(g) {
   cancelGraphAnim();
   const c = $("content");
+  const ego = GVIEW.mode === "ego";
   let html = "";
   if (readOnly()) html += `<div class="banner">Graph as of tx ${ASOF}.</div>`;
-  html += `<div class="toolbar"><h2>Graph</h2>${modeTabsHtml()}<span class="badge" id="gstat"></span><div class="spacer" style="flex:1"></div></div>`;
+  html += `<div class="toolbar"><h2>Graph${ego ? " · exploring " + esc(GVIEW.rootLabel) : ""}</h2>${modeTabsHtml()}`;
+  if (ego) html += `<button id="gFull">← Full graph</button>`;
+  else html += `<button id="gPlay">▶ Play history</button>`;
+  html += `<span class="badge" id="gstat"></span><div class="spacer" style="flex:1"></div></div>`;
   if (!(g.nodes || []).length) {
-    html += `<div class="empty">No entities to graph yet.</div>`;
-    c.innerHTML = html; wireModeTabs(); return;
+    html += `<div class="empty">${ego ? "No neighbours." : "No entities to graph yet."}</div>`;
+    c.innerHTML = html; wireModeTabs(); if (ego) $("gFull").onclick = loadGraph; return;
   }
-  html += `<div class="graphwrap"><canvas id="gcanvas"></canvas><div id="ginfo" class="ginfo hidden"></div><div class="glegend">drag to rearrange · hover for labels · click a node</div></div>`;
+  const hint = ego ? "click a node → expand its neighbours · drag to rearrange" : "drag to rearrange · click a node → explore from it";
+  html += `<div class="graphwrap"><canvas id="gcanvas"></canvas><div id="ginfo" class="ginfo hidden"></div><div class="glegend">${hint}</div></div>`;
   c.innerHTML = html;
   wireModeTabs();
+  if (ego) $("gFull").onclick = loadGraph;
+  else $("gPlay").onclick = playTimeline;
   startGraph(g);
 }
 
@@ -1109,6 +1326,10 @@ function startGraph(g) {
   const ctx = canvas.getContext("2d"); ctx.scale(dpr, dpr);
 
   const nodes = (g.nodes || []).map((n, i) => {
+    // Reuse a remembered position (GPOS) so nodes stay put across re-renders
+    // (e.g. timeline animation) — only genuinely new nodes spawn + settle.
+    const p = GPOS.get(n.id);
+    if (p) return { ...n, x: p.x, y: p.y, vx: 0, vy: 0 };
     const a = (i / (g.nodes.length || 1)) * Math.PI * 2, rad = Math.min(W, H) * 0.32;
     return { ...n, x: W / 2 + Math.cos(a) * rad * (0.5 + 0.5 * Math.random()), y: H / 2 + Math.sin(a) * rad * (0.5 + 0.5 * Math.random()), vx: 0, vy: 0 };
   });
@@ -1140,6 +1361,7 @@ function startGraph(g) {
       n.vx += (W / 2 - n.x) * GRAVITY; n.vy += (H / 2 - n.y) * GRAVITY;
       n.vx *= DAMP; n.vy *= DAMP;
       if (n !== dragNode) { n.x += n.vx; n.y += n.vy; }
+      GPOS.set(n.id, { x: n.x, y: n.y }); // remember positions for stable re-renders
     }
   }
 
@@ -1188,9 +1410,12 @@ function startGraph(g) {
   function showInfo(n) {
     const info = $("ginfo");
     info.className = "ginfo";
-    info.innerHTML = `<div class="gi-kind">${esc(n.kind)}${n.hyper ? " · N-ary edge" : ""}</div><div class="gi-label">${esc(n.label || "(no label)")}</div><div class="gi-id">${esc(n.id)}</div>` + (n.hyper ? "" : `<div class="gi-actions"><button class="gi-rec">open record</button><button class="gi-open">open in table</button></div>`);
-    const open = info.querySelector(".gi-open");
-    if (open) open.onclick = () => { const k = CATALOG.find((kk) => kk.type_id === n.type_id); if (k) { MODE = "table"; selectKind(k); } };
+    const explore = GVIEW.mode === "ego"
+      ? `<button class="gi-exp">expand +</button>`
+      : `<button class="gi-exp">explore →</button>`;
+    info.innerHTML = `<div class="gi-kind">${esc(n.kind)}${n.hyper ? " · N-ary edge" : ""}</div><div class="gi-label">${esc(n.label || "(no label)")}</div><div class="gi-id">${esc(n.id)}</div>` + (n.hyper ? "" : `<div class="gi-actions">${explore}<button class="gi-rec">open record</button></div>`);
+    const exp = info.querySelector(".gi-exp");
+    if (exp) exp.onclick = () => (GVIEW.mode === "ego" ? expandEgo(n.id) : enterEgo(n.id, n.label));
     const rec = info.querySelector(".gi-rec");
     if (rec) rec.onclick = () => openRecord(n.id);
   }
@@ -1230,14 +1455,38 @@ async function refreshAll() {
   await reloadView();
 }
 
+let ASOF_T = null;
+function fmtTxTime(us) { try { return new Date(us / 1000).toLocaleString(); } catch { return ""; } }
+function updateAsofTime() {
+  clearTimeout(ASOF_T);
+  ASOF_T = setTimeout(async () => {
+    const tx = ASOF === null ? HEAD : ASOF;
+    const r = await api.get(`/tx_time?tx=${tx}`);
+    const el = $("asofTime"); if (el) el.textContent = r && r.time_us ? "· " + fmtTxTime(r.time_us) : "";
+  }, 200);
+}
 $("asof").oninput = (e) => {
   const v = parseInt(e.target.value, 10);
   ASOF = v >= HEAD ? null : v;
   const lbl = $("asofLabel");
   if (ASOF === null) { lbl.textContent = "now"; lbl.className = "asof live"; }
   else { lbl.textContent = "tx " + ASOF; lbl.className = "asof past"; }
+  updateAsofTime();
 };
-$("asof").onchange = async () => { await loadCatalog(); if (SEL) SEL = CATALOG.find((k) => k.type_id === SEL.type_id) || CATALOG[0]; if (SEL_EDGE) SEL_EDGE = EDGES.find((e) => e.type_id === SEL_EDGE.type_id) || SEL_EDGE; renderKinds(); await reloadView(); };
+$("atBtn").onclick = () => { $("atMsg").textContent = ""; $("atDlg").showModal(); };
+$("atGo").onclick = async () => {
+  const v = $("atInput").value;
+  if (!v) { toast("pick a date & time", true); return; }
+  const us = new Date(v).getTime() * 1000;
+  const r = await api.get(`/tx_at?us=${us}`);
+  if (r.tx == null) { $("atMsg").textContent = "no commit at or before that time"; return; }
+  $("atDlg").close();
+  const slider = $("asof");
+  slider.value = String(r.tx);
+  slider.dispatchEvent(new Event("input"));
+  slider.dispatchEvent(new Event("change"));
+};
+$("asof").onchange = async () => { await loadCatalog(); if (SEL) SEL = CATALOG.find((k) => k.type_id === SEL.type_id) || CATALOG[0]; if (SEL_EDGE) SEL_EDGE = EDGES.find((e) => e.type_id === SEL_EDGE.type_id) || SEL_EDGE; renderKinds(); updateAsofTime(); await reloadView(); };
 
 // ---- auth / session ----
 function showLogin() { $("login").classList.remove("hidden"); setTimeout(() => $("luser").focus(), 0); }
@@ -1329,8 +1578,27 @@ async function refreshNodeStatus() {
     `<div class="hrow"><span class="htx">sstables</span><span class="hval">${s.sstables ?? "?"}</span></div>` +
     `<div class="hrow"><span class="htx">wal seq</span><span class="hval">${s.wal_seq ?? "?"}</span></div>`;
 }
-async function openNode() { await refreshNodeStatus(); $("npResult").textContent = ""; $("nodeDlg").showModal(); }
+const kb = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? (n / 1024).toFixed(1) + " KB" : n + " B");
+async function refreshEngineStats() {
+  const s = await api.get("/engine/stats");
+  const m = s.memory || {};
+  $("engineStats").innerHTML =
+    `<div class="hrow"><span class="htx">head tx</span><span class="hval">${s.head ?? "?"}</span></div>` +
+    `<div class="hrow"><span class="htx">sstables</span><span class="hval">${s.sstables ?? "?"}</span></div>` +
+    `<div class="hrow"><span class="htx">wal seq</span><span class="hval">${s.wal_seq ?? "?"}</span></div>` +
+    `<div class="hrow"><span class="htx">active MVCC snapshots</span><span class="hval">${s.active_snapshots ?? "?"}${s.active_snapshots ? ` (oldest tx ${s.oldest_snapshot})` : ""}</span></div>` +
+    `<div class="recsh" style="margin-top:8px">Resident index memory</div>` +
+    [["lookup_key", "lookup key"], ["adjacency", "adjacency"], ["type_cluster", "edge-type cluster"], ["entity_type_cluster", "entity-type cluster"], ["vector", "vector"], ["property_btree", "property b-tree"], ["memtable", "memtable"]]
+      .map(([k, lbl]) => `<div class="hrow"><span class="htx">${lbl}</span><span class="hval">${kb(m[k] || 0)}</span></div>`).join("") +
+    `<div class="hrow"><span class="htx"><b>total</b></span><span class="hval"><b>${kb(m.total || 0)}</b> (index ${kb(m.index_total || 0)} + memtable)</span></div>`;
+}
+async function openNode() { await refreshEngineStats(); await refreshNodeStatus(); $("npResult").textContent = ""; $("nodeDlg").showModal(); }
 $("nodeBtn").onclick = openNode;
+$("compactBtn").onclick = async () => {
+  const r = await api.post("/engine/compact", {});
+  if (r.status === 200) { toast(`compacted ${r.body.sstables_in} sstables · ${r.body.records_in}→${r.body.records_out} records`); await refreshEngineStats(); }
+  else toast(r.body.error?.message || "compact failed", true);
+};
 $("npPull").onclick = async () => {
   $("npResult").textContent = "pulling…";
   const r = await api.post("/replication/pull", { peer: $("npPeer").value.trim(), token: $("npToken").value.trim() });
