@@ -74,24 +74,27 @@ jobs:
           done
           echo "server did not become healthy in 60s"; docker logs ndb; docker rm -f ndb; exit 1
 
-  # Adoptable-core gate 2: the TypeScript SDK typechecks, builds, and passes
-  # its integration suite against a real server over /v1.
-  ts-sdk:
+  # Adoptable-core gate 2: the JS clients. @ndb/client typechecks, builds, and
+  # passes its integration suite against a real server over /v1; @ndb/mcp's
+  # launcher starts the MCP server and lists the nDB tools.
+  js-clients:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: clients/ts
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain (pinned via rust-toolchain.toml)
         run: rustup show
-      - name: Build server binary (integration test spawns it)
-        working-directory: .
-        run: cargo build -p ndb-server
+      - name: Build the binaries the launch/integration tests spawn
+        run: cargo build -p ndb-server -p ndb-mcp-server
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm run build
-      - run: npm test
+      - name: "@ndb/client"
+        working-directory: clients/ts
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
+          npm test
+      - name: "@ndb/mcp"
+        working-directory: clients/mcp-npm
+        run: npm test
