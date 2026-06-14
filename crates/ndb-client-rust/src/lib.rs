@@ -42,7 +42,30 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::sync::Arc;
 use std::time::Duration;
+
+/// A connection the client can read/write — either a plain `TcpStream` or a
+/// rustls TLS stream over one. (`Box<dyn ReadWrite>` lets one code path serve
+/// both `http://` and `https://`.)
+trait ReadWrite: Read + Write {}
+impl<T: Read + Write> ReadWrite for T {}
+
+/// Build a rustls client config: bundled Mozilla roots, ring provider, safe
+/// defaults. Process-local provider (no global `install_default`) so this is
+/// safe to call from a library without racing other rustls users.
+fn build_tls_config() -> Result<Arc<rustls::ClientConfig>, ClientError> {
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let cfg = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|e| ClientError::Parse(format!("tls init: {e}")))?
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    Ok(Arc::new(cfg))
+}
 
 use ndb_engine::{
     CommitRequest, CommitResponse, ErrorResponse, JsonRecord, JsonValue, LookupRequest,
@@ -118,6 +141,10 @@ pub struct CompactResponse {
 #[derive(Debug, Clone)]
 pub struct Client {
     host_port: String,
+    /// Hostname only (no port) — used for the `Host:` header and TLS SNI.
+    host: String,
+    /// TLS config when the endpoint is `https://`; `None` for plain `http://`.
+    tls_config: Option<Arc<rustls::ClientConfig>>,
     /// Raw bearer token (without the `Bearer ` prefix). Empty = no auth.
     token: String,
     read_timeout: Duration,
@@ -130,13 +157,19 @@ pub struct Client {
 }
 
 impl Client {
-    /// Build a client pointed at `url`. Accepts `http://host:port` or
-    /// bare `host:port`; reads `NDB_TOKEN` from the env for auth.
+    /// Build a client pointed at `url`. Accepts `https://host[:port]`,
+    /// `http://host[:port]`, or bare `host:port`; reads `NDB_TOKEN` from the
+    /// env for auth. `https://` enables TLS (default port 443); otherwise the
+    /// default port is 8742.
     pub fn new(url: &str) -> Result<Self, ClientError> {
-        let host_port = parse_host_port(url).ok_or_else(|| ClientError::BadUrl(url.to_owned()))?;
+        let (host_port, host, tls) =
+            parse_endpoint(url).ok_or_else(|| ClientError::BadUrl(url.to_owned()))?;
+        let tls_config = if tls { Some(build_tls_config()?) } else { None };
         let token = std::env::var("NDB_TOKEN").unwrap_or_default();
         Ok(Self {
             host_port,
+            host,
+            tls_config,
             token,
             read_timeout: Duration::from_mins(1),
             write_timeout: Duration::from_secs(30),
@@ -417,11 +450,25 @@ impl Client {
     // HTTP plumbing.
     // -----------------------------------------------------------------
 
-    fn connect(&self) -> std::io::Result<TcpStream> {
-        let stream = TcpStream::connect(&self.host_port)?;
-        stream.set_read_timeout(Some(self.read_timeout))?;
-        stream.set_write_timeout(Some(self.write_timeout))?;
-        Ok(stream)
+    fn connect(&self) -> std::io::Result<Box<dyn ReadWrite>> {
+        let tcp = TcpStream::connect(&self.host_port)?;
+        tcp.set_read_timeout(Some(self.read_timeout))?;
+        tcp.set_write_timeout(Some(self.write_timeout))?;
+        match &self.tls_config {
+            None => Ok(Box::new(tcp)),
+            Some(cfg) => {
+                let name = rustls::pki_types::ServerName::try_from(self.host.clone())
+                    .map_err(|_| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "invalid TLS server name",
+                        )
+                    })?;
+                let conn = rustls::ClientConnection::new(cfg.clone(), name)
+                    .map_err(std::io::Error::other)?;
+                Ok(Box::new(rustls::StreamOwned::new(conn, tcp)))
+            }
+        }
     }
 
     fn auth_header(&self) -> String {
@@ -435,7 +482,7 @@ impl Client {
     fn get(&self, path: &str) -> Result<(u16, Vec<u8>), ClientError> {
         let req = format!(
             "GET {path} HTTP/1.1\r\nHost: {}\r\n{}Connection: close\r\n\r\n",
-            self.host_port,
+            self.host,
             self.auth_header()
         );
         // GET is idempotent: retry the whole round-trip.
@@ -463,7 +510,7 @@ impl Client {
     fn post(&self, path: &str, body: &[u8]) -> Result<(u16, Vec<u8>), ClientError> {
         let mut req = format!(
             "POST {path} HTTP/1.1\r\nHost: {}\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            self.host_port,
+            self.host,
             self.auth_header(),
             body.len(),
         )
@@ -477,7 +524,7 @@ impl Client {
 
     /// Retry `connect` (and only connect) with backoff — always safe
     /// because no request bytes have been transmitted yet.
-    fn connect_with_retry(&self) -> Result<TcpStream, ClientError> {
+    fn connect_with_retry(&self) -> Result<Box<dyn ReadWrite>, ClientError> {
         let mut attempt = 0u32;
         loop {
             match self.connect() {
@@ -497,11 +544,22 @@ impl Client {
         std::thread::sleep(delay);
     }
 
-    fn send_recv(&self, mut s: TcpStream, request: &[u8]) -> Result<(u16, Vec<u8>), ClientError> {
+    fn send_recv(
+        &self,
+        mut s: Box<dyn ReadWrite>,
+        request: &[u8],
+    ) -> Result<(u16, Vec<u8>), ClientError> {
         s.write_all(request)?;
         s.flush()?;
         let mut buf = Vec::new();
-        s.read_to_end(&mut buf)?;
+        // A peer that closes a `Connection: close` response without a TLS
+        // close_notify surfaces as UnexpectedEof; the bytes we already read are
+        // still the complete response, so treat that as a clean end.
+        match s.read_to_end(&mut buf) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof && !buf.is_empty() => {}
+            Err(e) => return Err(e.into()),
+        }
         let header_end = buf
             .windows(4)
             .position(|w| w == b"\r\n\r\n")
@@ -549,14 +607,31 @@ fn http_error(status: u16, body: &[u8]) -> ClientError {
     }
 }
 
-fn parse_host_port(url: &str) -> Option<String> {
-    // Accept "http://host:port", "host:port", with optional trailing /
-    let stripped = url.strip_prefix("http://").unwrap_or(url);
-    let stripped = stripped.strip_suffix('/').unwrap_or(stripped);
-    if stripped.contains('/') {
+/// Parse `url` into `(host_port, host, tls)`. Accepts `https://host[:port]`,
+/// `http://host[:port]`, or bare `host[:port]`. Default port: 443 for https,
+/// else 8742. `host` is the bare hostname (for `Host:`/SNI).
+fn parse_endpoint(url: &str) -> Option<(String, String, bool)> {
+    let (rest, tls) = if let Some(r) = url.strip_prefix("https://") {
+        (r, true)
+    } else if let Some(r) = url.strip_prefix("http://") {
+        (r, false)
+    } else {
+        (url, false)
+    };
+    let rest = rest.strip_suffix('/').unwrap_or(rest);
+    if rest.is_empty() || rest.contains('/') {
         return None;
     }
-    Some(stripped.to_owned())
+    let host = rest.split(':').next().unwrap_or(rest).to_owned();
+    if host.is_empty() {
+        return None;
+    }
+    let host_port = if rest.contains(':') {
+        rest.to_owned()
+    } else {
+        format!("{rest}:{}", if tls { 443 } else { 8742 })
+    };
+    Some((host_port, host, tls))
 }
 
 #[cfg(test)]
@@ -565,25 +640,37 @@ mod unit_tests {
 
     #[test]
     fn parses_url_with_scheme() {
-        assert_eq!(
-            parse_host_port("http://127.0.0.1:8742").unwrap(),
-            "127.0.0.1:8742"
-        );
+        let (hp, host, tls) = parse_endpoint("http://127.0.0.1:8742").unwrap();
+        assert_eq!(hp, "127.0.0.1:8742");
+        assert_eq!(host, "127.0.0.1");
+        assert!(!tls);
     }
 
     #[test]
     fn parses_bare_host_port() {
-        assert_eq!(parse_host_port("localhost:9000").unwrap(), "localhost:9000");
+        let (hp, host, tls) = parse_endpoint("localhost:9000").unwrap();
+        assert_eq!(hp, "localhost:9000");
+        assert_eq!(host, "localhost");
+        assert!(!tls);
+    }
+
+    #[test]
+    fn https_defaults_to_443_and_tls() {
+        let (hp, host, tls) = parse_endpoint("https://ndb.example.com").unwrap();
+        assert_eq!(hp, "ndb.example.com:443");
+        assert_eq!(host, "ndb.example.com");
+        assert!(tls);
     }
 
     #[test]
     fn strips_trailing_slash() {
-        assert_eq!(parse_host_port("http://x:1/").unwrap(), "x:1");
+        let (hp, _, _) = parse_endpoint("http://x:1/").unwrap();
+        assert_eq!(hp, "x:1");
     }
 
     #[test]
     fn rejects_paths_in_url() {
-        assert!(parse_host_port("http://x:1/foo").is_none());
+        assert!(parse_endpoint("http://x:1/foo").is_none());
     }
 
     #[test]

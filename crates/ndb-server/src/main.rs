@@ -49,7 +49,10 @@ pub const BIO_TYPE_CITED_BY: u32 = 202; // drug + disease + publication + eviden
 fn usage() {
     eprintln!(
         "Usage: ndb-server --path <database-dir> [--bind 127.0.0.1:8742] [--audit] \\\n\
-         \t[--bench-mode] [--tls-cert <path> --tls-key <path>]\n\
+         \t[--read-only] [--bench-mode] [--tls-cert <path> --tls-key <path>]\n\
+         \n\
+         --read-only serves reads but rejects every write with 403 read_only\n\
+         (no leader required) — for exposing a public, unwritable instance.\n\
          \n\
          --bench-mode pre-registers a known schema (type=1, props 10..13) so the\n\
          indexed routes return real hits against a fresh database. Used by the\n\
@@ -105,6 +108,11 @@ struct Args {
     replicate_token: Option<String>,
     /// Slow-query log threshold in ms (0 = disabled).
     slow_query_ms: u64,
+    /// Serve reads but reject all writes with 403 read_only (no leader needed).
+    read_only: bool,
+    /// Emit `Access-Control-Allow-Origin: <value>` (and answer OPTIONS preflight)
+    /// so a browser app on another origin can call the API.
+    cors_origin: Option<String>,
 }
 
 fn parse_args() -> Option<Args> {
@@ -119,8 +127,12 @@ fn parse_args() -> Option<Args> {
     let mut replicate_interval: u64 = 2;
     let mut replicate_token: Option<String> = None;
     let mut slow_query_ms: u64 = 0;
+    let mut read_only = false;
+    let mut cors_origin: Option<String> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
+            "--read-only" => read_only = true,
+            "--cors-origin" => cors_origin = args.next(),
             "--path" | "-p" => path = args.next(),
             "--bind" | "-b" => bind = args.next(),
             "--audit" => audit = true,
@@ -157,6 +169,8 @@ fn parse_args() -> Option<Args> {
         replicate_interval,
         replicate_token,
         slow_query_ms,
+        read_only,
+        cors_origin,
     })
 }
 
@@ -226,9 +240,13 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    // A follower serves reads but rejects writes (they go to the leader).
-    if args.replicate_from.is_some() {
+    // A follower serves reads but rejects writes (they go to the leader); the
+    // standalone --read-only flag does the same without needing a leader.
+    if args.replicate_from.is_some() || args.read_only {
         server = server.with_read_only(true);
+    }
+    if let Some(origin) = &args.cors_origin {
+        server = server.with_cors_origin(origin.clone());
     }
     if args.bench_mode {
         let engine = server.engine();

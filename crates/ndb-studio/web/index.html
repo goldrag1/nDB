@@ -223,6 +223,7 @@
       <button id="nodeBtn" class="hidden">Node</button>
       <button id="usersBtn" class="hidden">Users</button>
       <button id="logoutBtn">Logout</button>
+      <button id="loginBtn" class="hidden">Log in</button>
     </div>
   </header>
   <aside>
@@ -378,7 +379,7 @@ const $ = (id) => document.getElementById(id);
 let HEAD = 0, ASOF = null, SEL = null, CATALOG = [], MODE = "table", EDGES = [], SEL_EDGE = null;
 let PIVOT = { row: null, col: null, agg: "count", value: null };
 let GRAPH_ANIM = null;
-let ME = { authed: false, user: null, role: null };
+let ME = { authed: false, user: null, role: null, public_read: false };
 const canWrite = () => ME.role === "editor" || ME.role === "admin";
 
 const api = {
@@ -1492,11 +1493,14 @@ $("asof").onchange = async () => { await loadCatalog(); if (SEL) SEL = CATALOG.f
 function showLogin() { $("login").classList.remove("hidden"); setTimeout(() => $("luser").focus(), 0); }
 function hideLogin() { $("login").classList.add("hidden"); }
 function renderUser() {
-  $("who").textContent = ME.user ? `${ME.user} · ${ME.role}` : "";
+  $("who").textContent = ME.authed ? `${ME.user} · ${ME.role}` : (ME.public_read ? "read-only" : "");
   $("usersBtn").classList.toggle("hidden", ME.role !== "admin");
   $("nodeBtn").classList.toggle("hidden", ME.role !== "admin");
   $("dbActive").textContent = ME.db ? "▦ " + ME.db : "";
   $("dbBtn").classList.toggle("hidden", ME.role !== "admin");
+  // Logout for signed-in users; "Log in" for anonymous public-read visitors.
+  $("logoutBtn").classList.toggle("hidden", !ME.authed);
+  $("loginBtn").classList.toggle("hidden", ME.authed);
 }
 
 // ---- databases (admin) ----
@@ -1539,7 +1543,9 @@ async function afterDbChange(name) {
 
 async function init() {
   ME = await api.get("/me");
-  if (!ME.authed) { renderUser(); showLogin(); return; }
+  // Force the login wall only when reads are NOT public. With --public-read,
+  // an anonymous visitor browses read-only (canWrite() is false → no edit UI).
+  if (!ME.authed && !ME.public_read) { renderUser(); showLogin(); return; }
   hideLogin();
   renderUser();
   await loadCatalog();
@@ -1553,6 +1559,14 @@ $("loginForm").onsubmit = async (e) => {
   else { $("lerr").textContent = r.body.error?.message || "login failed"; }
 };
 $("logoutBtn").onclick = async () => { await api.post("/logout", {}); location.reload(); };
+$("loginBtn").onclick = () => showLogin();
+// In public-read mode the login modal is optional — let anonymous visitors
+// dismiss it (Esc) and keep browsing read-only.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && ME.public_read && !ME.authed && !$("login").classList.contains("hidden")) {
+    hideLogin();
+  }
+});
 
 // ---- users panel (admin) ----
 async function openUsers() {

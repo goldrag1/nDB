@@ -1,0 +1,30 @@
+# nDB MCP server, Streamable HTTP transport (AI agents). Plain HTTP on
+# localhost; the edge terminates TLS. When NDB_TOKEN is set in the env file,
+# POST /mcp requires Authorization: Bearer <token> (GET /health stays open).
+#
+# Opens its OWN copy of the DB directory (the engine is single-writer). For a
+# read-only agent surface, point --path at a read replica / snapshot copy.
+[Unit]
+Description=nDB MCP server (Streamable HTTP, /mcp)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ndb
+Group=ndb
+EnvironmentFile=/etc/ndb/ndb.env
+ExecStart=/usr/local/bin/ndb-mcp-server --http 127.0.0.1:9000 --path /var/lib/ndb/mcp-data
+Restart=on-failure
+RestartSec=2
+MemoryHigh=384M
+MemoryMax=512M
+MemorySwapMax=0
+CPUQuota=50%
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ndb
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

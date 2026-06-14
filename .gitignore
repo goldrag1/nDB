@@ -11,3 +11,16 @@ __pycache__/
 # biodiv_ndb seed builder caches Wikipedia photo URLs here
 tools/biodiv/.photo-cache.json
 .claude/
+
+# transient deploy screenshots
+ndb-public-studio.png
+ndb-protein-public.png
+ndb-exoplanet-public.png
+
+ndb-home-public.png
+ndb-exo-path-public.png
+ndb-bench-public.png
+ndb-bench-report.png
+ndb-bench-full.png
+ndb-bench-charts.png
+ndb-bench-final.png
