@@ -144,8 +144,8 @@
     </div>
 
     <div class="card">
-      <a href="/bench.html" class="card-title">Benchmarks vs SQLite →</a>
-      <p>nDB vs embedded SQLite (Rust), 100k records, same host — recorded results across 7 workloads in two modes. The honest split: nDB wins indexed lookups, aggregates, and recursion (especially under concurrency, 6–21× via lock-free MVCC); SQLite wins full-table scans and 2-pattern joins. Both embedded, so this isolates storage-engine quality.</p>
+      <a href="/bench.html" class="card-title">Benchmark report — vs SQLite &amp; MariaDB →</a>
+      <p>Same 50k-entity / 50k-N-ary-fact dataset, one host. Storage: nDB 8.0 MB vs SQLite 14.6 vs MariaDB 21.2 (1.8–2.6× more compact). Lookups: nDB wins 7–55×. Concurrency: 4–21× via lock-free MVCC. Honest losses too — a mature SQL optimiser still wins the single-thread join.</p>
     </div>
 
     <div class="card">

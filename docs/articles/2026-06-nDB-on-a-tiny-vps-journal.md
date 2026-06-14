@@ -169,3 +169,23 @@ User: serious proper study (not a tweak), compare with SQLite **and MariaDB**, t
 5. **Publish as a report** — strip live UI from `bench.html` (1485 lines; live controls + recorded tables interleaved — careful surgery), retitle "Benchmark report", render stats tables + simple CSS/SVG charts (no chart-lib), 3-engine columns. Log via VPS localhost `/api/race/log` (public POST is CF-403'd). Add a methodology section (hardware, versions, sample sizes, caveats — embedded vs networked: SQLite/nDB in-process, MariaDB over a socket → note the architectural axis honestly).
 
 **Methodology honesty:** controlled (1-thread latency) AND stress (concurrency throughput); embedded (nDB, SQLite) vs networked (MariaDB) is a real axis — report it, don't hide it. Don't fabricate; publish losses too.
+
+## 2026-06-14 — 3-engine study DONE in-session (nDB vs SQLite vs MariaDB), published
+
+Local MariaDB 10.11.14 was already installed + running (:3306, `~/.my.cnf` root creds). Loaded the SQLite bench's EXACT rows (region 1000 / customer 49000 / sales 45000 / contains 5000 = 50k entities + 50k N-ary facts) into MariaDB InnoDB with matching indexes (pymysql via `~/.my.cnf`). Fair same-host triad.
+
+**Storage (on disk, same dataset):** nDB **8.0 MB** (pre-compaction WAL — conservative) · SQLite **14.6 MB** (VACUUMed) · MariaDB **21.2 MB** (InnoDB data+index). nDB 1.8× vs SQLite, 2.6× vs MariaDB — N-ary facts don't normalise into junction rows.
+
+**Controlled latency (rps; p99):** nDB / SQLite / MariaDB
+- point_lookup: 672,948 (5µs) / 90,090 (20µs) / 13,968 (268µs) — nDB wins, MariaDB pays the networked per-call tax.
+- property_lookup: 339,674 (8µs) / 21,260 (107µs) / 6,159 (538µs) — nDB.
+- two_pattern_join: 1,144 / 1,628 / **3,435** — MariaDB's optimiser wins single-thread (honest loss for nDB).
+- recursive_contains_depth3: 6,164 / **7,532** / 2,565 — SQLite edges single-thread.
+
+**Stress (conc=32, nDB vs SQLite):** point 9.46M vs 1.51M · property 9.65M vs 452k · count 10.2M vs 868k · recursion **198k vs 48k (flips to nDB under load)**.
+
+**Methodology honesty:** nDB+SQLite measured in-process by their Rust bench servers (p50/p99 over 500 iters/point); MariaDB end-to-end via a reused client over a unix socket (1.5–4k iters) — includes client/protocol cost (the real price of a networked DB; part of nDB's embedded pitch). Embedded-vs-networked stated, not hidden. No fabrication; losses shown.
+
+**Published:** rewrote `bench.html` as a static **Benchmark report** (removed ALL live-race buttons/tools per the user) — methodology + 3 result tables + the N-ary structural explanation + honest takeaways. Homepage card updated to the real headline. Live at `https://ndb.nextstar-erp.com/bench.html`.
+
+**Not done (honest):** MariaDB concurrent sweep, storage-scaling curve (10k→10M), and a formal mean±CI harness — the controlled p50/p99 are 500-iter / 1.5–4k-iter distributions (solid), but the cross-engine basis differs (embedded vs networked); a future pass could unify it + add the scaling curves.
