@@ -138,3 +138,19 @@ Measured BOTH modes (publishing only controlled would undersell nDB; only stress
 Honest split: **nDB wins indexed lookups, aggregates, and recursion — decisively under concurrency (6–21×, lock-free MVCC reads vs SQLite's global lock); recursion flips to nDB under load. Embedded SQLite wins full-table scans, single-pattern filters, and 2-pattern joins** (mature query planner). 14 races (7 controlled + 7 stress) logged to the feedback nDB; `bench.html` defaults to the `sqlite-rust` challenger and renders the recorded table. Live-race buttons stay offline (no PG/harness on the box) — recorded results are the deliverable.
 
 **Did NOT fabricate** anything; where the data contradicted the old "nDB wins recursion" card, rewrote the card to the measured reality (recursion is a *concurrency* win, not single-thread).
+
+## 2026-06-14 — Storage-cost headline + benchmark-report plan (next pass)
+
+**Real storage measurement** (same logical dataset: 50k entities + 50k N-ary facts + properties, region/customer/sales/contains shape):
+- **nDB: 8.0 MB** on disk (LSM, dictionary-coded; WAL-resident, pre-compaction).
+- **SQLite: 14.6 MB** (checkpointed + VACUUMed; normalized tables + `sales`/`contains` junction tables).
+- → **~1.8× more compact**, because each N-ary fact is one dictionary-coded record instead of junction-table rows repeating foreign keys + labels. (Flushing/compacting nDB should hold or widen the gap.)
+
+**User direction:** remove the live-race buttons/tools (no PG/harness on the box → dead UI), and publish *validated* numbers — many samples with statistics, emphasising nDB's real strengths: **storage cost** and **multi-dimensional / N-ary data that forces SQL into many table-links (junctions + multi-way joins)**.
+
+**Plan for the focused benchmark-report pass (do with fresh context — rigor is the point):**
+1. **Strip live UI** from `bench.html` (1485 lines): remove `#challenger-pick` live buttons, `#race-btn`/`#stress-btn` + the live-fetch JS + `#backends-status`; keep the access-pattern explainers + the recorded aggregate tables. Re-title from "Live race" to "Benchmark report". (Surgery on a big file — do carefully, verify render.)
+2. **Statistical rigor:** dedicated harness — ≥30 samples/workload/mode on a quiet host, report mean ± stddev + p50/p95/p99 + a 95% CI; discard warmup; pin if possible. Extend `/api/race/*` (or a new aggregates view) to carry stddev/CI, not just mean.
+3. **Storage scaling curve:** rebuild both engines at 10k / 100k / 1M / 10M N-ary facts; plot bytes/fact for nDB vs SQLite (normalized) → show the junction-table overhead growing. Add a chart to the page.
+4. **N-ary join-depth study (nDB's thesis):** a workload family where answering needs k-way relationships (k=2..6). SQL = k junction joins; nDB = k adjacency hops. Plot latency vs k for both → the "many table links" cost curve. (The existing `two_pattern_join` / `recursive_contains_depth3` are the seeds.)
+5. **Publish** via the VPS localhost `/api/race/log` (public POST is Cloudflare-403'd); validate the report page renders the stats + charts; 0 console errors.
