@@ -23,7 +23,6 @@
 
 use std::process::ExitCode;
 
-use ndb_engine::PropertyId;
 use ndb_mcp_server::{HttpOpts, McpServer, serve_http, serve_https};
 use ndb_server::Principal;
 
@@ -127,17 +126,22 @@ fn main() -> ExitCode {
         };
     }
 
-    // Register vector-indexed properties (comma-separated ids) so ndb.vector_search
-    // works — there's no MCP tool for index registration, so it's an env knob.
+    // DEPRECATED env knob: `NDB_VECTOR_PROP=<ids>` still works for backward
+    // compat, but it's now folded into the first-class persisted path — each id
+    // is registered AND written to the `.vector_props` sidecar, so it survives
+    // a restart with the env unset. Prefer the `ndb.register_vector_property`
+    // MCP tool; this env is a one-shot migration aid.
     if let Ok(spec) = std::env::var("NDB_VECTOR_PROP") {
         for part in spec.split(',') {
             if let Ok(pid) = part.trim().parse::<u32>() {
-                server
-                    .engine()
-                    .write()
-                    .expect("engine lock poisoned")
-                    .register_vector_property(PropertyId::new(pid));
-                eprintln!("ndb-mcp-server: registered vector property {pid}");
+                match server.register_vector_property_persisted(pid) {
+                    Ok(indexed) => eprintln!(
+                        "ndb-mcp-server: registered+persisted vector property {pid} \
+                         ({indexed} vectors indexed) [NDB_VECTOR_PROP is deprecated; \
+                         use the ndb.register_vector_property tool]"
+                    ),
+                    Err(e) => eprintln!("ndb-mcp-server: vector property {pid} failed: {e}"),
+                }
             }
         }
     }
@@ -150,7 +154,9 @@ fn main() -> ExitCode {
     // Network transport when --http is given; otherwise the stdio loop.
     if let Some(addr) = http_addr {
         let bearer_token = std::env::var("NDB_TOKEN").ok().filter(|t| !t.is_empty());
-        let write_token = std::env::var("NDB_WRITE_TOKEN").ok().filter(|t| !t.is_empty());
+        let write_token = std::env::var("NDB_WRITE_TOKEN")
+            .ok()
+            .filter(|t| !t.is_empty());
         if bearer_token.is_some() {
             eprintln!("ndb-mcp-server: full bearer-token auth enabled for --http");
         } else if write_token.is_some() {

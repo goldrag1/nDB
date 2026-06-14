@@ -104,8 +104,14 @@ pub struct HttpOpts {
     pub cors_origin: Option<String>,
 }
 
-/// MCP tool names that mutate the database — gated by `write_token`.
-const WRITE_TOOLS: &[&str] = &["ndb.commit_entity", "ndb.commit_hyperedge"];
+/// MCP tool names that mutate the database (data or config) — gated by
+/// `write_token` on the reads-open / writes-gated deployment.
+const WRITE_TOOLS: &[&str] = &[
+    "ndb.commit_entity",
+    "ndb.commit_hyperedge",
+    "ndb.define_schema",
+    "ndb.register_vector_property",
+];
 
 /// True when the JSON-RPC body is a `tools/call` for a mutating tool.
 fn is_write_body(body: &[u8]) -> bool {

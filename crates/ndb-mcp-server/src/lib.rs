@@ -65,7 +65,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use ndb_engine::{
     Distance, Engine, EngineError, EntityId, EntityRecord, HyperEdgeRecord, HyperedgeId,
-    JsonRecord, JsonValue, PropertyId, Record, Resolved, RoleId, TxId, TypeId, Value,
+    JsonRecord, JsonValue, PropertyId, PropertyKeyRecord, Record, Resolved, RoleId, RoleNameRecord,
+    TxId, TypeId, TypeNameRecord, Value,
 };
 use ndb_server::{AuditEntry, AuditLog, Capability, Principal};
 use serde::{Deserialize, Serialize};
@@ -130,7 +131,11 @@ fn tool_capability(tool: &str) -> Option<Capability> {
         | "ndb.arrow_edge_index"
         | "ndb.search_text" => Some(Capability::Read),
         "ndb.iter" => Some(Capability::Iter),
-        "ndb.commit_entity" | "ndb.commit_hyperedge" => Some(Capability::Commit),
+        "ndb.commit_entity" | "ndb.commit_hyperedge" | "ndb.define_schema" => {
+            Some(Capability::Commit)
+        }
+        // Index/config mutation — gated like an administrative change.
+        "ndb.register_vector_property" => Some(Capability::Admin),
         _ => None,
     }
 }
@@ -234,16 +239,56 @@ impl McpServer {
     /// the marker fingerprint matches.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, McpError> {
         let path = path.as_ref();
-        let engine = if path.exists() && path.join("CURRENT").exists() {
+        let mut engine = if path.exists() && path.join("CURRENT").exists() {
             Engine::open_from_env(path)?
         } else {
             Engine::create_from_env(path)?
         };
+        // First-class config: re-register vector-indexed properties recorded in
+        // the `.vector_props` sidecar (written by `ndb.register_vector_property`)
+        // so vector search works after a restart with NO env knob. The HNSW
+        // index lives in memory, so we re-register each property then rebuild
+        // the indexes from the durable records once.
+        let persisted = read_vector_props(path);
+        for pid in &persisted {
+            engine.register_vector_property(PropertyId::new(*pid));
+        }
+        if !persisted.is_empty()
+            && let Err(e) = engine.rebuild_indexes()
+        {
+            eprintln!("ndb-mcp-server: rebuild indexes on open failed: {e}");
+        }
         Ok(Self {
             engine: Arc::new(RwLock::new(engine)),
             principal: None,
             audit: None,
         })
+    }
+
+    /// Register a vector-indexed property AND persist it to the `.vector_props`
+    /// sidecar so it survives restarts (the in-memory HNSW index is rebuilt on
+    /// open). Existing vectors for the property are indexed immediately via a
+    /// snapshot build. Returns the number of vectors indexed. This is the
+    /// runtime replacement for the `NDB_VECTOR_PROP` env knob.
+    pub fn register_vector_property_persisted(&self, property_id: u32) -> Result<usize, McpError> {
+        let pid = PropertyId::new(property_id);
+        let dir;
+        let indexed;
+        {
+            let mut eng = self.engine.write().expect("engine lock poisoned");
+            eng.register_vector_property(pid);
+            // Rebuild the in-memory HNSW from durable records so vectors that
+            // already exist (registration after data) are searchable — commits
+            // made *after* registration auto-index, but pre-existing ones need
+            // this. `vector_search` reads the HNSW, so this is the populating step.
+            eng.rebuild_indexes()?;
+            // Count of vectors now indexed for this property (also writes the
+            // file-backed snapshot, harmless).
+            indexed = eng.build_vector_snapshot(pid)?;
+            dir = eng.path().to_path_buf();
+        }
+        append_vector_prop(&dir, property_id)?;
+        Ok(indexed)
     }
 
     /// Wrap an existing engine — useful for tests.
@@ -429,6 +474,8 @@ impl McpServer {
             "ndb.arrow_vectors" => self.tool_arrow_vectors(args),
             "ndb.arrow_edge_index" => self.tool_arrow_edge_index(args),
             "ndb.search_text" => self.tool_search_text(args),
+            "ndb.register_vector_property" => self.tool_register_vector_property(args),
+            "ndb.define_schema" => self.tool_define_schema(args),
             other => Err(McpError::UnknownTool(other.into())),
         };
         let (status, failure_owned) = match &result {
@@ -744,20 +791,29 @@ impl McpServer {
     /// via the embed service and return it as a vector `Value` to store on prop 20.
     fn auto_embed(&self, args: &serde_json::Value) -> Option<Value> {
         let url = std::env::var("NDB_EMBED_URL").ok()?;
-        let arr = args.get("properties").and_then(serde_json::Value::as_array)?;
-        if arr.iter().any(|p| p.get("prop_id").and_then(serde_json::Value::as_u64) == Some(20)) {
+        let arr = args
+            .get("properties")
+            .and_then(serde_json::Value::as_array)?;
+        if arr
+            .iter()
+            .any(|p| p.get("prop_id").and_then(serde_json::Value::as_u64) == Some(20))
+        {
             return None; // explicit vector provided — don't override
         }
         let text = arr.iter().find_map(|p| {
             let pid = p.get("prop_id").and_then(serde_json::Value::as_u64)?;
             if pid == 13 || pid == 14 {
-                p.get("value").and_then(|v| v.get("value")).and_then(serde_json::Value::as_str).map(str::to_string)
+                p.get("value")
+                    .and_then(|v| v.get("value"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
             } else {
                 None
             }
         })?;
         let emb = embed_text(&url, &text)?;
-        let jv: JsonValue = serde_json::from_value(serde_json::json!({"tag": "vector", "value": emb})).ok()?;
+        let jv: JsonValue =
+            serde_json::from_value(serde_json::json!({"tag": "vector", "value": emb})).ok()?;
         jv.try_into().ok()
     }
 
@@ -769,9 +825,16 @@ impl McpServer {
             .get("text")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| McpError::BadArgs("search_text: missing 'text'".into()))?;
-        let property_id = args.get("property_id").and_then(serde_json::Value::as_u64).unwrap_or(20);
-        let property_id = u32::try_from(property_id).map_err(|_| McpError::BadArgs("property_id u32".into()))?;
-        let k = args.get("k").and_then(serde_json::Value::as_u64).map_or(8_usize, |n| n.try_into().unwrap_or(8));
+        let property_id = args
+            .get("property_id")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(20);
+        let property_id =
+            u32::try_from(property_id).map_err(|_| McpError::BadArgs("property_id u32".into()))?;
+        let k = args
+            .get("k")
+            .and_then(serde_json::Value::as_u64)
+            .map_or(8_usize, |n| n.try_into().unwrap_or(8));
         let url = std::env::var("NDB_EMBED_URL")
             .map_err(|_| McpError::BadArgs("search_text: NDB_EMBED_URL not configured".into()))?;
         let query = embed_text(&url, text)
@@ -924,6 +987,91 @@ impl McpServer {
     /// MCP `resources/read` (A4). Read-only context blobs an agent can pull to
     /// discover the schema without trial-and-error tool calls. Gated by the
     /// `read` capability when a principal is installed.
+    /// `ndb.register_vector_property` — register a vector-indexed property at
+    /// runtime and persist it (the first-class replacement for the
+    /// `NDB_VECTOR_PROP` env knob). Existing vectors are indexed immediately;
+    /// the registration is reloaded on the next open.
+    fn tool_register_vector_property(
+        &self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value, McpError> {
+        let pid = args
+            .get("property_id")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| {
+                McpError::BadArgs("register_vector_property requires integer 'property_id'".into())
+            })?;
+        let pid =
+            u32::try_from(pid).map_err(|_| McpError::BadArgs("property_id out of range".into()))?;
+        if pid == 0 {
+            return Err(McpError::BadArgs("property_id must be non-zero".into()));
+        }
+        let indexed = self.register_vector_property_persisted(pid)?;
+        Ok(serde_json::json!({
+            "property_id": pid, "indexed": indexed, "persisted": true,
+        }))
+    }
+
+    /// `ndb.define_schema` — name type / role / property dictionary slots so the
+    /// catalog (`ndb://dictionaries`) shows real names instead of `kind:N`.
+    /// Body: `{ "types":[{"id":1,"name":"Person"}], "roles":[…], "properties":[…] }`
+    /// (all optional). Writes `TypeName` / `RoleName` / `PropertyKey` records.
+    fn tool_define_schema(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+        let mut eng = self.engine.write().expect("engine lock poisoned");
+        let mut tx = eng.begin_write();
+        let (mut n_types, mut n_roles, mut n_props) = (0_u64, 0_u64, 0_u64);
+        for (key, kind) in [("types", 0_u8), ("roles", 1_u8), ("properties", 2_u8)] {
+            let Some(arr) = args.get(key).and_then(serde_json::Value::as_array) else {
+                continue;
+            };
+            for item in arr {
+                let id = item
+                    .get("id")
+                    .and_then(serde_json::Value::as_u64)
+                    .ok_or_else(|| {
+                        McpError::BadArgs(format!("{key} entry missing integer 'id'"))
+                    })?;
+                let id =
+                    u32::try_from(id).map_err(|_| McpError::BadArgs("id out of range".into()))?;
+                if id == 0 {
+                    return Err(McpError::BadArgs("dictionary id must be non-zero".into()));
+                }
+                let name = item
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| McpError::BadArgs(format!("{key} entry missing string 'name'")))?
+                    .to_owned();
+                match kind {
+                    0 => {
+                        tx.put_raw(Record::TypeName(TypeNameRecord {
+                            id: TypeId::new(id),
+                            name,
+                        }));
+                        n_types += 1;
+                    }
+                    1 => {
+                        tx.put_raw(Record::RoleName(RoleNameRecord {
+                            id: RoleId::new(id),
+                            name,
+                        }));
+                        n_roles += 1;
+                    }
+                    _ => {
+                        tx.put_raw(Record::PropertyKey(PropertyKeyRecord {
+                            id: PropertyId::new(id),
+                            name,
+                        }));
+                        n_props += 1;
+                    }
+                }
+            }
+        }
+        let tx_id = tx.commit()?;
+        Ok(serde_json::json!({
+            "tx_id": tx_id.get(), "types": n_types, "roles": n_roles, "properties": n_props,
+        }))
+    }
+
     fn handle_resource_read(
         &self,
         params: &serde_json::Value,
@@ -1021,7 +1169,9 @@ fn mcp_tool_result(result: serde_json::Value) -> serde_json::Value {
 /// engine sync. Returns `None` on any failure (so commits still succeed).
 fn embed_text(url: &str, text: &str) -> Option<Vec<f32>> {
     let rest = url.strip_prefix("http://")?;
-    let (hostport, path) = rest.find('/').map_or((rest, "/"), |i| (&rest[..i], &rest[i..]));
+    let (hostport, path) = rest
+        .find('/')
+        .map_or((rest, "/"), |i| (&rest[..i], &rest[i..]));
     let body = serde_json::json!({ "texts": [text] }).to_string();
     let mut stream = std::net::TcpStream::connect(hostport).ok()?;
     let req = format!(
@@ -1035,7 +1185,11 @@ fn embed_text(url: &str, text: &str) -> Option<Vec<f32>> {
     let start = resp.find("\r\n\r\n")? + 4;
     let v: serde_json::Value = serde_json::from_str(resp[start..].trim()).ok()?;
     let arr = v.get("vectors")?.as_array()?.first()?.as_array()?;
-    Some(arr.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect())
+    Some(
+        arr.iter()
+            .map(|x| x.as_f64().unwrap_or(0.0) as f32)
+            .collect(),
+    )
 }
 
 /// Wrap raw Arrow IPC bytes in the JSON envelope MCP tools return: base64 for
@@ -1047,6 +1201,40 @@ fn arrow_payload(ipc: &[u8]) -> serde_json::Value {
         "byte_len": ipc.len(),
         "data": BASE64.encode(ipc),
     })
+}
+
+/// Path of the vector-property sidecar inside a database directory.
+fn vector_props_path(db_dir: &std::path::Path) -> std::path::PathBuf {
+    db_dir.join(".vector_props")
+}
+
+/// Read persisted vector-property ids (newline-separated `u32`). A missing file
+/// or unparseable lines yield an empty/partial list — never an error (a fresh
+/// DB simply has none).
+fn read_vector_props(db_dir: &std::path::Path) -> Vec<u32> {
+    let Ok(contents) = std::fs::read_to_string(vector_props_path(db_dir)) else {
+        return Vec::new();
+    };
+    contents
+        .lines()
+        .filter_map(|l| l.trim().parse::<u32>().ok())
+        .collect()
+}
+
+/// Append a vector-property id to the sidecar, idempotently (no duplicate
+/// lines). Written atomically-enough for a single-writer engine.
+fn append_vector_prop(db_dir: &std::path::Path, property_id: u32) -> std::io::Result<()> {
+    let mut ids = read_vector_props(db_dir);
+    if ids.contains(&property_id) {
+        return Ok(());
+    }
+    ids.push(property_id);
+    let body = ids
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(vector_props_path(db_dir), body + "\n")
 }
 
 /// Static `resources/list` set (A4).
@@ -1450,6 +1638,22 @@ fn tool_list() -> Vec<serde_json::Value> {
             "ndb.arrow_edge_index",
             "export the hyperedge incidence list (hyperedge_id, role_id, participant_id, participant_kind) as base64 Arrow IPC for GNNs (cuGraph/PyG)",
             serde_json::json!({}),
+            &[],
+        ),
+        tool(
+            "ndb.register_vector_property",
+            "register a property as vector-indexed so ndb.vector_search / ndb.search_text work on it; indexes existing vectors and persists across restarts (no NDB_VECTOR_PROP env knob needed)",
+            serde_json::json!({"property_id": prop_id_prop}),
+            &["property_id"],
+        ),
+        tool(
+            "ndb.define_schema",
+            "name type/role/property dictionary slots so the catalog (ndb://dictionaries) shows real names instead of kind:N. Pass any of types/roles/properties arrays of {id,name}",
+            serde_json::json!({
+                "types": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "integer", "minimum": 1}, "name": {"type": "string"}}, "required": ["id", "name"]}},
+                "roles": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "integer", "minimum": 1}, "name": {"type": "string"}}, "required": ["id", "name"]}},
+                "properties": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "integer", "minimum": 1}, "name": {"type": "string"}}, "required": ["id", "name"]}}
+            }),
             &[],
         ),
     ]

@@ -161,6 +161,53 @@ Single node by default. For sharding, run `ndb-router` (it speaks the same
 `/v1`) in front of N `ndb-server` shards and point `NDB_DATA_UPSTREAM` at the
 router instead of a single server. See `docker-compose.sharded.yml`.
 
+## Configuring a vector property (no env knob)
+
+Vector search needs the property registered. The first-class way is the MCP
+tool — it persists (survives restarts) and needs no env var:
+
+```bash
+curl -s https://ndb.example.com/mcp -H "Authorization: Bearer $TOKEN" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+        "name":"ndb.register_vector_property","arguments":{"property_id":20}}}'
+```
+
+The id is written to `<db>/.vector_props` and re-registered (HNSW rebuilt from
+the durable records) on the next open. Name the type/role/property slots so the
+catalog reads cleanly with `ndb.define_schema` (`{types,roles,properties}` of
+`{id,name}`). The legacy `NDB_VECTOR_PROP=<ids>` env still works but is
+deprecated — at boot it's folded into the same sidecar and logs a notice.
+
+## systemd gotcha: `${VAR}` is NOT shell-expanded in `ExecStart`
+
+systemd does **not** run `ExecStart` through a shell, so common shell idioms
+silently fail:
+
+- `${NDB_TOKEN}` only expands if `NDB_TOKEN` is set via `Environment=` /
+  `EnvironmentFile=` **in the same unit** — and only as a standalone token.
+  `$VAR` spliced mid-word, `$(command)` substitution, `|` pipes, `&&`, `*`
+  globs, and `~` are all passed through **literally** (or rejected).
+- Worse, an *undefined* `${VAR}` expands to the **empty string** with no error
+  — so a service can start "successfully" with a blank token (i.e. wide open)
+  if the `EnvironmentFile` path was wrong or the key was misspelled.
+
+Two safe patterns:
+
+```ini
+# A) Pass real env to the program; let the program read it (what nDB does).
+EnvironmentFile=/etc/ndb/ndb.env
+ExecStart=/usr/local/bin/ndb-mcp-server --path /var/lib/ndb/data --http 127.0.0.1:9000
+# ndb-mcp-server reads NDB_TOKEN / NDB_WRITE_TOKEN / NDB_VECTOR_PROP from the env.
+
+# B) If you truly need shell features, invoke a shell explicitly.
+ExecStart=/bin/sh -c 'exec /usr/local/bin/ndb-mcp-server --path "$NDB_DATA" --http "$NDB_BIND"'
+```
+
+Prefer (A): keep secrets/config in `EnvironmentFile` and have the binary read
+them, rather than interpolating into the command line. Verify what actually
+launched with `systemctl show -p ExecStart,Environment <unit>` and confirm the
+token is non-empty in the running process (`systemctl show -p Environment`).
+
 ## Honest caveats
 
 - **TLS is fully covered, every client path.** `ndb-client-rust` and the `ndb`
