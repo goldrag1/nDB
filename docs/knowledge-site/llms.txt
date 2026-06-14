@@ -1,0 +1,52 @@
+# nDB — N-dimensional hypergraph database
+
+> nDB is a hyperedge-native database engine in Rust. The atomic unit is an
+> N-ary fact connecting any number of entities in named role slots — not a row
+> and not a binary edge. It has append-only LSM storage, MVCC time-travel,
+> adjacency / type-cluster / property-B-tree / vector indexes, a query
+> executor, sharding, follower replication, Arrow export, and an in-process
+> web Studio. Released as v2.4.0 (14 crates).
+
+## For AI agents (start here)
+
+The agent-native interfaces are an HTTP wire API and a Model Context Protocol
+server — prefer these over scraping HTML:
+
+- **MCP server**: `npx @n-dimension-database-ndb/mcp --path <db>` (stdio JSON-RPC).
+  Tools: ndb.health, ndb.read, ndb.iter, ndb.neighbors, ndb.vector_search,
+  ndb.property_lookup, ndb.property_range, ndb.commit_entity, ndb.commit_hyperedge,
+  ndb.read_as_of, ndb.arrow_export. Opens a local nDB directly (no network hop).
+- **HTTP wire API (`/v1`)**: read routes `/v1/health`, `/v1/iter`, `/v1/read/:uuid`,
+  `/v1/query`, `/v1/lookup`, `/v1/property_lookup`, `/v1/property_range`,
+  `/v1/traverse`; write route `/v1/commit`. JSON in/out. A public read-only
+  instance is at https://ndb.nextstar-erp.com/v1 (writes return 403 read_only).
+- **TypeScript SDK**: `npm i @n-dimension-database-ndb/client`,
+  `new NdbClient("https://ndb.nextstar-erp.com")`. Zero deps, targets `/v1`.
+- **Rust client/CLI**: `ndb-client-rust` crate; `ndb --url https://... health`
+  (supports TLS).
+
+## Pages
+
+- [Home](/): the data model in one page — one record per fact, N-ary edges.
+- [Whitepaper](/whitepaper.html): data model, storage architecture, plugin
+  framework, performance characteristics, and an honest list of what it isn't.
+- [Query language](/query-language.html): pattern matching on N-ary hyperedges
+  with property projection and time travel, with a live editor.
+- [Benchmarks](/bench.html): nDB vs PostgreSQL vs SQLite on a 100k-record
+  workload — recorded results; the honest split (nDB wins lookups + recursion,
+  Postgres wins hash joins).
+- [Studio](/studio/): a live, read-only web explorer over a real nDB — tables,
+  N-ary hyperedge expansion, query console, vector find-similar, time-travel.
+
+## Live demos (3D explorers over real nDB instances, read-only)
+
+- [alphafold_ndb](/alphafold_ndb/): AlphaFold protein structures + motifs.
+- [exoplanet_ndb](/exoplanet_ndb/): N-ary exoplanet discovery facts.
+- [biodiv_ndb](/biodiv_ndb/): ecological interactions with temporal qualifiers.
+
+## Source & install
+
+- Repo: https://github.com/goldrag1/nDB (MIT).
+- Docker: `docker run -p 8742:8742 -v ndb-data:/data ghcr.io/goldrag1/ndb`
+- Prebuilt `ndb` binary + `ndb-server` from the GitHub releases.
+- Build: `cargo run --release -p ndb-server -- --path ./db`
