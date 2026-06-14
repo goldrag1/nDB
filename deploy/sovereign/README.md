@@ -100,7 +100,14 @@ const db = new NdbClient("https://ndb.example.com", { token: TOKEN });
 await db.health();
 ```
 
-**3. An AI agent / MCP client** — point a Streamable-HTTP-capable client at
+**3. The Rust CLI / SDK** (TLS built in — rustls + bundled roots):
+```bash
+ndb --url https://ndb.example.com health      # https:// → TLS, port 443
+# or in code: ndb_client::Client::new("https://ndb.example.com")
+#             .with_token(token)
+```
+
+**4. An AI agent / MCP client** — point a Streamable-HTTP-capable client at
 `https://ndb.example.com/mcp`. For stdio-only clients (some Claude/Cursor/Codex
 setups), bridge with `mcp-remote`:
 ```json
@@ -135,9 +142,13 @@ router instead of a single server. See `docker-compose.sharded.yml`.
 
 ## Honest caveats
 
-- **The Rust CLI can't do TLS.** `ndb-client-rust` is plain TCP and rejects
-  `https://`. CLI/Rust users need the TS SDK, `curl`, or a private plain-HTTP
-  port on a WireGuard/Tailscale net. Browser + MCP + TS SDK are unaffected.
+- **TLS is fully covered, every client path.** `ndb-client-rust` and the `ndb`
+  CLI speak TLS to `https://` endpoints (rustls + ring + bundled Mozilla
+  `webpki-roots`, default port 443 — see the `https_defaults_to_443_and_tls`
+  test), `ndb-server` can also terminate TLS itself (`--tls-cert/--tls-key`),
+  and the edge terminates TLS for `/mcp` + `/v1`. So curl, TS SDK, Rust CLI/SDK,
+  browser, and MCP all work over HTTPS — no plain-HTTP side door needed. (The
+  MCP `--http` transport is plain HTTP *by design*: the edge wraps it in TLS.)
 - **Runtime TLS not exercised here.** `ndb-edge` is verified to `cargo check`
   against pingora 0.8.1; the live handshake needs a real cert + :443, so test it
   on the box after step 5 (the `curl https://…/health` above is the gate).

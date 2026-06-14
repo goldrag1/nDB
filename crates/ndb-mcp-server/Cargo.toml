@@ -1,6 +1,6 @@
 [package]
 name         = "ndb-mcp-server"
-description  = "nDB Model Context Protocol server — AI agent bridge via stdio JSON-RPC"
+description  = "nDB Model Context Protocol server — AI agent bridge via stdio or Streamable HTTP(S)"
 version      = { workspace = true }
 edition      = { workspace = true }
 rust-version = { workspace = true }
@@ -25,6 +25,9 @@ serde_json = { workspace = true }
 thiserror  = { workspace = true }
 uuid       = { workspace = true }
 base64     = "0.22"
+# TLS termination for the Streamable HTTP transport (mirrors ndb-server).
+rustls         = { version = "0.23", default-features = false, features = ["std", "ring", "logging", "tls12"] }
+rustls-pemfile = "2"
 
 [lints]
 workspace = true

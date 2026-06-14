@@ -23,7 +23,7 @@
 
 use std::process::ExitCode;
 
-use ndb_mcp_server::{HttpOpts, McpServer, serve_http};
+use ndb_mcp_server::{HttpOpts, McpServer, serve_http, serve_https};
 use ndb_server::Principal;
 
 fn usage() {
@@ -34,8 +34,10 @@ fn usage() {
          Transports:\n\
            (default)          stdio JSON-RPC loop — for a same-machine MCP client.\n\
            --http <addr>      Streamable HTTP MCP on <addr> (e.g. 127.0.0.1:9000):\n\
-                              POST /mcp (JSON-RPC), GET /health. For remote agents,\n\
-                              put a TLS-terminating proxy (Pingora) in front.\n\
+                              POST /mcp (JSON-RPC), GET /health. Plain HTTP — front\n\
+                              it with a TLS proxy (Pingora), or add --tls-* below.\n\
+           --tls-cert <path>  PEM cert chain; with --tls-key, --http serves HTTPS\n\
+           --tls-key <path>   PEM private key (PKCS#8/PKCS#1/SEC1) — pairs with --tls-cert\n\
            --cors-origin <o>  Emit Access-Control-Allow-Origin: <o> (browser agents).\n\
          \n\
          Environment:\n\
@@ -51,12 +53,16 @@ fn main() -> ExitCode {
     let mut audit = false;
     let mut http_addr: Option<String> = None;
     let mut cors_origin: Option<String> = None;
+    let mut tls_cert: Option<String> = None;
+    let mut tls_key: Option<String> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--path" | "-p" => path = args.next(),
             "--audit" => audit = true,
             "--http" => http_addr = args.next(),
             "--cors-origin" => cors_origin = args.next(),
+            "--tls-cert" => tls_cert = args.next(),
+            "--tls-key" => tls_key = args.next(),
             "--help" | "-h" => {
                 usage();
                 return ExitCode::SUCCESS;
@@ -123,7 +129,15 @@ fn main() -> ExitCode {
             bearer_token,
             cors_origin,
         };
-        if let Err(e) = serve_http(&server, &addr, &opts) {
+        let result = match (tls_cert, tls_key) {
+            (Some(cert), Some(key)) => serve_https(&server, &addr, &cert, &key, &opts),
+            (None, None) => serve_http(&server, &addr, &opts),
+            _ => {
+                eprintln!("--tls-cert and --tls-key must be supplied together");
+                return ExitCode::from(2);
+            }
+        };
+        if let Err(e) = result {
             eprintln!("ndb-mcp-server: http server error: {e}");
             return ExitCode::from(1);
         }
