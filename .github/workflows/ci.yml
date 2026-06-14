@@ -26,6 +26,11 @@ jobs:
         run: cargo test --workspace
       - name: Decoder robustness suite (explicit)
         run: cargo test -p ndb-engine --test robustness
+      # MCP protocol conformance — the spec-client suite that guards the
+      # `tools/call` content envelope and JSON-RPC frame shapes. The original
+      # envelope bug was invisible to curl; this is the gate that catches it.
+      - name: MCP conformance suite (explicit)
+        run: cargo test -p ndb-mcp-server --test mcp_conformance
 
   # Lint gate. ADVISORY for now: there is a backlog of ~42 pre-existing
   # pedantic warnings in ndb-engine. `continue-on-error` keeps the signal
