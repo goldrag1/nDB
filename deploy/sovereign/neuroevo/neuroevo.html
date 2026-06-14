@@ -6,7 +6,7 @@
 <title>nDB — Evolving Ecosystem (artificial life)</title>
 <style>
   :root{--bg:#0a0a10;--panel:#14141c;--line:#23232e;--text:#e8e8ec;--muted:#8b8b99;
-        --plant:#4fae5a;--herb:#65CBF3;--pred:#f5a623;--hidden:#6ee7a8;--accent:#6ee7a8;--neg:#f06b6b;}
+        --plant:#4fae5a;--herb:#65CBF3;--pred:#f5a623;--apex:#c98bf0;--hidden:#6ee7a8;--accent:#6ee7a8;--neg:#f06b6b;}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
   .wrap{max-width:1020px;margin:0 auto;padding:26px 18px 64px}
@@ -41,7 +41,7 @@
 <body>
 <div class="wrap">
   <h1>Evolving Ecosystem <span style="color:var(--muted);font-weight:400">· artificial life on nDB</span></h1>
-  <p class="sub">🌱 plants · 🐰 herbivores · 🦊 predators — competing to survive. No fitness function: whoever eats and breeds, wins.</p>
+  <p class="sub">🌱 plants · 🐰 herbivores · 🦊 predators · 🦅 apex — a 3-level food web competing to survive. No fitness function: whoever eats and breeds, wins.</p>
   <p class="lede">
     Every creature has a neural-net <strong>brain</strong> (more neurons/synapses
     = smarter) wiring its senses to its moves. Moving and <em>thinking</em> burn
@@ -61,6 +61,7 @@
       <div class="stats">
         <div class="stat"><b id="sHerb" style="color:var(--herb)">–</b><span>🐰 herbivores</span></div>
         <div class="stat"><b id="sPred" style="color:var(--pred)">–</b><span>🦊 predators</span></div>
+        <div class="stat"><b id="sApex" style="color:var(--apex)">–</b><span>🦅 apex</span></div>
         <div class="stat"><b id="sPlant" style="color:var(--plant)">–</b><span>🌱 plants</span></div>
       </div>
     </div>
@@ -70,6 +71,7 @@
       <div class="legend">
         <span style="color:var(--herb)">▬ herbivores</span>
         <span style="color:var(--pred)">▬ predators</span>
+        <span style="color:var(--apex)">▬ apex</span>
         <span>· dashed = now</span>
       </div>
       <h2 style="margin-top:16px">🧠 smartest 🐰 brain @ this era</h2>
@@ -123,17 +125,18 @@ function drawWorld(){
   g.font='13px sans-serif'; g.textAlign='center'; g.textBaseline='middle';
   for(const p of A.p) g.fillText('🌱', p[0]*s, p[1]*s);
   // creatures: glide by cid between A and B
-  let herb=0,pred=0;
+  const EMO=['🐰','🦊','🦅'], BASE=[12,15,17];
+  const cnt=[0,0,0];
   mapB.forEach((b,cid)=>{
     const a=mapA.get(cid); let x=b[0],y=b[1];
     if(a){ let dx=b[0]-a[0], dy=b[1]-a[1];
       if(Math.abs(dx)<W/3 && Math.abs(dy)<H/3){ x=a[0]+dx*al; y=a[1]+dy*al; } }
     const sp=b[2], e=b[3];
-    if(sp===0)herb++; else pred++;
-    const sz = (sp===1?15:12) + Math.min(10,e/8);
+    cnt[sp]++;
+    const sz = BASE[sp] + Math.min(10,e/8);
     g.globalAlpha = a?1:Math.min(1,al*1.5);   // pop-in for newborns
     g.font=sz+'px sans-serif';
-    g.fillText(sp===0?'🐰':'🦊', x*s, y*s);
+    g.fillText(EMO[sp], x*s, y*s);
   });
   g.globalAlpha=1;
   // predation flashes
@@ -142,7 +145,7 @@ function drawWorld(){
   for(const f of flashes){ const age=(now-f.born)/700; g.strokeStyle='rgba(245,90,90,'+(1-age)+')'; g.lineWidth=2;
     g.beginPath(); g.arc(f.x*s,f.y*s,4+age*16,0,6.283); g.stroke();
     if(age<0.5){ g.font='16px sans-serif'; g.fillText('💥', f.x*s, f.y*s); } }
-  $('sHerb').textContent=herb; $('sPred').textContent=pred; $('sPlant').textContent=A.p.length;
+  $('sHerb').textContent=cnt[0]; $('sPred').textContent=cnt[1]; $('sApex').textContent=cnt[2]; $('sPlant').textContent=A.p.length;
 }
 
 function spawnFlashes(prevClock){
@@ -153,12 +156,13 @@ function spawnFlashes(prevClock){
 function drawPop(){
   const W=500,H=190,pad=24,n=CEN.length, step=Math.max(1,Math.floor(n/240));
   const pts=[]; for(let i=0;i<n;i+=step) pts.push(CEN[i]);
-  const maxP=Math.max(...pts.map(r=>Math.max(r[1],r[2])),1), last=CEN[n-1][0]||1;
+  const maxP=Math.max(...pts.map(r=>Math.max(r[1],r[2],r[3])),1), last=CEN[n-1][0]||1;
   const X=t=>pad+(t/last)*(W-2*pad), Y=v=>H-pad-(v/maxP)*(H-2*pad);
   const ln=k=>pts.map((r,i)=>`${i?'L':'M'}${X(r[0]).toFixed(1)} ${Y(r[k]).toFixed(1)}`).join(' ');
   let s=`<line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="#23232e"/>`;
   s+=`<path d="${ln(1)}" fill="none" stroke="#65CBF3" stroke-width="1.6"/>`;
   s+=`<path d="${ln(2)}" fill="none" stroke="#f5a623" stroke-width="1.6"/>`;
+  s+=`<path d="${ln(3)}" fill="none" stroke="#c98bf0" stroke-width="1.6"/>`;
   s+=`<line x1="${X(clock)}" y1="${pad-6}" x2="${X(clock)}" y2="${H-pad}" stroke="#fff" opacity="0.5" stroke-dasharray="3 3"/>`;
   s+=`<text x="${pad}" y="13" fill="#8b8b99" font-size="11">peak ${maxP} · tick 0…${last}</text>`;
   $('pop').innerHTML=s;
@@ -185,7 +189,8 @@ function updateText(){
   // latest predation as a one-liner
   let latest=null; for(const p of PRED){ if(p[4]<=clock) latest=p; else break; }
   if(latest && latest[4]!==lastEvtTick){ lastEvtTick=latest[4];
-    $('evt').textContent=`🦊 caught a 🐰 near (${latest[2]}, ${latest[3]}) · tick ${latest[4]}`; }
+    const hunter=['🐰','🦊','🦅'][latest[5]||1], prey=(latest[5]===2)?'🦊':'🐰';
+    $('evt').textContent=`${hunter} caught a ${prey} near (${latest[2]}, ${latest[3]}) · tick ${latest[4]}`; }
   // smartest herbivore brain of the current era
   const b=brainAt(clock);
   if(b){
@@ -208,10 +213,10 @@ function frame(ts){
 }
 
 function records(){
-  const peakH=Math.max(...CEN.map(r=>r[1])), peakP=Math.max(...CEN.map(r=>r[2]));
-  const smart=Math.max(...BRA.filter(b=>b.species===0).map(b=>b.synapse_count));
-  const html=[['🐰 '+peakH,'peak herbivores'],['🦊 '+peakP,'peak predators'],
-    ['🧠 '+smart,'smartest 🐰 (synapses)'],['💥 '+PRED.length,'total hunts'],
+  const peakH=Math.max(...CEN.map(r=>r[1])), peakP=Math.max(...CEN.map(r=>r[2])), peakA=Math.max(...CEN.map(r=>r[3]));
+  const smart=Math.max(...BRA.map(b=>b.synapse_count));
+  const html=[['🐰 '+peakH,'peak herbivores'],['🦊 '+peakP,'peak predators'],['🦅 '+peakA,'peak apex'],
+    ['🧠 '+smart,'biggest brain (synapses)'],['💥 '+PRED.length,'total hunts'],
     ['🍼 '+D.births.length,'total births'],['⏱ '+(CEN[CEN.length-1][0]),'ticks lived']];
   $('records').innerHTML=html.map(([b,s])=>`<div class="rec"><b>${b}</b><span>${s}</span></div>`).join('');
 }
