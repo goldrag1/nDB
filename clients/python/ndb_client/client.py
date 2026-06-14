@@ -245,6 +245,19 @@ class Client:
         parsed = _json.loads(resp.body)
         return list(parsed.get("entity_ids", []))
 
+    def query_text(self, text: str) -> dict:
+        """``POST /query/text`` — run a query in the human-readable query
+        language (the body is the raw query string, ``text/plain``).
+
+        Mirrors the TS SDK's ``queryText``. Returns the same ``QueryResponse``
+        shape as :meth:`query` (``{"columns", "rows", "truncated"}``). The
+        server resolves text → AST → ids, so you write names, not numbers::
+
+            db.query_text('match (c:Commit) return c.message limit 5')
+        """
+        resp = self._request_raw("POST", "/query/text", text.encode("utf-8"), "text/plain")
+        return _json.loads(resp.body)  # type: ignore[no-any-return]
+
     def query(self, request: Mapping[str, Any]) -> dict:
         """``POST /query`` — execute a structured wire-AST query.
 
@@ -287,6 +300,34 @@ class Client:
         resp = self._request("POST", "/property_range", body=body)
         parsed = _json.loads(resp.body)
         return list(parsed.get("entity_ids", []))
+
+    def arrow_export(self, batch_rows: Optional[int] = None):  # type: ignore[no-untyped-def]
+        """``GET /arrow/export`` — every record as a single ``pyarrow.Table``.
+
+        This is the **efficient** on-ramp: the server does the columnar
+        projection (the ``ndb-arrow`` crate) and streams Arrow IPC, so the
+        client just reads it — far cheaper than :meth:`iter_arrow`, which
+        pulls JSONL and projects in Python. From here, analytics is one call::
+
+            tbl = db.arrow_export()
+            df  = tbl.to_pandas()            # pandas
+            import polars as pl; pl.from_arrow(tbl)   # polars (zero-copy)
+
+        Requires the ``arrow`` extra (``pip install 'ndb-client[arrow]'``).
+        ``batch_rows`` tunes the server's Arrow batch size.
+        """
+        try:
+            import pyarrow as pa  # type: ignore[import-not-found]
+        except ImportError as e:
+            raise NdbError(
+                "arrow_export requires pyarrow. Install with: pip install 'ndb-client[arrow]'"
+            ) from e
+        path = "/arrow/export"
+        if batch_rows is not None:
+            path += f"?batch_rows={int(batch_rows)}"
+        resp = self._request("GET", path)
+        reader = pa.ipc.open_stream(pa.py_buffer(resp.body))
+        return reader.read_all()
 
     def iter_arrow(self):  # type: ignore[no-untyped-def]
         """Materialise the record stream as a ``pyarrow.RecordBatch``.
@@ -391,12 +432,27 @@ class Client:
         path: str,
         body: Optional[Any] = None,
     ) -> _ParsedResponse:
+        """JSON request: serialise ``body`` (if any) as ``application/json``."""
+        if body is None:
+            return self._request_raw(method, path, None, None)
+        data = _json.dumps(body).encode("utf-8")
+        return self._request_raw(method, path, data, "application/json")
+
+    def _request_raw(
+        self,
+        method: str,
+        path: str,
+        data: Optional[bytes],
+        content_type: Optional[str],
+    ) -> _ParsedResponse:
+        """Send a pre-encoded body with an explicit content type (or no body).
+        Used by JSON routes (via :meth:`_request`) and by text/plain routes
+        like ``/query/text``."""
         url = self._url(path)
-        data = None
         headers = self._auth_headers()
-        if body is not None:
-            data = _json.dumps(body).encode("utf-8")
-            headers["Content-Type"] = "application/json"
+        if data is not None:
+            if content_type:
+                headers["Content-Type"] = content_type
             headers["Content-Length"] = str(len(data))
         req = _urllib_request.Request(url, data=data, method=method, headers=headers)
         try:
