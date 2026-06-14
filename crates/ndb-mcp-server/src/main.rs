@@ -122,11 +122,15 @@ fn main() -> ExitCode {
     // Network transport when --http is given; otherwise the stdio loop.
     if let Some(addr) = http_addr {
         let bearer_token = std::env::var("NDB_TOKEN").ok().filter(|t| !t.is_empty());
+        let write_token = std::env::var("NDB_WRITE_TOKEN").ok().filter(|t| !t.is_empty());
         if bearer_token.is_some() {
-            eprintln!("ndb-mcp-server: bearer-token auth enabled for --http");
+            eprintln!("ndb-mcp-server: full bearer-token auth enabled for --http");
+        } else if write_token.is_some() {
+            eprintln!("ndb-mcp-server: reads open, write tools require NDB_WRITE_TOKEN");
         }
         let opts = HttpOpts {
             bearer_token,
+            write_token,
             cors_origin,
         };
         let result = match (tls_cert, tls_key) {

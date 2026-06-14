@@ -35,13 +35,42 @@ const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 /// Configuration for the Streamable HTTP MCP transport.
 #[derive(Debug, Default, Clone)]
 pub struct HttpOpts {
-    /// When set, every `POST /mcp` must carry `Authorization: Bearer <token>`.
-    /// `/health` is always exempt so a proxy can probe liveness.
+    /// When set, EVERY `POST /mcp` must carry `Authorization: Bearer <token>`
+    /// (full lockdown). `/health` is always exempt for proxy liveness.
     pub bearer_token: Option<String>,
+    /// When set (and `bearer_token` is not), reads are open but *write* tools
+    /// (`ndb.commit_entity` / `ndb.commit_hyperedge`) require this bearer token.
+    /// Lets a public read-only UI and a token-bearing writer share one endpoint.
+    pub write_token: Option<String>,
     /// When set, emit `Access-Control-Allow-Origin: <value>` on every response
     /// and answer `OPTIONS` preflight — so a browser agent on another origin
     /// can call the endpoint.
     pub cors_origin: Option<String>,
+}
+
+/// MCP tool names that mutate the database — gated by `write_token`.
+const WRITE_TOOLS: &[&str] = &["ndb.commit_entity", "ndb.commit_hyperedge"];
+
+/// True when the JSON-RPC body is a `tools/call` for a mutating tool.
+fn is_write_body(body: &[u8]) -> bool {
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return false;
+    };
+    if v.get("method").and_then(serde_json::Value::as_str) != Some("tools/call") {
+        return false;
+    }
+    let name = v
+        .get("params")
+        .and_then(|p| p.get("name"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    WRITE_TOOLS.contains(&name)
+}
+
+fn bearer_ok(authorization: Option<&str>, token: &str) -> bool {
+    authorization
+        .and_then(|a| a.strip_prefix("Bearer "))
+        .is_some_and(|t| t == token)
 }
 
 /// Bind `addr` and serve the Streamable HTTP MCP endpoint until the process is
@@ -144,19 +173,18 @@ pub(crate) fn handle_connection<S: Read + Write>(
             );
         }
         if method == "POST" {
+            let auth = authorization.as_deref();
             if let Some(token) = &opts.bearer_token {
-                let ok = authorization
-                    .as_deref()
-                    .and_then(|a| a.strip_prefix("Bearer "))
-                    .is_some_and(|t| t == token);
-                if !ok {
-                    return write_json(
-                        stream,
-                        401,
-                        "Unauthorized",
-                        r#"{"error":"missing or invalid bearer token"}"#,
-                        opts,
-                    );
+                // full lockdown: every request needs the token
+                if !bearer_ok(auth, token) {
+                    return write_json(stream, 401, "Unauthorized",
+                        r#"{"error":"missing or invalid bearer token"}"#, opts);
+                }
+            } else if let Some(wt) = &opts.write_token {
+                // reads open; only write tools need the token
+                if is_write_body(&body) && !bearer_ok(auth, wt) {
+                    return write_json(stream, 401, "Unauthorized",
+                        r#"{"error":"write tools require Authorization: Bearer <token>"}"#, opts);
                 }
             }
             if content_length > MAX_BODY_BYTES {
@@ -360,6 +388,7 @@ mod tests {
         let server = McpServer::open(&dir).unwrap();
         let opts = HttpOpts {
             bearer_token: Some("secret".to_owned()),
+            write_token: None,
             cors_origin: None,
         };
         let request = "GET /health HTTP/1.1\r\nHost: x\r\n\r\n";
@@ -375,6 +404,7 @@ mod tests {
         let server = McpServer::open(&dir).unwrap();
         let opts = HttpOpts {
             bearer_token: Some("secret".to_owned()),
+            write_token: None,
             cors_origin: None,
         };
         // tools/list with no Authorization header.
