@@ -23,15 +23,24 @@
 
 use std::process::ExitCode;
 
-use ndb_mcp_server::McpServer;
+use ndb_mcp_server::{HttpOpts, McpServer, serve_http};
 use ndb_server::Principal;
 
 fn usage() {
     eprintln!(
-        "Usage: ndb-mcp-server --path <database-dir> [--audit]\n\
+        "Usage: ndb-mcp-server --path <database-dir> [--audit] \\\n\
+         \t[--http <addr> [--cors-origin <origin>]]\n\
+         \n\
+         Transports:\n\
+           (default)          stdio JSON-RPC loop — for a same-machine MCP client.\n\
+           --http <addr>      Streamable HTTP MCP on <addr> (e.g. 127.0.0.1:9000):\n\
+                              POST /mcp (JSON-RPC), GET /health. For remote agents,\n\
+                              put a TLS-terminating proxy (Pingora) in front.\n\
+           --cors-origin <o>  Emit Access-Control-Allow-Origin: <o> (browser agents).\n\
          \n\
          Environment:\n\
            NDB_MCP_PRINCIPAL  JSON: {{\"name\":..,\"capabilities\":[..]}}; gates every tool call\n\
+           NDB_TOKEN          When set, --http requires Authorization: Bearer <token>\n\
            NDB_AUDIT=1        Equivalent to --audit (append <db>/.audit.jsonl per tool call)\n"
     );
 }
@@ -40,10 +49,14 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let mut path: Option<String> = None;
     let mut audit = false;
+    let mut http_addr: Option<String> = None;
+    let mut cors_origin: Option<String> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--path" | "-p" => path = args.next(),
             "--audit" => audit = true,
+            "--http" => http_addr = args.next(),
+            "--cors-origin" => cors_origin = args.next(),
             "--help" | "-h" => {
                 usage();
                 return ExitCode::SUCCESS;

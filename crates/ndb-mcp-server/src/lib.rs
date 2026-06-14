@@ -72,6 +72,11 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+/// Streamable HTTP transport — lets a remote agent reach the MCP tools over the
+/// network (the stdio loop only serves a same-machine agent).
+pub mod http;
+pub use http::{HttpOpts, serve_http};
+
 /// Errors raised by the MCP server.
 #[derive(Debug, Error)]
 pub enum McpError {

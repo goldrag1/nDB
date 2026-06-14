@@ -223,3 +223,16 @@ Mean latency (µs) per depth:
 **Honest finding (does NOT favour nDB):** this graph is dense → reachable set saturates by ~3 hops → cost is node-bounded, flat with depth for in-process engines. SQLite's CTE (~65µs) is a touch FASTER than nDB's traversal (~100µs). The only clear depth effect is MariaDB's networked per-level tax (150→268µs). ¹nDB's recursion engine REJECTED depth=2 with `RecursionDepthExceeded { depth:2, frontier_size:2 }` (and the bench server `unwrap()`s query errors → the connection thread panics) — a real limitation + a bench-robustness bug, both reported.
 
 **Conclusion published verbatim on the page:** join-depth is not where nDB wins on this dataset; its wins are storage + lookups + concurrency. The thesis (deep relational join blow-up) needs a SPARSE, high-fan-out graph where each hop multiplies the intermediate result — a future dataset, not this one. Did not manufacture a graph to make nDB win (that would be cherry-picking — the opposite of a serious study).
+
+## 2026-06-14 — Strength-bench candidates: honest triage (schema-evolution measured modest)
+
+User: "any other bench showing nDB strength? — all of them." Mapped 4 candidates; started with the fastest. **Schema evolution measured (N=200k):** SQLite ALTER 1ms + backfill 78ms; MariaDB ALTER 3ms + backfill 127ms; storage barely moved. Modern engines do **instant ADD COLUMN** (no rewrite) → the "migration pain" thesis is weak. nDB's edge is narrow (no DDL/lock + sparse storage only-where-present), not dramatic. → NOT a compelling strength bench. (Second candidate, after dense-graph n-pattern, that measured modest — honest, and it makes the real wins more credible.)
+
+**Meta-finding:** nDB's genuine, defensible wins = storage-at-scale, indexed lookups, concurrency, time-travel. Several intuitive "strengths" don't beat mature engines. Report that honestly.
+
+**Locked plan — remaining 3 strength benches (focused next pass; designs made fair up front):**
+1. **Time-travel / as-of** (most likely genuine win): nDB native MVCC snapshot read at any tx vs MariaDB **system-versioned tables** (`AS OF`, fair) + SQLite manual SCD2. Measure: storage of M versions of N rows (nDB dictionary-coded append vs SQL history table growth) + as-of query latency. nDB's signature; SQLite structurally can't.
+2. **High-arity N-ary storage** (the thesis, generalised): N facts of arity K (roles), K=2..6. nDB = N records (K refs each); SQL modelled the standard way = a `fact_role(fact_id, role, entity_id)` association table = **N×K rows** (+ index). Measure storage + a "facts touching entity X" query vs the K-row regroup. Storage gap grows with K — clean + fair (association table IS the relational N-ary pattern). Variable-arity makes it starker (SQL pays max-width or many rows).
+3. **Co-located vector + filter** (capability gap): hybrid "vector-similar AND property=X" — nDB native kNN (HNSW) in one engine; SQLite/MariaDB 10.11 have no native vector → brute-force scan or a bolt-on store. Frame as capability + measure nDB hybrid latency vs a brute-force baseline.
+
+Each is a real build (versioned data + system-versioning DDL; a K-ary nDB loader; vector data + brute-force baseline) — to be run with the same rigor (≥ solid sample sizes, fair modelling, losses shown), not crammed.
