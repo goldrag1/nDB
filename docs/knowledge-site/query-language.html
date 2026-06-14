@@ -213,6 +213,19 @@
     surface is locked down.
   </p>
 
+  <aside class="benchcallout">
+    <p class="bc-head">How these query shapes perform</p>
+    <p class="bc-sub">The same multi-pattern joins and lookups, benchmarked against SQLite &amp; MariaDB on 50k facts:</p>
+    <div class="bc-stats">
+      <div class="bc-stat"><b>7–55×</b><span>point/indexed lookup</span></div>
+      <div class="bc-stat"><b>4–21×</b><span>concurrent reads (MVCC)</span></div>
+      <div class="bc-stat"><b>2-pattern</b><span>join: nDB wins</span></div>
+    </div>
+    <p class="bc-note">Honest caveat: a mature SQL optimiser still wins the single-thread <em>dense</em>
+      join, and deep recursive closure hits a depth limit in v1.
+      <a href="/bench.html">Full study, including the n-pattern join chart →</a></p>
+  </aside>
+
   <div class="qlp-grid">
     <div>
       <div class="qlp-editor-wrap">

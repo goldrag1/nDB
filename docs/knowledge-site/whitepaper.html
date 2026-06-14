@@ -302,6 +302,20 @@ write constraint(target_type: "Customer",
 
   <h2>Performance characteristics</h2>
 
+  <aside class="benchcallout">
+    <p class="bc-head">Measured against SQLite and MariaDB — same dataset, one host</p>
+    <p class="bc-sub">50k entities + 50k N-ary facts, identical indexes. The qualitative claims below are now backed by numbers:</p>
+    <div class="bc-stats">
+      <div class="bc-stat"><b>1.8–2.6×</b><span>more compact on disk</span></div>
+      <div class="bc-stat"><b>7–55×</b><span>faster point/indexed lookups</span></div>
+      <div class="bc-stat"><b>4–21×</b><span>concurrent-read throughput</span></div>
+      <div class="bc-stat"><b>9–154×</b><span>faster time-travel as-of reads</span></div>
+    </div>
+    <p class="bc-note">And the honest losses are published too — a mature SQL optimiser still wins the
+      single-thread join, and a dedicated vector DB beats raw kNN.
+      <a href="/bench.html">Read the full benchmark report →</a></p>
+  </aside>
+
   <p><strong>Strong points:</strong></p>
   <ul>
     <li>Point lookups: comparable to RocksDB / LevelDB — sub-millisecond on hot data</li>

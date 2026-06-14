@@ -31,6 +31,17 @@
     data model it exercises.
   </p>
 
+  <aside class="benchcallout">
+    <p class="bc-head">The engine behind these demos, benchmarked</p>
+    <p class="bc-sub">Every demo reads a real nDB over the <code>/v1</code> wire protocol. Against SQLite &amp; MariaDB on the same 50k-fact dataset:</p>
+    <div class="bc-stats">
+      <div class="bc-stat"><b>1.8–2.6×</b><span>more compact</span></div>
+      <div class="bc-stat"><b>7–55×</b><span>faster lookups</span></div>
+      <div class="bc-stat"><b>4–21×</b><span>concurrent reads</span></div>
+    </div>
+    <p class="bc-note"><a href="/bench.html">See the full report — wins, honest losses, and where nDB fits →</a></p>
+  </aside>
+
   <div class="figure-row">
     <figure><a href="/langgraph_ndb/"><img src="/static/images/heroes/hero-langgraph.png" alt="langgraph_ndb screenshot"></a><figcaption>langgraph_ndb · GraphRAG citation graph (3D · time-travel · kNN)</figcaption></figure>
     <figure><a href="/alphafold_ndb/"><img src="/static/images/heroes/hero-alphafold-graph.png" alt="alphafold_ndb screenshot"></a><figcaption>alphafold_ndb · protein structure + hypergraph</figcaption></figure>

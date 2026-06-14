@@ -34,6 +34,19 @@
     strings per entity. The trap is real; the design specifically dodges it.
   </p>
 
+  <aside class="benchcallout">
+    <p class="bc-head">Measured: nDB is the most compact of the three</p>
+    <p class="bc-sub">Same 50k entities + 50k arity-3 facts, one host, indexes built — on-disk size:</p>
+    <div class="bc-stats">
+      <div class="bc-stat"><b>8.0 MB</b><span>nDB</span></div>
+      <div class="bc-stat"><b>14.6 MB</b><span>SQLite (1.8×)</span></div>
+      <div class="bc-stat"><b>21.2 MB</b><span>MariaDB (2.6×)</span></div>
+    </div>
+    <p class="bc-note">The N-ary fact stored as one record — not a junction table that repeats the
+      method/mission columns per row — is where the 1.8–2.6× gap comes from.
+      <a href="/bench.html">Full storage study, with the cases tables still win →</a></p>
+  </aside>
+
   <h2>The naive "schemaless tax"</h2>
 
   <p>The textbook critique of property-bag / document stores (BSON, JSONB, RDF-as-strings) is exactly this:</p>

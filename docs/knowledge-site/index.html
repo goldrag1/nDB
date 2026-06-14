@@ -43,6 +43,19 @@
     </div>
   </section>
 
+  <aside class="benchcallout">
+    <p class="bc-head">Benchmarked against SQLite &amp; MariaDB — same dataset, one host</p>
+    <p class="bc-sub">50k entities + 50k N-ary facts, identical indexes. Measured, not claimed:</p>
+    <div class="bc-stats">
+      <div class="bc-stat"><b>1.8–2.6×</b><span>more compact on disk</span></div>
+      <div class="bc-stat"><b>7–55×</b><span>faster lookups</span></div>
+      <div class="bc-stat"><b>4–21×</b><span>concurrent reads</span></div>
+      <div class="bc-stat"><b>9–154×</b><span>time-travel as-of</span></div>
+    </div>
+    <p class="bc-note">Plus the honest losses — a mature SQL optimiser still wins the single-thread join.
+      <a href="/bench.html">Read the full benchmark report →</a></p>
+  </aside>
+
   <figure class="hero-figure concept">
     <object type="image/svg+xml" data="/static/images/concepts/nary-vs-sql.svg" aria-label="One N-ary record in nDB versus three SQL tables for the same fact"></object>
     <figcaption>
