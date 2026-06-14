@@ -183,7 +183,9 @@ def simulate(ticks=2400, plants0=150, herb0=50, pred0=8):
             creatures += [Creature(rnd()*W,rnd()*H,HERB,Brain()) for _ in range(8)]  # reseed prey
         # record
         if t%FRAME_EVERY==0:
-            cc=[[int(c.x),int(c.y),c.sp,max(0,min(99,int(c.e)))] for c in creatures]
+            # [x, y, species, energy, cid] — cid lets the viewer match a creature
+            # across frames and glide it smoothly between recorded positions.
+            cc=[[int(c.x),int(c.y),c.sp,max(0,min(99,int(c.e))),c.cid] for c in creatures]
             pp=[[int(p[0]),int(p[1])] for p in plants]
             frames.append({"t":t,"c":cc,"p":pp})
         herbs=[c for c in creatures if c.sp==HERB]; preds=[c for c in creatures if c.sp==PRED]
