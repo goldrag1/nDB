@@ -15,6 +15,9 @@ use std::net::TcpStream;
 
 use serde_json::{json, Value};
 
+mod embed;
+use embed::embed16;
+
 fn post(host_port: &str, token: &str, payload: &Value) -> Value {
     let body = serde_json::to_vec(payload).expect("serialize");
     let mut stream = TcpStream::connect(host_port).expect("connect to MCP");
@@ -60,6 +63,10 @@ impl Mcp {
     }
     fn entity(&self, type_id: u32, props: &[(u32, &str)]) -> String {
         let properties: Vec<Value> = props.iter().map(|(p, v)| json!({"prop_id": p, "value": s(v)})).collect();
+        self.entity_raw(type_id, Value::Array(properties))
+    }
+    /// Commit an entity with raw `[{prop_id,value}]` properties (e.g. vectors).
+    fn entity_raw(&self, type_id: u32, properties: Value) -> String {
         self.call("ndb.commit_entity", json!({"type_id": type_id, "properties": properties}))["entity_id"]
             .as_str()
             .unwrap()
@@ -147,7 +154,12 @@ fn main() {
     let mut commit_ids: Vec<String> = Vec::new();
     for (i, &(author, msg, fkeys, ikey, sha)) in commits.iter().enumerate() {
         let cts = (base_ts + (i as i64) * 3600).to_string();
-        let cid = m.entity(3, &[(13, msg), (15, sha), (16, cts.as_str())]);
+        let cid = m.entity_raw(3, json!([
+            {"prop_id":13,"value":{"tag":"string","value":msg}},
+            {"prop_id":15,"value":{"tag":"string","value":sha}},
+            {"prop_id":16,"value":{"tag":"string","value":cts}},
+            {"prop_id":20,"value":{"tag":"vector","value":embed16(msg)}}
+        ]));
         // ONE N-ary fact: commit + author + each file + (issue) — a single record.
         let mut roles: Vec<(u32, &str)> = vec![(4, cid.as_str()), (1, people[pos(&people_def, author)].as_str())];
         for &fk in fkeys {

@@ -23,6 +23,7 @@
 
 use std::process::ExitCode;
 
+use ndb_engine::PropertyId;
 use ndb_mcp_server::{HttpOpts, McpServer, serve_http, serve_https};
 use ndb_server::Principal;
 
@@ -117,6 +118,21 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
+    }
+
+    // Register vector-indexed properties (comma-separated ids) so ndb.vector_search
+    // works — there's no MCP tool for index registration, so it's an env knob.
+    if let Ok(spec) = std::env::var("NDB_VECTOR_PROP") {
+        for part in spec.split(',') {
+            if let Ok(pid) = part.trim().parse::<u32>() {
+                server
+                    .engine()
+                    .write()
+                    .expect("engine lock poisoned")
+                    .register_vector_property(PropertyId::new(pid));
+                eprintln!("ndb-mcp-server: registered vector property {pid}");
+            }
+        }
     }
 
     // Network transport when --http is given; otherwise the stdio loop.

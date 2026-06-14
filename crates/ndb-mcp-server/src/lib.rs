@@ -353,7 +353,7 @@ impl McpServer {
             ),
             "tools/list" => JsonRpcResponse::ok(id, serde_json::json!({"tools": tool_list()})),
             "tools/call" => match self.handle_tool_call(&req.params) {
-                Ok(result) => JsonRpcResponse::ok(id, result),
+                Ok(result) => JsonRpcResponse::ok(id, mcp_tool_result(result)),
                 Err(e) => JsonRpcResponse::err(id, -32000, e.to_string()),
             },
             "resources/list" => {
@@ -929,6 +929,27 @@ impl McpServer {
             }]
         }))
     }
+}
+
+/// Shape a `tools/call` result so BOTH spec-compliant MCP clients and our own
+/// tooling work: the MCP spec requires `result.content = [{type:"text",text}]`
+/// (clients read that); we also keep the raw result fields at the top level so
+/// `result.records` / `result.entity_id` etc. still work for our SDK/viz.
+fn mcp_tool_result(result: serde_json::Value) -> serde_json::Value {
+    let text = serde_json::to_string(&result).unwrap_or_default();
+    let mut obj = if let serde_json::Value::Object(m) = result {
+        m
+    } else {
+        let mut m = serde_json::Map::new();
+        m.insert("value".to_string(), result);
+        m
+    };
+    obj.insert(
+        "content".to_string(),
+        serde_json::json!([{"type": "text", "text": text}]),
+    );
+    obj.insert("isError".to_string(), serde_json::json!(false));
+    serde_json::Value::Object(obj)
 }
 
 /// Wrap raw Arrow IPC bytes in the JSON envelope MCP tools return: base64 for

@@ -9,30 +9,31 @@
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:#06080c;color:var(--ink);font:13px/1.5 system-ui,Segoe UI,Roboto,sans-serif;overflow:hidden}
   #g{position:fixed;inset:0}
-  .panel{position:fixed;background:rgba(16,20,27,.92);border:1px solid var(--line);border-radius:10px;backdrop-filter:blur(6px)}
-  #ctl{top:14px;left:14px;width:300px;padding:14px 16px}
+  .panel{position:fixed;background:rgba(16,20,27,.93);border:1px solid var(--line);border-radius:10px;backdrop-filter:blur(6px)}
+  #ctl{top:14px;left:14px;width:312px;padding:14px 16px;max-height:94vh;overflow:auto}
   #ctl h1{font-size:15px;margin:0 0 2px}#ctl h1 b{color:var(--accent)}
   #ctl .sub{color:var(--dim);font-size:11.5px;margin-bottom:10px}
-  .stat{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--dim);margin-bottom:12px}
-  .stat b{color:var(--ink)}
-  .ctlrow{margin:9px 0}
-  .ctlrow label{display:block;font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px}
-  select,button{background:#11151c;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12.5px}
-  select{width:100%}
+  .stat{display:flex;gap:13px;flex-wrap:wrap;font-size:11.5px;color:var(--dim);margin-bottom:11px}.stat b{color:var(--ink)}
+  .ctlrow{margin:9px 0}.ctlrow label{display:block;font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px}
+  select,button,input[type=text]{background:#11151c;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:12.5px}
+  select,input[type=text]{width:100%}
   input[type=range]{width:100%;accent-color:var(--accent)}
-  .tt b{color:var(--accent);font-family:var(--mono)}
-  .live{display:flex;align-items:center;gap:7px;font-size:12px}
-  .dot{width:8px;height:8px;border-radius:50%;background:#3a414c}.dot.on{background:#5fd08a;box-shadow:0 0 8px #5fd08a}
-  #legend{bottom:14px;left:14px;padding:10px 12px;font-size:11.5px}
-  #legend .li{display:flex;align-items:center;gap:7px;margin:2px 0}
-  #legend .sw{width:10px;height:10px;border-radius:2px}
-  #detail{bottom:14px;right:14px;width:330px;max-height:46vh;overflow:auto;padding:13px 15px;display:none}
-  #detail .meta{color:var(--dim);font-family:var(--mono);font-size:11px;margin-bottom:8px;word-break:break-all}
-  #detail .role{display:flex;gap:8px;padding:3px 0;border-top:1px dashed var(--line)}
-  #detail .role .k{width:74px;color:var(--dim);flex:none}.role .v .p{font-family:var(--mono);font-size:11.5px}
-  #dims{top:14px;right:14px;width:230px;padding:11px 13px;font-size:11.5px;color:var(--dim)}
-  #dims b{color:var(--ink)} .x{color:var(--accent)}
   button{cursor:pointer}
+  .tt b{color:var(--accent);font-family:var(--mono)}
+  .srow{display:flex;gap:6px}.srow input{flex:1}
+  .hint{color:#5a6473;font-size:10.5px;margin-top:3px}
+  .live{display:flex;align-items:center;gap:7px;font-size:12px;margin-top:4px}
+  .dot{width:8px;height:8px;border-radius:50%;background:#3a414c}.dot.on{background:#5fd08a;box-shadow:0 0 8px #5fd08a}
+  #legend{bottom:14px;left:14px;padding:10px 12px;font-size:11px;max-width:230px}
+  #legend .li{display:flex;align-items:center;gap:6px;margin:2px 0}.li .sw{width:10px;height:10px;border-radius:2px;flex:none}.li .ln{width:14px;height:2px;flex:none}
+  #legend .h{color:var(--dim);margin:6px 0 2px}
+  #detail{bottom:14px;right:14px;width:340px;max-height:52vh;overflow:auto;padding:13px 15px;display:none}
+  #detail .meta{color:var(--dim);font-family:var(--mono);font-size:11px;margin-bottom:8px;word-break:break-all}
+  #detail .role{display:flex;gap:8px;padding:3px 0;border-top:1px dashed var(--line)}#detail .role .k{width:78px;flex:none}
+  #detail .role .k{font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+  #detail .p{font-family:var(--mono);font-size:11.5px}
+  #detail .score{color:var(--accent);font-family:var(--mono);font-size:11px}
+  #dims{top:14px;right:14px;width:222px;padding:11px 13px;font-size:11px;color:var(--dim)}#dims b{color:var(--ink)}.x{color:var(--accent)}
 </style>
 </head>
 <body>
@@ -40,39 +41,33 @@
 
 <div class="panel" id="ctl">
   <h1><b>nDB</b> Agent Memory</h1>
-  <div class="sub">A coding agent's memory, growing live — every fact is one N-ary record.</div>
+  <div class="sub">A coding agent's memory, growing live. Each fact is one N-ary hyperedge — the lit links ARE the relationships.</div>
   <div class="stat" id="stat">loading…</div>
-  <div class="ctlrow"><label>color by (attribute dimension)</label>
-    <select id="colorBy">
-      <option value="type">entity type</option>
-      <option value="recency">recency (time)</option>
-      <option value="author">author (person)</option>
-      <option value="lang">file language</option>
-    </select></div>
+
+  <div class="ctlrow"><label>semantic recall (vector search)</label>
+    <div class="srow"><input type="text" id="q" placeholder="e.g. how is TLS handled?"><button id="qbtn">recall</button></div>
+    <div class="hint">embeds your query (16-dim) → ndb.vector_search → lights the nearest memories</div>
+  </div>
+
+  <div class="ctlrow"><label>colour by (attribute dimension)</label>
+    <select id="colorBy"><option value="type">entity type</option><option value="recency">recency (time)</option><option value="lang">file language</option></select></div>
   <div class="ctlrow"><label>size by</label>
-    <select id="sizeBy">
-      <option value="degree">connections (degree)</option>
-      <option value="arity">N-ary arity</option>
-      <option value="uniform">uniform</option>
-    </select></div>
+    <select id="sizeBy"><option value="degree">connections (degree)</option><option value="arity">N-ary arity</option><option value="uniform">uniform</option></select></div>
+
   <div class="ctlrow"><label>time-travel (4th dimension) — <span class="tt" id="ttlbl">now</span></label>
     <input type="range" id="tt" min="1" max="1" value="1">
-    <div style="display:flex;gap:8px;margin-top:6px">
-      <button id="play" style="flex:1">▶ play growth</button>
-      <button id="nowbtn" style="flex:1">now</button>
-    </div>
+    <div style="display:flex;gap:8px;margin-top:6px"><button id="play" style="flex:1">▶ play growth</button><button id="nowbtn" style="flex:1">now</button></div>
   </div>
-  <div class="ctlrow live"><span class="dot" id="livedot"></span>
-    <label style="margin:0;text-transform:none;letter-spacing:0">live: agent writing every ~15s → <span id="livestate">on</span></label>
-  </div>
+  <div class="ctlrow"><button id="clearhl" style="width:100%">clear highlight</button></div>
+  <div class="live"><span class="dot" id="livedot"></span><span>live: agent writing every ~15s → <span id="livestate">on</span></span></div>
 </div>
 
 <div class="panel" id="dims">
   <b>dimensions shown</b><br>
-  <span class="x">X·Y·Z</span> force-layout structure (3D)<br>
+  <span class="x">X·Y·Z</span> structure (3D)<br>
+  <span class="x">links</span> N-ary relationships (hyperedges)<br>
   <span class="x">time</span> tx slider / play (4th)<br>
-  <span class="x">colour + size</span> any attribute (5th, 6th…)<br>
-  <span style="color:#5a6473">n-dimensional data, many channels at once.</span>
+  <span class="x">colour·size·vector</span> attributes (5th+)
 </div>
 
 <div class="panel" id="legend"></div>
@@ -82,21 +77,24 @@
 <script>
 const TYPE={1:'Person',2:'File',3:'Commit',4:'Issue',5:'PR',6:'Observation'};
 const TCOL={1:'#ffcf5d',2:'#5db0ff',3:'#5fd08a',4:'#e07a7a',5:'#c08cff',6:'#f0a25e'};
-const PROP={10:'name',12:'path',13:'message',14:'title',15:'sha',16:'ts',21:'status',22:'meta'};
 const ROLE={1:'author',2:'touches',3:'closes',4:'commit',5:'reviewer',6:'observation'};
-const EDGECOL='#5b6675';
-let ENTS={}, EDGES=[], MAXTX=1, curTx=null, Graph, byId=new Map(), linkSeen=new Set(), GD={nodes:[],links:[]}, playing=false, live=true;
+const RCOL={1:'#ffcf5d',2:'#5db0ff',3:'#e07a7a',4:'#5fd08a',5:'#c08cff',6:'#f0a25e'};
+const PROP={10:'name',12:'path',13:'message',14:'title',15:'sha',16:'ts',21:'status',22:'meta',20:'vector'};
+const EDGECOL='#39424f', DIMLINK='rgba(110,124,148,0.16)';
+let ENTS={}, EDGES=[], MAXTX=1, curTx=null, Graph, byId=new Map(), GD={nodes:[],links:[]}, linkSeen=new Set();
+let HL=new Set(), HLINK=new Set(), DEG={}, playing=false;
+
+// 16-dim bag-of-tokens embedder — MUST match embed.rs (byte-sum mod 16, L2)
+function embed16(t){const v=Array(16).fill(0);for(const tok of (t.toLowerCase().match(/[a-z0-9]+/g)||[])){let s=0;for(let i=0;i<tok.length;i++)s+=tok.charCodeAt(i);v[s%16]+=1;}const n=Math.sqrt(v.reduce((a,x)=>a+x*x,0));if(n>0)for(let i=0;i<16;i++)v[i]/=n;return v;}
 
 const mcp=async(m,p)=>{const r=await fetch('/mcp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:m,params:p})});const j=await r.json();if(j.error)throw new Error(JSON.stringify(j.error));return j.result;};
 const propmap=a=>Object.fromEntries((a||[]).map(p=>[p.prop_id,p.value&&p.value.value]));
 const esc=s=>(s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-function label(n){
-  if(n.kind==='edge'){return (n.t===100?'commit fact':n.t===101?'PR':n.t===102?'agent recall':'fact')+' · '+n.arity+'-ary';}
-  const p=n.props;return p[10]||p[14]||(p[13]||'').slice(0,50)||(p[12]||'').split('/').pop()||n.id.slice(0,8);
-}
+const lkey=l=>(l.source.id||l.source)+'|'+(l.target.id||l.target)+'|'+l.role;
+function label(n){if(n.kind==='edge')return (n.t===100?'commit fact':n.t===101?'PR':n.t===102?'agent recall':'fact')+' · '+n.arity+'-ary';const p=n.props;return p[10]||p[14]||(p[13]||'').slice(0,52)||(p[12]||'').split('/').pop()||n.id.slice(0,8);}
 
 async function snapshot(tx){
-  const res=await mcp('tools/call',{name:'ndb.iter',arguments: tx?{limit:600,snapshot_tx:tx}:{limit:600}});
+  const res=await mcp('tools/call',{name:'ndb.iter',arguments: tx?{limit:800,snapshot_tx:tx}:{limit:800}});
   const ents={},edges=[];
   for(const r of res.records){
     if(r.kind==='entity') ents[r.entity_id]={type:r.type_id,props:propmap(r.properties),tx:r.tx_id_assert};
@@ -114,92 +112,99 @@ function buildNodes(ents,edges){
   }
   return {nodes,links};
 }
-function degree(){ const d={}; for(const l of GD.links){d[l.source.id||l.source]=(d[l.source.id||l.source]||0)+1; d[l.target.id||l.target]=(d[l.target.id||l.target]||0)+1;} return d; }
+function degree(){const d={};for(const l of GD.links){const s=l.source.id||l.source,t=l.target.id||l.target;d[s]=(d[s]||0)+1;d[t]=(d[t]||0)+1;}return d;}
 
 function colorFn(n){
+  const dimmed = HL.size && !HL.has(n.id);
+  if(n.kind==='edge') return dimmed?'#20262e':EDGECOL;
   const by=document.getElementById('colorBy').value;
-  if(n.kind==='edge') return EDGECOL;
-  if(by==='type') return TCOL[n.t]||'#999';
-  if(by==='recency'){const f=Math.max(0,Math.min(1,n.tx/MAXTX));const g=Math.round(60+f*180);return `rgb(${Math.round(40+f*60)},${g},${Math.round(120+f*120)})`;}
-  if(by==='lang'){const L={rust:'#dea584',toml:'#9c7',bash:'#8fd',markdown:'#9bd',html:'#e88',systemd:'#cc9'};return n.t===2?(L[n.props[22]]||'#789'):'#3a414c';}
-  if(by==='author'){return n.t===1?TCOL[1]:'#46505e';}
-  return '#888';
+  let c;
+  if(by==='recency'){const f=Math.max(0,Math.min(1,n.tx/MAXTX));c=`rgb(${Math.round(40+f*60)},${Math.round(60+f*180)},${Math.round(120+f*120)})`;}
+  else if(by==='lang'){const L={rust:'#dea584',toml:'#9c7',bash:'#8fd',markdown:'#9bd',html:'#e88',systemd:'#cc9'};c=n.t===2?(L[n.props[22]]||'#789'):'#46505e';}
+  else c=TCOL[n.t]||'#999';
+  return dimmed?'#2a313b':c;
 }
-let DEG={};
-function sizeFn(n){
-  const by=document.getElementById('sizeBy').value;
-  if(by==='arity') return n.kind==='edge'?2+(n.arity||1)*1.2:1.5;
-  if(by==='uniform') return n.kind==='edge'?2:3;
-  return 1.5+Math.sqrt(DEG[n.id]||0)*1.6;            // degree
-}
-function applyStyle(){ DEG=degree(); Graph.nodeColor(colorFn).nodeVal(sizeFn); }
+function sizeFn(n){const by=document.getElementById('sizeBy').value;if(by==='arity')return n.kind==='edge'?2+(n.arity||1)*1.3:1.6;if(by==='uniform')return n.kind==='edge'?2:3;return 1.5+Math.sqrt(DEG[n.id]||0)*1.7;}
+function applyStyle(){DEG=degree();Graph.nodeColor(colorFn).nodeVal(sizeFn)
+  .linkColor(l=>HLINK.has(lkey(l))?(RCOL[l.role]||'#9bd'):DIMLINK)
+  .linkWidth(l=>HLINK.has(lkey(l))?2.6:0.5)
+  .linkDirectionalParticles(l=>HLINK.has(lkey(l))?3:0).linkDirectionalParticleWidth(2);}
 
 function merge(data,grow){
   const {nodes,links}=buildNodes(data.ents,data.edges);
   if(!grow){byId.clear();linkSeen.clear();GD={nodes:[],links:[]};}
   let added=0;
   for(const n of nodes) if(!byId.has(n.id)){byId.set(n.id,n);GD.nodes.push(n);added++;}
-  for(const l of links){const k=l.source+'|'+l.target+'|'+l.role; if(!linkSeen.has(k)){linkSeen.add(k);GD.links.push({...l});}}
-  ENTS=data.ents;EDGES=data.edges;
-  Graph.graphData(GD); applyStyle();
-  return added;
+  for(const l of links){const k=l.source+'|'+l.target+'|'+l.role;if(!linkSeen.has(k)){linkSeen.add(k);GD.links.push({...l});}}
+  ENTS=data.ents;EDGES=data.edges;Graph.graphData(GD);applyStyle();return added;
 }
-function renderStats(snap){
-  const e=Object.values(ENTS),n=t=>e.filter(x=>x.type===t).length;
-  document.getElementById('stat').innerHTML=
-   `<span><b>${e.length}</b> entities</span><span><b>${EDGES.length}</b> N-ary facts</span>`+
-   `<span><b>${n(6)}</b> agent recalls</span><span>tx <b>${snap}</b></span>`;
+function renderStats(snap){const e=Object.values(ENTS),n=t=>e.filter(x=>x.type===t).length;
+  document.getElementById('stat').innerHTML=`<span><b>${e.length}</b> entities</span><span><b>${EDGES.length}</b> N-ary facts</span><span><b>${n(6)}</b> recalls</span><span>tx <b>${snap}</b></span>`;}
+function renderLegend(){document.getElementById('legend').innerHTML=
+  '<div class="h">nodes</div>'+Object.keys(TYPE).map(t=>`<div class="li"><span class="sw" style="background:${TCOL[t]}"></span>${TYPE[t]}</div>`).join('')+
+  `<div class="li"><span class="sw" style="background:${EDGECOL}"></span>N-ary fact (hub)</div>`+
+  '<div class="h">links (roles)</div>'+Object.keys(ROLE).map(r=>`<div class="li"><span class="ln" style="background:${RCOL[r]}"></span>${ROLE[r]}</div>`).join('');}
+
+// highlight the N-ary neighbourhood: hubs touching this node, their links + fillers
+function highlight(id){
+  HL=new Set();HLINK=new Set();
+  const node=byId.get(id);if(!node)return;
+  // entity -> hubs whose roles include it; edge -> itself
+  const hubList = node.kind==='edge'?[node]:GD.nodes.filter(n=>n.kind==='edge'&&n.roles&&n.roles.some(r=>r.entity_id===id));
+  HL.add(id);
+  for(const h of hubList){HL.add(h.id);for(const r of h.roles){HL.add(r.entity_id);HLINK.add(h.id+'|'+r.entity_id+'|'+r.role_id);}}
+  applyStyle();
 }
-function renderLegend(){
-  document.getElementById('legend').innerHTML='<div style="color:var(--dim);margin-bottom:4px">entity types</div>'+
-    Object.keys(TYPE).map(t=>`<div class="li"><span class="sw" style="background:${TCOL[t]}"></span>${TYPE[t]}</div>`).join('')+
-    `<div class="li"><span class="sw" style="background:${EDGECOL}"></span>N-ary fact (hub)</div>`;
-}
+function clearHL(){HL=new Set();HLINK=new Set();applyStyle();}
+
 function detail(n){
-  const d=document.getElementById('detail');d.style.display='block';
+  const d=document.getElementById('detail');d.style.display='block';highlight(n.id);
   if(n.kind==='edge'){
     const by={};for(const r of n.roles){(by[r.role_id]=by[r.role_id]||[]).push(r.entity_id);}
-    let rows='';for(const rid of [4,6,1,5,2,3]){if(!by[rid])continue;rows+=`<div class="role"><div class="k">${ROLE[rid]||rid}</div><div class="v">${by[rid].map(u=>{const e=ENTS[u];if(!e)return u.slice(0,8);return e.type===2?'<span class="p">'+esc(e.props[12])+'</span>':esc(e.props[10]||e.props[14]||(e.props[13]||'').slice(0,46)||u.slice(0,8));}).join('<br>')}</div></div>`;}
-    d.innerHTML=`<div style="font-weight:600">${label(n)} — one record</div><div class="meta">${n.arity} entities linked · hyperedge · tx ${n.tx}</div>${rows}`;
-  }else{
-    const p=n.props;d.innerHTML=`<div style="font-weight:600">${esc(label(n))}</div><div class="meta">${TYPE[n.t]} · tx ${n.tx} · ${n.id}</div>`+
-      Object.entries(p).map(([k,v])=>`<div class="role"><div class="k">${PROP[k]||k}</div><div class="v">${esc(v)}</div></div>`).join('');
-  }
+    let rows='';for(const rid of [4,6,1,5,2,3]){if(!by[rid])continue;rows+=`<div class="role"><div class="k" style="color:${RCOL[rid]}">${ROLE[rid]||rid}</div><div class="v">${by[rid].map(u=>{const e=ENTS[u];if(!e)return u.slice(0,8);return e.type===2?'<span class="p">'+esc(e.props[12])+'</span>':esc(e.props[10]||e.props[14]||(e.props[13]||'').slice(0,46)||u.slice(0,8));}).join('<br>')}</div></div>`;}
+    d.innerHTML=`<div style="font-weight:600">${label(n)} — ONE record</div><div class="meta">${n.arity} entities linked by this hyperedge · tx ${n.tx}</div>${rows}`;
+  }else{const p=n.props;d.innerHTML=`<div style="font-weight:600">${esc(label(n))}</div><div class="meta">${TYPE[n.t]} · tx ${n.tx}</div>`+
+    Object.entries(p).filter(([k])=>k!=='20').map(([k,v])=>`<div class="role"><div class="k">${PROP[k]||k}</div><div class="v">${esc(v)}</div></div>`).join('');}
 }
 
-async function reload(tx){ const data=await snapshot(tx); merge(data,false); renderStats(tx||MAXTX); }
+async function vsearch(){
+  const q=document.getElementById('q').value.trim();if(!q)return;
+  try{
+    const res=await mcp('tools/call',{name:'ndb.vector_search',arguments:{property_id:20,query:embed16(q),k:8,metric:'cosine'}});
+    const hits=res.hits||[];
+    HL=new Set();HLINK=new Set();
+    for(const h of hits){HL.add(h.entity_id);
+      // also light the facts those memories belong to
+      for(const n of GD.nodes) if(n.kind==='edge'&&n.roles.some(r=>r.entity_id===h.entity_id)){HL.add(n.id);for(const r of n.roles){HL.add(r.entity_id);HLINK.add(n.id+'|'+r.entity_id+'|'+r.role_id);}}
+    }
+    applyStyle();
+    const d=document.getElementById('detail');d.style.display='block';
+    d.innerHTML=`<div style="font-weight:600">semantic recall: “${esc(q)}”</div><div class="meta">ndb.vector_search · top ${hits.length} by cosine</div>`+
+      hits.map((h,i)=>{const e=ENTS[h.entity_id];const t=e?(e.props[13]||e.props[14]||e.props[12]||h.entity_id.slice(0,8)):h.entity_id.slice(0,8);return `<div class="role"><div class="k">#${i+1} <span class="score">${h.distance.toFixed(3)}</span></div><div class="v">${esc(t)}</div></div>`;}).join('');
+    if(hits[0]&&byId.get(hits[0].entity_id)) Graph.cameraPosition(undefined,byId.get(hits[0].entity_id),800);
+  }catch(e){alert('vector search: '+e.message);}
+}
 
-async function init(){
+async function reload(tx){const data=await snapshot(tx);merge(data,false);renderStats(tx||MAXTX);}
+
+function init(){
   Graph=ForceGraph3D()(document.getElementById('g'))
-    .backgroundColor('#06080c').nodeOpacity(0.95).nodeResolution(10)
-    .linkColor(()=> 'rgba(120,135,160,0.28)').linkWidth(0.4).linkDirectionalParticles(0)
-    .nodeLabel(label).cooldownTicks(220).onNodeClick(detail);
-  Graph.onEngineStop(()=>{ for(const n of GD.nodes){ if(n.x!=null){n.fx=n.x;n.fy=n.y;n.fz=n.z;} } });
+    .backgroundColor('#06080c').nodeOpacity(0.95).nodeResolution(10).nodeLabel(label)
+    .cooldownTicks(220).onNodeClick(detail).onBackgroundClick(clearHL);
+  Graph.onEngineStop(()=>{for(const n of GD.nodes)if(n.x!=null){n.fx=n.x;n.fy=n.y;n.fz=n.z;}});
   renderLegend();
-  const first=await snapshot(); merge(first,false);
-  MAXTX=Math.max(1,...GD.nodes.map(n=>n.tx)); renderStats(MAXTX);
-  const tt=document.getElementById('tt'); tt.max=MAXTX; tt.value=MAXTX;
-  tt.oninput=async()=>{const v=+tt.value;curTx=v>=MAXTX?null:v;document.getElementById('ttlbl').innerHTML=curTx?('as of tx <b>'+v+'</b>'):'now';for(const n of GD.nodes){delete n.fx;delete n.fy;delete n.fz;}await reload(curTx);};
-  document.getElementById('nowbtn').onclick=()=>{tt.value=MAXTX;tt.oninput();};
-  document.getElementById('colorBy').onchange=applyStyle;
-  document.getElementById('sizeBy').onchange=applyStyle;
-  document.getElementById('play').onclick=async function(){
-    if(playing){playing=false;this.textContent='▶ play growth';return;}
-    playing=true;this.textContent='⏸ pause';
-    for(let t=1;t<=MAXTX && playing;t++){tt.value=t;document.getElementById('ttlbl').innerHTML='as of tx <b>'+t+'</b>';await reload(t);await new Promise(r=>setTimeout(r,260));}
-    playing=false;this.textContent='▶ play growth';tt.value=MAXTX;document.getElementById('ttlbl').innerHTML='now';await reload(null);
-  };
-  // live: poll, grow when at "now"
-  document.getElementById('livedot').classList.add('on');
-  setInterval(async()=>{
-    if(!live||playing||curTx) return;
-    try{const data=await snapshot();const before=GD.nodes.length;const newMax=Math.max(1,...Object.values(data.ents).map(e=>e.tx),...data.edges.map(e=>e.tx));
-      const added=merge(data,true);MAXTX=Math.max(MAXTX,newMax);document.getElementById('tt').max=MAXTX;
-      if(!curTx)document.getElementById('tt').value=MAXTX;
-      renderStats(MAXTX);
-      if(added>0){document.getElementById('livestate').textContent='+'+added+' just now';setTimeout(()=>document.getElementById('livestate').textContent='on',2500);}
-    }catch(e){}
-  },4000);
+  snapshot().then(first=>{
+    merge(first,false);MAXTX=Math.max(1,...GD.nodes.map(n=>n.tx));renderStats(MAXTX);
+    const tt=document.getElementById('tt');tt.max=MAXTX;tt.value=MAXTX;
+    tt.oninput=async()=>{const v=+tt.value;curTx=v>=MAXTX?null:v;document.getElementById('ttlbl').innerHTML=curTx?('as of tx <b>'+v+'</b>'):'now';for(const n of GD.nodes){delete n.fx;delete n.fy;delete n.fz;}await reload(curTx);};
+    document.getElementById('nowbtn').onclick=()=>{tt.value=MAXTX;tt.oninput();};
+    document.getElementById('clearhl').onclick=clearHL;
+    document.getElementById('colorBy').onchange=applyStyle;document.getElementById('sizeBy').onchange=applyStyle;
+    document.getElementById('qbtn').onclick=vsearch;document.getElementById('q').addEventListener('keydown',e=>{if(e.key==='Enter')vsearch();});
+    document.getElementById('play').onclick=async function(){if(playing){playing=false;this.textContent='▶ play growth';return;}playing=true;this.textContent='⏸ pause';for(let t=1;t<=MAXTX&&playing;t++){tt.value=t;document.getElementById('ttlbl').innerHTML='as of tx <b>'+t+'</b>';await reload(t);await new Promise(r=>setTimeout(r,240));}playing=false;this.textContent='▶ play growth';tt.value=MAXTX;document.getElementById('ttlbl').innerHTML='now';await reload(null);};
+    document.getElementById('livedot').classList.add('on');
+    setInterval(async()=>{if(playing||curTx)return;try{const data=await snapshot();const newMax=Math.max(1,...Object.values(data.ents).map(e=>e.tx),...data.edges.map(e=>e.tx));const added=merge(data,true);MAXTX=Math.max(MAXTX,newMax);tt.max=MAXTX;if(!curTx)tt.value=MAXTX;renderStats(MAXTX);if(added>0){document.getElementById('livestate').textContent='+'+added+' new';setTimeout(()=>document.getElementById('livestate').textContent='on',2500);}}catch(e){}},4000);
+  });
 }
 window.addEventListener('load',init);
 </script>

@@ -22,6 +22,10 @@ path = "src/static_server.rs"
 name = "ndb-agent"
 path = "src/agent.rs"
 
+[[bin]]
+name = "ndb-vrecall"
+path = "src/vrecall.rs"
+
 [dependencies]
 serde_json = "1"
 
