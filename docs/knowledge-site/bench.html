@@ -730,7 +730,7 @@ const CHAL_BLURB = {
           "pure storage-engine signal: nDB's data model + indexes vs " +
           "SQLite's B-trees, on equal language footing.",
 };
-const state = { challenger: "pg" };
+const state = { challenger: "sqlite-rust" };  // recorded results are vs SQLite (Rust)
 const chalBase = () => "/bench/" + state.challenger;
 const chalName = () => CHAL_LABEL[state.challenger];
 

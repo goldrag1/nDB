@@ -144,8 +144,8 @@
     </div>
 
     <div class="card">
-      <a href="/bench.html" class="card-title">Benchmarks vs Postgres &amp; SQLite →</a>
-      <p>100k records, same shape, same Linux host. Recorded race results across workloads: the honest split — nDB wins on lookups + recursion, Postgres wins on hash joins. Embedded nDB vs embedded SQLite isolates storage-engine quality from the networked-vs-embedded advantage.</p>
+      <a href="/bench.html" class="card-title">Benchmarks vs SQLite →</a>
+      <p>nDB vs embedded SQLite (Rust), 100k records, same host — recorded results across 7 workloads in two modes. The honest split: nDB wins indexed lookups, aggregates, and recursion (especially under concurrency, 6–21× via lock-free MVCC); SQLite wins full-table scans and 2-pattern joins. Both embedded, so this isolates storage-engine quality.</p>
     </div>
 
     <div class="card">
