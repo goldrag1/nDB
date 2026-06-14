@@ -1,0 +1,14 @@
+# systemd USER timer: grow nDB memory via a real Claude agent on a schedule.
+# Install: ~/.config/systemd/user/ndb-remember.timer
+# Enable:  systemctl --user enable --now ndb-remember.timer
+# (requires `loginctl enable-linger <user>` so it fires without an active login)
+[Unit]
+Description=Grow nDB memory via a real Claude agent every 30 min
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

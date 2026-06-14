@@ -58,7 +58,7 @@
     <input type="range" id="tt" min="1" max="1" value="1">
     <div style="display:flex;gap:8px;margin-top:6px"><button id="play" style="flex:1">▶ play growth</button><button id="nowbtn" style="flex:1">now</button></div>
   </div>
-  <div class="ctlrow"><button id="clearhl" style="width:100%">clear highlight</button></div>
+  <div class="ctlrow" style="display:flex;gap:8px"><button id="tour" style="flex:1">▶ tour hyperedges</button><button id="clearhl" style="flex:1">clear</button></div>
   <div class="live"><span class="dot" id="livedot"></span><span>live: agent writing every ~15s → <span id="livestate">on</span></span></div>
 </div>
 
@@ -80,7 +80,7 @@ const TCOL={1:'#ffcf5d',2:'#5db0ff',3:'#5fd08a',4:'#e07a7a',5:'#c08cff',6:'#f0a2
 const ROLE={1:'author',2:'touches',3:'closes',4:'commit',5:'reviewer',6:'observation'};
 const RCOL={1:'#ffcf5d',2:'#5db0ff',3:'#e07a7a',4:'#5fd08a',5:'#c08cff',6:'#f0a25e'};
 const PROP={10:'name',12:'path',13:'message',14:'title',15:'sha',16:'ts',21:'status',22:'meta',20:'vector'};
-const EDGECOL='#39424f', DIMLINK='rgba(110,124,148,0.16)';
+const EDGECOL='#9aa7bd', DIMLINK='rgba(110,124,148,0.16)';
 let ENTS={}, EDGES=[], MAXTX=1, curTx=null, Graph, byId=new Map(), GD={nodes:[],links:[]}, linkSeen=new Set();
 let HL=new Set(), HLINK=new Set(), DEG={}, playing=false;
 
@@ -90,6 +90,7 @@ function embed16(t){const v=Array(16).fill(0);for(const tok of (t.toLowerCase().
 const mcp=async(m,p)=>{const r=await fetch('/mcp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:m,params:p})});const j=await r.json();if(j.error)throw new Error(JSON.stringify(j.error));return j.result;};
 const propmap=a=>Object.fromEntries((a||[]).map(p=>[p.prop_id,p.value&&p.value.value]));
 const esc=s=>(s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const rgba=(hex,a)=>{const n=parseInt((hex||'#8a97ad').slice(1),16);return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')';};
 const lkey=l=>(l.source.id||l.source)+'|'+(l.target.id||l.target)+'|'+l.role;
 function label(n){if(n.kind==='edge')return (n.t===100?'commit fact':n.t===101?'PR':n.t===102?'agent recall':'fact')+' · '+n.arity+'-ary';const p=n.props;return p[10]||p[14]||(p[13]||'').slice(0,52)||(p[12]||'').split('/').pop()||n.id.slice(0,8);}
 
@@ -126,9 +127,10 @@ function colorFn(n){
 }
 function sizeFn(n){const by=document.getElementById('sizeBy').value;if(by==='arity')return n.kind==='edge'?2+(n.arity||1)*1.3:1.6;if(by==='uniform')return n.kind==='edge'?2:3;return 1.5+Math.sqrt(DEG[n.id]||0)*1.7;}
 function applyStyle(){DEG=degree();Graph.nodeColor(colorFn).nodeVal(sizeFn)
-  .linkColor(l=>HLINK.has(lkey(l))?(RCOL[l.role]||'#9bd'):DIMLINK)
-  .linkWidth(l=>HLINK.has(lkey(l))?2.6:0.5)
-  .linkDirectionalParticles(l=>HLINK.has(lkey(l))?3:0).linkDirectionalParticleWidth(2);}
+  // hyperedge links are ALWAYS visible (role-coloured); highlighted ones blaze + flow
+  .linkColor(l=>HLINK.has(lkey(l))?(RCOL[l.role]||'#9bd'):rgba(RCOL[l.role]||'#8a97ad', HL.size?0.10:0.45))
+  .linkWidth(l=>HLINK.has(lkey(l))?3.2:1.1)
+  .linkDirectionalParticles(l=>HLINK.has(lkey(l))?4:0).linkDirectionalParticleWidth(2.4).linkDirectionalParticleSpeed(0.012);}
 
 function merge(data,grow){
   const {nodes,links}=buildNodes(data.ents,data.edges);
@@ -156,6 +158,18 @@ function highlight(id){
   applyStyle();
 }
 function clearHL(){HL=new Set();HLINK=new Set();applyStyle();}
+
+// auto-demonstration: cycle through every N-ary fact, lighting its star + flow
+let touring=false, tourTimer=null;
+function tour(){
+  const btn=document.getElementById('tour');
+  if(touring){touring=false;clearInterval(tourTimer);btn.textContent='▶ tour hyperedges';return;}
+  const hubs=GD.nodes.filter(n=>n.kind==='edge').sort((a,b)=>(b.arity||0)-(a.arity||0));
+  if(!hubs.length)return;
+  touring=true;btn.textContent='⏸ touring';let i=0;
+  const step=()=>{if(!touring)return;const h=hubs[i%hubs.length];detail(h);if(byId.get(h.id))Graph.cameraPosition(undefined,byId.get(h.id),700);i++;};
+  step();tourTimer=setInterval(step,2800);
+}
 
 function detail(n){
   const d=document.getElementById('detail');d.style.display='block';highlight(n.id);
@@ -199,6 +213,10 @@ function init(){
     tt.oninput=async()=>{const v=+tt.value;curTx=v>=MAXTX?null:v;document.getElementById('ttlbl').innerHTML=curTx?('as of tx <b>'+v+'</b>'):'now';for(const n of GD.nodes){delete n.fx;delete n.fy;delete n.fz;}await reload(curTx);};
     document.getElementById('nowbtn').onclick=()=>{tt.value=MAXTX;tt.oninput();};
     document.getElementById('clearhl').onclick=clearHL;
+    document.getElementById('tour').onclick=tour;
+    // open already demonstrating: light the highest-arity N-ary fact
+    const hubs0=GD.nodes.filter(n=>n.kind==='edge').sort((a,b)=>(b.arity||0)-(a.arity||0));
+    if(hubs0[0]) setTimeout(()=>detail(hubs0[0]),600);
     document.getElementById('colorBy').onchange=applyStyle;document.getElementById('sizeBy').onchange=applyStyle;
     document.getElementById('qbtn').onclick=vsearch;document.getElementById('q').addEventListener('keydown',e=>{if(e.key==='Enter')vsearch();});
     document.getElementById('play').onclick=async function(){if(playing){playing=false;this.textContent='▶ play growth';return;}playing=true;this.textContent='⏸ pause';for(let t=1;t<=MAXTX&&playing;t++){tt.value=t;document.getElementById('ttlbl').innerHTML='as of tx <b>'+t+'</b>';await reload(t);await new Promise(r=>setTimeout(r,240));}playing=false;this.textContent='▶ play growth';tt.value=MAXTX;document.getElementById('ttlbl').innerHTML='now';await reload(null);};
