@@ -1,0 +1,29 @@
+# nDB data API (the /v1 wire protocol). Plain HTTP on localhost; the edge
+# (ndb-edge / Pingora) terminates TLS in front. Bearer-token auth via NDB_TOKEN
+# in the EnvironmentFile gates every route except /health,/ready,/metrics.
+[Unit]
+Description=nDB data server (/v1 wire protocol)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ndb
+Group=ndb
+EnvironmentFile=/etc/ndb/ndb.env
+ExecStart=/usr/local/bin/ndb-server --path /var/lib/ndb/data --bind 127.0.0.1:8742
+Restart=on-failure
+RestartSec=2
+# cgroup caps (mirror the existing tiny-VPS pattern; raise on a dedicated box)
+MemoryHigh=512M
+MemoryMax=768M
+MemorySwapMax=0
+CPUQuota=80%
+# hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ndb
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

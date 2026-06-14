@@ -1,0 +1,32 @@
+# ndb-edge — Pingora TLS edge. Binds :443, terminates TLS with the Let's
+# Encrypt cert, path-routes /mcp* -> :9000 and everything else -> :8742.
+# Needs CAP_NET_BIND_SERVICE to bind :443 as a non-root user.
+[Unit]
+Description=nDB edge (Pingora TLS reverse proxy)
+After=network-online.target ndb-server.service ndb-mcp.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ndb
+Group=ndb
+EnvironmentFile=/etc/ndb/ndb.env
+# Defaults live in the binary; override via /etc/ndb/ndb.env if needed:
+#   NDB_EDGE_BIND, NDB_TLS_CERT, NDB_TLS_KEY, NDB_DATA_UPSTREAM, NDB_MCP_UPSTREAM
+ExecStart=/usr/local/bin/ndb-edge
+Restart=on-failure
+RestartSec=2
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+MemoryHigh=256M
+MemoryMax=384M
+MemorySwapMax=0
+CPUQuota=80%
+NoNewPrivileges=true
+ProtectSystem=strict
+# read the certs; nothing to write
+ReadOnlyPaths=/etc/ndb
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

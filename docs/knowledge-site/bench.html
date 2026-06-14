@@ -258,6 +258,37 @@
     but the durable finding is the <em>slope</em>: SQL's footprint grows ~k× (it's
     N×k rows), nDB's grows by a few bytes/record, regardless of key encoding.</p>
 
+  <h2>7 · Time-travel — "as-of" reads over version history</h2>
+  <p class="cap">10,000 entities each updated to 10 versions (100,000 row-versions
+    retained), then read <em>as of the first version</em>. nDB does this as a
+    native MVCC snapshot read; SQLite needs a hand-built SCD2 table
+    (<code>valid_from/valid_to</code>); MariaDB uses system-versioned tables
+    (<code>FOR SYSTEM_TIME AS OF</code>). SQL sides use integer keys (their
+    favourable choice).</p>
+  <table>
+    <thead><tr><th>Engine</th><th>As-of read latency</th><th>vs nDB</th><th>Version storage</th><th>Native?</th></tr></thead>
+    <tbody>
+      <tr><td>nDB</td><td class="win">0.45 µs</td><td>1×</td><td>6.0 MB</td><td>built-in snapshot</td></tr>
+      <tr><td>SQLite (SCD2)</td><td>4.04 µs</td><td>9×</td><td class="win">2.7 MB</td><td>hand-built valid_from/to</td></tr>
+      <tr><td>MariaDB (system-versioned)</td><td>69.15 µs</td><td>154×</td><td>7.5 MB</td><td>feature + AS OF</td></tr>
+    </tbody>
+  </table>
+  <div style="max-width:560px;background:rgba(255,255,255,.02);border-radius:8px;padding:12px 14px;font:12px system-ui">
+    <div style="color:#9aa6b2;margin-bottom:8px">As-of read latency (lower = faster)</div>
+    <div style="margin:5px 0"><span style="display:inline-block;width:130px;color:#cdd6e0">nDB</span><span style="display:inline-block;height:11px;width:3px;background:#6ee7a8;border-radius:2px;vertical-align:middle"></span> <span style="color:#9aa6b2">0.45 µs</span></div>
+    <div style="margin:5px 0"><span style="display:inline-block;width:130px;color:#cdd6e0">SQLite (SCD2)</span><span style="display:inline-block;height:11px;width:21px;background:#60a5fa;border-radius:2px;vertical-align:middle"></span> <span style="color:#9aa6b2">4.04 µs</span></div>
+    <div style="margin:5px 0"><span style="display:inline-block;width:130px;color:#cdd6e0">MariaDB (sys-ver)</span><span style="display:inline-block;height:11px;width:360px;background:#f59e0b;border-radius:2px;vertical-align:middle"></span> <span style="color:#9aa6b2">69 µs</span></div>
+  </div>
+  <p class="cap"><strong>Honest reading.</strong> nDB's win here is <em>latency +
+    ergonomics</em>: an as-of read is a first-class snapshot — ~9× faster than a
+    SQLite SCD2 index lookup, ~150× faster than MariaDB's networked
+    <code>AS OF</code> — and at 0.45 µs it's essentially as fast as reading the
+    latest value (0.32 µs), with no schema design needed. Storage is <em>not</em>
+    an nDB win: SQLite's integer-keyed SCD2 (2.7 MB) is more compact than nDB's
+    UUID-based 6 MB. So: reach for nDB when you query history constantly and want
+    it free + native; if you only keep history and rarely read it, a SCD2 table
+    is smaller.</p>
+
   <h2>Takeaways</h2>
   <ul>
     <li><strong>Storage:</strong> nDB is the most compact (8.0 MB vs 14.6 / 21.2) — N-ary facts don't normalise into junction rows.</li>

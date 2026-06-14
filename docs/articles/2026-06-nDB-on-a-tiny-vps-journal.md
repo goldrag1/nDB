@@ -251,3 +251,12 @@ Wrote `examples/arity_storage.rs` (build E entities + N facts of arity k). SQL s
 nDB +~1MB/role; SQLite +~8.3MB/role; MariaDB +~12MB/role. At k=6 nDB is 6.2× (SQLite) / 8.4× (MariaDB) smaller, and the gap WIDENS with arity. This IS a genuine nDB win (unlike schema-evolution / dense n-pattern) — the thesis made concrete. Fair-play note on the page: SQL ids are VARCHAR(36) (matching nDB UUIDs); integer keys would shrink absolutes, but the slope (N×k rows vs N records) is the durable, encoding-independent finding. Published as §6 with a line chart.
 
 Strength-bench scorecard so far: storage-scaling ✓ win · high-arity ✓ win · concurrency ✓ win · lookups ✓ win · schema-evolution ✗ modest · dense n-pattern ✗ modest. Remaining: time-travel (likely win), vector (capability).
+
+## 2026-06-14 — Time-travel — partial win (latency yes, storage no), published
+
+`examples/versioned.rs`: 10k entities × 10 versions = 100k MVCC versions. SQL: SQLite SCD2 (valid_from/to, int keys) + MariaDB system-versioned (FOR SYSTEM_TIME AS OF, int keys — SQL-favourable).
+- **As-of read latency: nDB 0.45µs vs SQLite 4.04µs (9×) vs MariaDB 69.15µs (154×).** And nDB as-of (0.45) ≈ current read (0.32) — no time-travel penalty. Clear nDB win + native (no SCD2 schema).
+- **Storage: NOT an nDB win** — nDB 6.0MB (UUID-based) vs SQLite SCD2 2.7MB (int keys, smallest) vs MariaDB 7.5MB. Reported honestly.
+Published §7: latency bar chart + the honest "win when you read history constantly; SCD2 is smaller if you rarely read it" framing.
+
+Strength scorecard: storage-scaling ✓ · high-arity ✓ · concurrency ✓ · lookups ✓ · **time-travel: latency ✓ / storage ✗** · schema-evolution ✗ · dense n-pattern ✗. Remaining: vector (capability).
