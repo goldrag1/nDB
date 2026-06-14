@@ -117,7 +117,38 @@
   <p class="cap">Recursion <em>flips to nDB under load</em>: SQLite is faster
     single-threaded but doesn't scale across clients; nDB does.</p>
 
-  <h2>4 · Why the relational engines need more — the N-ary axis</h2>
+  <h2>4 · N-pattern join — cost vs join depth (k hops)</h2>
+  <p class="cap">The same containment graph, walked to depth <em>k</em> — a k-way
+    relationship. SQL expresses it as a recursive CTE (each level re-joins the
+    edge table); nDB walks its adjacency index. Identical topology across
+    engines; mean latency per query.</p>
+  <table>
+    <thead><tr><th>Depth k</th><th>nDB</th><th>SQLite</th><th>MariaDB</th></tr></thead>
+    <tbody>
+      <tr><td>2</td><td>—¹</td><td>79 µs</td><td>150 µs</td></tr>
+      <tr><td>3</td><td>95 µs</td><td class="win">56 µs</td><td>152 µs</td></tr>
+      <tr><td>4</td><td>120 µs</td><td class="win">64 µs</td><td>170 µs</td></tr>
+      <tr><td>5</td><td>97 µs</td><td class="win">66 µs</td><td>209 µs</td></tr>
+      <tr><td>6</td><td>107 µs</td><td class="win">77 µs</td><td>268 µs</td></tr>
+    </tbody>
+  </table>
+  <p class="cap">
+    <strong>Honest reading.</strong> This dataset's containment graph is
+    <em>dense</em> — the reachable set saturates within ~3 hops — so cost is
+    bounded by node count, not depth. The two in-process engines stay flat and
+    close; SQLite's recursive CTE is actually a touch faster than nDB's
+    traversal here. The one clear depth effect is <strong>MariaDB climbing
+    150→268 µs</strong> as each extra level pays another networked round of the
+    recursion. So join-<em>depth</em> isn't where nDB pulls ahead on this graph —
+    its wins are storage, indexed lookups, and concurrency. ¹nDB's recursion
+    guard rejected the depth-2 query (<code>RecursionDepthExceeded</code>) — a
+    real engine limitation, reported not hidden. <em>A sparse, high-fan-out
+    graph (where each hop multiplies the intermediate result) is the test that
+    would actually stress relational join-depth blow-up; that's a future
+    dataset, not this one.</em>
+  </p>
+
+  <h2>5 · Why the relational engines need more — the N-ary axis</h2>
   <p>
     An N-ary fact (a containment edge linking parent + child regions, a sale
     linking buyer + item) is <strong>one record</strong> in nDB. In SQL it's a

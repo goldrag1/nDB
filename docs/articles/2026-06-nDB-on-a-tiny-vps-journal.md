@@ -207,3 +207,19 @@ Parameterised the nDB bench builder (`NDB_BENCH_SCALE` env via LazyLock) to buil
 Published: `bench.html` now shows the 3-engine scaling curve + the concurrency caveat. Report is fully static (no live tools). Local artifacts (bench servers, `ndb_bench_cmp` DB) are dev-only.
 
 **Remaining for a future pass (stated on no false pretenses):** native-client MariaDB concurrency sweep; a single unified mean±95%CI harness across all engines (cross-basis embedded-vs-networked makes one-number-fits-all hard — current latency points are 500–4000-iter distributions, solid, but measured per engine's natural interface).
+
+## 2026-06-14 — N-pattern join (join-depth) sweep — honest, partly-negative result
+
+User: "two_pattern_join exists — what about n-pattern join?" Built a depth sweep (k=2..6) on the SAME containment topology across engines: parameterised nDB's recursion depth via `NDB_BENCH_RECDEPTH`; replicated nDB's exact index-edge formula into SQLite + MariaDB; ran a recursive CTE (distinct nodes, depth<k) timed many iters.
+
+Mean latency (µs) per depth:
+| k | nDB | SQLite | MariaDB |
+| 2 | guard-err¹ | 79 | 150 |
+| 3 | 95 | 56 | 152 |
+| 4 | 120 | 64 | 170 |
+| 5 | 97 | 66 | 209 |
+| 6 | 107 | 77 | 268 |
+
+**Honest finding (does NOT favour nDB):** this graph is dense → reachable set saturates by ~3 hops → cost is node-bounded, flat with depth for in-process engines. SQLite's CTE (~65µs) is a touch FASTER than nDB's traversal (~100µs). The only clear depth effect is MariaDB's networked per-level tax (150→268µs). ¹nDB's recursion engine REJECTED depth=2 with `RecursionDepthExceeded { depth:2, frontier_size:2 }` (and the bench server `unwrap()`s query errors → the connection thread panics) — a real limitation + a bench-robustness bug, both reported.
+
+**Conclusion published verbatim on the page:** join-depth is not where nDB wins on this dataset; its wins are storage + lookups + concurrency. The thesis (deep relational join blow-up) needs a SPARSE, high-fan-out graph where each hop multiplies the intermediate result — a future dataset, not this one. Did not manufacture a graph to make nDB win (that would be cherry-picking — the opposite of a serious study).

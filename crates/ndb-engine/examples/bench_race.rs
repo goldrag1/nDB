@@ -861,7 +861,13 @@ fn recursive_request(root: EntityId) -> QueryRequest {
                 },
             ],
             property_filters: vec![],
-            recursion: Some(Recursion::Plus { max_depth: 3 }),
+            recursion: Some(Recursion::Plus {
+                // Depth sweep for the n-pattern-join study (default 3).
+                max_depth: std::env::var("NDB_BENCH_RECDEPTH")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(3),
+            }),
         }],
         filter: None,
         returns: vec![ReturnItem::from("leaf")],
