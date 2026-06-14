@@ -236,3 +236,18 @@ User: "any other bench showing nDB strength? — all of them." Mapped 4 candidat
 3. **Co-located vector + filter** (capability gap): hybrid "vector-similar AND property=X" — nDB native kNN (HNSW) in one engine; SQLite/MariaDB 10.11 have no native vector → brute-force scan or a bolt-on store. Frame as capability + measure nDB hybrid latency vs a brute-force baseline.
 
 Each is a real build (versioned data + system-versioning DDL; a K-ary nDB loader; vector data + brute-force baseline) — to be run with the same rigor (≥ solid sample sizes, fair modelling, losses shown), not crammed.
+
+## 2026-06-14 — High-arity N-ary storage — GENUINE win, published
+
+Wrote `examples/arity_storage.rs` (build E entities + N facts of arity k). SQL side = the standard `fact_role(fact_id,role,entity_id)` association table (N×k rows). 50k facts / 10k entities, k=2..6:
+
+| k | nDB | SQLite | MariaDB | fact_role rows |
+| 2 | 5.1 | 21.7 | 28.6 | 100k |
+| 3 | 6.0 | 30.0 | 40.7 | 150k |
+| 4 | 7.0 | 38.3 | 52.7 | 200k |
+| 5 | 7.9 | 46.6 | 64.7 | 250k |
+| 6 | 8.9 | 54.9 | 74.8 | 300k |
+
+nDB +~1MB/role; SQLite +~8.3MB/role; MariaDB +~12MB/role. At k=6 nDB is 6.2× (SQLite) / 8.4× (MariaDB) smaller, and the gap WIDENS with arity. This IS a genuine nDB win (unlike schema-evolution / dense n-pattern) — the thesis made concrete. Fair-play note on the page: SQL ids are VARCHAR(36) (matching nDB UUIDs); integer keys would shrink absolutes, but the slope (N×k rows vs N records) is the durable, encoding-independent finding. Published as §6 with a line chart.
+
+Strength-bench scorecard so far: storage-scaling ✓ win · high-arity ✓ win · concurrency ✓ win · lookups ✓ win · schema-evolution ✗ modest · dense n-pattern ✗ modest. Remaining: time-travel (likely win), vector (capability).

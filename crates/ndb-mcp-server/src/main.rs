@@ -113,6 +113,23 @@ fn main() -> ExitCode {
         };
     }
 
+    // Network transport when --http is given; otherwise the stdio loop.
+    if let Some(addr) = http_addr {
+        let bearer_token = std::env::var("NDB_TOKEN").ok().filter(|t| !t.is_empty());
+        if bearer_token.is_some() {
+            eprintln!("ndb-mcp-server: bearer-token auth enabled for --http");
+        }
+        let opts = HttpOpts {
+            bearer_token,
+            cors_origin,
+        };
+        if let Err(e) = serve_http(&server, &addr, &opts) {
+            eprintln!("ndb-mcp-server: http server error: {e}");
+            return ExitCode::from(1);
+        }
+        return ExitCode::SUCCESS;
+    }
+
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     if let Err(e) = server.run_stdio(stdin.lock(), stdout.lock()) {

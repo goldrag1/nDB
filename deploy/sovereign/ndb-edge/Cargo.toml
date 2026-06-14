@@ -1,0 +1,32 @@
+# ndb-edge — a Pingora TLS edge for nDB.
+#
+# Standalone crate: the empty [workspace] table below detaches it from the
+# parent nDB workspace so building Pingora's heavy dependency tree never slows
+# down the main `cargo build`. Build it on the deploy box:
+#
+#   cd deploy/sovereign/ndb-edge && cargo build --release
+#
+# Needs a C toolchain + cmake + perl (BoringSSL build). On Ubuntu:
+#   sudo apt install -y build-essential cmake perl pkg-config
+[workspace]
+
+[package]
+name    = "ndb-edge"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[[bin]]
+name = "ndb-edge"
+path = "src/main.rs"
+
+[dependencies]
+# Pin to a known Pingora line. Verify the ProxyHttp / TlsSettings API against
+# whatever version resolves — Pingora's surface shifts between minor versions.
+pingora      = { version = "0.4", features = ["proxy", "rustls"] }
+async-trait  = "0.1"
+env_logger   = "0.11"
+
+[profile.release]
+lto           = "thin"
+codegen-units = 1
