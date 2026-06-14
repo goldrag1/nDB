@@ -309,9 +309,7 @@
 <script>
 // ─── Configuration ─────────────────────────────────────────────
 // The example seeds these so the page is self-describing.
-const API_URL = (location.hostname === "127.0.0.1" || location.hostname === "localhost")
-  ? "http://127.0.0.1:8742"   // local dev: cargo-run server
-  : location.origin;          // deployed: same-origin; /iter path-routed to the read-only server
+const API_URL = "http://127.0.0.1:8742";
 const DB_PATH = "/tmp/v22-explorer-ndb";
 
 // Reserved IDs from crates/ndb-renderer/examples/v22_explorer/main.rs.

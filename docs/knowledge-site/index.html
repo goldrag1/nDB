@@ -15,11 +15,12 @@
     <a href="/whitepaper.html">Whitepaper</a>
     <a href="/discussion.html">Discussion</a>
     <a href="/demos.html">Demos</a>
+    <a href="/studio/">Studio</a>
     <a href="/query-language.html">Query</a>
     <a href="/bench.html">Bench</a>
     <a href="/repo.html">Repo</a>
   </nav>
-  <div class="right">v2.3.0 · 488 tests</div>
+  <div class="right">v2.4.0 · 488 tests</div>
 </header>
 
 <main class="page">
@@ -38,7 +39,7 @@
       <a href="https://github.com/goldrag1/nDB" class="btn secondary" target="_blank" rel="noreferrer">GitHub</a>
     </div>
     <div class="meta">
-      Latest release · v2.3.0 (2026-05-28) · Rust · MIT · 8 crates · 488 tests passing
+      Latest release · v2.4.0 (2026-05-28) · Rust · MIT · 14 crates · 488 tests passing
     </div>
   </section>
 
@@ -124,7 +125,17 @@
 
     <div class="card">
       <a href="/demos.html" class="card-title">Demos →</a>
-      <p>Live, interactive demonstrations. Five so far: protein structures (alphafold_ndb), N-ary exoplanet discoveries (exoplanet_ndb), earthquake aftershock sequences (seismic_ndb), chemical reactions with living data via <code>/subscribe</code> (chemistry_ndb), and ecological interactions with temporal qualifiers (biodiv_ndb).</p>
+      <p>Live, interactive 3D explorers over real nDB instances: protein structures (<a href="/alphafold_ndb/">alphafold_ndb</a>), N-ary exoplanet discoveries (<a href="/exoplanet_ndb/">exoplanet_ndb</a>), and ecological interactions with temporal qualifiers (<a href="/biodiv_ndb/">biodiv_ndb</a>) — each reading a read-only nDB over the <code>/v1</code> wire protocol.</p>
+    </div>
+
+    <div class="card">
+      <a href="/studio/" class="card-title">Studio →</a>
+      <p>Open the database itself — a live, read-only web explorer over a real nDB: record-kinds as tables, N-ary hyperedge expansion, the query console, find-similar over vectors, and time-travel across the whole store. The engine linked into one binary.</p>
+    </div>
+
+    <div class="card">
+      <a href="/repo.html" class="card-title">Adopt it →</a>
+      <p>Installable, not just source. <code>npm i @n-dimension-database-ndb/client</code>, a Docker image, an MCP server for AI agents, and a Rust client/CLI — all speaking the <code>/v1</code> wire protocol. v2.4.0 adds sharding (router), follower replication, Arrow export, and Studio.</p>
     </div>
 
     <div class="card">
@@ -133,8 +144,8 @@
     </div>
 
     <div class="card">
-      <a href="/bench.html" class="card-title">Live race vs Postgres →</a>
-      <p>100k records loaded on both sides, same shape, same Linux host. Pick a workload, hit Race — both engines run it in parallel and the winner's card lights up. Honest split: nDB wins on lookups + recursion, Postgres wins on hash joins.</p>
+      <a href="/bench.html" class="card-title">Benchmarks vs Postgres &amp; SQLite →</a>
+      <p>100k records, same shape, same Linux host. Recorded race results across workloads: the honest split — nDB wins on lookups + recursion, Postgres wins on hash joins. Embedded nDB vs embedded SQLite isolates storage-engine quality from the networked-vs-embedded advantage.</p>
     </div>
 
     <div class="card">
