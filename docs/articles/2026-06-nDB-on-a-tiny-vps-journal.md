@@ -100,3 +100,19 @@ Deploy shape per domain: a read-only `ndb-server` (original DB) + a `python3 -m 
 Each is the original rich dataset (1624 / 163 / 168 entities) served read-only; writes 403; same-origin so no CORS; verified in-browser (0 errors beyond favicon). Total VPS footprint now: Studio + trio `/v1` + 3 API servers + 3 static servers = 8 cgroup-capped services, all tiny.
 
 ---
+
+## 2026-06-14 — Consolidate to one subdomain via the user's own `server.py`
+
+The user already had a complete gateway — `docs/knowledge-site/server.py` — that serves the marketing/docs site (homepage, whitepaper, bench, query) and reverse-proxies each demo at `/<demo>_ndb/` (static + `/api`), injects a feedback widget, and has a recorded-race aggregates endpoint. **Reuse it; don't reinvent.** (I had started a custom gateway — deleted it.) The earlier-built per-domain subdomains were the wrong shape for what the user wanted (one origin, paths).
+
+Adapted `server.py`: trimmed DEMOS to the 3 live ones with ports repointed to the deployed `ndb-srv-*`/`ndb-web-*` services; added `/v1/*` → trio read-only server (machine API on the main origin) and `/studio` → Studio. **Studio path-mount trick:** Studio's frontend calls `fetch("/api"+path)` in exactly two spots, so the gateway rewrites `"/api"` → `"/studio/api"` on the served HTML and routes `/studio/api/*` → `8780/api/*` — clean mount under a path, no recompile.
+
+Stood up a writable **feedback nDB** (`ndb-server` on :8744, no `--read-only`) + the **site gateway** (`server.py` on :9880) as cgroup-capped systemd units. Created the empty feedback DB with `ndb-studio --new` (4s + kill). Tested every path on `localhost:9880` first (all 200; `/studio/api/me` → `public_read:true`; explorer `/api/iter` returns data) — **only then** rewrote the tunnel ingress to a single `ndb.nextstar-erp.com → localhost:9880` rule and removed the 3 explorer-subdomain rules.
+
+**Tunnel-edit care:** the ingress rewrite is block-aware and preserves the unrelated tamdinh `path: ^/socket.io` rules (verified) — never clobber a shared tunnel's other tenants. After restart the public site served every path 200; homepage shows v2.4.0 / 14 crates / Studio in nav; the exoplanet explorer renders through `/exoplanet_ndb/` with its API same-origin; 0 console errors.
+
+**Honest gaps:** (1) `bench.html` ships but its live-race backends (PG + harness) aren't deployed and there are **no recorded results** to show — I refused to fabricate numbers; the aggregates table is empty until a one-time real nDB-vs-SQLite run is logged. (2) The orphaned `ndb-protein/exoplanet/biodiv.nextstar-erp.com` CNAMEs now fall through to the tunnel 404 (harmless; cleanup needs the CF dashboard). (3) Frontend stays static by decision — agent-friendliness comes from `llms.txt` + the MCP/`/v1` interfaces, not a SPA.
+
+**Live, one origin:** `https://ndb.nextstar-erp.com` → homepage · `/whitepaper.html` · `/bench.html` · `/query-language.html` · `/alphafold_ndb/` · `/exoplanet_ndb/` · `/biodiv_ndb/` · `/studio/` · `/v1/*` · `/llms.txt`. Footprint: 10 cgroup-capped services (gateway + feedback + studio + trio + 3 API + 3 static), all tiny next to Frappe.
+
+---
