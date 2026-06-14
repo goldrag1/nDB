@@ -331,6 +331,55 @@
     <li><strong>Dense-graph deep traversal:</strong> when the reachable set saturates, in-process SQLite matches or beats nDB.</li>
   </ul>
 
+  <h2>Where nDB fits — by application &amp; industry</h2>
+  <p class="cap">Each fit below is justified by a measured result above, not a
+    slogan. nDB shines when several of its wins compound — N-ary relationships +
+    time-travel + co-located vectors + concurrent reads, all embedded in one
+    binary.</p>
+  <table>
+    <thead><tr><th>Application</th><th>Why nDB (evidence)</th><th>Industries</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Knowledge graphs &amp; scientific data</strong></td>
+        <td>N-ary facts as one record + high-arity storage win + co-located vectors for similarity. (§1, §6, §8)</td>
+        <td>Pharma / drug discovery, genomics, cheminformatics, scholarly/citation, materials, biodiversity</td>
+      </tr>
+      <tr>
+        <td><strong>Audit, provenance &amp; compliance</strong></td>
+        <td>Native time-travel: "what did this look like at time T", who-changed-what, append-only — 9–154× faster as-of reads, free. (§7)</td>
+        <td>Finance/regtech, healthcare records, legal/contracts, supply-chain provenance, government</td>
+      </tr>
+      <tr>
+        <td><strong>Fraud, risk &amp; AML graphs</strong></td>
+        <td>An event links payer+payee+device+merchant+time as one N-ary fact; fast indexed lookups + concurrent analyst reads + entity-similarity vectors. (§2, §3, §6, §8)</td>
+        <td>Banking, payments, insurance, marketplaces</td>
+      </tr>
+      <tr>
+        <td><strong>AI-agent memory &amp; RAG backends</strong></td>
+        <td>Heterogeneous facts + vectors + time-travel ("what did the agent know at step T") in one embedded store with a built-in MCP server — no separate vector DB + SQL + audit log. (§7, §8)</td>
+        <td>AI products, agent platforms, internal copilots</td>
+      </tr>
+      <tr>
+        <td><strong>360° entity / relationship views</strong></td>
+        <td>Sub-µs point + indexed lookups, high concurrency, N-ary relationships without junction-table sprawl. (§2, §3, §6)</td>
+        <td>CRM, identity/IAM, customer-data platforms, social</td>
+      </tr>
+      <tr>
+        <td><strong>Digital twins, asset &amp; network graphs</strong></td>
+        <td>N-ary asset↔sensor↔event relationships + time-travel state history + concurrent reads, embeddable at the edge. (§3, §6, §7)</td>
+        <td>Manufacturing/IIoT, telecom inventory, energy/utilities, logistics</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="cap"><strong>Less ideal for</strong> (per the not-wins above): heavy
+    analytical/OLAP with big hash-joins and aggregations (use a columnar
+    warehouse); high-contention transactional OLTP with rich constraints (a
+    mature RDBMS); plain 2-D tabular CRUD (SQLite/Postgres is simpler); and
+    massive-scale ANN serving (a dedicated vector DB). nDB's sweet spot is
+    <em>relationship-rich, version-aware, mixed-modality data read concurrently
+    from an embedded engine</em> — not a drop-in for a data warehouse or a
+    pure vector store.</p>
+
   <p class="cap">Reproduce: the bench servers are
     <code>cargo run --release --example bench_race -p ndb-engine</code> (nDB) and
     <code>cargo run --release -p bench-race-sqlite-rust</code> (SQLite); the
