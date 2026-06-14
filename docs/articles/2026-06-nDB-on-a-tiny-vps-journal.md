@@ -154,3 +154,18 @@ Honest split: **nDB wins indexed lookups, aggregates, and recursion — decisive
 3. **Storage scaling curve:** rebuild both engines at 10k / 100k / 1M / 10M N-ary facts; plot bytes/fact for nDB vs SQLite (normalized) → show the junction-table overhead growing. Add a chart to the page.
 4. **N-ary join-depth study (nDB's thesis):** a workload family where answering needs k-way relationships (k=2..6). SQL = k junction joins; nDB = k adjacency hops. Plot latency vs k for both → the "many table links" cost curve. (The existing `two_pattern_join` / `recursive_contains_depth3` are the seeds.)
 5. **Publish** via the VPS localhost `/api/race/log` (public POST is Cloudflare-403'd); validate the report page renders the stats + charts; 0 console errors.
+
+## 2026-06-14 — Locked plan v2: serious 3-engine study (nDB vs SQLite vs MariaDB)
+
+User: serious proper study (not a tweak), compare with SQLite **and MariaDB**, then publish. Feasibility confirmed: **MariaDB 10.11 already on the VPS** (Frappe), and `/home/long/long/rust/python/pg_bench.py` is a ready template (same workload phases + JSONL output) to adapt into a MariaDB harness. To be run as a FRESH focused session (rigor is the point; not to be crammed into exhausted context).
+
+**Engines (all in-process-fair where possible):** nDB (`examples/bench_race`, :8771) · SQLite-Rust (`race-sqlite-rust`, :8774) · **MariaDB** (new harness, :8775) — server.py `BENCH_BACKENDS` already reserves `/bench/*` slots; add `/bench/mariadb`.
+
+**Deliverables:**
+1. **MariaDB bench harness** — adapt `pg_bench.py` (or a Rust `mysql`/`mariadb` crate harness) to the SAME 100k region/customer/sales/contains schema with junction tables; implement point_lookup, property_lookup, single_pattern_query, two_pattern_join, recursive_contains_depthK, count_aggregate, iter_all; expose `/health /workloads /run/<name> /stress`. Use a dedicated bench DB/user (NOT Frappe's).
+2. **Statistical rigor** — dedicated runner, ≥30 samples/workload/mode on a quiet host (run benches LOCAL, not on the Frappe VPS, to avoid contention), discard warmup; report mean ± stddev, p50/p95/p99, 95% CI. Persist per-sample so CI is recomputable. Extend the aggregates view to carry stddev/CI.
+3. **Storage-scaling study** — build all 3 engines at 10k / 100k / 1M (and 10M if disk allows) N-ary facts; measure bytes/fact (nDB LSM **compacted**, SQLite VACUUMed, MariaDB InnoDB `information_schema` size). Plot the junction-table overhead curve. (Baseline already: nDB 8.0 MB vs SQLite 14.6 MB at 50k+50k.)
+4. **N-ary join-depth study (the thesis)** — workload family needing k-way relationships (k=2..6): SQL/MariaDB pay k junction joins, nDB pays k adjacency hops. Plot latency + rows-scanned vs k for all 3. This quantifies "traditional DB needs many table links."
+5. **Publish as a report** — strip live UI from `bench.html` (1485 lines; live controls + recorded tables interleaved — careful surgery), retitle "Benchmark report", render stats tables + simple CSS/SVG charts (no chart-lib), 3-engine columns. Log via VPS localhost `/api/race/log` (public POST is CF-403'd). Add a methodology section (hardware, versions, sample sizes, caveats — embedded vs networked: SQLite/nDB in-process, MariaDB over a socket → note the architectural axis honestly).
+
+**Methodology honesty:** controlled (1-thread latency) AND stress (concurrency throughput); embedded (nDB, SQLite) vs networked (MariaDB) is a real axis — report it, don't hide it. Don't fabricate; publish losses too.
