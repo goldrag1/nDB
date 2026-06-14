@@ -3,193 +3,196 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>nDB — Evolving Brains (neuro-evolution showcase)</title>
+<title>nDB — Evolving Ecosystem (artificial life)</title>
 <style>
   :root{--bg:#0a0a10;--panel:#14141c;--line:#23232e;--text:#e8e8ec;--muted:#8b8b99;
-        --in:#65CBF3;--bias:#8b8b99;--hidden:#6ee7a8;--out:#f5a623;--pos:#6ee7a8;--neg:#f06b6b;--accent:#6ee7a8;}
+        --plant:#4fae5a;--herb:#65CBF3;--pred:#f5a623;--hidden:#6ee7a8;--accent:#6ee7a8;--neg:#f06b6b;}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-  .wrap{max-width:1000px;margin:0 auto;padding:28px 18px 64px}
+  .wrap{max-width:1020px;margin:0 auto;padding:28px 18px 64px}
   h1{font-size:24px;margin:0 0 4px}
-  .sub{color:var(--muted);font-size:13px;margin:0 0 18px}
-  .lede{color:#c7c7d2;font-size:14px;max-width:78ch}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0}
-  @media(max-width:760px){.grid{grid-template-columns:1fr}}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 16px}
+  .lede{color:#c7c7d2;font-size:14px;max-width:80ch}
+  .grid{display:grid;grid-template-columns:460px 1fr;gap:16px;margin:18px 0}
+  @media(max-width:820px){.grid{grid-template-columns:1fr}}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
   .panel h2{font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+  canvas{width:100%;height:auto;display:block;background:#0c130d;border-radius:8px;image-rendering:pixelated}
   svg{width:100%;height:auto;display:block}
-  .stats{display:flex;gap:22px;flex-wrap:wrap;margin:6px 0 0}
-  .stat b{display:block;font-size:22px;font-family:ui-monospace,Menlo,monospace;color:var(--accent);line-height:1.1}
+  .stats{display:flex;gap:20px;flex-wrap:wrap;margin:10px 0 0}
+  .stat b{display:block;font-size:21px;font-family:ui-monospace,Menlo,monospace;line-height:1.1}
   .stat span{font-size:11.5px;color:var(--muted)}
-  .controls{display:flex;align-items:center;gap:12px;margin:8px 0 0}
+  .controls{display:flex;align-items:center;gap:12px;margin:6px 0 0}
   .controls input[type=range]{flex:1;accent-color:var(--accent)}
   button{background:#1d2b22;color:var(--accent);border:1px solid #2c4636;border-radius:7px;padding:7px 14px;font-size:13px;cursor:pointer}
   button:hover{background:#244231}
   .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin-top:8px}
   .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle}
   code{background:#1c1c26;padding:1px 5px;border-radius:4px;font-size:12.5px}
-  .foot{color:var(--muted);font-size:12.5px;margin-top:26px;border-top:1px solid var(--line);padding-top:14px}
+  .foot{color:var(--muted);font-size:12.5px;margin-top:24px;border-top:1px solid var(--line);padding-top:14px}
   a{color:var(--accent)}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>Evolving Brains <span style="color:var(--muted);font-weight:400">· an nDB showcase</span></h1>
-  <p class="sub">Watch creatures evolve from a 3-synapse reflex into a brain that solves XOR — then time-travel through every generation.</p>
+  <h1>Evolving Ecosystem <span style="color:var(--muted);font-weight:400">· an nDB showcase</span></h1>
+  <p class="sub">Many creatures, two species, one world — competing to survive. No fitness function: whoever eats and breeds, wins.</p>
   <p class="lede">
-    Each creature is a small neural network. Mutations <em>grow its topology</em>
-    (add a neuron, add a synapse, perturb a weight), so a creature's
-    <strong>intelligence — its neuron + synapse count</strong> — increases as it
-    gets better at the task. Every generation's champion brain is stored in nDB
-    as <strong>N-ary facts</strong>: a synapse is one
-    <code>hyper_edge</code> linking <code>pre → post</code> with a weight; the
-    champions form a <strong>lineage</strong>; and because nDB is MVCC, the whole
-    run is a <strong>time-travelable history</strong> — which is exactly what the
-    slider below reads back.
+    A living 2D world of regrowing <span style="color:var(--plant)">plants</span>,
+    <span style="color:var(--herb)">herbivores</span> that eat them and flee, and
+    <span style="color:var(--pred)">predators</span> that hunt herbivores. Each
+    creature has a neural-net <strong>brain</strong> (variable topology =
+    <em>intelligence</em>) wiring senses → motion; moving and <em>thinking</em>
+    burn energy, eating restores it, starving kills. Survivors breed with
+    mutated brains — so selection is <strong>emergent</strong>: populations boom
+    and bust, and brains get smarter where it pays. The whole run is recorded in
+    nDB (creatures, N-ary synapses, lineage, census) and is
+    <strong>time-travelable</strong> — drag the slider.
   </p>
 
   <div class="grid">
     <div class="panel">
-      <h2>Intelligence over generations</h2>
-      <svg id="chart" viewBox="0 0 520 240"></svg>
+      <h2>The world — tick <span id="tick">0</span></h2>
+      <canvas id="world" width="448" height="448"></canvas>
+      <div class="stats">
+        <div class="stat"><b id="sHerb" style="color:var(--herb)">–</b><span>herbivores</span></div>
+        <div class="stat"><b id="sPred" style="color:var(--pred)">–</b><span>predators</span></div>
+        <div class="stat"><b id="sPlant" style="color:var(--plant)">–</b><span>plants</span></div>
+      </div>
       <div class="legend">
-        <span><i class="dot" style="background:var(--out)"></i>fitness (0–4, 4 = XOR solved)</span>
-        <span><i class="dot" style="background:var(--hidden)"></i>neurons</span>
-        <span><i class="dot" style="background:var(--in)"></i>synapses</span>
+        <span><i class="dot" style="background:var(--plant)"></i>plant</span>
+        <span><i class="dot" style="background:var(--herb)"></i>herbivore</span>
+        <span><i class="dot" style="background:var(--pred)"></i>predator (brighter = more energy)</span>
       </div>
     </div>
     <div class="panel">
-      <h2>Champion brain — generation <span id="genLabel">0</span></h2>
-      <svg id="brain" viewBox="0 0 460 300"></svg>
-      <div class="stats">
-        <div class="stat"><b id="sFit">–</b><span>fitness</span></div>
-        <div class="stat"><b id="sNeur">–</b><span>neurons</span></div>
-        <div class="stat"><b id="sSyn">–</b><span>synapses</span></div>
-      </div>
+      <h2>Population over time (boom &amp; bust)</h2>
+      <svg id="pop" viewBox="0 0 500 200"></svg>
       <div class="legend">
-        <span><i class="dot" style="background:var(--in)"></i>input</span>
-        <span><i class="dot" style="background:var(--bias)"></i>bias</span>
-        <span><i class="dot" style="background:var(--hidden)"></i>hidden</span>
-        <span><i class="dot" style="background:var(--out)"></i>output</span>
-        <span><i class="dot" style="background:var(--pos)"></i>+weight</span>
-        <span><i class="dot" style="background:var(--neg)"></i>−weight</span>
+        <span><i class="dot" style="background:var(--herb)"></i>herbivores</span>
+        <span><i class="dot" style="background:var(--pred)"></i>predators</span>
+        <span>· dashed line = current tick</span>
+      </div>
+      <h2 style="margin-top:16px">Smartest herbivore brain @ this era</h2>
+      <svg id="brain" viewBox="0 0 460 220"></svg>
+      <div class="stats">
+        <div class="stat"><b id="bNeur" style="color:var(--hidden)">–</b><span>neurons</span></div>
+        <div class="stat"><b id="bSyn" style="color:var(--herb)">–</b><span>synapses</span></div>
+        <div class="stat"><b id="bAvg" style="color:var(--accent)">–</b><span>avg synapses (herbivores)</span></div>
       </div>
     </div>
   </div>
 
   <div class="panel">
     <div class="controls">
-      <button id="play">▶ Play evolution</button>
+      <button id="play">▶ Play</button>
       <input id="slider" type="range" min="0" max="0" value="0">
-      <span id="genText" style="color:var(--muted);font-size:13px;min-width:7ch"></span>
+      <span id="tlabel" style="color:var(--muted);font-size:13px;min-width:9ch"></span>
     </div>
   </div>
 
   <p class="foot">
-    A real nDB evolution run (deterministic, reproducible), exported for this
-    static view. The same data lives in nDB as Creatures (type 50), Neurons
-    (type 51), N-ary Synapse <code>hyper_edge</code>s (type 150, roles pre/post)
-    and Lineage edges (type 151) — queryable over <code>/v1</code> and the MCP
-    tools, time-travelable via MVCC. Generator + model:
-    <code>deploy/sovereign/neuroevo/evolve.py</code>.
+    A real artificial-life run (deterministic), recorded into nDB and exported for
+    this replay. In nDB it's Creatures (type 50), Neurons (51), N-ary Synapse
+    <code>hyper_edge</code>s (150, roles pre/post + weight), champion Lineage
+    edges (151) and a Census time-series (53) — queryable over <code>/v1</code>
+    and the MCP tools, time-travelable via MVCC. Sim + model:
+    <code>deploy/sovereign/neuroevo/ecosystem.py</code>. The per-tick neural
+    compute runs in RAM (a database is not an inference engine); nDB is the
+    evolutionary historian.
   </p>
 </div>
 
 <script>
-let HIST = [];
-const $ = id => document.getElementById(id);
-const KCOL = {in:'#65CBF3', bias:'#8b8b99', hidden:'#6ee7a8', out:'#f5a623'};
+let D=null, FR=[], CEN=[], BRA=[];
+const $=id=>document.getElementById(id);
+const KCOL={in:'#65CBF3',bias:'#8b8b99',hidden:'#6ee7a8',out:'#f5a623'};
 
-function nodeDepth(snap){
-  // longest-path depth from sources; output pinned to the far right column.
-  const inc = {}; snap.nodes.forEach(n=>inc[n.id]=[]);
-  snap.conns.forEach(c=>inc[c.dst]&&inc[c.dst].push(c.src));
-  const kind = {}; snap.nodes.forEach(n=>kind[n.id]=n.kind);
-  const depth = {}; const order = snap.nodes.map(n=>n.id).sort((a,b)=>a-b);
-  let maxd = 0;
-  order.forEach(id=>{
-    if(kind[id]==='in'||kind[id]==='bias'){depth[id]=0;}
-    else{depth[id]=Math.max(0,...inc[id].map(s=>(depth[s]??0)+1)); }
-    maxd=Math.max(maxd,depth[id]);
-  });
-  // pin outputs to the last column
-  snap.nodes.forEach(n=>{ if(n.kind==='out') depth[n.id]=maxd; });
-  return {depth, maxd};
+// ---- world canvas ----
+function drawWorld(fr){
+  const cv=$('world'), g=cv.getContext('2d'), W=D.world.w, H=D.world.h;
+  const s=cv.width/W;
+  g.fillStyle='#0c130d'; g.fillRect(0,0,cv.width,cv.height);
+  g.fillStyle='#4fae5a';
+  for(const p of fr.p){ g.fillRect(p[0]*s-1, p[1]*s-1, 3, 3); }
+  for(const c of fr.c){
+    const [x,y,sp,e]=c;
+    const energy=Math.max(0.25,Math.min(1,e/70));
+    if(sp===0){ g.fillStyle='rgba(101,203,243,'+energy+')'; }
+    else      { g.fillStyle='rgba(245,166,35,'+energy+')'; }
+    const r=sp===1?4.2:3.2;
+    g.beginPath(); g.arc(x*s,y*s,r,0,6.283); g.fill();
+  }
 }
 
-function drawBrain(snap){
-  const W=460,H=300,pad=34;
-  const {depth,maxd}=nodeDepth(snap);
-  const cols={}; snap.nodes.forEach(n=>{(cols[depth[n.id]]=cols[depth[n.id]]||[]).push(n.id);});
+// ---- population chart ----
+function drawPop(curTick){
+  const W=500,H=200,pad=26,n=CEN.length;
+  const step=Math.max(1,Math.floor(n/240));
+  const pts=[]; for(let i=0;i<n;i+=step) pts.push(CEN[i]);
+  const maxP=Math.max(...pts.map(r=>Math.max(r[1],r[2])),1);
+  const X=t=>pad+(t/(CEN[n-1][0]||1))*(W-2*pad);
+  const Y=v=>H-pad-(v/maxP)*(H-2*pad);
+  const line=idx=>pts.map((r,i)=>`${i?'L':'M'}${X(r[0]).toFixed(1)} ${Y(r[idx]).toFixed(1)}`).join(' ');
+  let s=`<line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="#23232e"/>`;
+  s+=`<path d="${line(1)}" fill="none" stroke="#65CBF3" stroke-width="1.6"/>`;
+  s+=`<path d="${line(2)}" fill="none" stroke="#f5a623" stroke-width="1.6"/>`;
+  s+=`<line x1="${X(curTick)}" y1="${pad-6}" x2="${X(curTick)}" y2="${H-pad}" stroke="#e8e8ec" stroke-width="1" opacity="0.55" stroke-dasharray="3 3"/>`;
+  s+=`<text x="${pad}" y="14" fill="#8b8b99" font-size="11">peak ${maxP} · tick 0…${CEN[n-1][0]}</text>`;
+  $('pop').innerHTML=s;
+}
+
+// ---- brain graph (reused) ----
+function brainAt(tick){
+  let b=null; for(const x of BRA){ if(x.species===0 && x.epoch<=tick) b=x; } return b||BRA.find(x=>x.species===0);
+}
+function drawBrain(b){
+  if(!b){$('brain').innerHTML='';return;}
+  const W=460,H=220,pad=24;
+  const inc={}; b.nodes.forEach(n=>inc[n.id]=[]); b.conns.forEach(c=>inc[c.dst]&&inc[c.dst].push(c.src));
+  const kind={}; b.nodes.forEach(n=>kind[n.id]=n.kind);
+  const depth={}; let maxd=0;
+  b.nodes.map(n=>n.id).sort((a,b)=>a-b).forEach(id=>{
+    depth[id]=(kind[id]==='in')?0:Math.max(0,...inc[id].map(s=>(depth[s]??0)+1)); maxd=Math.max(maxd,depth[id]);
+  });
+  b.nodes.forEach(n=>{ if(n.kind==='out') depth[n.id]=maxd; });
+  const cols={}; b.nodes.forEach(n=>{(cols[depth[n.id]]=cols[depth[n.id]]||[]).push(n.id);});
   const pos={};
-  Object.keys(cols).forEach(d=>{
-    const ids=cols[d]; const x=pad+(maxd? (d/maxd):0)*(W-2*pad);
-    ids.forEach((id,i)=>{ const y=pad+(ids.length===1?0.5:i/(ids.length-1))*(H-2*pad); pos[id]={x,y};});
-  });
+  Object.keys(cols).forEach(d=>{const ids=cols[d];const x=pad+(maxd?d/maxd:0)*(W-2*pad);
+    ids.forEach((id,i)=>{pos[id]={x,y:pad+(ids.length===1?0.5:i/(ids.length-1))*(H-2*pad)};});});
   let s='';
-  // edges
-  snap.conns.forEach(c=>{
-    const a=pos[c.src],b=pos[c.dst]; if(!a||!b)return;
-    const col=c.w>=0?'#6ee7a8':'#f06b6b'; const wdt=Math.min(4,0.4+Math.abs(c.w)*0.5);
-    s+=`<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="${col}" stroke-width="${wdt}" opacity="0.6"/>`;
-  });
-  // nodes
-  snap.nodes.forEach(n=>{
-    const p=pos[n.id]; s+=`<circle cx="${p.x}" cy="${p.y}" r="9" fill="${KCOL[n.kind]}" stroke="#0a0a10" stroke-width="2"/>`;
-  });
+  b.conns.forEach(c=>{const a=pos[c.src],z=pos[c.dst];if(!a||!z)return;
+    s+=`<line x1="${a.x}" y1="${a.y}" x2="${z.x}" y2="${z.y}" stroke="${c.w>=0?'#6ee7a8':'#f06b6b'}" stroke-width="${Math.min(3.5,0.4+Math.abs(c.w)*0.5)}" opacity="0.55"/>`;});
+  b.nodes.forEach(n=>{const p=pos[n.id];s+=`<circle cx="${p.x}" cy="${p.y}" r="7" fill="${KCOL[n.kind]}" stroke="#0a0a10" stroke-width="2"/>`;});
   $('brain').innerHTML=s;
 }
 
-function drawChart(idx){
-  const W=520,H=240,pad=30; const n=HIST.length;
-  const maxN=Math.max(...HIST.map(s=>s.neuron_count));
-  const maxS=Math.max(...HIST.map(s=>s.synapse_count));
-  const X=i=>pad+(n<=1?0:i/(n-1))*(W-2*pad);
-  const Yf=v=>H-pad-(v/4)*(H-2*pad);
-  const Yn=v=>H-pad-(v/maxN)*(H-2*pad);
-  const Ys=v=>H-pad-(v/maxS)*(H-2*pad);
-  const path=(yf)=>HIST.map((s,i)=>`${i?'L':'M'}${X(i).toFixed(1)} ${yf(s).toFixed(1)}`).join(' ');
-  let s='';
-  // axes
-  s+=`<line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="#23232e"/>`;
-  s+=`<line x1="${pad}" y1="${pad}" x2="${pad}" y2="${H-pad}" stroke="#23232e"/>`;
-  s+=`<path d="${path(s2=>Yn(s2.neuron_count))}" fill="none" stroke="#6ee7a8" stroke-width="1.5" opacity="0.85"/>`;
-  s+=`<path d="${path(s2=>Ys(s2.synapse_count))}" fill="none" stroke="#65CBF3" stroke-width="1.5" opacity="0.85"/>`;
-  s+=`<path d="${path(s2=>Yf(s2.fitness))}" fill="none" stroke="#f5a623" stroke-width="2"/>`;
-  // generation marker
-  s+=`<line x1="${X(idx)}" y1="${pad}" x2="${X(idx)}" y2="${H-pad}" stroke="#e8e8ec" stroke-width="1" opacity="0.5" stroke-dasharray="3 3"/>`;
-  s+=`<text x="${pad}" y="14" fill="#8b8b99" font-size="11">gen 0 … ${n-1}  ·  fitness top = 4.0</text>`;
-  $('chart').innerHTML=s;
-}
-
 function show(i){
-  const snap=HIST[i];
-  $('genLabel').textContent=snap.generation;
-  $('genText').textContent='gen '+snap.generation;
-  $('sFit').textContent=snap.fitness.toFixed(2);
-  $('sNeur').textContent=snap.neuron_count;
-  $('sSyn').textContent=snap.synapse_count;
-  drawBrain(snap); drawChart(i);
+  const fr=FR[i]; if(!fr)return;
+  drawWorld(fr); drawPop(fr.t);
+  $('tick').textContent=fr.t; $('tlabel').textContent='tick '+fr.t;
+  let herb=0,pred=0; for(const c of fr.c){ if(c[2]===0)herb++; else pred++; }
+  $('sHerb').textContent=herb; $('sPred').textContent=pred; $('sPlant').textContent=fr.p.length;
+  const b=brainAt(fr.t); drawBrain(b);
+  if(b){ $('bNeur').textContent=b.neuron_count; $('bSyn').textContent=b.synapse_count; $('bAvg').textContent=(b.avg_synapses||0).toFixed(1); }
 }
 
 let timer=null;
 function play(){
-  if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ Play evolution';return;}
+  if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ Play';return;}
   $('play').textContent='⏸ Pause';
-  let i=+$('slider').value; if(i>=HIST.length-1)i=0;
-  timer=setInterval(()=>{
-    if(i>=HIST.length-1){clearInterval(timer);timer=null;$('play').textContent='▶ Play evolution';return;}
-    i++; $('slider').value=i; show(i);
-  },140);
+  let i=+$('slider').value; if(i>=FR.length-1)i=0;
+  timer=setInterval(()=>{ if(i>=FR.length-1){clearInterval(timer);timer=null;$('play').textContent='▶ Play';return;}
+    i++; $('slider').value=i; show(i); }, 90);
 }
 
 fetch('neuroevo.json').then(r=>r.json()).then(d=>{
-  HIST=d.history;
-  const sl=$('slider'); sl.max=HIST.length-1; sl.value=HIST.length-1;
-  sl.addEventListener('input',()=>{if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ Play evolution';} show(+sl.value);});
+  D=d; FR=d.frames; CEN=d.census; BRA=d.brains;
+  const sl=$('slider'); sl.max=FR.length-1; sl.value=0;
+  sl.addEventListener('input',()=>{if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ Play';} show(+sl.value);});
   $('play').addEventListener('click',play);
-  show(HIST.length-1);
-}).catch(e=>{ $('chart').innerHTML='<text x="10" y="20" fill="#f06b6b">failed to load neuroevo.json: '+e+'</text>'; });
+  show(0); play();
+}).catch(e=>{ $('pop').innerHTML='<text x="10" y="20" fill="#f06b6b">failed to load neuroevo.json: '+e+'</text>'; });
 </script>
 </body>
 </html>
