@@ -37,6 +37,11 @@ fn usage() {
            --http <addr>      Streamable HTTP MCP on <addr> (e.g. 127.0.0.1:9000):\n\
                               POST /mcp (JSON-RPC), GET /health. Plain HTTP — front\n\
                               it with a TLS proxy (Pingora), or add --tls-* below.\n\
+           --v1-bind <addr>   Also serve the /v1 data API on <addr> (e.g. 127.0.0.1:8742)\n\
+                              from the SAME engine — a write via /mcp is instantly\n\
+                              readable via /v1. Requires --http. With NDB_TOKEN, /v1 is\n\
+                              fully locked; with only NDB_WRITE_TOKEN, /v1 is read-only\n\
+                              (writes go through /mcp); with neither, /v1 is open.\n\
            --tls-cert <path>  PEM cert chain; with --tls-key, --http serves HTTPS\n\
            --tls-key <path>   PEM private key (PKCS#8/PKCS#1/SEC1) — pairs with --tls-cert\n\
            --cors-origin <o>  Emit Access-Control-Allow-Origin: <o> (browser agents).\n\
@@ -53,6 +58,7 @@ fn main() -> ExitCode {
     let mut path: Option<String> = None;
     let mut audit = false;
     let mut http_addr: Option<String> = None;
+    let mut v1_addr: Option<String> = None;
     let mut cors_origin: Option<String> = None;
     let mut tls_cert: Option<String> = None;
     let mut tls_key: Option<String> = None;
@@ -61,6 +67,7 @@ fn main() -> ExitCode {
             "--path" | "-p" => path = args.next(),
             "--audit" => audit = true,
             "--http" => http_addr = args.next(),
+            "--v1-bind" => v1_addr = args.next(),
             "--cors-origin" => cors_origin = args.next(),
             "--tls-cert" => tls_cert = args.next(),
             "--tls-key" => tls_key = args.next(),
@@ -135,6 +142,11 @@ fn main() -> ExitCode {
         }
     }
 
+    if v1_addr.is_some() && http_addr.is_none() {
+        eprintln!("--v1-bind requires --http (the unified launch serves both surfaces)");
+        return ExitCode::from(2);
+    }
+
     // Network transport when --http is given; otherwise the stdio loop.
     if let Some(addr) = http_addr {
         let bearer_token = std::env::var("NDB_TOKEN").ok().filter(|t| !t.is_empty());
@@ -144,6 +156,32 @@ fn main() -> ExitCode {
         } else if write_token.is_some() {
             eprintln!("ndb-mcp-server: reads open, write tools require NDB_WRITE_TOKEN");
         }
+
+        // Unified launch: serve the /v1 data API from the SAME engine handle on
+        // a second thread, so a /mcp write is instantly readable via /v1 (one
+        // engine, two surfaces, one process). The v1 server gets a clone of the
+        // shared Arc<RwLock<Engine>> — single-writer is preserved by the lock.
+        if let Some(v1) = v1_addr {
+            let shared = server.engine();
+            let mut v1srv = ndb_server::Server::from_shared(shared);
+            // Auth parity: full lockdown mirrors /mcp's NDB_TOKEN; with only a
+            // write token, /v1 becomes the read surface (writes via /mcp).
+            if let Some(tok) = &bearer_token {
+                v1srv = v1srv.with_auth_token(tok.clone());
+            } else if write_token.is_some() {
+                v1srv = v1srv.with_read_only(true);
+            }
+            if let Some(origin) = &cors_origin {
+                v1srv = v1srv.with_cors_origin(origin.clone());
+            }
+            eprintln!("ndb-mcp-server: also serving /v1 on http://{v1} (shared engine)");
+            std::thread::spawn(move || {
+                if let Err(e) = v1srv.run(&v1) {
+                    eprintln!("ndb-mcp-server: /v1 server error: {e}");
+                }
+            });
+        }
+
         let opts = HttpOpts {
             bearer_token,
             write_token,

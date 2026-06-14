@@ -29,6 +29,27 @@ TLS stops at Pingora; both upstreams are plain HTTP on `127.0.0.1`. One shared
 bearer token (`NDB_TOKEN`) gates `/v1` and `POST /mcp`; `/health` stays open for
 liveness probes.
 
+### Unified single-engine launch (recommended)
+
+The two upstreams above can be **separate processes over separate databases** —
+in which case a write via `/mcp` is *not* visible via `/v1`. To serve both
+surfaces from **one engine in one process**, run `ndb-mcp-server` with both
+`--http` and `--v1-bind`:
+
+```bash
+ndb-mcp-server --path /var/lib/ndb/data \
+  --http 127.0.0.1:9000 \
+  --v1-bind 127.0.0.1:8742
+```
+
+Now `/mcp` and `/v1` share a single `Arc<RwLock<Engine>>` (single-writer
+preserved by the lock): a `tools/call ndb.commit_entity` over `/mcp` is
+instantly readable via `GET /v1/read/:uuid`. Auth parity follows the env: with
+`NDB_TOKEN` both surfaces are fully locked; with only `NDB_WRITE_TOKEN`, `/v1`
+is read-only (writes go through `/mcp`); with neither, `/v1` is open. The
+`mcp_write_is_instantly_readable_via_v1_on_one_engine` integration test is the
+gate.
+
 ## What's in this directory
 
 | Path | What |

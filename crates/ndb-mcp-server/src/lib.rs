@@ -249,8 +249,18 @@ impl McpServer {
     /// Wrap an existing engine — useful for tests.
     #[must_use]
     pub fn from_engine(engine: Engine) -> Self {
+        Self::from_shared(Arc::new(RwLock::new(engine)))
+    }
+
+    /// Build an MCP server over an **already-shared** engine handle. The caller
+    /// keeps a clone of the same `Arc<RwLock<Engine>>`, so a write committed
+    /// here is immediately visible to any other surface built on that handle
+    /// (e.g. a v1 [`ndb_server::Server::from_shared`]) — the basis of the
+    /// single-engine, dual-surface (`/v1` + `/mcp`) unified launch.
+    #[must_use]
+    pub fn from_shared(engine: Arc<RwLock<Engine>>) -> Self {
         Self {
-            engine: Arc::new(RwLock::new(engine)),
+            engine,
             principal: None,
             audit: None,
         }
