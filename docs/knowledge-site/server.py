@@ -68,25 +68,28 @@ SITE_ROOT = Path(__file__).resolve().parent
 # Each demo gets a (static-port, api-port, url-prefix) triple. The Python
 # dispatcher iterates DEMOS to route requests. Adding a new demo is a
 # single dict entry here + a launcher entry + a narrative page.
+# Ports here match the deployed read-only API servers (ndb-srv-*) and static
+# servers (ndb-web-*) on the VPS. Three demos are live.
 DEMOS = [
-    {"prefix": "/alphafold_ndb",  "static": "http://127.0.0.1:9876", "api": "http://127.0.0.1:8742",
+    {"prefix": "/alphafold_ndb",  "static": "http://127.0.0.1:9101", "api": "http://127.0.0.1:8743",
+     # docs/explorer hardcodes API_URL="http://127.0.0.1:8742"; rewrite it to
+     # same-origin so the browser stays on this host.
      "html_api_rewrite_from": b'"http://127.0.0.1:8742"',
      "html_api_rewrite_to":   b'(window.location.origin + "/alphafold_ndb/api")'},
-    {"prefix": "/exoplanet_ndb",  "static": "http://127.0.0.1:9877", "api": "http://127.0.0.1:8745",
-     # exoplanet SPA detects same-origin itself (location.port check) — no
-     # rewrite needed. Empty bytes match nothing, so .replace() is a no-op.
+    {"prefix": "/exoplanet_ndb",  "static": "http://127.0.0.1:9102", "api": "http://127.0.0.1:8746",
+     # exoplanet SPA derives same-origin from location.pathname — no rewrite.
      "html_api_rewrite_from": b'',
      "html_api_rewrite_to":   b''},
-    {"prefix": "/seismic_ndb",    "static": "http://127.0.0.1:9878", "api": "http://127.0.0.1:8746",
-     "html_api_rewrite_from": b'',
-     "html_api_rewrite_to":   b''},
-    {"prefix": "/chemistry_ndb",  "static": "http://127.0.0.1:9879", "api": "http://127.0.0.1:8747",
-     "html_api_rewrite_from": b'',
-     "html_api_rewrite_to":   b''},
-    {"prefix": "/biodiv_ndb",     "static": "http://127.0.0.1:9881", "api": "http://127.0.0.1:8748",
+    {"prefix": "/biodiv_ndb",     "static": "http://127.0.0.1:9103", "api": "http://127.0.0.1:8749",
      "html_api_rewrite_from": b'',
      "html_api_rewrite_to":   b''},
 ]
+
+# Studio (read-only GUI) mounted under /studio. Its frontend calls
+# fetch("/api"+path) — rewritten to "/studio/api" on the served HTML so all
+# calls stay under the prefix. The machine wire API is proxied at /v1.
+STUDIO_UPSTREAM = "http://127.0.0.1:8780"
+TRIO_V1_UPSTREAM = "http://127.0.0.1:8742"
 
 # Back-compat for the old single-demo constants (unused now but kept so
 # diffs against earlier server.py read cleanly).
@@ -375,6 +378,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         if bare.startswith("/langgraph_ndb/") and method == "GET":
             self._serve_langgraph(bare[len("/langgraph_ndb/"):])
+            return
+
+        # ── machine wire API: /v1/* → trio read-only server (keeps /v1) ──
+        if bare == "/v1" or bare.startswith("/v1/"):
+            self._proxy_passthrough(TRIO_V1_UPSTREAM, path, method)
+            return
+
+        # ── Studio GUI under /studio (HTML /api refs rewritten to /studio/api) ──
+        if bare == "/studio" or bare == "/studio/":
+            self._proxy_studio("/", method)
+            return
+        if bare.startswith("/studio/"):
+            self._proxy_studio(path[len("/studio"):], method)
             return
 
         # ── demo proxy (match the longest demo prefix) ──
@@ -895,6 +911,69 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if b"</body>" in payload:
                 payload = payload.replace(b"</body>", WIDGET_SNIPPET + b"</body>", 1)
 
+        self.send_response(status)
+        skip = {"transfer-encoding", "content-length", "connection"}
+        for key, value in resp_headers:
+            if key.lower() in skip:
+                continue
+            self.send_header(key, value)
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        if method != "HEAD":
+            self.wfile.write(payload)
+
+    # ── /v1 passthrough (machine wire API, no rewrite) ──────────────
+    def _proxy_passthrough(self, upstream_base: str, path: str, method: str):
+        body = None
+        if method in ("POST", "PUT"):
+            n = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(n) if n else b""
+        req = urllib.request.Request(upstream_base + path, data=body, method=method)
+        for h in ("Content-Type", "Accept"):
+            v = self.headers.get(h)
+            if v:
+                req.add_header(h, v)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                status, payload = resp.status, resp.read()
+                ctype = resp.headers.get("Content-Type", "application/json")
+        except urllib.error.HTTPError as e:
+            status, payload = e.code, (e.read() if hasattr(e, "read") else b"")
+            ctype = "application/json"
+        except Exception as exc:  # noqa: BLE001
+            return self._json(502, {"error": "v1_upstream_unreachable", "detail": str(exc)})
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        if method != "HEAD":
+            self.wfile.write(payload)
+
+    # ── /studio proxy (rewrite /api → /studio/api on HTML) ──────────
+    def _proxy_studio(self, sub: str, method: str):
+        body = None
+        if method in ("POST", "PUT"):
+            n = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(n) if n else b""
+        req = urllib.request.Request(STUDIO_UPSTREAM + (sub or "/"), data=body, method=method)
+        for h in ("Content-Type", "Accept", "Cookie"):
+            v = self.headers.get(h)
+            if v:
+                req.add_header(h, v)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                status = resp.status
+                resp_headers = list(resp.headers.items())
+                payload = resp.read()
+        except urllib.error.HTTPError as e:
+            status = e.code
+            resp_headers = list(e.headers.items()) if e.headers else []
+            payload = e.read() if hasattr(e, "read") else b""
+        except Exception as exc:  # noqa: BLE001
+            return self._json(502, {"error": "studio_upstream_unreachable", "detail": str(exc)})
+        ctype = next((v for (k, v) in resp_headers if k.lower() == "content-type"), "")
+        if ctype.lower().startswith("text/html"):
+            payload = payload.replace(b'"/api"', b'"/studio/api"')
         self.send_response(status)
         skip = {"transfer-encoding", "content-length", "connection"}
         for key, value in resp_headers:
