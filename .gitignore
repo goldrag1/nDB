@@ -5,6 +5,9 @@ Cargo.lock.bak
 .DS_Store
 __pycache__/
 *.pyc
+# Python packaging artifacts (e.g. `pip install clients/python`)
+build/
+*.egg-info/
 .playwright-mcp/
 .demo-data/
 
