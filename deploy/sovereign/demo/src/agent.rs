@@ -17,9 +17,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
-mod embed;
-use embed::embed16;
-
 fn post(host_port: &str, token: &str, payload: &Value) -> Value {
     let body = serde_json::to_vec(payload).unwrap();
     let mut s = TcpStream::connect(host_port).expect("connect mcp");
@@ -108,8 +105,7 @@ fn main() {
         let obs = call(&hp, &token, "ndb.commit_entity",
             json!({"type_id":6, "properties":[
                 {"prop_id":13,"value":{"tag":"string","value":format!("Answered: {q}")}},
-                {"prop_id":16,"value":{"tag":"string","value":ts}},
-                {"prop_id":20,"value":{"tag":"vector","value":embed16(q)}}
+                {"prop_id":16,"value":{"tag":"string","value":ts}}
             ]}));
         let obs_id = obs.get("entity_id").and_then(|x| x.as_str()).unwrap_or("").to_string();
         if obs_id.is_empty() {

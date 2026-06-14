@@ -127,7 +127,8 @@ fn tool_capability(tool: &str) -> Option<Capability> {
         | "ndb.property_range"
         | "ndb.arrow_export"
         | "ndb.arrow_vectors"
-        | "ndb.arrow_edge_index" => Some(Capability::Read),
+        | "ndb.arrow_edge_index"
+        | "ndb.search_text" => Some(Capability::Read),
         "ndb.iter" => Some(Capability::Iter),
         "ndb.commit_entity" | "ndb.commit_hyperedge" => Some(Capability::Commit),
         _ => None,
@@ -417,6 +418,7 @@ impl McpServer {
             "ndb.arrow_export" => self.tool_arrow_export(args),
             "ndb.arrow_vectors" => self.tool_arrow_vectors(args),
             "ndb.arrow_edge_index" => self.tool_arrow_edge_index(args),
+            "ndb.search_text" => self.tool_search_text(args),
             other => Err(McpError::UnknownTool(other.into())),
         };
         let (status, failure_owned) = match &result {
@@ -480,6 +482,9 @@ impl McpServer {
                 .try_into()
                 .map_err(|e: ndb_engine::WireError| McpError::Convert(e.to_string()))?;
             properties.push((PropertyId::new(prop_id), v));
+        }
+        if let Some(vec) = self.auto_embed(args) {
+            properties.push((PropertyId::new(20), vec));
         }
         let mut engine = self.engine.write().expect("engine lock poisoned");
         let mut txn = engine.begin_write();
@@ -724,6 +729,53 @@ impl McpServer {
         Ok(arrow_payload(&ipc))
     }
 
+    /// If `NDB_EMBED_URL` is set, the committed record carries a `message`(13) or
+    /// `title`(14) text, and no vector(20) was supplied, compute a REAL embedding
+    /// via the embed service and return it as a vector `Value` to store on prop 20.
+    fn auto_embed(&self, args: &serde_json::Value) -> Option<Value> {
+        let url = std::env::var("NDB_EMBED_URL").ok()?;
+        let arr = args.get("properties").and_then(serde_json::Value::as_array)?;
+        if arr.iter().any(|p| p.get("prop_id").and_then(serde_json::Value::as_u64) == Some(20)) {
+            return None; // explicit vector provided — don't override
+        }
+        let text = arr.iter().find_map(|p| {
+            let pid = p.get("prop_id").and_then(serde_json::Value::as_u64)?;
+            if pid == 13 || pid == 14 {
+                p.get("value").and_then(|v| v.get("value")).and_then(serde_json::Value::as_str).map(str::to_string)
+            } else {
+                None
+            }
+        })?;
+        let emb = embed_text(&url, &text)?;
+        let jv: JsonValue = serde_json::from_value(serde_json::json!({"tag": "vector", "value": emb})).ok()?;
+        jv.try_into().ok()
+    }
+
+    /// `ndb.search_text` — semantic search by text: embed the query server-side
+    /// (via `NDB_EMBED_URL`) then k-NN over the vector property. The agent-facing
+    /// "recall memories like this" surface.
+    fn tool_search_text(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+        let text = args
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| McpError::BadArgs("search_text: missing 'text'".into()))?;
+        let property_id = args.get("property_id").and_then(serde_json::Value::as_u64).unwrap_or(20);
+        let property_id = u32::try_from(property_id).map_err(|_| McpError::BadArgs("property_id u32".into()))?;
+        let k = args.get("k").and_then(serde_json::Value::as_u64).map_or(8_usize, |n| n.try_into().unwrap_or(8));
+        let url = std::env::var("NDB_EMBED_URL")
+            .map_err(|_| McpError::BadArgs("search_text: NDB_EMBED_URL not configured".into()))?;
+        let query = embed_text(&url, text)
+            .ok_or_else(|| McpError::Convert("embed service unreachable".into()))?;
+        let engine = self.engine.write().expect("engine lock poisoned");
+        let hits = engine.vector_search(PropertyId::new(property_id), &query, k, Distance::Cosine);
+        Ok(serde_json::json!({
+            "query": text,
+            "hits": hits.into_iter().map(|(id, d)| serde_json::json!({
+                "entity_id": id.into_uuid().to_string(), "distance": d,
+            })).collect::<Vec<_>>(),
+        }))
+    }
+
     /// Read every record at the latest snapshot — shared by the Arrow exporters.
     fn snapshot_records(&self) -> Result<Vec<Record>, McpError> {
         let engine = self.engine.write().expect("engine lock poisoned");
@@ -755,6 +807,8 @@ impl McpServer {
                 "commit_hyperedge: total arity must be ≥ 1 (provide 'roles' and/or 'hyperedge_roles')".into(),
             ));
         }
+        // Note: hyperedges are NOT auto-embedded — vectors live on entities only,
+        // so vector_search + the recall benchmark operate over one consistent set.
         let properties = parse_property_list(args.get("properties"))?;
 
         let mut engine = self.engine.write().expect("engine lock poisoned");
@@ -950,6 +1004,28 @@ fn mcp_tool_result(result: serde_json::Value) -> serde_json::Value {
     );
     obj.insert("isError".to_string(), serde_json::json!(false));
     serde_json::Value::Object(obj)
+}
+
+/// POST `text` to the embed service at `url` (e.g. `http://127.0.0.1:8090/embed`)
+/// and return the resulting vector. Plain blocking HTTP on localhost — keeps the
+/// engine sync. Returns `None` on any failure (so commits still succeed).
+fn embed_text(url: &str, text: &str) -> Option<Vec<f32>> {
+    let rest = url.strip_prefix("http://")?;
+    let (hostport, path) = rest.find('/').map_or((rest, "/"), |i| (&rest[..i], &rest[i..]));
+    let body = serde_json::json!({ "texts": [text] }).to_string();
+    let mut stream = std::net::TcpStream::connect(hostport).ok()?;
+    let req = format!(
+        "POST {path} HTTP/1.1\r\nHost: {hostport}\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(req.as_bytes()).ok()?;
+    let mut resp = String::new();
+    stream.read_to_string(&mut resp).ok()?;
+    let start = resp.find("\r\n\r\n")? + 4;
+    let v: serde_json::Value = serde_json::from_str(resp[start..].trim()).ok()?;
+    let arr = v.get("vectors")?.as_array()?.first()?.as_array()?;
+    Some(arr.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect())
 }
 
 /// Wrap raw Arrow IPC bytes in the JSON envelope MCP tools return: base64 for
@@ -1318,6 +1394,16 @@ fn tool_list() -> Vec<serde_json::Value> {
                 "metric": {"type": "string", "enum": ["l2_squared", "cosine"], "default": "l2_squared"}
             }),
             &["property_id", "query"],
+        ),
+        tool(
+            "ndb.search_text",
+            "semantic search by text: embeds the query with a real model server-side, then k-NN over the vector property — 'recall memories like this'",
+            serde_json::json!({
+                "text": {"type": "string", "description": "natural-language query"},
+                "property_id": prop_id_prop,
+                "k": {"type": "integer", "minimum": 1, "default": 8}
+            }),
+            &["text"],
         ),
         tool(
             "ndb.property_lookup",

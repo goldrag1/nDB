@@ -15,9 +15,6 @@ use std::net::TcpStream;
 
 use serde_json::{json, Value};
 
-mod embed;
-use embed::embed16;
-
 fn post(host_port: &str, token: &str, payload: &Value) -> Value {
     let body = serde_json::to_vec(payload).expect("serialize");
     let mut stream = TcpStream::connect(host_port).expect("connect to MCP");
@@ -154,11 +151,11 @@ fn main() {
     let mut commit_ids: Vec<String> = Vec::new();
     for (i, &(author, msg, fkeys, ikey, sha)) in commits.iter().enumerate() {
         let cts = (base_ts + (i as i64) * 3600).to_string();
+        // text only — ndb-mcp auto-embeds prop 20 from the message via the embed service
         let cid = m.entity_raw(3, json!([
             {"prop_id":13,"value":{"tag":"string","value":msg}},
             {"prop_id":15,"value":{"tag":"string","value":sha}},
-            {"prop_id":16,"value":{"tag":"string","value":cts}},
-            {"prop_id":20,"value":{"tag":"vector","value":embed16(msg)}}
+            {"prop_id":16,"value":{"tag":"string","value":cts}}
         ]));
         // ONE N-ary fact: commit + author + each file + (issue) — a single record.
         let mut roles: Vec<(u32, &str)> = vec![(4, cid.as_str()), (1, people[pos(&people_def, author)].as_str())];

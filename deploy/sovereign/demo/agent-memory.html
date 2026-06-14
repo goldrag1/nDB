@@ -46,7 +46,7 @@
 
   <div class="ctlrow"><label>semantic recall (vector search)</label>
     <div class="srow"><input type="text" id="q" placeholder="e.g. how is TLS handled?"><button id="qbtn">recall</button></div>
-    <div class="hint">embeds your query (16-dim) → ndb.vector_search → lights the nearest memories</div>
+    <div class="hint">real-model embed (BGE-384, server-side) → ndb.search_text → lights the nearest memories</div>
   </div>
 
   <div class="ctlrow"><label>colour by (attribute dimension)</label>
@@ -84,9 +84,7 @@ const EDGECOL='#9aa7bd', DIMLINK='rgba(110,124,148,0.16)';
 let ENTS={}, EDGES=[], MAXTX=1, curTx=null, Graph, byId=new Map(), GD={nodes:[],links:[]}, linkSeen=new Set();
 let HL=new Set(), HLINK=new Set(), DEG={}, playing=false;
 
-// 16-dim bag-of-tokens embedder — MUST match embed.rs (byte-sum mod 16, L2)
-function embed16(t){const v=Array(16).fill(0);for(const tok of (t.toLowerCase().match(/[a-z0-9]+/g)||[])){let s=0;for(let i=0;i<tok.length;i++)s+=tok.charCodeAt(i);v[s%16]+=1;}const n=Math.sqrt(v.reduce((a,x)=>a+x*x,0));if(n>0)for(let i=0;i<16;i++)v[i]/=n;return v;}
-
+// query embedding is done server-side by a real model (BGE-384) via ndb.search_text
 const mcp=async(m,p)=>{const r=await fetch('/mcp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:m,params:p})});const j=await r.json();if(j.error)throw new Error(JSON.stringify(j.error));return j.result;};
 const propmap=a=>Object.fromEntries((a||[]).map(p=>[p.prop_id,p.value&&p.value.value]));
 const esc=s=>(s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
@@ -184,7 +182,7 @@ function detail(n){
 async function vsearch(){
   const q=document.getElementById('q').value.trim();if(!q)return;
   try{
-    const res=await mcp('tools/call',{name:'ndb.vector_search',arguments:{property_id:20,query:embed16(q),k:8,metric:'cosine'}});
+    const res=await mcp('tools/call',{name:'ndb.search_text',arguments:{text:q,k:8}});
     const hits=res.hits||[];
     HL=new Set();HLINK=new Set();
     for(const h of hits){HL.add(h.entity_id);
