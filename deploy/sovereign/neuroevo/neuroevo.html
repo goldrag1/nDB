@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nDB — Evolving Brains (neuro-evolution showcase)</title>
+<style>
+  :root{--bg:#0a0a10;--panel:#14141c;--line:#23232e;--text:#e8e8ec;--muted:#8b8b99;
+        --in:#65CBF3;--bias:#8b8b99;--hidden:#6ee7a8;--out:#f5a623;--pos:#6ee7a8;--neg:#f06b6b;--accent:#6ee7a8;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:28px 18px 64px}
+  h1{font-size:24px;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 18px}
+  .lede{color:#c7c7d2;font-size:14px;max-width:78ch}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0}
+  @media(max-width:760px){.grid{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .panel h2{font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+  svg{width:100%;height:auto;display:block}
+  .stats{display:flex;gap:22px;flex-wrap:wrap;margin:6px 0 0}
+  .stat b{display:block;font-size:22px;font-family:ui-monospace,Menlo,monospace;color:var(--accent);line-height:1.1}
+  .stat span{font-size:11.5px;color:var(--muted)}
+  .controls{display:flex;align-items:center;gap:12px;margin:8px 0 0}
+  .controls input[type=range]{flex:1;accent-color:var(--accent)}
+  button{background:#1d2b22;color:var(--accent);border:1px solid #2c4636;border-radius:7px;padding:7px 14px;font-size:13px;cursor:pointer}
+  button:hover{background:#244231}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin-top:8px}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle}
+  code{background:#1c1c26;padding:1px 5px;border-radius:4px;font-size:12.5px}
+  .foot{color:var(--muted);font-size:12.5px;margin-top:26px;border-top:1px solid var(--line);padding-top:14px}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Evolving Brains <span style="color:var(--muted);font-weight:400">· an nDB showcase</span></h1>
+  <p class="sub">Watch creatures evolve from a 3-synapse reflex into a brain that solves XOR — then time-travel through every generation.</p>
+  <p class="lede">
+    Each creature is a small neural network. Mutations <em>grow its topology</em>
+    (add a neuron, add a synapse, perturb a weight), so a creature's
+    <strong>intelligence — its neuron + synapse count</strong> — increases as it
+    gets better at the task. Every generation's champion brain is stored in nDB
+    as <strong>N-ary facts</strong>: a synapse is one
+    <code>hyper_edge</code> linking <code>pre → post</code> with a weight; the
+    champions form a <strong>lineage</strong>; and because nDB is MVCC, the whole
+    run is a <strong>time-travelable history</strong> — which is exactly what the
+    slider below reads back.
+  </p>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>Intelligence over generations</h2>
+      <svg id="chart" viewBox="0 0 520 240"></svg>
+      <div class="legend">
+        <span><i class="dot" style="background:var(--out)"></i>fitness (0–4, 4 = XOR solved)</span>
+        <span><i class="dot" style="background:var(--hidden)"></i>neurons</span>
+        <span><i class="dot" style="background:var(--in)"></i>synapses</span>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Champion brain — generation <span id="genLabel">0</span></h2>
+      <svg id="brain" viewBox="0 0 460 300"></svg>
+      <div class="stats">
+        <div class="stat"><b id="sFit">–</b><span>fitness</span></div>
+        <div class="stat"><b id="sNeur">–</b><span>neurons</span></div>
+        <div class="stat"><b id="sSyn">–</b><span>synapses</span></div>
+      </div>
+      <div class="legend">
+        <span><i class="dot" style="background:var(--in)"></i>input</span>
+        <span><i class="dot" style="background:var(--bias)"></i>bias</span>
+        <span><i class="dot" style="background:var(--hidden)"></i>hidden</span>
+        <span><i class="dot" style="background:var(--out)"></i>output</span>
+        <span><i class="dot" style="background:var(--pos)"></i>+weight</span>
+        <span><i class="dot" style="background:var(--neg)"></i>−weight</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="controls">
+      <button id="play">▶ Play evolution</button>
+      <input id="slider" type="range" min="0" max="0" value="0">
+      <span id="genText" style="color:var(--muted);font-size:13px;min-width:7ch"></span>
+    </div>
+  </div>
+
+  <p class="foot">
+    A real nDB evolution run (deterministic, reproducible), exported for this
+    static view. The same data lives in nDB as Creatures (type 50), Neurons
+    (type 51), N-ary Synapse <code>hyper_edge</code>s (type 150, roles pre/post)
+    and Lineage edges (type 151) — queryable over <code>/v1</code> and the MCP
+    tools, time-travelable via MVCC. Generator + model:
+    <code>deploy/sovereign/neuroevo/evolve.py</code>.
+  </p>
+</div>
+
+<script>
+let HIST = [];
+const $ = id => document.getElementById(id);
+const KCOL = {in:'#65CBF3', bias:'#8b8b99', hidden:'#6ee7a8', out:'#f5a623'};
+
+function nodeDepth(snap){
+  // longest-path depth from sources; output pinned to the far right column.
+  const inc = {}; snap.nodes.forEach(n=>inc[n.id]=[]);
+  snap.conns.forEach(c=>inc[c.dst]&&inc[c.dst].push(c.src));
+  const kind = {}; snap.nodes.forEach(n=>kind[n.id]=n.kind);
+  const depth = {}; const order = snap.nodes.map(n=>n.id).sort((a,b)=>a-b);
+  let maxd = 0;
+  order.forEach(id=>{
+    if(kind[id]==='in'||kind[id]==='bias'){depth[id]=0;}
+    else{depth[id]=Math.max(0,...inc[id].map(s=>(depth[s]??0)+1)); }
+    maxd=Math.max(maxd,depth[id]);
+  });
+  // pin outputs to the last column
+  snap.nodes.forEach(n=>{ if(n.kind==='out') depth[n.id]=maxd; });
+  return {depth, maxd};
+}
+
+function drawBrain(snap){
+  const W=460,H=300,pad=34;
+  const {depth,maxd}=nodeDepth(snap);
+  const cols={}; snap.nodes.forEach(n=>{(cols[depth[n.id]]=cols[depth[n.id]]||[]).push(n.id);});
+  const pos={};
+  Object.keys(cols).forEach(d=>{
+    const ids=cols[d]; const x=pad+(maxd? (d/maxd):0)*(W-2*pad);
+    ids.forEach((id,i)=>{ const y=pad+(ids.length===1?0.5:i/(ids.length-1))*(H-2*pad); pos[id]={x,y};});
+  });
+  let s='';
+  // edges
+  snap.conns.forEach(c=>{
+    const a=pos[c.src],b=pos[c.dst]; if(!a||!b)return;
+    const col=c.w>=0?'#6ee7a8':'#f06b6b'; const wdt=Math.min(4,0.4+Math.abs(c.w)*0.5);
+    s+=`<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="${col}" stroke-width="${wdt}" opacity="0.6"/>`;
+  });
+  // nodes
+  snap.nodes.forEach(n=>{
+    const p=pos[n.id]; s+=`<circle cx="${p.x}" cy="${p.y}" r="9" fill="${KCOL[n.kind]}" stroke="#0a0a10" stroke-width="2"/>`;
+  });
+  $('brain').innerHTML=s;
+}
+
+function drawChart(idx){
+  const W=520,H=240,pad=30; const n=HIST.length;
+  const maxN=Math.max(...HIST.map(s=>s.neuron_count));
+  const maxS=Math.max(...HIST.map(s=>s.synapse_count));
+  const X=i=>pad+(n<=1?0:i/(n-1))*(W-2*pad);
+  const Yf=v=>H-pad-(v/4)*(H-2*pad);
+  const Yn=v=>H-pad-(v/maxN)*(H-2*pad);
+  const Ys=v=>H-pad-(v/maxS)*(H-2*pad);
+  const path=(yf)=>HIST.map((s,i)=>`${i?'L':'M'}${X(i).toFixed(1)} ${yf(s).toFixed(1)}`).join(' ');
+  let s='';
+  // axes
+  s+=`<line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="#23232e"/>`;
+  s+=`<line x1="${pad}" y1="${pad}" x2="${pad}" y2="${H-pad}" stroke="#23232e"/>`;
+  s+=`<path d="${path(s2=>Yn(s2.neuron_count))}" fill="none" stroke="#6ee7a8" stroke-width="1.5" opacity="0.85"/>`;
+  s+=`<path d="${path(s2=>Ys(s2.synapse_count))}" fill="none" stroke="#65CBF3" stroke-width="1.5" opacity="0.85"/>`;
+  s+=`<path d="${path(s2=>Yf(s2.fitness))}" fill="none" stroke="#f5a623" stroke-width="2"/>`;
+  // generation marker
+  s+=`<line x1="${X(idx)}" y1="${pad}" x2="${X(idx)}" y2="${H-pad}" stroke="#e8e8ec" stroke-width="1" opacity="0.5" stroke-dasharray="3 3"/>`;
+  s+=`<text x="${pad}" y="14" fill="#8b8b99" font-size="11">gen 0 … ${n-1}  ·  fitness top = 4.0</text>`;
+  $('chart').innerHTML=s;
+}
+
+function show(i){
+  const snap=HIST[i];
+  $('genLabel').textContent=snap.generation;
+  $('genText').textContent='gen '+snap.generation;
+  $('sFit').textContent=snap.fitness.toFixed(2);
+  $('sNeur').textContent=snap.neuron_count;
+  $('sSyn').textContent=snap.synapse_count;
+  drawBrain(snap); drawChart(i);
+}
+
+let timer=null;
+function play(){
+  if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ Play evolution';return;}
+  $('play').textContent='⏸ Pause';
+  let i=+$('slider').value; if(i>=HIST.length-1)i=0;
+  timer=setInterval(()=>{
+    if(i>=HIST.length-1){clearInterval(timer);timer=null;$('play').textContent='▶ Play evolution';return;}
+    i++; $('slider').value=i; show(i);
+  },140);
+}
+
+fetch('neuroevo.json').then(r=>r.json()).then(d=>{
+  HIST=d.history;
+  const sl=$('slider'); sl.max=HIST.length-1; sl.value=HIST.length-1;
+  sl.addEventListener('input',()=>{if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ Play evolution';} show(+sl.value);});
+  $('play').addEventListener('click',play);
+  show(HIST.length-1);
+}).catch(e=>{ $('chart').innerHTML='<text x="10" y="20" fill="#f06b6b">failed to load neuroevo.json: '+e+'</text>'; });
+</script>
+</body>
+</html>
