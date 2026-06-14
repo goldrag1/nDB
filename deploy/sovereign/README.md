@@ -148,12 +148,35 @@ The agent now lists nDB's tools (`ndb.vector_search`, `ndb.commit_hyperedge`,
 ## Multi-developer access
 
 - **Shared token** (`NDB_TOKEN`): simplest — one secret, everyone sends it.
-- **Per-agent capability gating**: set `NDB_MCP_PRINCIPAL` (e.g.
-  `{"name":"alice","capabilities":["read","iter","vector_search"]}`) so a given
-  MCP deployment only exposes the tools that principal allows. Run a second
-  `ndb-mcp` unit on another port with a different principal for a read-only tier.
-- **Audit**: add `--audit` to the unit's `ExecStart` to append every call to
-  `<db>/.audit.jsonl`.
+- **Per-dev tokens + capability scoping (recommended for teams):** point
+  `NDB_MCP_PRINCIPALS` at a registry file mapping each dev's bearer token to a
+  principal with its own capability set. Each HTTP request's token resolves to
+  that principal and the call is gated by its capabilities — and **audited under
+  the dev's name** (the registry forces auditing on). One endpoint, many devs,
+  least-privilege per dev:
+
+  ```json
+  // /etc/ndb/principals.json   (chmod 600)
+  {
+    "principals": {
+      "tok-alice-9f3…": {"name": "alice", "capabilities": ["health","read","iter","commit"]},
+      "tok-bob-7a1…":   {"name": "bob",   "capabilities": ["health","read","iter"]}
+    }
+  }
+  ```
+  ```ini
+  # in the ndb-mcp unit's EnvironmentFile (/etc/ndb/ndb.env)
+  NDB_MCP_PRINCIPALS=/etc/ndb/principals.json
+  ```
+  Now `bob`'s token can read but a `commit` returns a JSON-RPC error naming the
+  missing `commit` capability, while `alice`'s token commits — and both calls
+  land in `<db>/.audit.jsonl` attributed to `alice` / `bob`. Capabilities:
+  `health`, `read`, `iter`, `commit`, `flush`, `compact`, `admin` (wildcard).
+- **Single-principal gate:** `NDB_MCP_PRINCIPAL` (one JSON principal) gates a
+  whole deployment — handy for a read-only tier on a second port.
+- **Audit**: `--audit` / `NDB_AUDIT=1` append every call to `<db>/.audit.jsonl`
+  (`{ts_us, principal, method, path, status, failure}` per line); the principals
+  registry turns this on automatically.
 
 ## Scaling out (optional)
 

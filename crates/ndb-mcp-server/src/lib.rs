@@ -68,7 +68,7 @@ use ndb_engine::{
     JsonRecord, JsonValue, PropertyId, PropertyKeyRecord, Record, Resolved, RoleId, RoleNameRecord,
     TxId, TypeId, TypeNameRecord, Value,
 };
-use ndb_server::{AuditEntry, AuditLog, Capability, Principal};
+use ndb_server::{AuditEntry, AuditLog, Capability, Principal, Principals};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -221,11 +221,17 @@ impl JsonRpcResponse {
 /// MCP server handle. Owns a shared engine.
 pub struct McpServer {
     engine: Arc<RwLock<Engine>>,
-    /// Optional principal. When set, every tool call is checked against
-    /// the principal's capabilities. When unset, every tool is allowed
-    /// (the legacy stdio behaviour — appropriate for a single-tenant
-    /// local launch).
+    /// Optional single principal. When set, every tool call is checked
+    /// against this principal's capabilities. Used by the stdio launch and
+    /// as the default effective principal when no per-request principal is
+    /// supplied. When unset (and no `principals` registry), every tool is
+    /// allowed (the legacy single-tenant local behaviour).
     principal: Option<Principal>,
+    /// Optional multi-tenant registry: bearer token → principal. When set,
+    /// the HTTP transport resolves each request's token to a principal and
+    /// gates that call by its capabilities — per-dev tokens with distinct
+    /// capability scopes, all audited under the dev's name.
+    principals: Option<Principals>,
     /// Optional audit log. Each tool call emits a row.
     audit: Option<Arc<Mutex<AuditLog>>>,
 }
@@ -261,6 +267,7 @@ impl McpServer {
         Ok(Self {
             engine: Arc::new(RwLock::new(engine)),
             principal: None,
+            principals: None,
             audit: None,
         })
     }
@@ -307,6 +314,7 @@ impl McpServer {
         Self {
             engine,
             principal: None,
+            principals: None,
             audit: None,
         }
     }
@@ -318,6 +326,34 @@ impl McpServer {
     pub fn with_principal(mut self, p: Principal) -> Self {
         self.principal = Some(p);
         self
+    }
+
+    /// Install a multi-tenant principals registry (bearer token → principal).
+    /// When set, the HTTP transport resolves each request's token to a
+    /// principal and gates that call by its capabilities — distinct per-dev
+    /// tokens with distinct capability scopes, all audited under the dev's
+    /// name. Pair with [`with_audit_log`](Self::with_audit_log).
+    #[must_use]
+    pub fn with_principals(mut self, p: Principals) -> Self {
+        self.principals = Some(p);
+        self
+    }
+
+    /// Whether a multi-tenant principals registry is installed (the HTTP
+    /// transport uses this to decide between per-request token resolution and
+    /// the simpler single-token modes).
+    #[must_use]
+    pub fn has_principals(&self) -> bool {
+        self.principals.is_some()
+    }
+
+    /// Resolve a bearer token to a principal via the registry. `None` when no
+    /// registry is installed or the token is unknown.
+    #[must_use]
+    pub fn resolve_principal(&self, token: &str) -> Option<Principal> {
+        self.principals
+            .as_ref()
+            .and_then(|p| p.resolve(token).cloned())
     }
 
     /// Enable audit logging into `<db>/.audit.jsonl`. The MCP server
@@ -385,8 +421,17 @@ impl McpServer {
         Ok(())
     }
 
-    /// Handle a single line. Public so tests can drive it directly.
+    /// Handle a single line under the server's default principal (the one set
+    /// via [`with_principal`](Self::with_principal), or none). Public so tests
+    /// and the stdio loop can drive it directly.
     pub fn handle_line(&self, line: &str) -> JsonRpcResponse {
+        self.handle_line_as(line, self.principal.as_ref())
+    }
+
+    /// Handle a single line gated by an explicit `effective` principal — used
+    /// by the HTTP transport after it resolves the request's bearer token via
+    /// the multi-tenant registry. `None` means unrestricted (single-tenant).
+    pub fn handle_line_as(&self, line: &str, effective: Option<&Principal>) -> JsonRpcResponse {
         let req: JsonRpcRequest = match serde_json::from_str(line) {
             Ok(r) => r,
             Err(e) => {
@@ -408,14 +453,14 @@ impl McpServer {
                 }),
             ),
             "tools/list" => JsonRpcResponse::ok(id, serde_json::json!({"tools": tool_list()})),
-            "tools/call" => match self.handle_tool_call(&req.params) {
+            "tools/call" => match self.handle_tool_call(&req.params, effective) {
                 Ok(result) => JsonRpcResponse::ok(id, mcp_tool_result(result)),
                 Err(e) => JsonRpcResponse::err(id, -32000, e.to_string()),
             },
             "resources/list" => {
                 JsonRpcResponse::ok(id, serde_json::json!({"resources": resource_list()}))
             }
-            "resources/read" => match self.handle_resource_read(&req.params) {
+            "resources/read" => match self.handle_resource_read(&req.params, effective) {
                 Ok(result) => JsonRpcResponse::ok(id, result),
                 Err(e) => JsonRpcResponse::err(id, -32000, e.to_string()),
             },
@@ -430,7 +475,11 @@ impl McpServer {
         }
     }
 
-    fn handle_tool_call(&self, params: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+    fn handle_tool_call(
+        &self,
+        params: &serde_json::Value,
+        effective: Option<&Principal>,
+    ) -> Result<serde_json::Value, McpError> {
         let name = params
             .get("name")
             .and_then(serde_json::Value::as_str)
@@ -438,15 +487,13 @@ impl McpServer {
         let empty = serde_json::Value::Object(serde_json::Map::new());
         let args = params.get("arguments").unwrap_or(&empty);
 
-        // ReBAC gating: when a principal is installed, every recognised
-        // tool must have a capability the principal holds. Unknown tools
-        // are rejected the same way they were before — capability check
-        // is purely additive.
-        let principal_name: String = self
-            .principal
-            .as_ref()
-            .map_or_else(|| "anonymous".into(), |p| p.name.clone());
-        if let Some(p) = &self.principal
+        // ReBAC gating: when a principal is in effect (per-request from the
+        // multi-tenant registry, or the server's default), every recognised
+        // tool must have a capability the principal holds. Unknown tools are
+        // rejected the same way regardless — the capability check is additive.
+        let principal_name: String =
+            effective.map_or_else(|| "anonymous".into(), |p| p.name.clone());
+        if let Some(p) = effective
             && let Some(needed) = tool_capability(name)
             && !p.allows(needed)
         {
@@ -1075,8 +1122,9 @@ impl McpServer {
     fn handle_resource_read(
         &self,
         params: &serde_json::Value,
+        effective: Option<&Principal>,
     ) -> Result<serde_json::Value, McpError> {
-        if let Some(p) = &self.principal
+        if let Some(p) = effective
             && !p.allows(Capability::Read)
         {
             return Err(McpError::Forbidden {

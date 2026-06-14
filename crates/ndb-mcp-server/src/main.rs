@@ -46,7 +46,11 @@ fn usage() {
            --cors-origin <o>  Emit Access-Control-Allow-Origin: <o> (browser agents).\n\
          \n\
          Environment:\n\
-           NDB_MCP_PRINCIPAL  JSON: {{\"name\":..,\"capabilities\":[..]}}; gates every tool call\n\
+           NDB_MCP_PRINCIPAL  JSON: {{\"name\":..,\"capabilities\":[..]}}; single-principal gate\n\
+           NDB_MCP_PRINCIPALS Path to a principals registry (JSON: {{\"principals\":{{\"<token>\":\n\
+                              {{\"name\":..,\"capabilities\":[..]}}}}}}). Multi-tenant: each HTTP\n\
+                              request's bearer token resolves to a principal gated by its caps,\n\
+                              audited under its name (forces audit on).\n\
            NDB_TOKEN          When set, --http requires Authorization: Bearer <token>\n\
            NDB_AUDIT=1        Equivalent to --audit (append <db>/.audit.jsonl per tool call)\n"
     );
@@ -112,7 +116,31 @@ fn main() -> ExitCode {
         }
     }
 
-    let audit_on = audit || std::env::var("NDB_AUDIT").is_ok_and(|v| v == "1");
+    // Multi-tenant: a principals registry file (bearer token -> principal with
+    // a capability set) enables per-dev tokens + capability scoping over HTTP.
+    // Auditing is forced on so every per-dev call is attributable.
+    let mut principals_loaded = false;
+    if let Ok(path) = std::env::var("NDB_MCP_PRINCIPALS")
+        && !path.is_empty()
+    {
+        match ndb_server::Principals::load(std::path::Path::new(&path)) {
+            Ok(Some(p)) => {
+                eprintln!(
+                    "ndb-mcp-server: multi-tenant auth — {} principals from {path}",
+                    p.principals.len()
+                );
+                server = server.with_principals(p);
+                principals_loaded = true;
+            }
+            Ok(None) => eprintln!("ndb-mcp-server: NDB_MCP_PRINCIPALS file not found: {path}"),
+            Err(e) => {
+                eprintln!("ndb-mcp-server: invalid NDB_MCP_PRINCIPALS: {e}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+
+    let audit_on = audit || principals_loaded || std::env::var("NDB_AUDIT").is_ok_and(|v| v == "1");
     if audit_on {
         server = match server.with_audit_log() {
             Ok(s) => {

@@ -251,6 +251,41 @@ pub(crate) fn handle_connection<S: Read + Write>(
         }
         if method == "POST" {
             let auth = authorization.as_deref();
+
+            // Multi-tenant mode: a principals registry is installed, so each
+            // request's bearer token must resolve to a known principal; the
+            // call is then gated by THAT principal's capabilities (audited
+            // under its name). This supersedes the single-token modes.
+            if server.has_principals() {
+                let principal = auth
+                    .and_then(|a| a.strip_prefix("Bearer "))
+                    .and_then(|t| server.resolve_principal(t));
+                let Some(principal) = principal else {
+                    return write_json(
+                        stream,
+                        401,
+                        "Unauthorized",
+                        r#"{"error":"unknown or missing per-dev bearer token"}"#,
+                        opts,
+                    );
+                };
+                if content_length > MAX_BODY_BYTES {
+                    return write_json(
+                        stream,
+                        413,
+                        "Payload Too Large",
+                        r#"{"error":"request body too large"}"#,
+                        opts,
+                    );
+                }
+                let body_str = String::from_utf8_lossy(&body);
+                let resp = server.handle_line_as(body_str.as_ref(), Some(&principal));
+                let json = serde_json::to_string(&resp).unwrap_or_else(|_| {
+                    r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"serialize failed"}}"#.to_owned()
+                });
+                return write_json(stream, 200, "OK", &json, opts);
+            }
+
             if let Some(token) = &opts.bearer_token {
                 // full lockdown: every request needs the token
                 if !bearer_ok(auth, token) {
@@ -629,6 +664,128 @@ mod tests {
         let request = "GET /mcp HTTP/1.1\r\nHost: x\r\n\r\n";
         let resp = round_trip(&server, &HttpOpts::default(), request);
         assert!(resp.starts_with("HTTP/1.1 405"), "got: {resp}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Frame a `POST /mcp` carrying a per-dev bearer token.
+    fn post_mcp_auth(body: &str, token: &str) -> String {
+        format!(
+            "POST /mcp HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\n\
+             Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    /// Gap 6 acceptance: two devs with different capability scopes, gated per
+    /// request by their own tokens, and every call audited under the dev's name.
+    #[test]
+    fn two_devs_different_capabilities_audited() {
+        use std::collections::{BTreeSet, HashMap};
+
+        use ndb_server::{Capability, Principal, Principals};
+
+        let dir = temp_dir("multitenant");
+        // reader: can read/iter but NOT commit. writer: can also commit.
+        let mut map = HashMap::new();
+        map.insert(
+            "tok-reader".to_owned(),
+            Principal {
+                name: "reader-dev".into(),
+                capabilities: BTreeSet::from([
+                    Capability::Health,
+                    Capability::Read,
+                    Capability::Iter,
+                ]),
+                entity_id: None,
+            },
+        );
+        map.insert(
+            "tok-writer".to_owned(),
+            Principal {
+                name: "writer-dev".into(),
+                capabilities: BTreeSet::from([
+                    Capability::Health,
+                    Capability::Read,
+                    Capability::Iter,
+                    Capability::Commit,
+                ]),
+                entity_id: None,
+            },
+        );
+        let server = McpServer::open(&dir)
+            .unwrap()
+            .with_principals(Principals { principals: map })
+            .with_audit_log()
+            .unwrap();
+        let opts = HttpOpts::default();
+
+        let commit = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ndb.commit_entity","arguments":{"type_id":1,"properties":[]}}}"#;
+
+        // Unknown token → 401 at the transport.
+        let bad = round_trip_owned(&server, &opts, post_mcp_auth(commit, "tok-nope"));
+        assert!(
+            bad.starts_with("HTTP/1.1 401"),
+            "unknown token must 401: {bad}"
+        );
+
+        // reader (no Commit) → 200 transport, JSON-RPC error naming the dev + cap.
+        let r = round_trip_owned(&server, &opts, post_mcp_auth(commit, "tok-reader"));
+        assert!(r.starts_with("HTTP/1.1 200"), "got: {r}");
+        let rv = resp_body(&r);
+        assert!(
+            rv.get("result").is_none(),
+            "reader commit must be denied: {rv}"
+        );
+        let msg = rv["error"]["message"].as_str().unwrap_or("");
+        assert!(
+            msg.contains("reader-dev") && msg.contains("commit"),
+            "denial must name the principal + capability: {rv}"
+        );
+
+        // writer (has Commit) → succeeds with a real entity_id.
+        let w = round_trip_owned(&server, &opts, post_mcp_auth(commit, "tok-writer"));
+        let wv = resp_body(&w);
+        assert!(
+            wv["result"]["entity_id"].as_str().is_some(),
+            "writer commit must succeed: {wv}"
+        );
+
+        // reader CAN read (has Read): a read tool is allowed.
+        let read_health =
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ndb.health"}}"#;
+        let rh = resp_body(&round_trip_owned(
+            &server,
+            &opts,
+            post_mcp_auth(read_health, "tok-reader"),
+        ));
+        assert_eq!(
+            rh["result"]["status"], "ok",
+            "reader health must pass: {rh}"
+        );
+
+        // Audit trail: both devs attributed, the reader's denial recorded as 403,
+        // the writer's commit as 200.
+        let audit_path = server.audit_log_path().expect("audit enabled");
+        let log = std::fs::read_to_string(&audit_path).unwrap();
+        let lines: Vec<serde_json::Value> = log
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let has = |princ: &str, status: u64| {
+            lines.iter().any(|e| {
+                e["principal"] == princ && e["status"] == status && e["path"] == "ndb.commit_entity"
+            })
+        };
+        assert!(
+            has("reader-dev", 403),
+            "audit must record reader's 403: {log}"
+        );
+        assert!(
+            has("writer-dev", 200),
+            "audit must record writer's 200: {log}"
+        );
+
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
