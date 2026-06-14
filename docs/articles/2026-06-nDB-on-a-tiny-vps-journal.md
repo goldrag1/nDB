@@ -189,3 +189,21 @@ Local MariaDB 10.11.14 was already installed + running (:3306, `~/.my.cnf` root 
 **Published:** rewrote `bench.html` as a static **Benchmark report** (removed ALL live-race buttons/tools per the user) — methodology + 3 result tables + the N-ary structural explanation + honest takeaways. Homepage card updated to the real headline. Live at `https://ndb.nextstar-erp.com/bench.html`.
 
 **Not done (honest):** MariaDB concurrent sweep, storage-scaling curve (10k→10M), and a formal mean±CI harness — the controlled p50/p99 are 500-iter / 1.5–4k-iter distributions (solid), but the cross-engine basis differs (embedded vs networked); a future pass could unify it + add the scaling curves.
+
+## 2026-06-14 — Full study: storage-scaling curve + honest concurrency scope
+
+Parameterised the nDB bench builder (`NDB_BENCH_SCALE` env via LazyLock) to build at any scale; generated matching-cardinality data for SQLite + MariaDB in python. **Storage scaling (total records → MB):**
+
+| records | nDB | SQLite | MariaDB |
+|---|---|---|---|
+| 10k  | ~1.0 | 1.50 | 1.70 |
+| 100k | 8.0  | 14.6 | 20.2 |
+| 1M   | **81** | 147 | 178 |
+
+→ nDB ~81 B/record vs 147 (SQLite) / 178 (MariaDB); the gap holds/grows with scale (junction-table overhead). nDB figures are pre-compaction WAL (conservative).
+
+**MariaDB concurrency — refused to publish a misleading number.** Measured via a Python threaded client, conc=32 came out *lower* than single-client (7.5k vs 14k) because the client is GIL-bound, not MariaDB's server. Publishing that would unfairly understate MariaDB. So the concurrency table stays nDB-vs-SQLite (both native Rust bench servers, fair) with an explicit note that a fair MariaDB concurrency number needs a native client (not built this pass). Honest scoping > a wrong number.
+
+Published: `bench.html` now shows the 3-engine scaling curve + the concurrency caveat. Report is fully static (no live tools). Local artifacts (bench servers, `ndb_bench_cmp` DB) are dev-only.
+
+**Remaining for a future pass (stated on no false pretenses):** native-client MariaDB concurrency sweep; a single unified mean±95%CI harness across all engines (cross-basis embedded-vs-networked makes one-number-fits-all hard — current latency points are 500–4000-iter distributions, solid, but measured per engine's natural interface).

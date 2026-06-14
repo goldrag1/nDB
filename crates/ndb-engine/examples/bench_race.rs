@@ -64,10 +64,22 @@ const ROLE_CHILD: u32 = 12;
 
 // ─── Workload sizing (smaller than the realworld bench — live = must
 // stay under ~500 ms wall-clock per click). ──────────────────────────
-const N_CUSTOMERS: usize = 49_000;
-const N_REGIONS: usize = 1_000;
-const N_SALES_ORDERS: usize = 45_000;
-const N_CONTAINS_EDGES: usize = 5_000;
+// Dataset sizes scale with NDB_BENCH_SCALE (default 1.0 → 100k total). Used by
+// the storage-scaling study; the perf/concurrency runs use the default.
+fn bench_scale() -> f64 {
+    std::env::var("NDB_BENCH_SCALE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1.0)
+}
+static N_CUSTOMERS: std::sync::LazyLock<usize> =
+    std::sync::LazyLock::new(|| (49_000.0 * bench_scale()) as usize);
+static N_REGIONS: std::sync::LazyLock<usize> =
+    std::sync::LazyLock::new(|| ((1_000.0 * bench_scale()) as usize).max(1));
+static N_SALES_ORDERS: std::sync::LazyLock<usize> =
+    std::sync::LazyLock::new(|| (45_000.0 * bench_scale()) as usize);
+static N_CONTAINS_EDGES: std::sync::LazyLock<usize> =
+    std::sync::LazyLock::new(|| (5_000.0 * bench_scale()) as usize);
 
 const N_ITER_LOOKUPS: usize = 500;
 const N_ITER_QUERY_SMALL: usize = 50;
@@ -112,7 +124,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (chain_roots, _chain_leaves) = load_contains_chain(&mut engine, &region_ids);
     let load_ms = load_start.elapsed().as_secs_f64() * 1000.0;
     let n_entities = customer_ids.len() + region_ids.len();
-    let n_hyperedges = sales_ids.len() + N_CONTAINS_EDGES;
+    let n_hyperedges = sales_ids.len() + *N_CONTAINS_EDGES;
     eprintln!(
         "loaded {} entities + {} hyperedges in {:.0} ms",
         n_entities, n_hyperedges, load_ms
@@ -937,10 +949,10 @@ fn register_dictionaries(engine: &mut Engine) {
 }
 
 fn load_regions(engine: &mut Engine) -> Vec<String> {
-    let mut codes = Vec::with_capacity(N_REGIONS);
+    let mut codes = Vec::with_capacity(*N_REGIONS);
     let mut tx = engine.begin_write();
     let mut in_tx = 0;
-    for i in 0..N_REGIONS {
+    for i in 0..*N_REGIONS {
         let code = format!("REG-{i:05}");
         let eid = EntityId::now_v7();
         tx.put_entity(EntityRecord {
@@ -971,10 +983,10 @@ fn load_regions(engine: &mut Engine) -> Vec<String> {
 }
 
 fn load_customers(engine: &mut Engine, region_codes: &[String]) -> Vec<EntityId> {
-    let mut ids = Vec::with_capacity(N_CUSTOMERS);
+    let mut ids = Vec::with_capacity(*N_CUSTOMERS);
     let mut tx = engine.begin_write();
     let mut in_tx = 0;
-    for i in 0..N_CUSTOMERS {
+    for i in 0..*N_CUSTOMERS {
         let eid = EntityId::now_v7();
         let region = &region_codes[i % region_codes.len()];
         tx.put_entity(EntityRecord {
@@ -1005,10 +1017,10 @@ fn load_customers(engine: &mut Engine, region_codes: &[String]) -> Vec<EntityId>
 }
 
 fn load_sales(engine: &mut Engine, customers: &[EntityId]) -> Vec<HyperedgeId> {
-    let mut ids = Vec::with_capacity(N_SALES_ORDERS);
+    let mut ids = Vec::with_capacity(*N_SALES_ORDERS);
     let mut tx = engine.begin_write();
     let mut in_tx = 0;
-    for i in 0..N_SALES_ORDERS {
+    for i in 0..*N_SALES_ORDERS {
         let cust_idx = if i % 2 == 0 {
             ((i / 2) % customers.len().div_ceil(20)) * 20 % customers.len()
         } else {
@@ -1069,7 +1081,7 @@ fn load_contains_chain(
     let mut in_tx = 0;
     let mut roots = Vec::new();
     let mut leaves = Vec::new();
-    for i in 0..N_CONTAINS_EDGES {
+    for i in 0..*N_CONTAINS_EDGES {
         let parent_idx = i % n;
         let child_idx = (parent_idx + n / 4 + (i / n) * (n / 8)) % n;
         if parent_idx == child_idx {

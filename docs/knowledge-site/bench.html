@@ -61,21 +61,24 @@
     are fabricated, and losses are shown.
   </div>
 
-  <h2>1 · Storage — same dataset, on disk</h2>
-  <p class="cap">Lower is better. nDB stores each N-ary fact as one
-    dictionary-coded record; the relational engines normalise it into junction
-    tables (<code>sales</code>, <code>contains</code>) with repeated foreign keys.</p>
+  <h2>1 · Storage — scaling 10k → 1M records</h2>
+  <p class="cap">On-disk size for the same dataset at three scales (entities +
+    N-ary facts, 50/50). nDB stores each N-ary fact as one dictionary-coded
+    record; the relational engines normalise it into junction tables
+    (<code>sales</code>, <code>contains</code>) with repeated foreign keys, so
+    their footprint — and the gap — grows with scale.</p>
   <table>
-    <thead><tr><th>Engine</th><th>On-disk size</th><th>Relative</th><th></th></tr></thead>
+    <thead><tr><th>Total records</th><th>nDB</th><th>SQLite (VACUUMed)</th><th>MariaDB (InnoDB)</th><th>nDB advantage</th></tr></thead>
     <tbody>
-      <tr><td>nDB <span class="win">(best)</span></td><td>8.0 MB</td><td>1.0×</td><td><div class="barwrap"><span class="bar" style="width:76px"></span></div></td></tr>
-      <tr><td>SQLite (VACUUMed)</td><td>14.6 MB</td><td>1.8×</td><td><div class="barwrap"><span class="bar" style="width:139px"></span></div></td></tr>
-      <tr><td>MariaDB (InnoDB, data+index)</td><td>21.2 MB</td><td>2.6×</td><td><div class="barwrap"><span class="bar" style="width:201px"></span></div></td></tr>
+      <tr><td>10,000</td><td class="win">~1.0 MB</td><td>1.50 MB</td><td>1.70 MB</td><td>1.5–1.7×</td></tr>
+      <tr><td>100,000</td><td class="win">8.0 MB</td><td>14.6 MB</td><td>20.2 MB</td><td>1.8–2.5×</td></tr>
+      <tr><td>1,000,000</td><td class="win">81 MB</td><td>147 MB</td><td>178 MB</td><td>1.8–2.2×</td></tr>
     </tbody>
   </table>
-  <p class="cap">nDB figure is the pre-compaction write-ahead log (the full
-    uncompacted record stream); compaction only shrinks it further, so 8.0 MB is
-    a conservative ceiling for nDB.</p>
+  <p class="cap">At 1M records that's ~81 bytes/record for nDB vs ~147 (SQLite)
+    and ~178 (MariaDB). nDB's figure is the pre-compaction write-ahead log (the
+    full uncompacted record stream) — compaction only shrinks it further, so
+    these are conservative ceilings for nDB.</p>
 
   <h2>2 · Latency — single client (controlled)</h2>
   <p class="cap">Throughput (rows/sec) and tail latency (p99). Higher rps / lower
@@ -96,8 +99,12 @@
 
   <h2>3 · Concurrency — where nDB's design pays off (stress, 32 clients)</h2>
   <p class="cap">Throughput under 32 concurrent clients. nDB's lock-free MVCC
-    reads scale; SQLite serialises on its connection lock. (nDB vs SQLite
-    measured; MariaDB concurrent sweep not run in this pass.)</p>
+    reads scale; SQLite serialises on its connection lock. nDB and SQLite are
+    measured by their native multi-threaded Rust bench servers. MariaDB is
+    omitted here on purpose: measured through a Python threaded client it is
+    client-bound (GIL), which would <em>understate</em> MariaDB's real
+    server-side concurrency — a fair number needs a native concurrent client,
+    which this pass didn't build.</p>
   <table>
     <thead><tr><th>Workload</th><th>nDB rps</th><th>SQLite rps</th><th>nDB advantage</th></tr></thead>
     <tbody>
