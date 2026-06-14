@@ -289,12 +289,46 @@
     it free + native; if you only keep history and rarely read it, a SCD2 table
     is smaller.</p>
 
-  <h2>Takeaways</h2>
+  <h2>8 · Vector search — a capability, not a speed win</h2>
+  <p class="cap">50,000 × 128-dim embeddings. nDB has native kNN (HNSW snapshot)
+    co-located with the data, so you can do "similar AND property=X" in one
+    engine. SQLite and MariaDB 10.11 have <strong>no vector type</strong> — the
+    only option is to pull the data into a vector library or bolt on an extension.</p>
+  <table>
+    <thead><tr><th>Approach</th><th>kNN (k=10) latency</th><th>Native to the DB?</th></tr></thead>
+    <tbody>
+      <tr><td>nDB HNSW (built-in)</td><td>4.5 ms</td><td class="win">yes — filterable, co-located</td></tr>
+      <tr><td>numpy brute-force (BLAS)</td><td>1.2 ms</td><td>no — separate lib, export data</td></tr>
+      <tr><td>numpy brute-force (no BLAS)</td><td>6.3 ms</td><td>no — separate lib</td></tr>
+      <tr><td>SQLite / MariaDB 10.11</td><td>n/a</td><td>no vector type at all</td></tr>
+    </tbody>
+  </table>
+  <p class="cap"><strong>Honest reading.</strong> The win is <em>capability</em>,
+    not raw speed: nDB keeps vectors in the same store as everything else, so
+    semantic search composes with property/graph filters and time-travel without
+    a second system. But at this scale nDB's kNN (4.5 ms) is actually
+    <em>slower</em> than an optimised BLAS brute-force (1.2 ms) — its vector path
+    has clear optimisation headroom and isn't a drop-in for a dedicated ANN
+    library yet. Reach for it to avoid a separate vector store and to filter by
+    structure, not to win a raw-throughput race.</p>
+
+  <h2>Takeaways — where nDB wins, and where it doesn't</h2>
+  <p class="cap">A serious comparison shows both. nDB's real, measured wins:</p>
   <ul>
-    <li><strong>Storage:</strong> nDB is the most compact (8.0 MB vs 14.6 / 21.2) — N-ary facts don't normalise into junction rows.</li>
-    <li><strong>Lookups:</strong> nDB wins decisively (embedded + native indexes); the networked SQL engine pays a per-call tax.</li>
-    <li><strong>Single-thread joins:</strong> a mature relational optimiser (MariaDB) still wins — nDB is honest about that.</li>
-    <li><strong>Concurrency &amp; deep traversal:</strong> nDB's lock-free reads pull ahead 4–21× and recursion flips to nDB under load.</li>
+    <li><strong>Storage (scaling):</strong> most compact at every size — 1.8–2.6× vs SQLite/MariaDB, gap holds to 1M rows.</li>
+    <li><strong>High-arity facts:</strong> storage grows ~1 MB/role vs 8–12 MB/role for SQL's association table — the gap widens with arity.</li>
+    <li><strong>Indexed lookups:</strong> 7–55× faster (embedded + native indexes).</li>
+    <li><strong>Concurrency:</strong> lock-free MVCC reads scale 4–21× under load; recursion flips to nDB.</li>
+    <li><strong>Time-travel reads:</strong> as-of queries are native snapshots — 9–154× faster than SCD2 / system-versioning, and as fast as reading the present.</li>
+    <li><strong>Vector search:</strong> native + co-located + filterable (SQLite/MariaDB have no vector type) — a capability win.</li>
+  </ul>
+  <p class="cap">…and where it <strong>doesn't</strong> (measured, not hidden):</p>
+  <ul>
+    <li><strong>Single-thread joins / pattern scans:</strong> a mature relational optimiser (MariaDB/SQLite) wins.</li>
+    <li><strong>Schema change:</strong> modern SQL does instant <code>ADD COLUMN</code> — nDB's edge is only no-lock + sparse storage.</li>
+    <li><strong>Version storage:</strong> integer-keyed SQLite SCD2 (2.7 MB) is more compact than nDB's UUID-based 6 MB.</li>
+    <li><strong>Raw vector throughput:</strong> nDB's kNN (4.5 ms) is slower than optimised BLAS brute-force (1.2 ms) at this scale — its value is co-location, not speed.</li>
+    <li><strong>Dense-graph deep traversal:</strong> when the reachable set saturates, in-process SQLite matches or beats nDB.</li>
   </ul>
 
   <p class="cap">Reproduce: the bench servers are

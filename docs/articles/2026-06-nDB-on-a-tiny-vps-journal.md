@@ -260,3 +260,13 @@ Strength-bench scorecard so far: storage-scaling ✓ win · high-arity ✓ win �
 Published §7: latency bar chart + the honest "win when you read history constantly; SCD2 is smaller if you rarely read it" framing.
 
 Strength scorecard: storage-scaling ✓ · high-arity ✓ · concurrency ✓ · lookups ✓ · **time-travel: latency ✓ / storage ✗** · schema-evolution ✗ · dense n-pattern ✗. Remaining: vector (capability).
+
+## 2026-06-14 — Vector (capability, not speed) + honest wins/not-wins takeaways — ALL 4 done
+
+`examples/vector_bench.rs`: 50k × 128-dim, HNSW build 78ms, kNN(k=10) = 4.5ms/query. numpy BLAS brute-force = 1.2ms; numpy no-BLAS = 6.3ms. SQLite/MariaDB 10.11 have NO vector type. → Vector is a CAPABILITY win (native, co-located, filterable, no separate store), NOT a speed win — nDB's kNN is actually SLOWER than optimised BLAS brute-force at this scale (vector path has optimisation headroom). Published §8 honestly.
+
+Rewrote Takeaways as an explicit wins / not-wins scorecard:
+- WINS: storage-scaling (1.8–2.6×, holds to 1M) · high-arity (gap widens with arity) · lookups (7–55×) · concurrency (4–21×) · time-travel reads (9–154×, native) · vector (capability).
+- NOT WINS (shown, not hidden): single-thread joins/scans · schema change (instant DDL) · version storage (int SCD2 smaller) · raw vector throughput (BLAS brute-force faster) · dense-graph deep traversal.
+
+All 4 requested strength benches now built, measured, and published with honest results (2 clear wins: high-arity, time-travel-latency; 1 capability: vector; 1 modest: schema-evolution). New examples: arity_storage.rs, versioned.rs, vector_bench.rs. The report is the most credible kind — it states where nDB loses.
