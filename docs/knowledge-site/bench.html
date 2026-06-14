@@ -79,6 +79,29 @@
     and ~178 (MariaDB). nDB's figure is the pre-compaction write-ahead log (the
     full uncompacted record stream) — compaction only shrinks it further, so
     these are conservative ceilings for nDB.</p>
+  <svg viewBox="0 0 480 220" width="100%" style="max-width:560px;font:12px system-ui;background:rgba(255,255,255,.02);border-radius:8px">
+    <!-- log-y grid 1,10,100 MB -->
+    <g stroke="#2c3a4a" stroke-width="1">
+      <line x1="50" y1="180" x2="440" y2="180"/><line x1="50" y1="110" x2="440" y2="110"/><line x1="50" y1="40" x2="440" y2="40"/>
+    </g>
+    <g fill="#9aa6b2" text-anchor="end">
+      <text x="44" y="184">1</text><text x="44" y="114">10</text><text x="44" y="44">100 MB</text>
+    </g>
+    <g fill="#9aa6b2" text-anchor="middle">
+      <text x="50" y="198">10k</text><text x="245" y="198">100k</text><text x="440" y="198">1M records</text>
+    </g>
+    <polyline fill="none" stroke="#f59e0b" stroke-width="2" points="50,164 245,89 440,24"/>
+    <polyline fill="none" stroke="#60a5fa" stroke-width="2" points="50,168 245,99 440,29"/>
+    <polyline fill="none" stroke="#6ee7a8" stroke-width="2.5" points="50,180 245,117 440,47"/>
+    <g><circle cx="440" cy="24" r="3" fill="#f59e0b"/><circle cx="440" cy="29" r="3" fill="#60a5fa"/><circle cx="440" cy="47" r="3" fill="#6ee7a8"/></g>
+    <g font-size="11">
+      <rect x="60" y="14" width="10" height="10" fill="#6ee7a8"/><text x="74" y="23" fill="#cdd6e0">nDB</text>
+      <rect x="120" y="14" width="10" height="10" fill="#60a5fa"/><text x="134" y="23" fill="#cdd6e0">SQLite</text>
+      <rect x="190" y="14" width="10" height="10" fill="#f59e0b"/><text x="204" y="23" fill="#cdd6e0">MariaDB</text>
+    </g>
+  </svg>
+  <p class="cap">Log scale. nDB (green) is the lowest line at every size; the
+    relational engines' junction-table overhead widens the gap as the data grows.</p>
 
   <h2>2 · Latency — single client (controlled)</h2>
   <p class="cap">Throughput (rows/sec) and tail latency (p99). Higher rps / lower
@@ -114,6 +137,25 @@
       <tr><td>recursive_contains (depth 3)</td><td class="win">197,615</td><td>48,382</td><td>4.1×</td></tr>
     </tbody>
   </table>
+  <div style="max-width:560px;background:rgba(255,255,255,.02);border-radius:8px;padding:12px 14px;font:12px system-ui">
+    <div style="color:#9aa6b2;margin-bottom:8px">Throughput at 32 clients — bars relative to nDB per workload (nDB = full)</div>
+    <!-- point_lookup -->
+    <div style="margin:6px 0"><span style="display:inline-block;width:130px;color:#cdd6e0">point_lookup</span>
+      <span style="display:inline-block;height:11px;width:300px;background:#6ee7a8;border-radius:2px;vertical-align:middle"></span> <span style="color:#9aa6b2">9.46M</span></div>
+    <div style="margin:0 0 10px 138px"><span style="display:inline-block;height:11px;width:48px;background:#60a5fa;border-radius:2px;vertical-align:middle"></span> <span style="color:#9aa6b2">SQLite 1.51M · nDB 6.3×</span></div>
+    <!-- property_lookup -->
+    <div style="margin:6px 0"><span style="display:inline-block;width:130px;color:#cdd6e0">property_lookup</span>
+      <span style="display:inline-block;height:11px;width:300px;background:#6ee7a8;border-radius:2px;vertical-align:middle"></span> <span style="color:#9aa6b2">9.65M</span></div>
+    <div style="margin:0 0 10px 138px"><span style="display:inline-block;height:11px;width:14px;background:#60a5fa;border-radius:2px;vertical-align:middle"></span> <span style="color:#9aa6b2">SQLite 452k · nDB 21×</span></div>
+    <!-- count_aggregate -->
+    <div style="margin:6px 0"><span style="display:inline-block;width:130px;color:#cdd6e0">count_aggregate</span>
+      <span style="display:inline-block;height:11px;width:300px;background:#6ee7a8;border-radius:2px;vertical-align:middle"></span> <span style="color:#9aa6b2">10.24M</span></div>
+    <div style="margin:0 0 10px 138px"><span style="display:inline-block;height:11px;width:25px;background:#60a5fa;border-radius:2px;vertical-align:middle"></span> <span style="color:#9aa6b2">SQLite 868k · nDB 11.8×</span></div>
+    <!-- recursion -->
+    <div style="margin:6px 0"><span style="display:inline-block;width:130px;color:#cdd6e0">recursive (d3)</span>
+      <span style="display:inline-block;height:11px;width:300px;background:#6ee7a8;border-radius:2px;vertical-align:middle"></span> <span style="color:#9aa6b2">198k</span></div>
+    <div style="margin:0 0 4px 138px"><span style="display:inline-block;height:11px;width:73px;background:#60a5fa;border-radius:2px;vertical-align:middle"></span> <span style="color:#9aa6b2">SQLite 48k · nDB 4.1×</span></div>
+  </div>
   <p class="cap">Recursion <em>flips to nDB under load</em>: SQLite is faster
     single-threaded but doesn't scale across clients; nDB does.</p>
 
@@ -132,6 +174,28 @@
       <tr><td>6</td><td>107 µs</td><td class="win">77 µs</td><td>268 µs</td></tr>
     </tbody>
   </table>
+  <svg viewBox="0 0 480 220" width="100%" style="max-width:560px;font:12px system-ui;background:rgba(255,255,255,.02);border-radius:8px">
+    <g stroke="#2c3a4a" stroke-width="1">
+      <line x1="50" y1="180" x2="440" y2="180"/><line x1="50" y1="123" x2="440" y2="123"/><line x1="50" y1="66" x2="440" y2="66"/>
+    </g>
+    <g fill="#9aa6b2" text-anchor="end">
+      <text x="44" y="184">0</text><text x="44" y="127">100</text><text x="44" y="70">200 µs</text>
+    </g>
+    <g fill="#9aa6b2" text-anchor="middle">
+      <text x="50" y="198">k=2</text><text x="147" y="198">3</text><text x="245" y="198">4</text><text x="342" y="198">5</text><text x="440" y="198">6 hops</text>
+    </g>
+    <polyline fill="none" stroke="#f59e0b" stroke-width="2" points="50,94 147,93 245,83 342,61 440,27"/>
+    <polyline fill="none" stroke="#60a5fa" stroke-width="2" points="50,135 147,148 245,143 342,142 440,136"/>
+    <polyline fill="none" stroke="#6ee7a8" stroke-width="2.5" points="147,126 245,111 342,125 440,119"/>
+    <g font-size="11">
+      <rect x="60" y="14" width="10" height="10" fill="#6ee7a8"/><text x="74" y="23" fill="#cdd6e0">nDB</text>
+      <rect x="120" y="14" width="10" height="10" fill="#60a5fa"/><text x="134" y="23" fill="#cdd6e0">SQLite</text>
+      <rect x="190" y="14" width="10" height="10" fill="#f59e0b"/><text x="204" y="23" fill="#cdd6e0">MariaDB</text>
+    </g>
+  </svg>
+  <p class="cap">Lower = faster. The in-process engines (green/blue) stay flat as
+    depth grows; only MariaDB (amber) climbs — each extra hop is another
+    networked recursion level. nDB has no depth-2 point (engine recursion guard).</p>
   <p class="cap">
     <strong>Honest reading.</strong> This dataset's containment graph is
     <em>dense</em> — the reachable set saturates within ~3 hops — so cost is
