@@ -50,11 +50,13 @@ emit NDB_MAX_CONNECTIONS      "$(cfg SERVER_MAX_CONN)"
 emit MALLOC_ARENA_MAX         "$(cfg MALLOC_ARENA_MAX)"
 emit NDB_MEMTABLE_FLUSH_BYTES "$(cfg NDB_MEMTABLE_FLUSH_BYTES)"
 emit NDB_EMBED_URL            "$(cfg NDB_EMBED_URL)"
+emit NDB_VECTOR_PROP          "$(cfg NDB_VECTOR_PROP)"
 emit NDB_EDGE_BIND            "$(cfg NDB_EDGE_BIND)"
 emit NDB_TLS_CERT             "$(cfg NDB_TLS_CERT)"
 emit NDB_TLS_KEY              "$(cfg NDB_TLS_KEY)"
-emit NDB_DATA_UPSTREAM        "$(cfg NDB_DATA_UPSTREAM)"
+emit NDB_API_UPSTREAM         "$(cfg NDB_API_UPSTREAM)"
 emit NDB_MCP_UPSTREAM         "$(cfg NDB_MCP_UPSTREAM)"
+emit NDB_DATA_UPSTREAM        "$(cfg NDB_DATA_UPSTREAM)"
 emit RUST_LOG                 "$(cfg RUST_LOG)"
 emit NDB_MCP_PRINCIPAL        "$(cfg NDB_MCP_PRINCIPAL)"
 
@@ -95,9 +97,15 @@ dropin_for ndb-embed  ""                       "$(cfg EMBED_MEM_MAX)"  ""
 systemctl daemon-reload
 [ "$RESTART" -eq 0 ] && { echo "rendered. --no-restart set; apply with: systemctl restart ndb-server ndb-mcp ndb-edge"; exit 0; }
 
-# ---- 3) restart present services + verify, rollback on failure ----------
+# ---- 3) restart ACTIVE services + verify, rollback on failure ----------
+# Only restart units that are currently active — never *start* a stopped unit
+# (e.g. a dormant ndb-server when ndb-mcp serves /v1 unified would collide).
+# Fresh installs start services via `systemctl enable --now` in install.sh.
 UNITS=(); for u in ndb-server ndb-mcp ndb-edge ndb-embed; do
-  systemctl cat "$u" >/dev/null 2>&1 && UNITS+=("$u"); done
+  systemctl cat "$u" >/dev/null 2>&1 || continue
+  if systemctl is-active --quiet "$u"; then UNITS+=("$u"); else echo "  (skip restart $u — not active)"; fi
+done
+[ ${#UNITS[@]} -eq 0 ] && { echo "no active units to restart (use: systemctl enable --now …)"; exit 0; }
 echo "restarting: ${UNITS[*]}"
 ok=1
 for u in "${UNITS[@]}"; do systemctl restart "$u" || ok=0; done

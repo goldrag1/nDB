@@ -113,8 +113,8 @@ if [ -n "$DOMAIN" ] && [ -n "$EMAIL" ]; then
     sed -i "s/replace-with-openssl-rand-hex-32/$(openssl rand -hex 32)/" /etc/ndb/ndb.conf
     echo "set a fresh NDB_TOKEN in /etc/ndb/ndb.conf"
   fi
-  systemctl enable ndb-server ndb-mcp ndb-edge
-  ndb-configure                       # render ndb.env + cgroup drop-ins, start + verify
+  ndb-configure --no-restart          # render ndb.env + cgroup drop-ins (services not up yet)
+  systemctl enable --now ndb-server ndb-mcp ndb-edge   # start with config in place
   echo
   echo "✅ live. verify:  curl -s https://${DOMAIN}/health"
   echo "token (devs need it):  grep NDB_TOKEN /etc/ndb/ndb.conf"
@@ -123,6 +123,6 @@ else
   echo "installed. next (or re-run with 'DOMAIN EMAIL' to do these automatically):"
   echo "  ${SRC}/scripts/obtain-certs.sh ndb.example.com you@example.com"
   echo "  sed -i \"s/replace-with-openssl-rand-hex-32/\$(openssl rand -hex 32)/\" /etc/ndb/ndb.conf"
-  echo "  systemctl enable ndb-server ndb-mcp ndb-edge"
-  echo "  sudo ndb-configure          # renders /etc/ndb/ndb.conf -> env + cgroup caps, starts services"
+  echo "  sudo ndb-configure --no-restart   # render /etc/ndb/ndb.conf -> env + cgroup caps"
+  echo "  systemctl enable --now ndb-server ndb-mcp ndb-edge"
 fi
