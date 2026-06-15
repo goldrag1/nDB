@@ -96,28 +96,33 @@ done
 if   [ -x "${SRC}/ndb-edge/target/release/ndb-edge" ]; then install -m 0755 "${SRC}/ndb-edge/target/release/ndb-edge" /usr/local/bin/
 else echo "WARNING: ndb-edge not built (cd deploy/sovereign/ndb-edge && cargo build --release). Skipping edge binary."; fi
 
-# env file (don't clobber an existing one)
-[ -f /etc/ndb/ndb.env ] || { install -m 0600 "${SRC}/ndb.env.example" /etc/ndb/ndb.env; echo "wrote /etc/ndb/ndb.env"; }
+# config: ndb.conf is the single source of truth a dev edits; ndb-configure
+# renders it into ndb.env + systemd cgroup drop-ins (caps can't be env-expanded).
+[ -f /etc/ndb/ndb.conf ] || { install -m 0600 "${SRC}/ndb.conf.example" /etc/ndb/ndb.conf; echo "wrote /etc/ndb/ndb.conf (edit this to tune everything)"; }
+install -m 0755 "${SRC}/scripts/ndb-configure" /usr/local/bin/ndb-configure
 
-# units
+# units (baseline; ndb-configure drop-ins override the caps from ndb.conf)
 install -m 0644 "${SRC}/systemd/"*.service /etc/systemd/system/
 systemctl daemon-reload
 
-# One-command production: domain + email → certs, token, start.
+# One-command production: domain + email → certs, token, render-config, start.
 if [ -n "$DOMAIN" ] && [ -n "$EMAIL" ]; then
   echo "obtaining TLS cert for ${DOMAIN}…"
   "${SRC}/scripts/obtain-certs.sh" "$DOMAIN" "$EMAIL"
-  if grep -q "replace-with-openssl-rand-hex-32" /etc/ndb/ndb.env; then
-    sed -i "s/replace-with-openssl-rand-hex-32/$(openssl rand -hex 32)/" /etc/ndb/ndb.env
-    echo "set a fresh NDB_TOKEN in /etc/ndb/ndb.env"
+  if grep -q "replace-with-openssl-rand-hex-32" /etc/ndb/ndb.conf; then
+    sed -i "s/replace-with-openssl-rand-hex-32/$(openssl rand -hex 32)/" /etc/ndb/ndb.conf
+    echo "set a fresh NDB_TOKEN in /etc/ndb/ndb.conf"
   fi
-  systemctl enable --now ndb-server ndb-mcp ndb-edge
+  systemctl enable ndb-server ndb-mcp ndb-edge
+  ndb-configure                       # render ndb.env + cgroup drop-ins, start + verify
   echo
   echo "✅ live. verify:  curl -s https://${DOMAIN}/health"
-  echo "token (devs need it):  grep NDB_TOKEN /etc/ndb/ndb.env"
+  echo "token (devs need it):  grep NDB_TOKEN /etc/ndb/ndb.conf"
+  echo "tune anything later: edit /etc/ndb/ndb.conf then  sudo ndb-configure"
 else
   echo "installed. next (or re-run with 'DOMAIN EMAIL' to do these automatically):"
   echo "  ${SRC}/scripts/obtain-certs.sh ndb.example.com you@example.com"
-  echo "  sed -i \"s/replace-with-openssl-rand-hex-32/\$(openssl rand -hex 32)/\" /etc/ndb/ndb.env"
-  echo "  systemctl enable --now ndb-server ndb-mcp ndb-edge"
+  echo "  sed -i \"s/replace-with-openssl-rand-hex-32/\$(openssl rand -hex 32)/\" /etc/ndb/ndb.conf"
+  echo "  systemctl enable ndb-server ndb-mcp ndb-edge"
+  echo "  sudo ndb-configure          # renders /etc/ndb/ndb.conf -> env + cgroup caps, starts services"
 fi
