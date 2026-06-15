@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nDB — The Fruit-Fly Connectome, Firing (real brain → behaviour)</title>
+<style>
+  :root{--bg:#08080e;--panel:#13131c;--line:#23232e;--text:#e8e8ec;--muted:#8b8b99;
+        --sens:#ffd166;--proj:#5ad1ff;--mb:#9b8cff;--mbo:#c98bf0;--predn:#7cf0d4;
+        --vnc:#f5a623;--sez:#f06b6b;--accent:#7cf0d4;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:26px 18px 64px}
+  h1{font-size:24px;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 12px}
+  .lede{color:#c7c7d2;font-size:14px;max-width:84ch}
+  .records{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0 4px}
+  .rec{background:#16161f;border:1px solid var(--line);border-radius:9px;padding:8px 12px;min-width:92px}
+  .rec b{display:block;font-size:17px;font-family:ui-monospace,Menlo,monospace;line-height:1.1}
+  .rec span{font-size:11px;color:var(--muted)}
+  .scenarios{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0 6px}
+  .scn{background:#16161f;border:1px solid var(--line);border-radius:9px;padding:9px 13px;cursor:pointer;font-size:13px;color:var(--text)}
+  .scn:hover{border-color:#3a3a48}
+  .scn.on{border-color:var(--accent);background:#16261f;color:var(--accent)}
+  .scn b{font-size:14px}
+  .grid{display:grid;grid-template-columns:1fr 340px;gap:16px;margin:10px 0}
+  @media(max-width:900px){.grid{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .panel h2{font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+  canvas{width:100%;height:auto;display:block;border-radius:8px}
+  #net{background:radial-gradient(circle at 18% 40%,#0d1018,#07070d)}
+  #larva{background:radial-gradient(circle at 50% 60%,#0e1410,#08080d)}
+  svg{width:100%;height:auto;display:block}
+  .legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:8px}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;vertical-align:middle;margin-right:3px}
+  .controls{display:flex;align-items:center;gap:10px;margin:6px 0 0}
+  .controls input[type=range]{flex:1;accent-color:var(--accent)}
+  button,select{background:#16261f;color:var(--accent);border:1px solid #294638;border-radius:7px;padding:7px 12px;font-size:13px;cursor:pointer}
+  button:hover{background:#1d3329}
+  .behav{font-size:30px;text-align:center;margin:4px 0 2px}
+  .behavlabel{text-align:center;font-size:14px;color:var(--text);min-height:1.4em}
+  .behavlabel b{color:var(--accent)}
+  .bars{margin-top:10px}
+  .bar{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin:3px 0}
+  .bar .track{flex:1;height:8px;background:#1c1c26;border-radius:4px;overflow:hidden}
+  .bar .fill{height:100%;border-radius:4px;width:0}
+  code{background:#1c1c26;padding:1px 5px;border-radius:4px;font-size:12.5px}
+  .foot{color:var(--muted);font-size:12.5px;margin-top:22px;border-top:1px solid var(--line);padding-top:14px}
+  a{color:var(--accent)}
+  .cap{font-size:11px;color:var(--muted);margin-top:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>The Fruit-Fly Connectome, Firing <span style="color:var(--muted);font-weight:400">· a real brain → a behaviour, on nDB</span></h1>
+  <p class="sub">The <strong>complete</strong> 3,016-neuron larval <i>Drosophila</i> brain (Winding et al., <i>Science</i> 2023) — wired as spiking neurons, stimulated at the senses, watched until the command reaches the muscles.</p>
+  <p class="lede">
+    Pick a stimulus. Its sensory neurons fire, and the spike cascade sweeps left→right
+    through the <em>real</em> wiring — sensory → projection → mushroom-body →
+    <strong>descending neurons</strong>, the brain's output to the motor centres.
+    When the feeding command (DN-SEZ) wins, the larva <strong>feeds</strong>; when the
+    body command (DN-VNC) wins, it <strong>crawls</strong>, and a one-sided odour tips
+    the left/right balance into a <strong>turn</strong>. Same dynamics as the published
+    whole-brain models (Shiu et al., <i>eLife</i> 2024). Every neuron, synapse and spike
+    is recorded in nDB and <strong>time-travelable</strong> — scrub to ask "what fired
+    just before it turned?"
+  </p>
+
+  <div class="records" id="records"></div>
+
+  <div class="scenarios" id="scenarios"></div>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>The brain — <span id="scnname">…</span> · tick <span id="tick">0</span></h2>
+      <canvas id="net" width="1000" height="620"></canvas>
+      <div class="legend">
+        <span><i class="dot" style="background:var(--sens)"></i>sensory (in)</span>
+        <span><i class="dot" style="background:var(--proj)"></i>projection</span>
+        <span><i class="dot" style="background:var(--mb)"></i>mushroom body / LH</span>
+        <span><i class="dot" style="background:var(--mbo)"></i>MB output</span>
+        <span><i class="dot" style="background:var(--predn)"></i>pre-descending</span>
+        <span><i class="dot" style="background:var(--vnc)"></i>DN-VNC (body)</span>
+        <span><i class="dot" style="background:var(--sez)"></i>DN-SEZ (feed)</span>
+      </div>
+      <div class="cap">left → right = sensory input to motor output. Brightness = recent spiking; gold rings = the stimulated neurons.</div>
+    </div>
+
+    <div class="panel">
+      <h2>The larva does…</h2>
+      <canvas id="larva" width="340" height="180"></canvas>
+      <div class="behav" id="behavEmoji">🐛</div>
+      <div class="behavlabel" id="behavLabel">resting</div>
+      <div class="bars">
+        <div class="bar"><span style="width:64px;color:var(--sez)">feed (SEZ)</span><div class="track"><div class="fill" id="barS" style="background:var(--sez)"></div></div></div>
+        <div class="bar"><span style="width:64px;color:var(--vnc)">body L</span><div class="track"><div class="fill" id="barL" style="background:var(--vnc)"></div></div></div>
+        <div class="bar"><span style="width:64px;color:var(--vnc)">body R</span><div class="track"><div class="fill" id="barR" style="background:var(--vnc)"></div></div></div>
+      </div>
+      <h2 style="margin-top:16px">Spike raster (sensory → motor)</h2>
+      <svg id="raster" viewBox="0 0 340 200"></svg>
+      <div class="cap">y ordered top=sensory … bottom=descending; the diagonal sweep is the cascade reaching the output.</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="controls">
+      <button id="play">▶ Play</button>
+      <select id="speed"><option value="1">1×</option><option value="2" selected>2×</option><option value="4">4×</option></select>
+      <input id="slider" type="range" min="0" max="0" value="0">
+      <span id="tlabel" style="color:var(--muted);font-size:13px;min-width:9ch"></span>
+    </div>
+  </div>
+
+  <p class="foot">
+    Real connectome (CC-BY, <a href="https://github.com/brain-networks/larval-drosophila-connectome">data</a>), run as a leaky integrate-and-fire network and recorded into nDB.
+    In nDB: Neurons (type 70 — cell-class, side, modality), Synapse <code>hyper_edge</code>s
+    (170, roles pre/post + weight), time-stamped Spike events (171), and Action events
+    (172) — queryable over <code>/v1</code> + MCP, time-travelable via MVCC.
+    <strong>Honest caveats:</strong> forward LIF only — no learning or neuromodulation, and the
+    larval data lacks transmitter identity so signs are approximated by cell class. Real wiring,
+    simplified dynamics — not a conscious larva. Sim: <code>deploy/sovereign/flybrain/flybrain.py</code>.
+    &nbsp;·&nbsp; <a href="/neurosim.html">← Spiking Network</a> &nbsp;·&nbsp; <a href="/neuroevo.html">Evolving Ecosystem</a> &nbsp;·&nbsp; <a href="/">nDB home</a>
+  </p>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const CT_COL={sensory:'#ffd166','PN':'#5ad1ff','PN-somato':'#5ad1ff','LHN':'#9b8cff','KC':'#9b8cff',
+  'MBIN':'#9b8cff','LN':'#9b8cff','MBON':'#c98bf0','MB-FBN':'#c98bf0','MB-FFN':'#c98bf0','CN':'#c98bf0',
+  'pre-DN-VNC':'#7cf0d4','pre-DN-SEZ':'#7cf0d4','RGN':'#7cf0d4','DN-VNC':'#f5a623','DN-SEZ':'#f06b6b',
+  'ascending':'#8b8b99','other':'#5a5a66'};
+const CT_RGB={};  // hex -> [r,g,b]
+function hex2rgb(h){const n=parseInt(h.slice(1),16);return [(n>>16)&255,(n>>8)&255,n&255];}
+
+let D=null, NEU=[], EDGES=[], RUNS={}, TICKS=0, W=1000, H=620;
+let outAdjView=[];          // view-edge adjacency for "hot" edges
+let order=[], rowOf=[];     // raster ordering (by tier)
+let cur=null, curKey=null;  // current run
+let spikesByTick=[], lastSpk=[], stimSet=new Set();
+let clock=0, playing=false, speed=2, lastTS=0;
+let netStatic=null;         // offscreen faint-edge layer
+
+function buildStatic(){
+  const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
+  const g=cv.getContext('2d');
+  g.lineWidth=0.4; g.strokeStyle='rgba(120,130,160,0.05)';
+  g.beginPath();
+  for(const [a,b] of EDGES){ const A=NEU[a],B=NEU[b]; g.moveTo(A.x,A.y); g.lineTo(B.x,B.y); }
+  g.stroke();
+  netStatic=cv;
+}
+
+function loadRun(key){
+  curKey=key; cur=RUNS[key];
+  spikesByTick=Array.from({length:TICKS},()=>[]);
+  for(const [i,t] of cur.spikes){ if(t<TICKS) spikesByTick[t].push(i); }
+  lastSpk=new Array(NEU.length).fill(-999);
+  stimSet=new Set(cur.stim);
+  clock=0; $('slider').value=0;
+  document.querySelectorAll('.scn').forEach(e=>e.classList.toggle('on',e.dataset.k===key));
+  $('scnname').textContent=cur.emoji+' '+cur.label;
+  drawRaster();
+}
+
+function drawNet(){
+  const cv=$('net'), g=cv.getContext('2d'), s=cv.width/W;
+  g.clearRect(0,0,cv.width,cv.height);
+  g.drawImage(netStatic,0,0);
+  const t=Math.max(0,Math.min(TICKS-1,clock|0));
+  const firing=spikesByTick[t]||[];
+  for(const i of firing) lastSpk[i]=t;
+  // hot edges from neurons firing this tick — coloured by source neuron
+  g.lineWidth=0.9; g.globalAlpha=0.32;
+  for(const i of firing){
+    const adj=outAdjView[i]; if(!adj||!adj.length) continue;
+    const A=NEU[i], rgb=CT_RGB[A.ct]||[160,200,255];
+    g.strokeStyle=`rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+    g.beginPath();
+    for(const j of adj){ const B=NEU[j]; g.moveTo(A.x,A.y); g.lineTo(B.x,B.y); }
+    g.stroke();
+  }
+  g.globalAlpha=1;
+  // neurons
+  for(let i=0;i<NEU.length;i++){
+    const n=NEU[i], x=n.x*s, y=n.y*s;
+    const age=t-lastSpk[i];
+    const glow=age>=0&&age<8?(1-age/8):0;
+    const rgb=CT_RGB[n.ct]||[120,120,140];
+    let r=1.7, a=0.18+glow*0.7;
+    if(glow>0.55){ // bright flash
+      g.fillStyle='rgba(255,255,255,'+(glow*0.9)+')'; g.beginPath(); g.arc(x,y,r+1.8,0,6.283); g.fill();
+    }
+    g.fillStyle=`rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a.toFixed(3)})`;
+    g.beginPath(); g.arc(x,y,r+glow*1.6,0,6.283); g.fill();
+    if(stimSet.has(i)){ g.strokeStyle='rgba(255,209,102,0.9)'; g.lineWidth=1.1; g.beginPath(); g.arc(x,y,3.4,0,6.283); g.stroke(); }
+  }
+  // tier labels
+  const labels=['sensory','projection','MB / LH','MB-out','pre-DN','descending'];
+  g.fillStyle='#5a5a66'; g.font='11px system-ui'; g.textAlign='center';
+  for(let k=0;k<6;k++){ const x=(40+(k/5)*(W-80))*s; g.fillText(labels[k], x, cv.height-6); }
+}
+
+function drawRaster(){
+  const Wd=340,Hd=200,padL=4,padB=4,padT=4;
+  const n=NEU.length;
+  let s=`<rect x="0" y="0" width="${Wd}" height="${Hd}" fill="#0c0c14"/>`;
+  if(cur){
+    const X=t=>padL+(t/(TICKS-1))*(Wd-2*padL);
+    const Y=row=>padT+(row/(n-1))*(Hd-padT-padB);
+    for(const [i,t] of cur.spikes){
+      const rgb=CT_RGB[NEU[i].ct]||[150,150,160];
+      s+=`<rect x="${X(t).toFixed(1)}" y="${Y(rowOf[i]).toFixed(1)}" width="1.2" height="1.2" fill="rgb(${rgb[0]},${rgb[1]},${rgb[2]})" opacity="0.8"/>`;
+    }
+    s+=`<line x1="${X(clock).toFixed(1)}" y1="${padT}" x2="${X(clock).toFixed(1)}" y2="${Hd-padB}" stroke="#fff" opacity="0.5" stroke-dasharray="3 3"/>`;
+  }
+  $('raster').innerHTML=s;
+}
+
+// ---- larva animation -------------------------------------------------------
+let phase=0;
+function drawLarva(label){
+  const cv=$('larva'), g=cv.getContext('2d'), Wd=cv.width, Hd=cv.height;
+  g.clearRect(0,0,Wd,Hd);
+  const NS=14, segLen=15;
+  // behaviour params
+  let curv=0, headPulse=0, wobble=0, advance=0, speedP=0.12;
+  if(label==='feed'){ curv=0.02; headPulse=Math.sin(phase*4)*0.5+0.5; speedP=0.18; }
+  else if(label==='turn-left'){ curv=-0.16; advance=0.4; }
+  else if(label==='turn-right'){ curv=0.16; advance=0.4; }
+  else if(label==='escape'){ curv=0.34*Math.sin(phase*2); speedP=0.4; advance=0.2; }
+  else if(label==='crawl'){ curv=0.015*Math.sin(phase); advance=0.7; }
+  else { curv=0.01*Math.sin(phase*0.5); } // rest
+  // backbone from tail(left) to head(right)
+  const cx=Wd*0.30, cy=Hd*0.54;
+  let x=cx, y=cy, ang=0;
+  const pts=[];
+  for(let i=0;i<NS;i++){
+    // peristaltic wave: contraction band travels tail->head
+    const wave=Math.sin(phase*1.6 - i*0.6);
+    const step=segLen*(0.78+0.22*(advance?(wave*0.5+0.5):0.5));
+    x+=Math.cos(ang)*step; y+=Math.sin(ang)*step;
+    ang+=curv*(i>NS*0.6?1.6:0.5);   // bend concentrated toward head
+    pts.push([x,y,wave]);
+  }
+  // draw body: tapered circles, peristaltic shading
+  for(let i=0;i<NS;i++){
+    const [px,py,wave]=pts[i];
+    const taper=0.5+0.5*Math.sin((i/NS)*Math.PI);          // fat middle
+    const r=4+10*taper;
+    const lit=0.45+0.3*(wave*0.5+0.5);
+    g.fillStyle=`rgba(${120+80*lit|0},${200*lit+40|0},${120+60*lit|0},0.92)`;
+    g.beginPath(); g.arc(px,py,r,0,6.283); g.fill();
+  }
+  // head (last point) + mouth
+  const [hx,hy]=pts[NS-1];
+  g.fillStyle='#2a3b2a'; g.beginPath(); g.arc(hx,hy,5,0,6.283); g.fill();
+  // mouth hooks pulse when feeding
+  const open=label==='feed'?(1+headPulse*4):1.5;
+  g.strokeStyle='#1a241a'; g.lineWidth=2;
+  g.beginPath(); g.moveTo(hx+3,hy-open); g.lineTo(hx+9,hy-open*1.6);
+  g.moveTo(hx+3,hy+open); g.lineTo(hx+9,hy+open*1.6); g.stroke();
+}
+
+function setBehaviour(a){
+  const EMO={feed:'🍽️','turn-left':'↰','turn-right':'↱',crawl:'🐛',escape:'🌀',rest:'😴'};
+  const TXT={feed:'<b>feeding</b> — DN-SEZ command',
+    'turn-left':'<b>turning left</b> — DN-VNC asymmetry',
+    'turn-right':'<b>turning right</b> — DN-VNC asymmetry',
+    crawl:'<b>crawling</b> forward — DN-VNC',
+    escape:'<b>escape</b> — synchronous DN-VNC burst', rest:'resting'};
+  $('behavEmoji').textContent=EMO[a.label]||'🐛';
+  $('behavLabel').innerHTML=TXT[a.label]||a.label;
+  $('barS').style.width=Math.min(100,a.sez*260)+'%';
+  $('barL').style.width=Math.min(100,a.vl*260)+'%';
+  $('barR').style.width=Math.min(100,a.vr*260)+'%';
+}
+
+function frame(ts){
+  if(playing){ const dt=Math.min(0.05,(ts-lastTS)/1000); lastTS=ts;
+    clock+=dt*38*speed;
+    if(clock>=TICKS-1){ clock=TICKS-1; playing=false; $('play').textContent='▶ Play'; }
+    $('slider').value=clock|0;
+  } else lastTS=ts;
+  phase+=0.18*Math.max(1,speed*0.6);
+  if(cur){
+    const t=Math.max(0,Math.min(TICKS-1,clock|0));
+    const a=cur.action[t]||{label:'rest',sez:0,vl:0,vr:0};
+    drawNet(); drawRaster(); drawLarva(a.label); setBehaviour(a);
+    $('tick').textContent=clock|0; $('tlabel').textContent='tick '+(clock|0);
+  }
+  requestAnimationFrame(frame);
+}
+
+function records(){
+  const html=[
+    ['🧠 '+NEU.length.toLocaleString(),'real neurons'],
+    ['🔗 '+D.n_edges_total.toLocaleString(),'synaptic connections'],
+    ['🍽️ taste','→ DN-SEZ feeding'],
+    ['👃 odour','→ steer / turn'],
+    ['⏱ '+TICKS,'ticks (time-travel)'],
+  ];
+  $('records').innerHTML=html.map(([b,s])=>`<div class="rec"><b>${b}</b><span>${s}</span></div>`).join('');
+}
+
+fetch('flybrain.json').then(r=>r.json()).then(d=>{
+  D=d; NEU=d.neurons; EDGES=d.edges; RUNS=d.runs; TICKS=d.ticks; W=d.world.w; H=d.world.h;
+  for(const k in CT_COL) CT_RGB[k]=hex2rgb(CT_COL[k]);
+  // view-edge adjacency
+  outAdjView=Array.from({length:NEU.length},()=>[]);
+  for(const [a,b] of EDGES) outAdjView[a].push(b);
+  // raster order: by tier then ct then index
+  order=NEU.map(n=>n.i).sort((a,b)=> (NEU[a].tier-NEU[b].tier) || NEU[a].ct.localeCompare(NEU[b].ct) || a-b);
+  rowOf=new Array(NEU.length); order.forEach((id,row)=>rowOf[id]=row);
+  buildStatic();
+  // scenario buttons
+  const order2=['gustatory-external','olfactory','visual','thermo'];
+  const keys=order2.filter(k=>RUNS[k]);
+  $('scenarios').innerHTML=keys.map(k=>`<div class="scn" data-k="${k}"><b>${RUNS[k].emoji} ${RUNS[k].label}</b></div>`).join('');
+  document.querySelectorAll('.scn').forEach(e=>e.addEventListener('click',()=>{ loadRun(e.dataset.k); playing=true; $('play').textContent='⏸ Pause'; }));
+  const sl=$('slider'); sl.max=TICKS-1;
+  sl.addEventListener('input',()=>{ playing=false; $('play').textContent='▶ Play'; clock=+sl.value; });
+  $('play').addEventListener('click',()=>{ playing=!playing; $('play').textContent=playing?'⏸ Pause':'▶ Play'; if(playing&&clock>=TICKS-1)clock=0; });
+  $('speed').addEventListener('change',e=>speed=+e.target.value);
+  records(); loadRun(keys[0]); playing=true; $('play').textContent='⏸ Pause';
+  requestAnimationFrame(frame);
+}).catch(e=>{ $('records').innerHTML='<div class="rec"><b>load error</b><span>'+e+'</span></div>'; });
+</script>
+</body>
+</html>
