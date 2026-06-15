@@ -1,0 +1,86 @@
+# /etc/ndb/ndb.conf  —  single source of truth for an nDB deployment.
+#
+# Edit this file, then apply:
+#     sudo ndb-configure                 # render + restart services
+#     sudo ndb-configure --dry-run       # preview what would change
+#     sudo ndb-configure --no-restart    # render only, restart yourself
+#
+# ndb-configure reads this file and writes BOTH:
+#   • /etc/ndb/ndb.env                       (runtime env vars: tokens, limits…)
+#   • /etc/systemd/system/ndb-*.service.d/   (cgroup memory/CPU caps as drop-ins)
+# It must render the caps because systemd does NOT expand ${VAR} in
+# MemoryMax= and friends — so a plain env file can't carry them.
+# Re-running after an edit re-renders, backs up, restarts, and verifies
+# (auto-rollback if a service fails to come up).
+
+# ============================ AUTH ===================================
+# Two common postures:
+#   • Fully gated:  set NDB_TOKEN  -> reads AND writes need the bearer token.
+#   • Open reads:   leave NDB_TOKEN empty + set NDB_WRITE_TOKEN -> anyone can
+#                   read /v1+/mcp, only commit/admin tools need the write token.
+# Generate a token:  openssl rand -hex 32
+NDB_TOKEN=replace-with-openssl-rand-hex-32
+#NDB_WRITE_TOKEN=
+
+# ===================== PERFORMANCE / LIMITS ==========================
+# Memory caps per service. MAX = hard cap (cgroup OOM-kills the service above it,
+# then systemd restarts it). HIGH = soft throttle (kernel reclaims above it).
+# Size MAX above the real working-set high-water so connection bursts don't trip it.
+MCP_MEM_HIGH=512M
+MCP_MEM_MAX=768M
+SERVER_MEM_HIGH=512M
+SERVER_MEM_MAX=768M
+EDGE_MEM_HIGH=256M
+EDGE_MEM_MAX=384M
+EMBED_MEM_MAX=1400M            # applied only if ndb-embed.service is installed
+
+# Concurrent-connection caps. These are the main RAM driver on a thread-per-
+# connection server: each live connection holds a thread (stack + allocator arena).
+# 64 is plenty for a sovereign box; raise on a dedicated host.
+MCP_MAX_CONN=64
+SERVER_MAX_CONN=64
+
+# Allocator arenas. A threaded server otherwise spreads allocations across
+# 8*nCPU glibc arenas that retain freed memory -> RSS bloat. 2 keeps it tight.
+MALLOC_ARENA_MAX=2
+
+# CPU ceiling per service (percent of one core; >100% spans cores).
+CPU_QUOTA_MCP=50%
+CPU_QUOTA_SERVER=80%
+CPU_QUOTA_EDGE=80%
+
+# Engine: flush the memtable to disk after this many bytes (blank = engine default).
+#NDB_MEMTABLE_FLUSH_BYTES=
+
+# ============================ EMBEDDER ===============================
+# Where the embedding service lives (for vector text search). Blank = disabled.
+NDB_EMBED_URL=http://127.0.0.1:8090/embed
+# Register a vector property at startup so server-side vector search works on
+# an existing DB. Deprecated in favour of the ndb.register_vector_property
+# tool, but still honoured. Blank = none.
+#NDB_VECTOR_PROP=20
+
+# ===================== TLS + EDGE WIRING =============================
+NDB_EDGE_BIND=0.0.0.0:443
+NDB_TLS_CERT=/etc/ndb/fullchain.pem
+NDB_TLS_KEY=/etc/ndb/privkey.pem
+# The edge path-routes to three upstreams:
+#   /mcp*                              -> NDB_MCP_UPSTREAM   (the MCP server)
+#   /v1,/arrow,/health,/metrics,…      -> NDB_API_UPSTREAM   (the data API)
+#   everything else (the web UI)       -> NDB_DATA_UPSTREAM   (static site / default)
+# On a minimal box with no static UI, point DATA at the API (same value).
+NDB_API_UPSTREAM=127.0.0.1:8742
+NDB_MCP_UPSTREAM=127.0.0.1:9000
+NDB_DATA_UPSTREAM=127.0.0.1:8742
+
+# ============================ LOGGING ================================
+RUST_LOG=info
+
+# ===================== PER-AGENT CAPABILITIES (optional) =============
+# JSON principal; gates each MCP tool call by capability. Unset => unrestricted
+# (still token-gated). See deploy/sovereign/README.md for the multi-principal form.
+#NDB_MCP_PRINCIPAL={"name":"alice","capabilities":["read","iter","vector_search"]}
+
+# ---- Note: data dir + localhost binds for ndb-server/ndb-mcp are set on the
+# ---- unit's ExecStart= line (they sit behind the edge, so localhost is fine).
+# ---- Change them in the unit file if you must; everything else lives here.

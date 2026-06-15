@@ -18,13 +18,16 @@
 //!
 //! Dispatch is shared with stdio: every request runs through
 //! [`crate::McpServer::handle_line`], so the tool surface, principal gating, and
-//! audit log are identical across transports. Single-threaded accept loop,
-//! matching ndb-server's v1 design — real concurrency lives in the proxy in
-//! front (connection pooling) and is a v2 conversation here.
+//! audit log are identical across transports. Bounded thread-per-connection
+//! accept loop (scoped threads, capped by `NDB_MCP_MAX_CONN`, default 256 —
+//! matching ndb-server's `/v1`): many connections are served in parallel while
+//! the engine `RwLock` keeps writes single-writer. A flood past the cap gets an
+//! immediate `503` rather than exhausting threads/FDs.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::McpServer;
 
@@ -32,41 +35,144 @@ use crate::McpServer;
 /// read past the cap.
 const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 
+/// Default ceiling on concurrent connections. Matches ndb-server's `/v1`
+/// connection cap; beyond it new connections get an immediate `503` so a
+/// flood can't exhaust threads/FDs. Override with `NDB_MCP_MAX_CONN`.
+const DEFAULT_MAX_CONNECTIONS: usize = 256;
+
+/// Resolve the concurrent-connection cap from `NDB_MCP_MAX_CONN`, falling back
+/// to [`DEFAULT_MAX_CONNECTIONS`]. A non-positive / unparseable value uses the
+/// default.
+fn max_connections() -> usize {
+    std::env::var("NDB_MCP_MAX_CONN")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_MAX_CONNECTIONS)
+}
+
+/// RAII gauge: increments the in-flight counter on `acquire` (only if below the
+/// cap) and decrements on drop, so a panicking handler still releases its slot.
+struct ConnSlot<'a>(&'a AtomicUsize);
+
+impl<'a> ConnSlot<'a> {
+    /// Take a slot if in-flight is below `cap`; otherwise `None` (at capacity).
+    fn acquire(counter: &'a AtomicUsize, cap: usize) -> Option<Self> {
+        // Reserve optimistically, roll back if we blew the cap — cheap and
+        // correct under contention without a lock.
+        if counter.fetch_add(1, Ordering::AcqRel) < cap {
+            Some(Self(counter))
+        } else {
+            counter.fetch_sub(1, Ordering::AcqRel);
+            None
+        }
+    }
+}
+
+impl Drop for ConnSlot<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Minimal `503` for a connection refused at the concurrency cap. Written
+/// without parsing the request — the point is to shed load fast.
+fn write_503<W: Write>(stream: &mut W) -> std::io::Result<()> {
+    let body = r#"{"error":"server at connection capacity, retry shortly"}"#;
+    let resp = format!(
+        "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(resp.as_bytes())?;
+    stream.flush()
+}
+
 /// Configuration for the Streamable HTTP MCP transport.
 #[derive(Debug, Default, Clone)]
 pub struct HttpOpts {
-    /// When set, every `POST /mcp` must carry `Authorization: Bearer <token>`.
-    /// `/health` is always exempt so a proxy can probe liveness.
+    /// When set, EVERY `POST /mcp` must carry `Authorization: Bearer <token>`
+    /// (full lockdown). `/health` is always exempt for proxy liveness.
     pub bearer_token: Option<String>,
+    /// When set (and `bearer_token` is not), reads are open but *write* tools
+    /// (`ndb.commit_entity` / `ndb.commit_hyperedge`) require this bearer token.
+    /// Lets a public read-only UI and a token-bearing writer share one endpoint.
+    pub write_token: Option<String>,
     /// When set, emit `Access-Control-Allow-Origin: <value>` on every response
     /// and answer `OPTIONS` preflight — so a browser agent on another origin
     /// can call the endpoint.
     pub cors_origin: Option<String>,
 }
 
+/// MCP tool names that mutate the database (data or config) — gated by
+/// `write_token` on the reads-open / writes-gated deployment.
+const WRITE_TOOLS: &[&str] = &[
+    "ndb.commit_entity",
+    "ndb.commit_hyperedge",
+    "ndb.define_schema",
+    "ndb.register_vector_property",
+];
+
+/// True when the JSON-RPC body is a `tools/call` for a mutating tool.
+fn is_write_body(body: &[u8]) -> bool {
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return false;
+    };
+    if v.get("method").and_then(serde_json::Value::as_str) != Some("tools/call") {
+        return false;
+    }
+    let name = v
+        .get("params")
+        .and_then(|p| p.get("name"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    WRITE_TOOLS.contains(&name)
+}
+
+fn bearer_ok(authorization: Option<&str>, token: &str) -> bool {
+    authorization
+        .and_then(|a| a.strip_prefix("Bearer "))
+        .is_some_and(|t| t == token)
+}
+
 /// Bind `addr` and serve the Streamable HTTP MCP endpoint until the process is
-/// killed. One connection is handled at a time (the engine is single-writer;
-/// concurrency belongs in the proxy in front).
+/// killed. Each connection is handled on its own scoped thread, bounded by
+/// [`max_connections`] (a flood past the cap gets an immediate `503`). The
+/// engine stays single-writer — concurrent reads run under the `RwLock` read
+/// guard and writes serialise on the write guard — so concurrency here raises
+/// read throughput / stabilises p99 without weakening correctness.
 pub fn serve_http(server: &McpServer, addr: &str, opts: &HttpOpts) -> std::io::Result<()> {
     let listener = TcpListener::bind(addr)?;
+    let cap = max_connections();
     eprintln!(
-        "ndb-mcp-server: Streamable HTTP MCP on http://{addr}/mcp (POST JSON-RPC); GET /health{}",
+        "ndb-mcp-server: Streamable HTTP MCP on http://{addr}/mcp (POST JSON-RPC); GET /health \
+         [max {cap} concurrent conns]{}",
         if opts.bearer_token.is_some() {
             "  [bearer-token auth enabled]"
         } else {
             ""
         }
     );
-    for conn in listener.incoming() {
-        match conn {
-            Ok(mut stream) => {
-                if let Err(e) = handle_connection(server, &mut stream, opts) {
-                    eprintln!("ndb-mcp-server: connection error: {e}");
+    let in_flight = AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        for conn in listener.incoming() {
+            match conn {
+                Ok(mut stream) => {
+                    let Some(slot) = ConnSlot::acquire(&in_flight, cap) else {
+                        let _ = write_503(&mut stream); // shed load, keep accepting
+                        continue;
+                    };
+                    scope.spawn(move || {
+                        let _slot = slot; // released on thread exit (even on panic)
+                        if let Err(e) = handle_connection(server, &mut stream, opts) {
+                            eprintln!("ndb-mcp-server: connection error: {e}");
+                        }
+                    });
                 }
+                Err(e) => eprintln!("ndb-mcp-server: accept error: {e}"),
             }
-            Err(e) => eprintln!("ndb-mcp-server: accept error: {e}"),
         }
-    }
+    });
     Ok(())
 }
 
@@ -144,17 +250,61 @@ pub(crate) fn handle_connection<S: Read + Write>(
             );
         }
         if method == "POST" {
-            if let Some(token) = &opts.bearer_token {
-                let ok = authorization
-                    .as_deref()
+            let auth = authorization.as_deref();
+
+            // Multi-tenant mode: a principals registry is installed, so each
+            // request's bearer token must resolve to a known principal; the
+            // call is then gated by THAT principal's capabilities (audited
+            // under its name). This supersedes the single-token modes.
+            if server.has_principals() {
+                let principal = auth
                     .and_then(|a| a.strip_prefix("Bearer "))
-                    .is_some_and(|t| t == token);
-                if !ok {
+                    .and_then(|t| server.resolve_principal(t));
+                let Some(principal) = principal else {
+                    return write_json(
+                        stream,
+                        401,
+                        "Unauthorized",
+                        r#"{"error":"unknown or missing per-dev bearer token"}"#,
+                        opts,
+                    );
+                };
+                if content_length > MAX_BODY_BYTES {
+                    return write_json(
+                        stream,
+                        413,
+                        "Payload Too Large",
+                        r#"{"error":"request body too large"}"#,
+                        opts,
+                    );
+                }
+                let body_str = String::from_utf8_lossy(&body);
+                let resp = server.handle_line_as(body_str.as_ref(), Some(&principal));
+                let json = serde_json::to_string(&resp).unwrap_or_else(|_| {
+                    r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"serialize failed"}}"#.to_owned()
+                });
+                return write_json(stream, 200, "OK", &json, opts);
+            }
+
+            if let Some(token) = &opts.bearer_token {
+                // full lockdown: every request needs the token
+                if !bearer_ok(auth, token) {
                     return write_json(
                         stream,
                         401,
                         "Unauthorized",
                         r#"{"error":"missing or invalid bearer token"}"#,
+                        opts,
+                    );
+                }
+            } else if let Some(wt) = &opts.write_token {
+                // reads open; only write tools need the token
+                if is_write_body(&body) && !bearer_ok(auth, wt) {
+                    return write_json(
+                        stream,
+                        401,
+                        "Unauthorized",
+                        r#"{"error":"write tools require Authorization: Bearer <token>"}"#,
                         opts,
                     );
                 }
@@ -275,24 +425,37 @@ pub fn serve_https(
 ) -> std::io::Result<()> {
     let cfg = Arc::new(build_rustls_config(cert_path, key_path)?);
     let listener = TcpListener::bind(addr)?;
+    let cap = max_connections();
     eprintln!(
-        "ndb-mcp-server: Streamable HTTPS MCP on https://{addr}/mcp (TLS, POST JSON-RPC); GET /health{}",
+        "ndb-mcp-server: Streamable HTTPS MCP on https://{addr}/mcp (TLS, POST JSON-RPC); GET /health \
+         [max {cap} concurrent conns]{}",
         if opts.bearer_token.is_some() {
             "  [bearer-token auth enabled]"
         } else {
             ""
         }
     );
-    for conn in listener.incoming() {
-        match conn {
-            Ok(tcp) => {
-                if let Err(e) = handle_tls_connection(server, tcp, &cfg, opts) {
-                    eprintln!("ndb-mcp-server: TLS connection error: {e}");
+    let in_flight = AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        for conn in listener.incoming() {
+            match conn {
+                Ok(mut tcp) => {
+                    let Some(slot) = ConnSlot::acquire(&in_flight, cap) else {
+                        let _ = write_503(&mut tcp); // pre-TLS 503 is fine for load-shedding
+                        continue;
+                    };
+                    let cfg = Arc::clone(&cfg);
+                    scope.spawn(move || {
+                        let _slot = slot; // released on thread exit (even on panic)
+                        if let Err(e) = handle_tls_connection(server, tcp, &cfg, opts) {
+                            eprintln!("ndb-mcp-server: TLS connection error: {e}");
+                        }
+                    });
                 }
+                Err(e) => eprintln!("ndb-mcp-server: accept error: {e}"),
             }
-            Err(e) => eprintln!("ndb-mcp-server: accept error: {e}"),
         }
-    }
+    });
     Ok(())
 }
 
@@ -317,7 +480,11 @@ mod tests {
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
         let mut p = std::env::temp_dir();
-        p.push(format!("ndb-mcp-http-{}-{}", name, uuid::Uuid::now_v7().simple()));
+        p.push(format!(
+            "ndb-mcp-http-{}-{}",
+            name,
+            uuid::Uuid::now_v7().simple()
+        ));
         p
     }
 
@@ -340,6 +507,107 @@ mod tests {
         client.join().unwrap()
     }
 
+    /// Like [`round_trip`] but takes an owned request body — usable from many
+    /// concurrent scoped threads (each moves its own `String`).
+    fn round_trip_owned(server: &McpServer, opts: &HttpOpts, request: String) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = thread::spawn(move || {
+            let mut s = TcpStream::connect(addr).unwrap();
+            s.write_all(request.as_bytes()).unwrap();
+            let mut resp = String::new();
+            s.read_to_string(&mut resp).unwrap();
+            resp
+        });
+        let (mut stream, _) = listener.accept().unwrap();
+        handle_connection(server, &mut stream, opts).unwrap();
+        drop(stream);
+        client.join().unwrap()
+    }
+
+    /// Frame a JSON body as a complete `POST /mcp` HTTP/1.1 request.
+    fn post_mcp(body: &str) -> String {
+        format!(
+            "POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    fn resp_body(resp: &str) -> serde_json::Value {
+        let start = resp.find("\r\n\r\n").expect("response has a body") + 4;
+        serde_json::from_str(resp[start..].trim()).expect("body is JSON")
+    }
+
+    /// The concurrency guarantee: many connections handled in parallel against
+    /// ONE shared server all commit correctly — single-writer is preserved by
+    /// the engine `RwLock`, so N concurrent `commit_entity` calls yield N
+    /// distinct entities with none lost or duplicated.
+    #[test]
+    fn concurrent_commits_all_land_with_distinct_ids() {
+        let dir = temp_dir("concurrent");
+        let server = McpServer::open(&dir).unwrap();
+        let opts = HttpOpts::default();
+        let n = 32usize;
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ndb.commit_entity","arguments":{"type_id":1,"properties":[]}}}"#;
+
+        let ids: std::collections::HashSet<String> = thread::scope(|s| {
+            let handles: Vec<_> = (0..n)
+                .map(|_| {
+                    let server = &server;
+                    let opts = &opts;
+                    let req = post_mcp(body);
+                    s.spawn(move || {
+                        let resp = round_trip_owned(server, opts, req);
+                        let v = resp_body(&resp);
+                        assert!(
+                            v["result"]["tx_id"].as_u64().is_some_and(|t| t > 0),
+                            "each concurrent commit advances a tx: {v}"
+                        );
+                        v["result"]["entity_id"].as_str().unwrap().to_owned()
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        assert_eq!(
+            ids.len(),
+            n,
+            "every concurrent commit produced a distinct entity"
+        );
+
+        // The engine sees exactly n records — no write lost under contention.
+        let iter = server.handle_line(
+            r#"{"jsonrpc":"2.0","id":99,"method":"tools/call","params":{"name":"ndb.iter","arguments":{"limit":1000}}}"#,
+        );
+        let v = serde_json::to_value(&iter).unwrap();
+        assert_eq!(
+            v["result"]["records"].as_array().unwrap().len(),
+            n,
+            "engine holds exactly the n concurrently-committed records"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The connection cap admits exactly `cap` concurrent slots and rejects
+    /// beyond it, releasing a slot on drop (so a flood gets `503`, not OOM).
+    #[test]
+    fn conn_slot_enforces_cap() {
+        let c = AtomicUsize::new(0);
+        let a = ConnSlot::acquire(&c, 2).expect("1st slot under cap");
+        let _b = ConnSlot::acquire(&c, 2).expect("2nd slot under cap");
+        assert!(
+            ConnSlot::acquire(&c, 2).is_none(),
+            "3rd connection over cap=2 is refused"
+        );
+        drop(a);
+        assert!(
+            ConnSlot::acquire(&c, 2).is_some(),
+            "a freed slot is reusable"
+        );
+    }
+
     #[test]
     fn post_mcp_initialize_returns_json_result() {
         let dir = temp_dir("init");
@@ -350,7 +618,10 @@ mod tests {
         let resp = round_trip(&server, &HttpOpts::default(), request);
         assert!(resp.starts_with("HTTP/1.1 200 OK"), "got: {resp}");
         assert!(resp.contains("application/json"), "got: {resp}");
-        assert!(resp.contains("ndb-mcp-server"), "missing serverInfo: {resp}");
+        assert!(
+            resp.contains("ndb-mcp-server"),
+            "missing serverInfo: {resp}"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -360,6 +631,7 @@ mod tests {
         let server = McpServer::open(&dir).unwrap();
         let opts = HttpOpts {
             bearer_token: Some("secret".to_owned()),
+            write_token: None,
             cors_origin: None,
         };
         let request = "GET /health HTTP/1.1\r\nHost: x\r\n\r\n";
@@ -375,6 +647,7 @@ mod tests {
         let server = McpServer::open(&dir).unwrap();
         let opts = HttpOpts {
             bearer_token: Some("secret".to_owned()),
+            write_token: None,
             cors_origin: None,
         };
         // tools/list with no Authorization header.
@@ -391,6 +664,128 @@ mod tests {
         let request = "GET /mcp HTTP/1.1\r\nHost: x\r\n\r\n";
         let resp = round_trip(&server, &HttpOpts::default(), request);
         assert!(resp.starts_with("HTTP/1.1 405"), "got: {resp}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Frame a `POST /mcp` carrying a per-dev bearer token.
+    fn post_mcp_auth(body: &str, token: &str) -> String {
+        format!(
+            "POST /mcp HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\n\
+             Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    /// Gap 6 acceptance: two devs with different capability scopes, gated per
+    /// request by their own tokens, and every call audited under the dev's name.
+    #[test]
+    fn two_devs_different_capabilities_audited() {
+        use std::collections::{BTreeSet, HashMap};
+
+        use ndb_server::{Capability, Principal, Principals};
+
+        let dir = temp_dir("multitenant");
+        // reader: can read/iter but NOT commit. writer: can also commit.
+        let mut map = HashMap::new();
+        map.insert(
+            "tok-reader".to_owned(),
+            Principal {
+                name: "reader-dev".into(),
+                capabilities: BTreeSet::from([
+                    Capability::Health,
+                    Capability::Read,
+                    Capability::Iter,
+                ]),
+                entity_id: None,
+            },
+        );
+        map.insert(
+            "tok-writer".to_owned(),
+            Principal {
+                name: "writer-dev".into(),
+                capabilities: BTreeSet::from([
+                    Capability::Health,
+                    Capability::Read,
+                    Capability::Iter,
+                    Capability::Commit,
+                ]),
+                entity_id: None,
+            },
+        );
+        let server = McpServer::open(&dir)
+            .unwrap()
+            .with_principals(Principals { principals: map })
+            .with_audit_log()
+            .unwrap();
+        let opts = HttpOpts::default();
+
+        let commit = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ndb.commit_entity","arguments":{"type_id":1,"properties":[]}}}"#;
+
+        // Unknown token → 401 at the transport.
+        let bad = round_trip_owned(&server, &opts, post_mcp_auth(commit, "tok-nope"));
+        assert!(
+            bad.starts_with("HTTP/1.1 401"),
+            "unknown token must 401: {bad}"
+        );
+
+        // reader (no Commit) → 200 transport, JSON-RPC error naming the dev + cap.
+        let r = round_trip_owned(&server, &opts, post_mcp_auth(commit, "tok-reader"));
+        assert!(r.starts_with("HTTP/1.1 200"), "got: {r}");
+        let rv = resp_body(&r);
+        assert!(
+            rv.get("result").is_none(),
+            "reader commit must be denied: {rv}"
+        );
+        let msg = rv["error"]["message"].as_str().unwrap_or("");
+        assert!(
+            msg.contains("reader-dev") && msg.contains("commit"),
+            "denial must name the principal + capability: {rv}"
+        );
+
+        // writer (has Commit) → succeeds with a real entity_id.
+        let w = round_trip_owned(&server, &opts, post_mcp_auth(commit, "tok-writer"));
+        let wv = resp_body(&w);
+        assert!(
+            wv["result"]["entity_id"].as_str().is_some(),
+            "writer commit must succeed: {wv}"
+        );
+
+        // reader CAN read (has Read): a read tool is allowed.
+        let read_health =
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ndb.health"}}"#;
+        let rh = resp_body(&round_trip_owned(
+            &server,
+            &opts,
+            post_mcp_auth(read_health, "tok-reader"),
+        ));
+        assert_eq!(
+            rh["result"]["status"], "ok",
+            "reader health must pass: {rh}"
+        );
+
+        // Audit trail: both devs attributed, the reader's denial recorded as 403,
+        // the writer's commit as 200.
+        let audit_path = server.audit_log_path().expect("audit enabled");
+        let log = std::fs::read_to_string(&audit_path).unwrap();
+        let lines: Vec<serde_json::Value> = log
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let has = |princ: &str, status: u64| {
+            lines.iter().any(|e| {
+                e["principal"] == princ && e["status"] == status && e["path"] == "ndb.commit_entity"
+            })
+        };
+        assert!(
+            has("reader-dev", 403),
+            "audit must record reader's 403: {log}"
+        );
+        assert!(
+            has("writer-dev", 200),
+            "audit must record writer's 200: {log}"
+        );
+
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

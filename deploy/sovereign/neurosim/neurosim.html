@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nDB — Spiking Neural Network (live network + raster)</title>
+<style>
+  :root{--bg:#08080e;--panel:#13131c;--line:#23232e;--text:#e8e8ec;--muted:#8b8b99;
+        --exc:#5ad1ff;--inh:#f06b6b;--input:#ffd166;--spike:#fff;--accent:#7cf0d4;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:1020px;margin:0 auto;padding:26px 18px 64px}
+  h1{font-size:24px;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 14px}
+  .lede{color:#c7c7d2;font-size:14px;max-width:80ch}
+  .records{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0 4px}
+  .rec{background:#16161f;border:1px solid var(--line);border-radius:9px;padding:8px 12px;min-width:96px}
+  .rec b{display:block;font-size:18px;font-family:ui-monospace,Menlo,monospace;line-height:1.1}
+  .rec span{font-size:11px;color:var(--muted)}
+  .grid{display:grid;grid-template-columns:470px 1fr;gap:16px;margin:14px 0}
+  @media(max-width:840px){.grid{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .panel h2{font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+  canvas{width:100%;height:auto;display:block;background:radial-gradient(circle at 45% 35%,#0c1018,#07070d);border-radius:8px}
+  svg{width:100%;height:auto;display:block}
+  .stats{display:flex;gap:18px;flex-wrap:wrap;margin:10px 0 0}
+  .stat b{display:block;font-size:20px;font-family:ui-monospace,Menlo,monospace;line-height:1.1}
+  .stat span{font-size:11px;color:var(--muted)}
+  .controls{display:flex;align-items:center;gap:10px;margin:6px 0 0}
+  .controls input[type=range]{flex:1;accent-color:var(--accent)}
+  button,select{background:#16261f;color:var(--accent);border:1px solid #294638;border-radius:7px;padding:7px 12px;font-size:13px;cursor:pointer}
+  button:hover{background:#1d3329}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin-top:8px}
+  code{background:#1c1c26;padding:1px 5px;border-radius:4px;font-size:12.5px}
+  .foot{color:var(--muted);font-size:12.5px;margin-top:24px;border-top:1px solid var(--line);padding-top:14px}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Spiking Neural Network <span style="color:var(--muted);font-weight:400">· live activity on nDB</span></h1>
+  <p class="sub">A reservoir of leaky integrate-and-fire neurons — <span style="color:var(--exc)">excitatory</span> &amp; <span style="color:var(--inh)">inhibitory</span> — wired on a 2D sheet. A periodic stimulus lights the <span style="color:var(--input)">input</span> edge; activity then cascades as travelling waves and bursts.</p>
+  <p class="lede">
+    Each neuron integrates the spikes arriving along its synapses; when its
+    membrane crosses threshold it <strong>fires</strong>, dumps a pulse down its
+    outgoing synapses (1-tick delay), then goes quiet to recover. The whole run
+    is recorded into nDB — the <strong>structure</strong> as N-ary facts and the
+    <strong>activity</strong> as time-stamped spike events — so "what was the
+    network doing at tick&nbsp;T" is a native <strong>time-travel</strong> read.
+    Hit play, then drag the slider to scrub through time.
+  </p>
+
+  <div class="records" id="records"></div>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>The network — tick <span id="tick">0</span></h2>
+      <canvas id="net" width="470" height="470"></canvas>
+      <div class="stats">
+        <div class="stat"><b id="sFire" style="color:var(--spike)">–</b><span>⚡ firing now</span></div>
+        <div class="stat"><b id="sExc" style="color:var(--exc)">–</b><span>excitatory</span></div>
+        <div class="stat"><b id="sInh" style="color:var(--inh)">–</b><span>inhibitory</span></div>
+        <div class="stat"><b id="sRate" style="color:var(--accent)">–</b><span>pop. rate</span></div>
+      </div>
+      <div class="legend">
+        <span style="color:var(--exc)">● excitatory</span>
+        <span style="color:var(--inh)">● inhibitory</span>
+        <span style="color:var(--input)">◆ input</span>
+        <span style="color:var(--spike)">✸ spiking</span>
+        <span>brightness = membrane potential</span>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Spike raster — every fire, every neuron</h2>
+      <svg id="raster" viewBox="0 0 500 240"></svg>
+      <div class="legend">
+        <span style="color:var(--exc)">▪ excitatory spike</span>
+        <span style="color:var(--inh)">▪ inhibitory spike</span>
+        <span>· dashed = now &nbsp; y = neuron index &nbsp; x = tick</span>
+      </div>
+      <h2 style="margin-top:16px">Population firing rate over time</h2>
+      <svg id="rate" viewBox="0 0 500 120"></svg>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="controls">
+      <button id="play">▶ Play</button>
+      <select id="speed"><option value="1">1×</option><option value="2" selected>2×</option><option value="4">4×</option><option value="8">8×</option></select>
+      <input id="slider" type="range" min="0" max="0" value="0">
+      <span id="tlabel" style="color:var(--muted);font-size:13px;min-width:9ch"></span>
+    </div>
+  </div>
+
+  <p class="foot">
+    A deterministic LIF simulation, recorded into nDB and exported for this
+    replay. In nDB: Neurons (type 60, props kind + index), N-ary Synapse
+    <code>hyper_edge</code>s (160, roles pre/post + weight), and time-stamped
+    Spike events (161, role neuron + tick) — queryable over <code>/v1</code> +
+    MCP, time-travelable via MVCC. Sim:
+    <code>deploy/sovereign/neurosim/snn.py</code>. Membrane integration runs in
+    RAM; nDB is the historian of structure and activity.
+    &nbsp;·&nbsp; <a href="/neuroevo.html">← Evolving Ecosystem</a> &nbsp;·&nbsp; <a href="/">nDB home</a>
+  </p>
+</div>
+
+<script>
+let D=null, NEU=[], SYN=[], POT=[], TICKS=0;
+let spikesByTick=[];     // tick -> [neuron index, ...]
+let kindArr=[];          // neuron -> 'exc'/'inh'
+const $=id=>document.getElementById(id);
+let clock=0, playing=false, speed=2, lastTS=0, lastSpark=[];
+
+function drawNet(){
+  const cv=$('net'), g=cv.getContext('2d'), W=D.world.w, H=D.world.h, s=cv.width/W;
+  g.clearRect(0,0,cv.width,cv.height);
+  const t=Math.max(0,Math.min(TICKS-1,clock|0));
+  const pot=POT[t]||[];
+  const firing=new Set(spikesByTick[t]||[]);
+  // synapses: faint, colored by source neuron sign; brighten when source just fired
+  for(const sy of SYN){
+    const a=NEU[sy.pre], b=NEU[sy.post];
+    const hot=firing.has(sy.pre);
+    g.strokeStyle = (kindArr[sy.pre]==='inh')
+      ? (hot?'rgba(240,107,107,0.55)':'rgba(240,107,107,0.07)')
+      : (hot?'rgba(90,209,255,0.55)':'rgba(90,209,255,0.07)');
+    g.lineWidth = hot?1.4:0.5;
+    g.beginPath(); g.moveTo(a.x*s,a.y*s); g.lineTo(b.x*s,b.y*s); g.stroke();
+  }
+  // neurons
+  for(let i=0;i<NEU.length;i++){
+    const n=NEU[i], x=n.x*s, y=n.y*s;
+    const exc = n.kind==='exc';
+    const base = exc?[90,209,255]:[240,107,107];
+    const lvl = (pot[i]||0)/99;            // 0..1 membrane potential
+    const fire = firing.has(i);
+    let r=exc?4.5:4, alpha=0.25+lvl*0.6;
+    g.beginPath();
+    if(fire){
+      // bright white burst + halo
+      g.fillStyle='rgba(255,255,255,0.16)'; g.arc(x,y,11,0,6.283); g.fill();
+      g.beginPath(); g.fillStyle='#fff'; g.arc(x,y,r+2.2,0,6.283); g.fill();
+    }else{
+      g.fillStyle=`rgba(${base[0]},${base[1]},${base[2]},${alpha})`;
+      g.arc(x,y,r,0,6.283); g.fill();
+    }
+    if(n.input){ g.strokeStyle='#ffd166'; g.lineWidth=1.4; g.beginPath(); g.arc(x,y,r+3,0,6.283); g.stroke(); }
+  }
+  // counts
+  let fe=0,fi=0; for(const i of firing){ if(kindArr[i]==='inh') fi++; else fe++; }
+  const exc=NEU.filter(n=>n.kind==='exc').length;
+  $('sFire').textContent=firing.size; $('sExc').textContent=exc; $('sInh').textContent=NEU.length-exc;
+  $('sRate').textContent=(firing.size/NEU.length*100).toFixed(0)+'%';
+}
+
+function drawRaster(){
+  const W=500,H=240,padL=30,padR=8,padT=8,padB=18, n=NEU.length;
+  const X=t=>padL+(t/(TICKS-1))*(W-padL-padR);
+  const Y=i=>padT+(i/(n-1))*(H-padT-padB);
+  let s=`<rect x="0" y="0" width="${W}" height="${H}" fill="#0c0c14"/>`;
+  // dots: color by neuron kind
+  for(let i=0;i<D.spikes.length;i++){
+    const [ni,t]=D.spikes[i];
+    const col = kindArr[ni]==='inh' ? '#f06b6b' : '#5ad1ff';
+    s+=`<rect x="${X(t).toFixed(1)}" y="${Y(ni).toFixed(1)}" width="1.6" height="1.6" fill="${col}" opacity="0.85"/>`;
+  }
+  s+=`<line x1="${X(clock)}" y1="${padT}" x2="${X(clock)}" y2="${H-padB}" stroke="#fff" opacity="0.55" stroke-dasharray="3 3"/>`;
+  s+=`<text x="${padL}" y="${H-5}" fill="#8b8b99" font-size="10">tick 0</text>`;
+  s+=`<text x="${W-padR}" y="${H-5}" fill="#8b8b99" font-size="10" text-anchor="end">${TICKS}</text>`;
+  s+=`<text x="4" y="${padT+8}" fill="#8b8b99" font-size="10">n${n-1}</text>`;
+  s+=`<text x="4" y="${H-padB}" fill="#8b8b99" font-size="10">n0</text>`;
+  $('raster').innerHTML=s;
+}
+
+let RATE=[];   // per-tick population firing rate (0..1)
+function drawRate(){
+  const W=500,H=120,padL=30,padR=8,padT=8,padB=16;
+  const maxR=Math.max(...RATE,0.02);
+  const X=t=>padL+(t/(TICKS-1))*(W-padL-padR);
+  const Y=v=>H-padB-(v/maxR)*(H-padT-padB);
+  let path=''; for(let t=0;t<TICKS;t++) path+=`${t?'L':'M'}${X(t).toFixed(1)} ${Y(RATE[t]).toFixed(1)}`;
+  let s=`<line x1="${padL}" y1="${H-padB}" x2="${W-padR}" y2="${H-padB}" stroke="#23232e"/>`;
+  s+=`<path d="${path}" fill="none" stroke="#7cf0d4" stroke-width="1.4"/>`;
+  s+=`<line x1="${X(clock)}" y1="${padT}" x2="${X(clock)}" y2="${H-padB}" stroke="#fff" opacity="0.5" stroke-dasharray="3 3"/>`;
+  s+=`<text x="${padL}" y="13" fill="#8b8b99" font-size="10">peak ${(maxR*100).toFixed(0)}% of neurons firing / tick</text>`;
+  $('rate').innerHTML=s;
+}
+
+function frame(ts){
+  if(playing){ const dt=Math.min(0.05,(ts-lastTS)/1000); lastTS=ts;
+    clock+=dt*45*speed;                       // 45 ticks/sec * speed
+    if(clock>=TICKS-1){ clock=TICKS-1; playing=false; $('play').textContent='▶ Play'; }
+    $('slider').value=clock|0;
+  } else lastTS=ts;
+  drawNet(); drawRaster(); drawRate();
+  $('tick').textContent=clock|0; $('tlabel').textContent='tick '+(clock|0);
+  requestAnimationFrame(frame);
+}
+
+function records(){
+  const exc=NEU.filter(n=>n.kind==='exc').length;
+  const peak=Math.max(...RATE);
+  const mean=D.spikes.length/(NEU.length*TICKS);
+  const html=[
+    ['🧠 '+NEU.length,'neurons'],
+    ['🔗 '+SYN.length,'synapses (N-ary)'],
+    ['⚡ '+D.spikes.length.toLocaleString(),'spikes recorded'],
+    ['📈 '+(peak*100).toFixed(0)+'%','peak pop. rate'],
+    ['🌊 '+(mean*100).toFixed(1)+'%','mean firing rate'],
+    ['⏱ '+TICKS,'ticks (time-travel)'],
+  ];
+  $('records').innerHTML=html.map(([b,s])=>`<div class="rec"><b>${b}</b><span>${s}</span></div>`).join('');
+}
+
+fetch('neurosim.json').then(r=>r.json()).then(d=>{
+  D=d; NEU=d.neurons; SYN=d.synapses; POT=d.pot; TICKS=d.ticks;
+  kindArr=NEU.map(n=>n.kind);
+  spikesByTick=Array.from({length:TICKS},()=>[]);
+  RATE=new Array(TICKS).fill(0);
+  for(const [ni,t] of d.spikes){ if(t<TICKS){ spikesByTick[t].push(ni); RATE[t]++; } }
+  for(let t=0;t<TICKS;t++) RATE[t]/=NEU.length;
+  const sl=$('slider'); sl.max=TICKS-1; sl.value=0;
+  sl.addEventListener('input',()=>{ playing=false; $('play').textContent='▶ Play'; clock=+sl.value; });
+  $('play').addEventListener('click',()=>{ playing=!playing; $('play').textContent=playing?'⏸ Pause':'▶ Play';
+    if(playing && clock>=TICKS-1) clock=0; });
+  $('speed').addEventListener('change',e=>speed=+e.target.value);
+  records(); playing=true; $('play').textContent='⏸ Pause';
+  requestAnimationFrame(frame);
+}).catch(e=>{ $('raster').innerHTML='<text x="10" y="20" fill="#f06b6b">failed to load neurosim.json: '+e+'</text>'; });
+</script>
+</body>
+</html>

@@ -70,30 +70,51 @@ in development, pass `verify_ssl=False`:
 ndb = Client(base_url="https://localhost:8742", verify_ssl=False)
 ```
 
-## Arrow interop (optional)
+## Text queries
 
-Install with the `arrow` extra to get `iter_arrow()`, which materializes
-the record stream as a `pyarrow.RecordBatch`:
+`query_text` runs the human-readable query language (the server resolves
+names → ids), mirroring the TS SDK's `queryText`:
+
+```python
+res = ndb.query_text("match (c:Commit) return c.message limit 5")
+print(res["columns"], res["rows"])
+```
+
+## Arrow → pandas / polars (optional)
+
+Install the `arrow` extra, then `arrow_export()` pulls **server-side** Arrow
+IPC (the `ndb-arrow` crate's columnar projection) into a `pyarrow.Table` —
+the efficient on-ramp to the PyData stack:
 
 ```sh
 pip install 'ndb-client[arrow]'
 ```
 
 ```python
-batch = ndb.iter_arrow()  # pyarrow.RecordBatch
-import polars as pl
-df = pl.from_arrow(batch)
+tbl = ndb.arrow_export()       # pyarrow.Table (server does the projection)
+df  = tbl.to_pandas()          # pandas
+import polars as pl; pl.from_arrow(tbl)   # polars (zero-copy)
 ```
 
-The wire format mirrors `ndb_engine::wire`'s tagged-union JSON shapes;
-the Arrow projection is best-effort over the JSON stream (the same shape
-the `ndb-arrow` Rust crate produces, but bridged through Python instead
-of consumed from a Rust binary directly).
+`iter_arrow()` is also available (client-side projection over the JSONL
+`/iter` stream) but `arrow_export()` is preferred — it offloads the
+columnar work to the server and transfers Arrow, not JSON.
+
+## Five lines against a live nDB
+
+```python
+from ndb_client import Client
+db = Client("https://ndb-pingora.nextstar-erp.com")   # public sovereign demo (tailnet)
+print(db.health())                                    # {'status': 'ok'}
+tbl = db.arrow_export()                                # real agent-memory records
+print(tbl.num_rows, "records"); print(tbl.to_pandas().head())
+```
 
 ## Status
 
-v1.0 — surface mirrors the `ndb` CLI: `health`, `commit`, `read`,
+Surface mirrors the TS SDK + `ndb` CLI: `health`, `commit`, `read`,
 `iter`, `flush`, `compact`, `lookup_by_key`, `vector_search`,
-`property_lookup`, `property_range`. See `crates/ndb-mcp-server` for the
+`property_lookup`, `property_range`, `traverse`, `query`, `query_text`,
+plus `arrow_export` / `iter_arrow`. See `crates/ndb-mcp-server` for the
 canonical tool shapes and `crates/ndb-engine/src/wire.rs` for the wire
 JSON.

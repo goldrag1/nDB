@@ -922,9 +922,24 @@ impl Server {
     /// Wrap an already-opened engine. Useful for tests.
     #[must_use]
     pub fn from_engine(engine: Engine) -> Self {
-        let initial_tx = engine.manifest().last_tx_id;
+        Self::from_shared(Arc::new(RwLock::new(engine)))
+    }
+
+    /// Build a v1 server over an **already-shared** engine handle. The caller
+    /// keeps a clone of the same `Arc<RwLock<Engine>>`, so any write committed
+    /// through another surface built on that handle (e.g. an MCP server sharing
+    /// it) is immediately visible to this server's read routes. This is how one
+    /// process serves `/v1` and `/mcp` over a single engine — see the unified
+    /// launch in `ndb-mcp-server` (`--v1-bind`).
+    #[must_use]
+    pub fn from_shared(engine: Arc<RwLock<Engine>>) -> Self {
+        let initial_tx = engine
+            .read()
+            .expect("engine lock poisoned")
+            .manifest()
+            .last_tx_id;
         Self {
-            engine: Arc::new(RwLock::new(engine)),
+            engine,
             compaction_lock: Arc::new(Mutex::new(())),
             auth_token: None,
             principals: None,

@@ -1,0 +1,16 @@
+[workspace]
+[package]
+name = "ndb-embed"
+version = "0.1.0"
+edition = "2021"
+[[bin]]
+name = "ndb-embed"
+path = "src/main.rs"
+[dependencies]
+# HARD-pinned: fastembed pulls the ONNX runtime (ort) and its model/runtime
+# surface churns across minors — a loose pin has broken the build. `=4.9.1`
+# forces a deliberate bump (Cargo.lock + CI `--locked` enforce it).
+fastembed = "=4.9.1"
+serde_json = "1"
+[profile.release]
+opt-level = 2

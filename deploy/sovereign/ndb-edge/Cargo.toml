@@ -22,9 +22,11 @@ name = "ndb-edge"
 path = "src/main.rs"
 
 [dependencies]
-# Pin to a known Pingora line. Verify the ProxyHttp / TlsSettings API against
-# whatever version resolves — Pingora's surface shifts between minor versions.
-pingora      = { version = "0.8", features = ["proxy", "rustls"] }
+# HARD-pinned: Pingora's ProxyHttp / TlsSettings / add_tls_with_settings surface
+# shifts between releases and has bitten the build. `=0.8.1` forces a deliberate,
+# reviewed bump (Cargo.lock + CI `--locked` enforce it). When bumping, re-check
+# upstream_peer / TlsSettings against docs.rs for the new version.
+pingora      = { version = "=0.8.1", features = ["proxy", "rustls"] }
 async-trait  = "0.1"
 env_logger   = "0.11"
 

@@ -29,5 +29,13 @@ base64     = "0.22"
 rustls         = { version = "0.23", default-features = false, features = ["std", "ring", "logging", "tls12"] }
 rustls-pemfile = "2"
 
+# Integration tests (tests/) are separate crates and cannot name the package's
+# normal dependencies — re-declare the ones the suites need. `ndb-server` is
+# used by the unified-engine test to build a /v1 server over the shared engine.
+[dev-dependencies]
+serde_json = { workspace = true }
+uuid       = { workspace = true }
+ndb-server = { path = "../ndb-server" }
+
 [lints]
 workspace = true

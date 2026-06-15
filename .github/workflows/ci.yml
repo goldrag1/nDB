@@ -20,12 +20,32 @@ jobs:
       - uses: actions/checkout@v4
       - name: Toolchain (pinned via rust-toolchain.toml)
         run: rustup show
-      - name: Format
-        run: cargo fmt --all -- --check
+      # `--locked` fails if Cargo.lock would change — catches dependency churn
+      # (the pingora/fastembed kind) before it silently rebuilds something else.
       - name: Test (whole workspace)
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
       - name: Decoder robustness suite (explicit)
-        run: cargo test -p ndb-engine --test robustness
+        run: cargo test -p ndb-engine --test robustness --locked
+      # MCP protocol conformance — the spec-client suite that guards the
+      # `tools/call` content envelope and JSON-RPC frame shapes. The original
+      # envelope bug was invisible to curl; this is the gate that catches it.
+      - name: MCP conformance suite (explicit)
+        run: cargo test -p ndb-mcp-server --test mcp_conformance --locked
+
+  # Format gate. ADVISORY for now: a pre-existing repo-wide rustfmt backlog
+  # (~25 files predating the current stable rustfmt) would otherwise block
+  # every job. `continue-on-error` keeps the signal visible without blocking.
+  # Clear the backlog (`cargo fmt --all`), then drop `continue-on-error` to make
+  # formatting blocking so no NEW unformatted code can land.
+  fmt:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain (pinned via rust-toolchain.toml)
+        run: rustup show
+      - name: Format (advisory)
+        run: cargo fmt --all -- --check
 
   # Lint gate. ADVISORY for now: there is a backlog of ~42 pre-existing
   # pedantic warnings in ndb-engine. `continue-on-error` keeps the signal
@@ -41,6 +61,57 @@ jobs:
         run: rustup show
       - name: Clippy (advisory)
         run: cargo clippy --workspace --all-targets
+
+  # Standalone crates: ndb-edge (Pingora) and ndb-embed (fastembed/ort) live
+  # OUTSIDE the workspace (their own [workspace] + Cargo.lock), so the workspace
+  # test above never compiles them — and pingora/fastembed churn has bitten the
+  # build precisely there. Build both with `--locked` so a dependency drift or a
+  # broken upstream API surfaces in CI, not at deploy time.
+  standalone-crates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain (pinned via rust-toolchain.toml)
+        run: rustup show
+      - name: Build ndb-edge (Pingora TLS edge, =0.8.1)
+        run: cargo build --release --locked
+        working-directory: deploy/sovereign/ndb-edge
+      - name: Build ndb-embed (fastembed, =4.9.1)
+        run: cargo build --release --locked
+        working-directory: deploy/sovereign/embed
+
+  # Deployed-stack smoke: build the UNIFIED ndb-mcp-server, run it exactly as the
+  # production unit does (/mcp + /v1 from one engine), and probe both surfaces —
+  # the same gate the live deploy uses. Catches a binary that compiles but won't
+  # serve, or a /v1 + /mcp split regression, before it reaches the box.
+  deployed-stack-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain (pinned via rust-toolchain.toml)
+        run: rustup show
+      - name: Build unified server
+        run: cargo build --release --locked -p ndb-mcp-server
+      - name: Run + probe /v1 and /mcp (one engine, two surfaces)
+        run: |
+          ./target/release/ndb-mcp-server --path /tmp/ci-ndb \
+            --http 127.0.0.1:9000 --v1-bind 127.0.0.1:8742 &
+          SRV=$!
+          for i in $(seq 1 30); do
+            curl -fs http://127.0.0.1:8742/v1/health | grep -q '"ok"' && break
+            sleep 1
+          done
+          set -e
+          echo "v1 health:";  curl -fs http://127.0.0.1:8742/v1/health
+          echo "mcp tools/list:"; \
+            curl -fs http://127.0.0.1:9000/mcp \
+              -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | grep -q '"tools"'
+          # a /mcp write must be readable via /v1 on the shared engine
+          UUID=$(curl -fs http://127.0.0.1:9000/mcp -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ndb.commit_entity","arguments":{"type_id":1,"properties":[]}}}' | grep -o '"entity_id":"[^"]*"' | head -1 | cut -d'"' -f4)
+          echo "committed via /mcp: $UUID"
+          curl -fs "http://127.0.0.1:8742/v1/read/$UUID" | grep -q '"live"'
+          echo "read back via /v1 ✓"
+          kill $SRV 2>/dev/null || true
 
   # Portability guard: the store / index / export path must keep compiling for
   # NVIDIA DGX Spark (GB10 Grace Blackwell — aarch64). See docs/gpu-dgx-spark.md.
@@ -84,7 +155,7 @@ jobs:
       - name: Toolchain (pinned via rust-toolchain.toml)
         run: rustup show
       - name: Build the binaries the launch/integration tests spawn
-        run: cargo build -p ndb-server -p ndb-mcp-server
+        run: cargo build -p ndb-server -p ndb-mcp-server --locked
       - uses: actions/setup-node@v4
         with:
           node-version: "22"

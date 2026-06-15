@@ -1,0 +1,10 @@
+# systemd USER service: one real-Claude-agent memory-growth run.
+# Install: ~/.config/systemd/user/ndb-remember.service
+[Unit]
+Description=nDB — a real Claude agent records one new memory
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/ndb-remember.sh
+# claude auth lives in ~/.claude; HOME is set for user services automatically.

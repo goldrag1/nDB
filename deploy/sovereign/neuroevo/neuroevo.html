@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nDB — Evolving Ecosystem (artificial life)</title>
+<style>
+  :root{--bg:#0a0a10;--panel:#14141c;--line:#23232e;--text:#e8e8ec;--muted:#8b8b99;
+        --plant:#4fae5a;--herb:#65CBF3;--pred:#f5a623;--apex:#c98bf0;--hidden:#6ee7a8;--accent:#6ee7a8;--neg:#f06b6b;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:1020px;margin:0 auto;padding:26px 18px 64px}
+  h1{font-size:24px;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 14px}
+  .lede{color:#c7c7d2;font-size:14px;max-width:80ch}
+  .records{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0 4px}
+  .rec{background:#16161f;border:1px solid var(--line);border-radius:9px;padding:8px 12px;min-width:96px}
+  .rec b{display:block;font-size:18px;font-family:ui-monospace,Menlo,monospace;line-height:1.1}
+  .rec span{font-size:11px;color:var(--muted)}
+  .grid{display:grid;grid-template-columns:470px 1fr;gap:16px;margin:14px 0}
+  @media(max-width:840px){.grid{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .panel h2{font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+  canvas{width:100%;height:auto;display:block;background:radial-gradient(circle at 40% 30%,#10180f,#0a110a);border-radius:8px}
+  svg{width:100%;height:auto;display:block}
+  .ticker{margin-top:10px;font-size:13px;min-height:1.5em;color:#cfe9d6}
+  .ticker .mile{color:var(--accent)}
+  .stats{display:flex;gap:18px;flex-wrap:wrap;margin:10px 0 0}
+  .stat b{display:block;font-size:20px;font-family:ui-monospace,Menlo,monospace;line-height:1.1}
+  .stat span{font-size:11px;color:var(--muted)}
+  .controls{display:flex;align-items:center;gap:10px;margin:6px 0 0}
+  .controls input[type=range]{flex:1;accent-color:var(--accent)}
+  button,select{background:#1d2b22;color:var(--accent);border:1px solid #2c4636;border-radius:7px;padding:7px 12px;font-size:13px;cursor:pointer}
+  button:hover{background:#244231}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin-top:8px}
+  code{background:#1c1c26;padding:1px 5px;border-radius:4px;font-size:12.5px}
+  .foot{color:var(--muted);font-size:12.5px;margin-top:24px;border-top:1px solid var(--line);padding-top:14px}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Evolving Ecosystem <span style="color:var(--muted);font-weight:400">· artificial life on nDB</span></h1>
+  <p class="sub">🌱 plants · 🐰 herbivores · 🦊 predators · 🦅 apex — a 3-level food web competing to survive. No fitness function: whoever eats and breeds, wins.</p>
+  <p class="lede">
+    Every creature has a neural-net <strong>brain</strong> (more neurons/synapses
+    = smarter) wiring its senses to its moves. Moving and <em>thinking</em> burn
+    energy; eating restores it; starving kills. Survivors breed with mutated
+    brains — so the 🐰 evolve sharper foraging and escape, the 🦊 evolve the
+    hunt, and the populations <strong>boom and bust</strong>. The whole run is
+    recorded in nDB and <strong>time-travelable</strong> — hit play, then drag.
+  </p>
+
+  <div class="records" id="records"></div>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>The world — tick <span id="tick">0</span></h2>
+      <canvas id="world" width="470" height="470"></canvas>
+      <div class="ticker"><span id="evt">…</span><br><span class="mile" id="mile"></span></div>
+      <div class="stats">
+        <div class="stat"><b id="sHerb" style="color:var(--herb)">–</b><span>🐰 herbivores</span></div>
+        <div class="stat"><b id="sPred" style="color:var(--pred)">–</b><span>🦊 predators</span></div>
+        <div class="stat"><b id="sApex" style="color:var(--apex)">–</b><span>🦅 apex</span></div>
+        <div class="stat"><b id="sPlant" style="color:var(--plant)">–</b><span>🌱 plants</span></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Population over time (boom &amp; bust)</h2>
+      <svg id="pop" viewBox="0 0 500 190"></svg>
+      <div class="legend">
+        <span style="color:var(--herb)">▬ herbivores</span>
+        <span style="color:var(--pred)">▬ predators</span>
+        <span style="color:var(--apex)">▬ apex</span>
+        <span>· dashed = now</span>
+      </div>
+      <h2 style="margin-top:16px">🧠 smartest 🐰 brain @ this era</h2>
+      <svg id="brain" viewBox="0 0 460 200"></svg>
+      <div class="stats">
+        <div class="stat"><b id="bNeur" style="color:var(--hidden)">–</b><span>neurons</span></div>
+        <div class="stat"><b id="bSyn" style="color:var(--herb)">–</b><span>synapses</span></div>
+        <div class="stat"><b id="bAvg" style="color:var(--accent)">–</b><span>avg synapses (🐰)</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="controls">
+      <button id="play">▶ Play</button>
+      <select id="speed"><option value="1">1×</option><option value="2" selected>2×</option><option value="4">4×</option><option value="8">8×</option></select>
+      <input id="slider" type="range" min="0" max="0" value="0">
+      <span id="tlabel" style="color:var(--muted);font-size:13px;min-width:9ch"></span>
+    </div>
+  </div>
+
+  <p class="foot">
+    A real artificial-life run (deterministic), recorded into nDB and exported for
+    this replay. In nDB: Creatures (type 50), Neurons (51), N-ary Synapse
+    <code>hyper_edge</code>s (150, roles pre/post + weight), champion Lineage
+    edges (151), Census time-series (53) — queryable over <code>/v1</code> + MCP,
+    time-travelable via MVCC. Sim: <code>deploy/sovereign/neuroevo/ecosystem.py</code>.
+    Per-tick neural compute runs in RAM; nDB is the evolutionary historian.
+  </p>
+</div>
+
+<script>
+let D=null, FR=[], CEN=[], BRA=[], PRED=[];
+const $=id=>document.getElementById(id);
+const KCOL={in:'#65CBF3',bias:'#8b8b99',hidden:'#6ee7a8',out:'#f5a623'};
+let clock=0, playing=false, speed=2, lastTS=0;
+let fi=-1, mapA=null, mapB=null;          // cached frame maps
+let flashes=[];                            // predation rings
+
+function frameIndexFor(t){ let i=0; while(i<FR.length-1 && FR[i+1].t<=t) i++; return i; }
+function toMap(fr){ const m=new Map(); for(const c of fr.c) m.set(c[4],c); return m; }
+
+function drawWorld(){
+  const cv=$('world'), g=cv.getContext('2d'), W=D.world.w, H=D.world.h, s=cv.width/W;
+  g.clearRect(0,0,cv.width,cv.height);
+  const i=frameIndexFor(clock);
+  if(i!==fi){ fi=i; mapA=toMap(FR[i]); mapB=toMap(FR[Math.min(i+1,FR.length-1)]); }
+  const A=FR[i], B=FR[Math.min(i+1,FR.length-1)];
+  const span=(B.t-A.t)||1, al=Math.max(0,Math.min(1,(clock-A.t)/span));
+  // plants
+  g.font='13px sans-serif'; g.textAlign='center'; g.textBaseline='middle';
+  for(const p of A.p) g.fillText('🌱', p[0]*s, p[1]*s);
+  // creatures: glide by cid between A and B
+  const EMO=['🐰','🦊','🦅'], BASE=[12,15,17];
+  const cnt=[0,0,0];
+  mapB.forEach((b,cid)=>{
+    const a=mapA.get(cid); let x=b[0],y=b[1];
+    if(a){ let dx=b[0]-a[0], dy=b[1]-a[1];
+      if(Math.abs(dx)<W/3 && Math.abs(dy)<H/3){ x=a[0]+dx*al; y=a[1]+dy*al; } }
+    const sp=b[2], e=b[3];
+    cnt[sp]++;
+    const sz = BASE[sp] + Math.min(10,e/8);
+    g.globalAlpha = a?1:Math.min(1,al*1.5);   // pop-in for newborns
+    g.font=sz+'px sans-serif';
+    g.fillText(EMO[sp], x*s, y*s);
+  });
+  g.globalAlpha=1;
+  // predation flashes
+  const now=performance.now();
+  flashes=flashes.filter(f=>now-f.born<700);
+  for(const f of flashes){ const age=(now-f.born)/700; g.strokeStyle='rgba(245,90,90,'+(1-age)+')'; g.lineWidth=2;
+    g.beginPath(); g.arc(f.x*s,f.y*s,4+age*16,0,6.283); g.stroke();
+    if(age<0.5){ g.font='16px sans-serif'; g.fillText('💥', f.x*s, f.y*s); } }
+  $('sHerb').textContent=cnt[0]; $('sPred').textContent=cnt[1]; $('sApex').textContent=cnt[2]; $('sPlant').textContent=A.p.length;
+}
+
+function spawnFlashes(prevClock){
+  // fire a ring for each predation between prevClock and clock
+  for(const p of PRED){ if(p[4]>prevClock && p[4]<=clock) flashes.push({x:p[2],y:p[3],born:performance.now()}); }
+}
+
+function drawPop(){
+  const W=500,H=190,pad=24,n=CEN.length, step=Math.max(1,Math.floor(n/240));
+  const pts=[]; for(let i=0;i<n;i+=step) pts.push(CEN[i]);
+  const maxP=Math.max(...pts.map(r=>Math.max(r[1],r[2],r[3])),1), last=CEN[n-1][0]||1;
+  const X=t=>pad+(t/last)*(W-2*pad), Y=v=>H-pad-(v/maxP)*(H-2*pad);
+  const ln=k=>pts.map((r,i)=>`${i?'L':'M'}${X(r[0]).toFixed(1)} ${Y(r[k]).toFixed(1)}`).join(' ');
+  let s=`<line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="#23232e"/>`;
+  s+=`<path d="${ln(1)}" fill="none" stroke="#65CBF3" stroke-width="1.6"/>`;
+  s+=`<path d="${ln(2)}" fill="none" stroke="#f5a623" stroke-width="1.6"/>`;
+  s+=`<path d="${ln(3)}" fill="none" stroke="#c98bf0" stroke-width="1.6"/>`;
+  s+=`<line x1="${X(clock)}" y1="${pad-6}" x2="${X(clock)}" y2="${H-pad}" stroke="#fff" opacity="0.5" stroke-dasharray="3 3"/>`;
+  s+=`<text x="${pad}" y="13" fill="#8b8b99" font-size="11">peak ${maxP} · tick 0…${last}</text>`;
+  $('pop').innerHTML=s;
+}
+
+function brainAt(t){ let b=null; for(const x of BRA){ if(x.species===0 && x.epoch<=t) b=x; } return b||BRA.find(x=>x.species===0); }
+function drawBrain(b){
+  if(!b){$('brain').innerHTML='';return;}
+  const W=460,H=200,pad=22, inc={}, kind={}, depth={}; let maxd=0;
+  b.nodes.forEach(n=>{inc[n.id]=[];kind[n.id]=n.kind;});
+  b.conns.forEach(c=>inc[c.dst]&&inc[c.dst].push(c.src));
+  b.nodes.map(n=>n.id).sort((a,b)=>a-b).forEach(id=>{depth[id]=kind[id]==='in'?0:Math.max(0,...inc[id].map(s=>(depth[s]??0)+1));maxd=Math.max(maxd,depth[id]);});
+  b.nodes.forEach(n=>{if(n.kind==='out')depth[n.id]=maxd;});
+  const cols={}; b.nodes.forEach(n=>{(cols[depth[n.id]]=cols[depth[n.id]]||[]).push(n.id);});
+  const pos={}; Object.keys(cols).forEach(d=>{const ids=cols[d],x=pad+(maxd?d/maxd:0)*(W-2*pad);
+    ids.forEach((id,i)=>pos[id]={x,y:pad+(ids.length===1?0.5:i/(ids.length-1))*(H-2*pad)});});
+  let s=''; b.conns.forEach(c=>{const a=pos[c.src],z=pos[c.dst];if(a&&z)s+=`<line x1="${a.x}" y1="${a.y}" x2="${z.x}" y2="${z.y}" stroke="${c.w>=0?'#6ee7a8':'#f06b6b'}" stroke-width="${Math.min(3.5,0.4+Math.abs(c.w)*0.5)}" opacity="0.55"/>`;});
+  b.nodes.forEach(n=>{const p=pos[n.id];s+=`<circle cx="${p.x}" cy="${p.y}" r="7" fill="${KCOL[n.kind]}" stroke="#0a0a10" stroke-width="2"/>`;});
+  $('brain').innerHTML=s;
+}
+
+let lastEvtTick=-999, lastMileSyn=0, lastBrainEpoch=-1;
+function updateText(){
+  // latest predation as a one-liner
+  let latest=null; for(const p of PRED){ if(p[4]<=clock) latest=p; else break; }
+  if(latest && latest[4]!==lastEvtTick){ lastEvtTick=latest[4];
+    const hunter=['🐰','🦊','🦅'][latest[5]||1], prey=(latest[5]===2)?'🦊':'🐰';
+    $('evt').textContent=`${hunter} caught a ${prey} near (${latest[2]}, ${latest[3]}) · tick ${latest[4]}`; }
+  // smartest herbivore brain of the current era
+  const b=brainAt(clock);
+  if(b){
+    if(b.epoch!==lastBrainEpoch){ lastBrainEpoch=b.epoch; drawBrain(b); }
+    $('bNeur').textContent=b.neuron_count; $('bSyn').textContent=b.synapse_count; $('bAvg').textContent=(b.avg_synapses||0).toFixed(1);
+    if(b.synapse_count>lastMileSyn){ lastMileSyn=b.synapse_count; $('mile').textContent=`🧠 new smartest 🐰: ${b.synapse_count} synapses, ${b.neuron_count} neurons (era ${b.epoch})`; }
+  }
+  $('tick').textContent=clock|0; $('tlabel').textContent='tick '+(clock|0);
+}
+
+function frame(ts){
+  if(playing){ const dt=Math.min(0.05,(ts-lastTS)/1000); lastTS=ts;
+    const prev=clock; clock+=dt*30*speed;            // 30 ticks/sec * speed
+    if(clock>=CEN[CEN.length-1][0]){ clock=CEN[CEN.length-1][0]; playing=false; $('play').textContent='▶ Play'; }
+    spawnFlashes(prev);
+    $('slider').value=frameIndexFor(clock);
+  } else lastTS=ts;
+  drawWorld(); drawPop(); updateText();
+  requestAnimationFrame(frame);
+}
+
+function records(){
+  const peakH=Math.max(...CEN.map(r=>r[1])), peakP=Math.max(...CEN.map(r=>r[2])), peakA=Math.max(...CEN.map(r=>r[3]));
+  const smart=Math.max(...BRA.map(b=>b.synapse_count));
+  const html=[['🐰 '+peakH,'peak herbivores'],['🦊 '+peakP,'peak predators'],['🦅 '+peakA,'peak apex'],
+    ['🧠 '+smart,'biggest brain (synapses)'],['💥 '+PRED.length,'total hunts'],
+    ['🍼 '+D.births.length,'total births'],['⏱ '+(CEN[CEN.length-1][0]),'ticks lived']];
+  $('records').innerHTML=html.map(([b,s])=>`<div class="rec"><b>${b}</b><span>${s}</span></div>`).join('');
+}
+
+fetch('neuroevo.json').then(r=>r.json()).then(d=>{
+  D=d; FR=d.frames; CEN=d.census; BRA=d.brains; PRED=d.predations;
+  const sl=$('slider'); sl.max=FR.length-1; sl.value=0;
+  sl.addEventListener('input',()=>{ playing=false; $('play').textContent='▶ Play'; clock=FR[+sl.value].t; flashes=[]; });
+  $('play').addEventListener('click',()=>{ playing=!playing; $('play').textContent=playing?'⏸ Pause':'▶ Play';
+    if(playing && clock>=CEN[CEN.length-1][0]) clock=0; });
+  $('speed').addEventListener('change',e=>speed=+e.target.value);
+  records(); playing=true; $('play').textContent='⏸ Pause';
+  requestAnimationFrame(frame);
+}).catch(e=>{ $('pop').innerHTML='<text x="10" y="20" fill="#f06b6b">failed to load neuroevo.json: '+e+'</text>'; });
+</script>
+</body>
+</html>
