@@ -1,5 +1,10 @@
 # nDB in Production on a Tiny VPS — Design
 
+> **25/10/2026: this deployment was REMOVED from the VPS** (owner request — 32 bot-only hits in 14 days). The 10 `ndb-*` units,
+> `~/ndb` and the `ndb.nextstar-erp.com` DNS record + tunnel rule are gone; the tree and unit files are archived on Google Drive
+> `VPS-luu-tru/2026-10-25/ndb-vps-20261025.tar.gz` + `ndb-units-20261025.txt`.
+
+
 **Date:** 2026-06-14
 **Status:** approved design, pre-plan
 **Goal:** Put nDB into real public production on the resource-constrained HTS VPS, reachable at `ndb.nextstar-erp.com`, with **both** a human web GUI (nDB Studio, anonymous read) **and** the machine `/v1` API (ndb-server, read-only) so that an outside developer or AI coding agent can adopt and test it with the exact published tooling (`npx`, the TS SDK, the `ndb` CLI, the MCP server, `curl`). The whole effort is documented as it happens to produce a how-to **article**.
